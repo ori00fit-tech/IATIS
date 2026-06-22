@@ -1,0 +1,61 @@
+# =============================================================
+# IATIS — Institutional Adaptive Trading Intelligence System
+# Master Configuration
+# =============================================================
+
+system:
+  name: "IATIS"
+  version: "0.1.0-phase1"
+  mode: "synthetic"   # synthetic | csv | live  (Phase 1 = synthetic only)
+
+data:
+  source: "synthetic"          # synthetic | csv | twelve_data
+  symbol: "EURUSD"
+  timeframes: ["M15", "H1", "H4", "D1"]
+  bars_to_load: 500
+  # Real historical data available — see data/README.md. To use it, set
+  # source: "csv" and uncomment the lines below.
+  # csv_path: "data/EURUSD_M1_2026-03-16_2026-06-19.csv"
+  # csv_has_header: false
+  # csv_separator: "\t"
+
+regime:
+  atr_period: 14
+  lookback: 100
+
+engines:
+  enabled:
+    smc: true
+    ict: false        # placeholder — Phase 3
+    nnfx: false        # placeholder — Phase 3
+    price_action: true
+    quant: false        # placeholder — Phase 3
+    macro: false        # placeholder — Phase 4
+
+confluence:
+  weights:
+    smc: 0.25
+    price_action: 0.20
+    nnfx: 0.15
+    ict: 0.15
+    quant: 0.15
+    macro: 0.10
+  min_score_to_trade: 75
+  # NOTE: must be <= the number of engines enabled above, or EXECUTE
+  # becomes mathematically unreachable. Currently 2 engines enabled
+  # (smc, price_action) -> min_engines_agreeing must be <= 2.
+  # When ICT/NNFX/Quant get proven edges and are enabled (see
+  # research/edge_gate.py), raise this back toward 3.
+  min_engines_agreeing: 2
+
+risk:
+  risk_per_trade_min: 0.0025   # 0.25%
+  risk_per_trade_max: 0.01     # 1%
+  max_exposure: 0.05           # 5%
+  min_risk_reward: 3.0         # 1:3
+  max_drawdown_reduce: 0.10    # reduce size after 10% DD
+  max_drawdown_stop: 0.15      # stop system after 15% DD
+
+logging:
+  level: "INFO"
+  file: "storage/system.log"

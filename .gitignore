@@ -1,0 +1,28 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Real historical datasets (large, regenerable from source — see data/README.md)
+data/*.csv
+!data/README.md
+
+# Runtime artifacts
+storage/*.json
+storage/*.jsonl
+storage/*.db
+storage/*.log
+!storage/.gitkeep
+
+# Research results (generated, not authored)
+research/results/*_result.json
+
+# OS
+.DS_Store

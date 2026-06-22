@@ -1,0 +1,4 @@
+# This directory holds runtime artifacts (logs, trade history, performance DB).
+# Intentionally not committed with real data — see .gitignore.
+
+# trade_logs.json and performance.db are created at runtime starting Phase 2.

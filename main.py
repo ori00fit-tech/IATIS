@@ -1,0 +1,221 @@
+"""
+main.py
+----------
+IATIS Phase 1 entry point.
+
+Runs the full pipeline end to end on synthetic data:
+
+    data_loader -> data_validator -> timeframe_sync -> regime_detector
+    -> strategy engines (parallel) -> confluence (vote + score + contradiction)
+    -> risk_engine -> final decision
+
+This is meant to prove the architecture wires together correctly, not to
+produce a real trading signal — see README.md for what's real vs. stubbed
+in Phase 1.
+"""
+
+from __future__ import annotations
+
+import json
+
+from confluence.contradiction_engine import check_contradictions
+from confluence.score_calculator import calculate_score, validate_confluence_config
+from confluence.voting_system import tally_votes
+from core.data_loader import load_data
+from core.data_validator import DataValidationError, validate_ohlcv
+from core.timeframe_sync import build_multi_timeframe_view
+from engines.base_engine import Bias, EngineOutput
+from engines.ict_engine import ICTEngine
+from engines.nnfx_engine import NNFXEngine
+from engines.price_action_engine import PriceActionEngine
+from engines.quant_engine import QuantEngine
+from engines.smc_engine import SMCEngine
+from regimes.regime_detector import detect_regime
+from research.edge_gate import check_edge_gate
+from risk.risk_engine import RiskInputs, evaluate_risk
+from storage.decision_log import log_decision
+from utils.helpers import load_config
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_ALL_ENGINES = {
+    "smc": SMCEngine,
+    "ict": ICTEngine,
+    "nnfx": NNFXEngine,
+    "price_action": PriceActionEngine,
+    "quant": QuantEngine,
+    # "macro": MacroEngine,  # not yet created — Phase 4
+}
+
+
+def build_active_engines(config: dict) -> list:
+    enabled = config.get("engines", {}).get("enabled", {})
+
+    # Hard gate: refuse to enable any engine without a proven edge.
+    # Raises EdgeNotProvenError loudly rather than silently trading on
+    # an unproven idea. See research/edge_gate.py.
+    check_edge_gate(enabled)
+
+    engines = []
+    for key, cls in _ALL_ENGINES.items():
+        if enabled.get(key, False):
+            engines.append(cls())
+    return engines
+
+
+def run_pipeline(config: dict) -> dict:
+    logger.info("=== IATIS pipeline starting ===")
+
+    # Fail loudly at boot if confluence config is internally inconsistent
+    # (e.g. requiring more agreeing engines than are enabled), rather than
+    # silently guaranteeing NO_TRADE forever. See confluence/score_calculator.py.
+    validate_confluence_config(config)
+
+    # 1. Load data
+    df_base = load_data(config)
+
+    # 2. Validate
+    try:
+        validate_ohlcv(df_base)
+    except DataValidationError as exc:
+        logger.error(f"Data validation failed: {exc}")
+        failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
+        log_decision(failure_report)
+        return failure_report
+
+    # 3. Multi-timeframe view
+    timeframes = config["data"]["timeframes"]
+    mtf_data = build_multi_timeframe_view(df_base, timeframes)
+
+    # 4. Regime detection
+    regime_cfg = config.get("regime", {})
+    regime_result = detect_regime(
+        df_base,
+        atr_period=regime_cfg.get("atr_period", 14),
+        lookback=regime_cfg.get("lookback", 100),
+    )
+
+    # 5. Run active strategy engines
+    active_engines = build_active_engines(config)
+    outputs: list[EngineOutput] = [e.safe_analyze(mtf_data) for e in active_engines]
+
+    # Include disabled/not-yet-implemented engines as explicit NEUTRAL
+    # entries in the report so the output never hides that they didn't vote.
+    disabled = [k for k, v in config.get("engines", {}).get("enabled", {}).items() if not v]
+
+    # 6. Confluence: vote + weighted score + contradiction check
+    vote_result = tally_votes(outputs)
+    score_result = calculate_score(outputs, config["confluence"]["weights"])
+    contradiction_result = check_contradictions(outputs)
+
+    min_score = config["confluence"]["min_score_to_trade"]
+    min_engines = config["confluence"]["min_engines_agreeing"]
+
+    confluence_fail_reasons: list[str] = []
+    if score_result.final_score < min_score:
+        confluence_fail_reasons.append(
+            f"Confluence score {score_result.final_score} below minimum required {min_score}"
+        )
+    if vote_result.agree_count < min_engines:
+        confluence_fail_reasons.append(
+            f"Only {vote_result.agree_count} engine(s) agree, minimum required is {min_engines}"
+        )
+    if contradiction_result.blocked:
+        confluence_fail_reasons.extend(contradiction_result.reasons)
+
+    confluence_pass = len(confluence_fail_reasons) == 0
+
+    # 7. Risk gate (only meaningful if confluence passed — but in Phase 1
+    #    we still demonstrate the risk engine running on illustrative inputs)
+    risk_result = None
+    if confluence_pass:
+        entry = df_base["close"].iloc[-1]
+        # illustrative SL/TP — Phase 3 should derive these from SMC/ATR levels
+        atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
+        direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
+        stop = entry - direction * atr_estimate * 1.5
+        target = entry + direction * atr_estimate * 1.5 * config["risk"]["min_risk_reward"]
+
+        risk_inputs = RiskInputs(
+            account_balance=10_000.0,
+            entry_price=float(entry),
+            stop_loss_price=float(stop),
+            take_profit_price=float(target),
+            current_open_risk_pct=0.0,
+            current_drawdown_pct=0.0,
+            correlated_exposure_pct=0.0,
+        )
+        risk_result = evaluate_risk(risk_inputs, config)
+
+    risk_pass = risk_result.passed if risk_result else False
+    final_verdict = "EXECUTE" if (confluence_pass and risk_pass) else "NO_TRADE"
+
+    # Plain-language one-liner explaining the verdict, so the report is
+    # readable without parsing every nested field — addresses the
+    # "explainability" feedback: every decision should be self-explaining.
+    if final_verdict == "EXECUTE":
+        summary = (
+            f"EXECUTE {vote_result.winning_bias.value}: "
+            f"{vote_result.agree_count}/{score_result.engines_participating} active engines agreed, "
+            f"confluence score {score_result.final_score}/100, risk checks passed."
+        )
+    elif not confluence_pass:
+        summary = "NO_TRADE: " + "; ".join(confluence_fail_reasons)
+    else:
+        summary = "NO_TRADE: risk gate rejected — " + "; ".join(risk_result.reasons if risk_result else [])
+
+    report = {
+        "symbol": config["data"]["symbol"],
+        "summary": summary,
+        "regime": {
+            "state": regime_result.regime.value,
+            "confidence": regime_result.confidence,
+            "volatility": regime_result.volatility,
+            "trend_strength": regime_result.trend_strength,
+            "notes": regime_result.notes,
+        },
+        "engine_outputs": [o.to_dict() for o in outputs],
+        "disabled_engines": disabled,
+        "confluence": {
+            "vote": {
+                "winning_bias": vote_result.winning_bias.value,
+                "agree_count": vote_result.agree_count,
+                "total_engines": vote_result.total_engines,
+                "breakdown": vote_result.breakdown,
+            },
+            "score": score_result.final_score,
+            "directional_score": score_result.directional_score,
+            "contributions": score_result.contributions,
+            "engines_participating": score_result.engines_participating,
+            "engines_total": score_result.engines_total,
+            "participating_weight_share": score_result.participating_weight_share,
+            "contradiction": {
+                "blocked": contradiction_result.blocked,
+                "reasons": contradiction_result.reasons,
+            },
+            "passed": confluence_pass,
+            "fail_reasons": confluence_fail_reasons,
+        },
+        "risk": {
+            "passed": risk_result.passed if risk_result else None,
+            "reasons": risk_result.reasons if risk_result else ["Risk gate not evaluated — confluence failed first"],
+            "recommended_risk_pct": risk_result.recommended_risk_pct if risk_result else None,
+            "position_size_units": risk_result.position_size_units if risk_result else None,
+        },
+        "final_verdict": final_verdict,
+    }
+
+    logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
+    log_decision(report)
+    return report
+
+
+def main() -> None:
+    config = load_config()
+    report = run_pipeline(config)
+    print(json.dumps(report, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

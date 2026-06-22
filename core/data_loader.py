@@ -1,0 +1,245 @@
+"""
+core/data_loader.py
+--------------------
+Phase 1: synthetic OHLCV generator only. This exists purely so the rest of
+the pipeline (regime detector, engines, confluence, risk) has something
+real to run against while we build the architecture.
+
+Phase 2+: implement load_from_csv() and load_from_twelve_data() following
+the exact same return contract as load_synthetic(), so nothing downstream
+needs to change when we swap data sources.
+
+Return contract (all loaders must honor this):
+    pandas.DataFrame indexed by UTC datetime, columns:
+    ["open", "high", "low", "close", "volume"]
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def load_synthetic(
+    bars: int = 500,
+    start_price: float = 1.0850,
+    timeframe: str = "H1",
+    seed: int | None = None,
+) -> pd.DataFrame:
+    """Generate a synthetic but structurally plausible OHLCV series.
+
+    Not a price predictor, not calibrated to any real instrument — only
+    meant to exercise the pipeline end to end during Phase 1.
+    """
+    rng = np.random.default_rng(seed)
+
+    freq_map = {"M15": "15min", "H1": "1h", "H4": "4h", "D1": "1D"}
+    freq = freq_map.get(timeframe, "1h")
+
+    timestamps = pd.date_range(end=pd.Timestamp.now("UTC"), periods=bars, freq=freq)
+
+    # random walk with mild drift + volatility clustering, just enough
+    # structure for regime/SMC stub logic to have something to chew on
+    returns = rng.normal(loc=0.0, scale=0.0008, size=bars)
+    vol_regime = np.abs(rng.normal(loc=1.0, scale=0.3, size=bars)).clip(0.3, 2.5)
+    returns = returns * vol_regime
+
+    close = start_price * np.exp(np.cumsum(returns))
+    open_ = np.roll(close, 1)
+    open_[0] = start_price
+
+    # derive high/low from the actual open/close of each bar so high is
+    # always >= max(open, close) and low is always <= min(open, close)
+    wick_up = np.abs(rng.normal(0, 0.0006, size=bars))
+    wick_down = np.abs(rng.normal(0, 0.0006, size=bars))
+    bar_max = np.maximum(open_, close)
+    bar_min = np.minimum(open_, close)
+    high = bar_max * (1 + wick_up)
+    low = bar_min * (1 - wick_down)
+
+    volume = rng.integers(100, 5000, size=bars)
+
+    df = pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+        index=timestamps,
+    )
+    df.index.name = "datetime"
+
+    logger.info(f"Generated synthetic data: {bars} bars @ {timeframe}")
+    return df
+
+
+def load_from_csv(
+    path: str,
+    datetime_column: str | None = None,
+    column_map: dict[str, str] | None = None,
+    has_header: bool = True,
+    sep: str | None = None,
+    no_header_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Load real historical OHLCV data from a CSV file.
+
+    Designed to be tolerant of common export formats (MT4/MT5, generic
+    "Date,Open,High,Low,Close,Volume" exports) without guessing silently:
+    if column names can't be confidently matched, this raises rather than
+    fabricating a mapping.
+
+    Args:
+        path: path to the CSV file.
+        datetime_column: name of the datetime column, if not auto-detected.
+        column_map: optional explicit override, e.g.
+            {"datetime": "Date", "open": "O", "high": "H", "low": "L",
+             "close": "C", "volume": "Vol"}
+            If provided, this takes precedence over auto-detection.
+        has_header: set False for headerless exports (some broker/platform
+            exports ship raw rows with no column-name row at all). When
+            False, `no_header_columns` determines column order.
+        sep: explicit field separator (e.g. "\\t" for tab-separated files).
+            If not given, pandas' "python" engine auto-detects between
+            comma/tab/semicolon — explicit is safer for ambiguous files.
+        no_header_columns: column order to assume when has_header=False.
+            Defaults to ["datetime", "open", "high", "low", "close", "volume"],
+            the most common broker-export column order.
+
+    Returns:
+        DataFrame matching the project-wide OHLCV contract: indexed by
+        UTC datetime, columns ["open", "high", "low", "close", "volume"].
+
+    Raises:
+        FileNotFoundError: if `path` doesn't exist.
+        ValueError: if required columns can't be identified, or the
+            resulting data fails validate_ohlcv().
+    """
+    csv_path = Path(path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {path}")
+
+    if has_header:
+        raw = pd.read_csv(csv_path, sep=sep, engine="python" if sep is None else "c")
+    else:
+        columns = no_header_columns or ["datetime", "open", "high", "low", "close", "volume"]
+        raw = pd.read_csv(
+            csv_path, sep=sep, engine="python" if sep is None else "c",
+            header=None, names=columns,
+        )
+
+    if raw.empty:
+        raise ValueError(f"CSV file is empty: {path}")
+
+    resolved = column_map or _auto_detect_columns(raw.columns.tolist())
+    dt_col = datetime_column or resolved.get("datetime")
+    time_col = resolved.get("time")
+
+    required = ["datetime", "open", "high", "low", "close"]
+    missing = [k for k in required if resolved.get(k) is None and k != "datetime"]
+    if dt_col is None:
+        missing.insert(0, "datetime")
+    if missing:
+        raise ValueError(
+            f"Could not identify required columns {missing} in CSV header {raw.columns.tolist()}. "
+            f"Pass an explicit column_map to load_from_csv()."
+        )
+
+    # MT4/MT5-style exports often split date and time into two separate
+    # columns (e.g. "Date","Time"). If both are present, combine them —
+    # using the date column alone would silently collapse every bar on
+    # the same calendar day into one duplicate timestamp and drop data.
+    if time_col and time_col in raw.columns:
+        datetime_strings = raw[dt_col].astype(str) + " " + raw[time_col].astype(str)
+    else:
+        datetime_strings = raw[dt_col]
+
+    df = pd.DataFrame(
+        {
+            "open": pd.to_numeric(raw[resolved["open"]], errors="coerce"),
+            "high": pd.to_numeric(raw[resolved["high"]], errors="coerce"),
+            "low": pd.to_numeric(raw[resolved["low"]], errors="coerce"),
+            "close": pd.to_numeric(raw[resolved["close"]], errors="coerce"),
+            "volume": pd.to_numeric(raw[resolved.get("volume")], errors="coerce")
+            if resolved.get("volume") and resolved["volume"] in raw.columns
+            else 0,
+        }
+    )
+
+    df.index = pd.to_datetime(datetime_strings, utc=True, errors="coerce")
+    df.index.name = "datetime"
+
+    # Drop rows that failed to parse (datetime or any OHLC value) rather
+    # than silently propagating NaT/NaN into validate_ohlcv() with a
+    # confusing downstream error.
+    before = len(df)
+    df = df[df.index.notna()]
+    df = df.dropna(subset=["open", "high", "low", "close"])
+    dropped = before - len(df)
+    if dropped > 0:
+        logger.warning(f"Dropped {dropped} unparseable row(s) while loading {path}")
+
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep="first")]
+
+    if df.empty:
+        raise ValueError(f"No valid rows remained after parsing CSV: {path}")
+
+    logger.info(f"Loaded real CSV data: {len(df)} bars from {path} "
+                f"({df.index.min()} to {df.index.max()})")
+    return df
+
+
+def _auto_detect_columns(columns: list[str]) -> dict[str, str | None]:
+    """Best-effort case-insensitive column name matching for common
+    OHLCV export formats (generic, MT4/MT5-style). Returns None for any
+    field it can't confidently match — callers must treat that as a
+    hard failure, not fall back to a guess.
+    """
+    normalized = {c.lower().strip(): c for c in columns}
+
+    def find(*candidates: str) -> str | None:
+        for cand in candidates:
+            if cand in normalized:
+                return normalized[cand]
+        return None
+
+    return {
+        "datetime": find("datetime", "date", "date_time", "timestamp"),
+        "time": find("time"),
+        "open": find("open", "o"),
+        "high": find("high", "h"),
+        "low": find("low", "l"),
+        "close": find("close", "c", "price"),
+        "volume": find("volume", "vol", "v", "tick_volume"),
+    }
+
+
+def load_from_twelve_data(symbol: str, interval: str, api_key: str) -> pd.DataFrame:
+    """Phase 3 stub. Must return the same OHLCV contract as load_synthetic()."""
+    raise NotImplementedError("Twelve Data integration is planned for Phase 3.")
+
+
+def load_data(config: dict) -> pd.DataFrame:
+    """Dispatch to the correct loader based on config['data']['source']."""
+    source = config.get("data", {}).get("source", "synthetic")
+    bars = config.get("data", {}).get("bars_to_load", 500)
+    symbol = config.get("data", {}).get("symbol", "EURUSD")
+
+    if source == "synthetic":
+        return load_synthetic(bars=bars, timeframe=config["data"]["timeframes"][1])
+    elif source == "csv":
+        csv_path = config["data"].get("csv_path")
+        if not csv_path:
+            raise ValueError("config.yaml data.source is 'csv' but data.csv_path is not set")
+        return load_from_csv(
+            csv_path,
+            has_header=config["data"].get("csv_has_header", True),
+            sep=config["data"].get("csv_separator"),
+            no_header_columns=config["data"].get("csv_columns"),
+        )
+    elif source == "twelve_data":
+        return load_from_twelve_data(symbol, config["data"]["timeframes"][1], api_key="")
+    else:
+        raise ValueError(f"Unknown data source: {source}")

@@ -1,0 +1,13 @@
+{
+  "_comment": "Single source of truth for hypothesis status. config.yaml engines.enabled.* must never be set to true for an engine whose backing hypothesis here is not PASSED. Updated only by experiment scripts via _save_result(), or manually with extreme care.",
+  "hypotheses": {
+    "H001": {
+      "title": "Liquidity sweep + HTF trend alignment improves directional edge over baseline structural bias",
+      "status": "FAILED",
+      "blocks_engine": "smc_advanced (order_blocks, fvg, bos_choch)",
+      "result_file": "results/H001_result.json",
+      "tested_on": "real:EURUSD_M1_2026-03-16_2026-06-19.csv (resampled M15/H4), sample_size=225, sweep_win_rate=0.4978, baseline_win_rate=0.5143, p_value=0.6251",
+      "last_updated": "2026-06-21"
+    }
+  }
+}

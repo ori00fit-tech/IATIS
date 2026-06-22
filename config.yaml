@@ -13,11 +13,30 @@ data:
   symbol: "EURUSD"
   timeframes: ["M15", "H1", "H4", "D1"]
   bars_to_load: 500
-  # Real historical data available — see data/README.md. To use it, set
-  # source: "csv" and uncomment the lines below.
+
+  # --- CSV options (used when source: csv) ---
   # csv_path: "data/EURUSD_M1_2026-03-16_2026-06-19.csv"
   # csv_has_header: false
   # csv_separator: "\t"
+
+  # --- Twelve Data options (used when source: twelve_data) ---
+  # API key: set here OR in .env as TWELVE_DATA_API_KEY (preferred)
+  # twelve_data_api_key: ""
+  #
+  # Symbol in Twelve Data format (auto-converted from symbol above if not set)
+  # e.g. EUR/USD, XAU/USD, BTC/USD
+  # twelve_data_symbol: "EUR/USD"
+  #
+  # Symbols to analyze (multi-symbol support — each runs a full pipeline)
+  # Budget: Free plan = 800 req/day. Each symbol × timeframe = 1 request.
+  # Example below: 3 symbols × 1 timeframe = 3 requests per run.
+  twelve_data_symbols:
+    - symbol: "EUR/USD"
+      enabled: true
+    - symbol: "XAU/USD"
+      enabled: true
+    - symbol: "GBP/USD"
+      enabled: false   # enable when budget allows
 
 regime:
   atr_period: 14

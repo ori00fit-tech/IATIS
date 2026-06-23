@@ -78,3 +78,8 @@ risk:
 logging:
   level: "INFO"
   file: "storage/system.log"
+
+telegram:
+  enabled: true
+  # Credentials loaded from .env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+  # Set enabled: false to silence notifications without touching .env

@@ -21,7 +21,7 @@ import json
 from confluence.contradiction_engine import check_contradictions
 from confluence.score_calculator import calculate_score, validate_confluence_config
 from confluence.voting_system import tally_votes
-from core.data_loader import load_data
+from core.data_loader import load_data, load_multi_timeframe_from_twelve_data
 from core.data_validator import DataValidationError, validate_ohlcv
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
@@ -73,9 +73,43 @@ def run_pipeline(config: dict) -> dict:
     validate_confluence_config(config)
 
     # 1. Load data
-    df_base = load_data(config)
+    source = config.get("data", {}).get("source", "synthetic")
+    timeframes = config["data"]["timeframes"]
 
-    # 2. Validate
+    if source == "twelve_data":
+        # Fetch each timeframe natively from Twelve Data so each level
+        # has its full depth (500 bars) rather than being resampled from
+        # the lowest timeframe and ending up with only outputsize/N bars.
+        # Cost: 1 API credit per timeframe per run (cached within TTL).
+        import os
+        api_key = (
+            config["data"].get("twelve_data_api_key")
+            or os.environ.get("TWELVE_DATA_API_KEY", "")
+        )
+        td_symbol = (
+            config["data"].get("twelve_data_symbol")
+            or config["data"].get("symbol", "EURUSD").replace("USD", "/USD")[:7]
+        )
+        mtf_data = load_multi_timeframe_from_twelve_data(
+            td_symbol, timeframes, api_key=api_key,
+            outputsize=config["data"].get("bars_to_load", 500),
+        )
+        # use the finest timeframe as df_base for regime detection
+        df_base = mtf_data[timeframes[0]]
+    else:
+        df_base = load_data(config)
+        # 2. Validate
+        try:
+            validate_ohlcv(df_base)
+        except DataValidationError as exc:
+            logger.error(f"Data validation failed: {exc}")
+            failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
+            log_decision(failure_report)
+            return failure_report
+        # 3. Multi-timeframe view (resample from base)
+        mtf_data = build_multi_timeframe_view(df_base, timeframes)
+
+    # 2b. Validate base timeframe (applies to both paths)
     try:
         validate_ohlcv(df_base)
     except DataValidationError as exc:
@@ -83,10 +117,6 @@ def run_pipeline(config: dict) -> dict:
         failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
         log_decision(failure_report)
         return failure_report
-
-    # 3. Multi-timeframe view
-    timeframes = config["data"]["timeframes"]
-    mtf_data = build_multi_timeframe_view(df_base, timeframes)
 
     # 4. Regime detection
     regime_cfg = config.get("regime", {})

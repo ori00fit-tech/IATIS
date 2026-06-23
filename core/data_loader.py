@@ -223,23 +223,10 @@ def load_from_twelve_data(
     outputsize: int = 500,
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """Fetch real-time OHLCV data from Twelve Data REST API.
+    """Fetch real-time OHLCV data from Twelve Data REST API (single timeframe).
 
     Phase 2 implementation. Respects Free plan limits (800 req/day,
     8 req/min) via the built-in rate limiter in TwelveDataClient.
-    Responses are cached per-interval TTL so re-running the pipeline
-    within the same candle period doesn't burn an extra request.
-
-    Args:
-        symbol: Twelve Data symbol string, e.g. "EUR/USD", "XAU/USD"
-        interval: internal label ("M1","M15","H1","H4","D1")
-        api_key: Twelve Data API key (from .env TWELVE_DATA_API_KEY)
-        outputsize: bars to fetch (default 500, max 5000 on Free)
-        use_cache: use cached response if fresh (recommended True)
-
-    Returns:
-        Standard OHLCV DataFrame — same contract as load_synthetic()
-        and load_from_csv(), so nothing downstream changes.
     """
     from core.twelve_data_client import TwelveDataClient
 
@@ -249,6 +236,52 @@ def load_from_twelve_data(
         f"({client.remaining_today()} credits remaining today)"
     )
     return client.time_series(symbol, interval, outputsize=outputsize, use_cache=use_cache)
+
+
+def load_multi_timeframe_from_twelve_data(
+    symbol: str,
+    timeframes: list[str],
+    api_key: str,
+    outputsize: int = 500,
+    use_cache: bool = True,
+) -> dict[str, pd.DataFrame]:
+    """Fetch each timeframe directly from Twelve Data instead of resampling.
+
+    Why: resampling H1 -> H4 gives only outputsize/4 bars on the higher
+    timeframe, which is often insufficient for swing detection and
+    structural analysis. Fetching each timeframe natively gives full
+    depth for every level, at the cost of one API request per timeframe.
+
+    Budget note (Free plan: 800 req/day):
+        3 timeframes = 3 requests per call.
+        Use cache=True (default) so re-runs within the same candle
+        period don't burn extra credits.
+
+    Args:
+        symbol: Twelve Data symbol string, e.g. "EUR/USD"
+        timeframes: internal labels, e.g. ["M15", "H1", "H4", "D1"]
+        api_key: Twelve Data API key
+        outputsize: bars per timeframe (default 500)
+        use_cache: use cached response if fresh
+
+    Returns:
+        dict {timeframe_label: OHLCV DataFrame} — same contract as
+        build_multi_timeframe_view(), so the rest of the pipeline is
+        unchanged.
+    """
+    from core.twelve_data_client import TwelveDataClient
+
+    client = TwelveDataClient(api_key=api_key)
+    views: dict[str, pd.DataFrame] = {}
+
+    for tf in timeframes:
+        logger.info(
+            f"Fetching {symbol} @ {tf} ({client.remaining_today()} credits remaining)"
+        )
+        df = client.time_series(symbol, tf, outputsize=outputsize, use_cache=use_cache)
+        views[tf] = df
+
+    return views
 
 
 def load_data(config: dict) -> pd.DataFrame:

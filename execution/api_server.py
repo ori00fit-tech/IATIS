@@ -157,3 +157,18 @@ async def budget(x_api_key: str | None = Header(default=None)) -> dict[str, Any]
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/stats")
+async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
+    """Decision analytics from SQLite — regime performance, engine breakdown,
+    top NO_TRADE reasons."""
+    _check_auth(x_api_key)
+    try:
+        from storage.decision_db import summary, regime_performance
+        return {
+            "summary": summary(),
+            "regime_performance": regime_performance(),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

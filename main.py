@@ -34,6 +34,7 @@ from regimes.regime_detector import detect_regime
 from research.edge_gate import check_edge_gate
 from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
+from storage.decision_db import log_decision_db
 from execution.telegram_bot import send_signal as telegram_send
 from utils.helpers import load_config
 from utils.logger import get_logger
@@ -244,7 +245,8 @@ def run_pipeline(config: dict) -> dict:
     }
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
-    log_decision(report)
+    log_decision(report)       # JSONL — streaming / tail-friendly
+    log_decision_db(report)    # SQLite — queryable analytics
 
     # Send to Telegram — non-fatal if credentials missing or network fails.
     # Controlled by TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env.

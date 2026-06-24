@@ -19,8 +19,9 @@
 | ICT / NNFX / Quant / Macro engines | ⏳ Stub — gated behind `edge_gate.py` until hypotheses proven |
 | Confluence (voting, re-normalized score, contradiction) | ✅ Working |
 | Risk engine (sovereign authority) | ✅ Working — RR floor, drawdown halt, exposure cap |
-| Research layer / edge gate | ✅ Working — H001 tested on real data (FAILED, see `research/`) |
-| No-Trade Database | ✅ Working — every decision logged with full reasons |
+| Research layer / edge gate | ✅ Working — H001 FAILED, H002 PENDING (qualified sweep) |
+| No-Trade Database (JSONL) | ✅ Working — streaming append log |
+| **No-Trade Database (SQLite)** | ✅ Working — queryable analytics: regime performance, engine breakdown |
 | Behavior tests | ✅ Working — hand-crafted OHLCV scenarios |
 | **Telegram notifications** | ✅ Working — HTML formatted, full report per decision |
 | **Scheduler** | ✅ Working — multi-symbol, overlap protection, budget awareness |

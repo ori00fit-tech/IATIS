@@ -8,6 +8,14 @@
       "result_file": "results/H001_result.json",
       "tested_on": "real:EURUSD_M1_2026-03-16_2026-06-19.csv (resampled M15/H4), sample_size=225, sweep_win_rate=0.4978, baseline_win_rate=0.5143, p_value=0.6251",
       "last_updated": "2026-06-21"
+    },
+    "H002": {
+      "title": "Qualified liquidity sweep (min ATR size + trending regime) improves win rate over H001",
+      "status": "PENDING",
+      "blocks_engine": "smc_advanced (order_blocks, fvg, bos_choch)",
+      "result_file": "results/H002_result.json",
+      "notes": "Builds on H001 failure — adds ATR size filter (>=1x ATR14) and regime filter (TRENDING only). Pre-registered min_sample=30, min_improvement=5pp. Ready to run on existing EURUSD M1 dataset.",
+      "last_updated": "2026-06-24"
     }
   }
 }

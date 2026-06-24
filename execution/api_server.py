@@ -172,3 +172,111 @@ async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/dashboard", response_class=None)
+async def dashboard(x_api_key: str | None = Header(default=None)):
+    """Simple HTML dashboard — system health at a glance."""
+    from fastapi.responses import HTMLResponse
+    from storage.decision_db import summary, regime_performance, recent
+
+    try:
+        s = summary()
+        regime_perf = regime_performance()
+        last_decisions = recent(limit=5)
+    except Exception as exc:
+        return HTMLResponse(f"<pre>DB error: {exc}</pre>", status_code=500)
+
+    config = _get_config()
+    version = config.get("system", {}).get("version", "?")
+
+    try:
+        from core.twelve_data_client import RateLimiter, MAX_REQUESTS_PER_DAY
+        credits = RateLimiter().remaining_today()
+        credit_pct = int(credits / MAX_REQUESTS_PER_DAY * 100)
+        credit_color = "green" if credit_pct > 50 else "orange" if credit_pct > 20 else "red"
+    except Exception:
+        credits, credit_pct, credit_color = "?", 0, "gray"
+
+    decisions_html = ""
+    for d in last_decisions:
+        v = d.get("verdict", "?")
+        color = "#00cc44" if v == "EXECUTE" else "#ff4444"
+        decisions_html += f"""
+        <tr>
+            <td>{d.get('ts','')[:19]}</td>
+            <td>{d.get('symbol','?')}</td>
+            <td style="color:{color};font-weight:bold">{v}</td>
+            <td>{d.get('regime','?')}</td>
+            <td>{d.get('cf_score') or '—'}</td>
+            <td style="font-size:0.8em;max-width:300px">{(d.get('fail_reason') or d.get('summary',''))[:80]}</td>
+        </tr>"""
+
+    regime_html = ""
+    for r in regime_perf:
+        total = r.get('total', 1)
+        execs = r.get('executes', 0)
+        pct = int(execs / total * 100) if total else 0
+        regime_html += f"<tr><td>{r['regime']}</td><td>{total}</td><td>{execs} ({pct}%)</td><td>{r.get('avg_cf_score','?')}</td></tr>"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IATIS Dashboard</title>
+<meta http-equiv="refresh" content="60">
+<style>
+  body{{font-family:monospace;background:#0d1117;color:#c9d1d9;margin:20px;}}
+  h1{{color:#58a6ff;}} h2{{color:#79c0ff;border-bottom:1px solid #30363d;padding-bottom:4px;}}
+  .cards{{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0;}}
+  .card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 24px;min-width:140px;}}
+  .card .val{{font-size:2em;font-weight:bold;color:#58a6ff;}}
+  .card .lbl{{color:#8b949e;font-size:0.85em;}}
+  table{{width:100%;border-collapse:collapse;margin:8px 0;}}
+  th{{background:#161b22;color:#8b949e;text-align:left;padding:8px;font-size:0.85em;}}
+  td{{padding:8px;border-bottom:1px solid #21262d;font-size:0.9em;}}
+  tr:hover td{{background:#161b22;}}
+  .ok{{color:#3fb950;}} .warn{{color:#d29922;}} .badge{{
+    display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.8em;
+    background:#21262d;margin:2px;}}
+</style>
+</head>
+<body>
+<h1>🤖 IATIS Dashboard <span style="font-size:0.5em;color:#8b949e">v{version}</span></h1>
+<p style="color:#8b949e">Auto-refreshes every 60s</p>
+
+<h2>System Status</h2>
+<div class="cards">
+  <div class="card"><div class="val">{s.get('total',0)}</div><div class="lbl">Total Decisions</div></div>
+  <div class="card"><div class="val" style="color:#3fb950">{s.get('execute',0)}</div><div class="lbl">EXECUTE</div></div>
+  <div class="card"><div class="val" style="color:#f85149">{s.get('no_trade',0)}</div><div class="lbl">NO_TRADE</div></div>
+  <div class="card"><div class="val" style="color:{credit_color}">{credits}</div><div class="lbl">API Credits Left</div></div>
+</div>
+
+<h2>Top NO_TRADE Reasons</h2>
+<table>
+<tr><th>Reason</th><th>Count</th></tr>
+{"".join(f"<tr><td>{r['reason'][:80]}</td><td>{r['count']}</td></tr>" for r in s.get('top_no_trade_reasons',[])[:5]) or "<tr><td colspan=2>No data yet</td></tr>"}
+</table>
+
+<h2>Regime Performance</h2>
+<table>
+<tr><th>Regime</th><th>Total</th><th>EXECUTE</th><th>Avg Score</th></tr>
+{regime_html or "<tr><td colspan=4>No data yet</td></tr>"}
+</table>
+
+<h2>Last 5 Decisions</h2>
+<table>
+<tr><th>Time (UTC)</th><th>Symbol</th><th>Verdict</th><th>Regime</th><th>Score</th><th>Reason</th></tr>
+{decisions_html or "<tr><td colspan=6>No decisions yet</td></tr>"}
+</table>
+
+<p style="color:#8b949e;font-size:0.8em;margin-top:32px">
+  IATIS v{version} | <a href="/docs" style="color:#58a6ff">API Docs</a> |
+  <a href="/budget" style="color:#58a6ff">Budget</a> |
+  <a href="/stats" style="color:#58a6ff">Stats JSON</a>
+</p>
+</body>
+</html>"""
+    return HTMLResponse(html)

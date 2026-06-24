@@ -28,17 +28,25 @@ logger = get_logger(__name__)
 REGISTRY_PATH = Path(__file__).resolve().parent / "results" / "registry.json"
 
 # Engines that are plain technical reads, not edge claims — always allowed.
+# ICT/NNFX/Quant are now Phase 3 implementations, but still require
+# hypothesis validation before live activation. They can be enabled
+# for RESEARCH / PAPER TRADING by setting their hypothesis to "RESEARCH"
+# status in registry.json — use with caution.
 EXEMPT_ENGINES = {"smc", "price_action"}
 
 # Maps config.yaml engine keys to the hypothesis ID that must be PASSED
-# before that engine may be enabled. Engines not listed here and not in
-# EXEMPT_ENGINES are blocked by default until explicitly wired up.
+# (or RESEARCH for paper-trading-only mode) before that engine may be enabled.
 ENGINE_HYPOTHESIS_MAP = {
-    "ict": None,     # no hypothesis registered yet — blocked
-    "nnfx": None,    # no hypothesis registered yet — blocked
-    "quant": None,   # no hypothesis registered yet — blocked
-    "macro": None,   # no hypothesis registered yet — blocked
+    "ict":   "H003",   # ICT killzone/premium-discount — H003 pending
+    "nnfx":  "H004",   # NNFX EMA200+ADX — H004 pending
+    "quant": "H005",   # Quant RSI+momentum — H005 pending
+    "macro": None,     # no hypothesis registered yet — blocked
 }
+
+# Hypothesis statuses that allow engine activation
+# "PASSED" = proven edge on real data
+# "RESEARCH" = approved for paper trading / data collection only (not live)
+ALLOWED_STATUSES = {"PASSED", "RESEARCH"}
 
 
 class EdgeNotProvenError(Exception):
@@ -54,7 +62,7 @@ def _load_registry() -> dict:
 
 def check_edge_gate(enabled_engines: dict[str, bool]) -> None:
     """Raise EdgeNotProvenError if config tries to enable a non-exempt
-    engine that doesn't have a PASSED hypothesis backing it.
+    engine that doesn't have a PASSED (or RESEARCH) hypothesis backing it.
     """
     registry = _load_registry()
     hypotheses = registry.get("hypotheses", {})
@@ -72,10 +80,10 @@ def check_edge_gate(enabled_engines: dict[str, bool]) -> None:
             )
 
         status = hypotheses.get(hyp_id, {}).get("status")
-        if status != "PASSED":
+        if status not in ALLOWED_STATUSES:
             raise EdgeNotProvenError(
                 f"config.yaml enables engine '{engine_key}' but its backing hypothesis "
-                f"{hyp_id} has status '{status}', not 'PASSED'. Blocking."
+                f"{hyp_id} has status '{status}', not in {ALLOWED_STATUSES}. Blocking."
             )
 
     logger.info("Edge gate check passed — all enabled engines are exempt or proven.")

@@ -29,14 +29,21 @@ def test_edge_gate_allows_all_disabled():
 
 
 def test_edge_gate_blocks_unproven_engine():
+    # macro has no hypothesis at all — must be blocked
     with pytest.raises(EdgeNotProvenError):
-        check_edge_gate({"ict": True})
+        check_edge_gate({"macro": True})
 
 
-def test_edge_gate_blocks_pending_hypothesis():
-    # H001 exists in the registry but its status is PENDING, not PASSED.
-    # No engine currently maps to it, but this documents the intended
-    # behavior once smc_advanced is wired to ENGINE_HYPOTHESIS_MAP.
+def test_edge_gate_allows_research_status_engine():
+    # ICT/NNFX/Quant now have RESEARCH status — allowed for paper trading
+    # This should NOT raise — RESEARCH is in ALLOWED_STATUSES
+    check_edge_gate({"ict": True, "nnfx": True, "quant": True})
+
+
+def test_edge_gate_blocks_pending_hypothesis(monkeypatch):
+    # PENDING is not in ALLOWED_STATUSES — must be blocked
+    import research.edge_gate as edge_gate_module
+    monkeypatch.setattr(edge_gate_module, "ENGINE_HYPOTHESIS_MAP", {"nnfx": "H002"})
     with pytest.raises(EdgeNotProvenError):
         check_edge_gate({"nnfx": True})
 

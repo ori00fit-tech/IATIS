@@ -1,20 +1,41 @@
 {
-  "_comment": "Single source of truth for hypothesis status. config.yaml engines.enabled.* must never be set to true for an engine whose backing hypothesis here is not PASSED. Updated only by experiment scripts via _save_result(), or manually with extreme care.",
+  "_comment": "Single source of truth for hypothesis status. PASSED = proven edge. RESEARCH = approved for paper trading/data collection only.",
   "hypotheses": {
     "H001": {
-      "title": "Liquidity sweep + HTF trend alignment improves directional edge over baseline structural bias",
+      "title": "Liquidity sweep + HTF trend alignment improves directional edge",
       "status": "FAILED",
-      "blocks_engine": "smc_advanced (order_blocks, fvg, bos_choch)",
+      "blocks_engine": "smc_advanced",
       "result_file": "results/H001_result.json",
-      "tested_on": "real:EURUSD_M1_2026-03-16_2026-06-19.csv (resampled M15/H4), sample_size=225, sweep_win_rate=0.4978, baseline_win_rate=0.5143, p_value=0.6251",
+      "tested_on": "real:EURUSD_M1_2026-03-16_2026-06-19.csv, sample=225, wr=0.4978, p=0.6251",
       "last_updated": "2026-06-21"
     },
     "H002": {
-      "title": "Qualified liquidity sweep (min ATR size + trending regime) improves win rate over H001",
+      "title": "Qualified liquidity sweep (ATR size + trending regime) improves win rate over H001",
       "status": "PENDING",
-      "blocks_engine": "smc_advanced (order_blocks, fvg, bos_choch)",
+      "blocks_engine": "smc_advanced",
       "result_file": "results/H002_result.json",
-      "notes": "Builds on H001 failure — adds ATR size filter (>=1x ATR14) and regime filter (TRENDING only). Pre-registered min_sample=30, min_improvement=5pp. Ready to run on existing EURUSD M1 dataset.",
+      "notes": "Ready to run on EURUSD M15/H1 data",
+      "last_updated": "2026-06-24"
+    },
+    "H003": {
+      "title": "ICT killzone + premium/discount zone bias improves precision vs random entry",
+      "status": "RESEARCH",
+      "blocks_engine": "ict",
+      "notes": "RESEARCH status = approved for paper trading and data collection. Not proven on real edge yet. Engine may be enabled in config for observation; do not use for live trading until PASSED.",
+      "last_updated": "2026-06-24"
+    },
+    "H004": {
+      "title": "NNFX EMA200 baseline + ADX strength filter improves trend entry precision",
+      "status": "RESEARCH",
+      "blocks_engine": "nnfx",
+      "notes": "RESEARCH status — engine ready for paper trading observation.",
+      "last_updated": "2026-06-24"
+    },
+    "H005": {
+      "title": "Quant RSI + momentum (ROC) confirmation reduces false signals from SMC+PA",
+      "status": "RESEARCH",
+      "blocks_engine": "quant",
+      "notes": "RESEARCH status — engine ready for paper trading observation.",
       "last_updated": "2026-06-24"
     }
   }

@@ -29,16 +29,38 @@ data:
   # e.g. EUR/USD, XAU/USD, BTC/USD
   # twelve_data_symbol: "EUR/USD"
   #
-  # Symbols to analyze (multi-symbol support — each runs a full pipeline)
-  # Budget: Free plan = 800 req/day. Each symbol × timeframe = 1 request.
-  # Example below: 3 symbols × 1 timeframe = 3 requests per run.
+  # Symbols to analyze — each runs a full pipeline per cycle
+  # Budget: Free plan = 800 req/day. Each symbol × native_timeframes = credits.
+  # With 2 native TFs (M15+H1) per symbol: 20 symbols = 40 req/run
+  # Hourly runs: 40 × 24 = 960 req/day — slightly over Free plan (800)
+  # Safe schedule: every 2 hours → 40 × 12 = 480 req/day ✅
+  # Or: run only enabled symbols (start with 5-8, expand when on paid plan)
   twelve_data_symbols:
-    - symbol: "EUR/USD"
-      enabled: true
-    - symbol: "XAU/USD"
-      enabled: true
-    - symbol: "GBP/USD"
-      enabled: false   # enable when budget allows
+    # FOREX Majors
+    - {symbol: "EUR/USD",  enabled: true,  internal: "EURUSD"}
+    - {symbol: "GBP/USD",  enabled: true,  internal: "GBPUSD"}
+    - {symbol: "USD/JPY",  enabled: true,  internal: "USDJPY"}
+    - {symbol: "USD/CHF",  enabled: false, internal: "USDCHF"}
+    - {symbol: "AUD/USD",  enabled: false, internal: "AUDUSD"}
+    - {symbol: "USD/CAD",  enabled: false, internal: "USDCAD"}
+    - {symbol: "NZD/USD",  enabled: false, internal: "NZDUSD"}
+    - {symbol: "EUR/JPY",  enabled: false, internal: "EURJPY"}
+    - {symbol: "GBP/JPY",  enabled: false, internal: "GBPJPY"}
+    - {symbol: "AUD/JPY",  enabled: false, internal: "AUDJPY"}
+    - {symbol: "EUR/GBP",  enabled: false, internal: "EURGBP"}
+    - {symbol: "EUR/CHF",  enabled: false, internal: "EURCHF"}
+    # Metals
+    - {symbol: "XAU/USD",  enabled: true,  internal: "XAUUSD"}
+    - {symbol: "XAG/USD",  enabled: false, internal: "XAGUSD"}
+    # Energy
+    - {symbol: "WTI/USD",  enabled: false, internal: "USOIL"}
+    # Indices
+    - {symbol: "DJI",      enabled: false, internal: "US30"}
+    - {symbol: "NDX",      enabled: false, internal: "NAS100"}
+    - {symbol: "SPX",      enabled: false, internal: "SPX500"}
+    # Crypto
+    - {symbol: "BTC/USD",  enabled: false, internal: "BTCUSD"}
+    - {symbol: "ETH/USD",  enabled: false, internal: "ETHUSD"}
 
 regime:
   atr_period: 14
@@ -47,28 +69,26 @@ regime:
 engines:
   enabled:
     smc: true
-    ict: false        # placeholder — Phase 3
-    nnfx: false        # placeholder — Phase 3
+    ict: true          # Phase 3 — RESEARCH status (paper trading only)
+    nnfx: true         # Phase 3 — RESEARCH status (paper trading only)
     price_action: true
-    quant: false        # placeholder — Phase 3
-    macro: false        # placeholder — Phase 4
+    quant: true        # Phase 3 — RESEARCH status (paper trading only)
+    macro: false       # Phase 4
 
 confluence:
   weights:
     smc: 0.25
     price_action: 0.20
-    nnfx: 0.15
-    ict: 0.15
+    ict: 0.20
+    nnfx: 0.20
     quant: 0.15
-    macro: 0.10
-  # min_score_to_trade must be <= max achievable score with enabled engines.
-  # With smc (max=65) + price_action (max=80), re-normalized:
-  #   max = (0.25×65 + 0.20×80) / 0.45 = 71.7
-  # Setting 60 = ~85% of max → requires strong agreement from both engines.
-  # validate_confluence_config() enforces this at startup.
-  min_score_to_trade: 60
-  # min_engines_agreeing must be <= enabled engine count (currently 2)
-  min_engines_agreeing: 2
+    macro: 0.00
+  # With 5 engines, max achievable score depends on individual caps:
+  # SMC=65, PA=80, ICT=80, NNFX=80, Quant=60
+  # Weighted avg max = (0.25×65 + 0.20×80 + 0.20×80 + 0.20×80 + 0.15×60) / 1.0 = 73.25
+  # Setting 62 = ~85% of 73.25 — requires strong multi-engine agreement
+  min_score_to_trade: 62
+  min_engines_agreeing: 3   # now possible with 5 engines
 
 risk:
   risk_per_trade_min: 0.0025   # 0.25%

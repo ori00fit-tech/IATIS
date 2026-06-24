@@ -377,3 +377,31 @@ async def dashboard(x_api_key: str | None = Header(default=None)):
 </body>
 </html>"""
     return HTMLResponse(html_content)
+
+
+@app.get("/engine-stats")
+async def engine_stats_endpoint(
+    symbol: str | None = Query(default=None),
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Per-engine performance statistics and suggested weight adjustments."""
+    _check_auth(x_api_key)
+    try:
+        from storage.engine_tracker import engine_stats, neutral_rate_by_engine, suggested_weights
+        config = _get_config()
+        current_weights = config.get("confluence", {}).get("weights", {})
+
+        stats = engine_stats(min_votes=5, symbol=symbol)
+        neutral = neutral_rate_by_engine()
+        suggested = suggested_weights(current_weights)
+
+        return {
+            "engine_stats": stats,
+            "neutral_rates": neutral,
+            "current_weights": current_weights,
+            "suggested_weights": suggested,
+            "note": "Suggested weights need 20+ votes per engine to be reliable. Review before applying."
+        }
+    except Exception as exc:
+        logger.error(f"Engine stats error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")

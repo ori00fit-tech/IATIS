@@ -92,7 +92,7 @@ def test_build_message_contains_symbol():
 
 def test_build_message_contains_verdict():
     msg = _build_message(NO_TRADE_REPORT)
-    assert "NO_TRADE" in msg
+    assert "NO_TRADE" in msg  # verdict always present
 
     msg_ex = _build_message(EXECUTE_REPORT)
     assert "EXECUTE" in msg_ex
@@ -186,7 +186,8 @@ def test_send_raw_works():
 
 def test_test_connection_calls_send_raw():
     with patch("execution.telegram_bot.send_raw", return_value=True) as mock_send:
-        test_connection(token="tok", chat_id="123")
+        from execution.telegram_bot import test_connection as tc
+        tc(token="tok", chat_id="123")
     mock_send.assert_called_once()
     args = mock_send.call_args[0]
     assert "connected" in args[0].lower() or "IATIS" in args[0]

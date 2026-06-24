@@ -5,12 +5,15 @@ Phase 2: Telegram notification layer.
 
 Design principles:
 - Uses raw Telegram Bot API via requests (no extra library dependency)
-- Never crashes the pipeline — send failures are logged, not raised
-- Formats every message with full context: regime, engines, score,
-  verdict, and reasons — so you understand the decision without
-  opening any other file
-- Respects Telegram's 4096-char message limit via automatic truncation
-- Supports both EXECUTE and NO_TRADE messages with distinct formatting
+- parse_mode: HTML (not Markdown) — HTML is far more predictable in
+  Telegram because special characters in dynamic content (prices,
+  reasons, symbol names) don't accidentally trigger Markdown parsing.
+  The only thing that can break HTML is unescaped < > & — we handle
+  that with _escape().
+- Never crashes the pipeline — send failures are logged with the full
+  API error body, not just the exception message.
+- Full error logging: when the API returns a non-ok response, we log
+  the exact status code and response body so the cause is diagnosable.
 
 Setup: add to .env
     TELEGRAM_BOT_TOKEN=<your token>
@@ -37,6 +40,13 @@ class TelegramError(Exception):
     send_signal itself never raises to avoid crashing the pipeline)."""
 
 
+def _escape(text: str) -> str:
+    """Escape HTML special characters in dynamic content.
+    Telegram HTML mode only requires escaping < > &.
+    """
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _get_credentials() -> tuple[str, str]:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -44,33 +54,34 @@ def _get_credentials() -> tuple[str, str]:
 
 
 def _build_message(report: dict) -> str:
-    """Format a pipeline report into a readable Telegram message."""
+    """Format a pipeline report into an HTML Telegram message."""
     verdict = report.get("final_verdict", "UNKNOWN")
-    symbol = report.get("symbol", "?")
-    summary = report.get("summary", "")
+    symbol = _escape(report.get("symbol", "?"))
+    summary = _escape(report.get("summary", ""))
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # verdict icon
     icon = "✅" if verdict == "EXECUTE" else "⛔"
+
     regime_info = report.get("regime", {})
-    regime = regime_info.get("state", "?")
-    volatility = regime_info.get("volatility", "?")
+    regime = _escape(regime_info.get("state", "?"))
+    volatility = _escape(regime_info.get("volatility", "?"))
     confidence = regime_info.get("confidence", 0)
     trend = regime_info.get("trend_strength", 0)
 
-    # engine outputs
     engines = report.get("engine_outputs", [])
     engine_lines = []
     for e in engines:
-        bias = e.get("bias", "?")
+        bias = _escape(e.get("bias", "?"))
         score = e.get("score", 0)
-        name = e.get("engine", "?")
-        bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(bias, "⚪")
+        name = _escape(e.get("engine", "?"))
+        bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(
+            e.get("bias", ""), "⚪"
+        )
         engine_lines.append(f"  {bias_icon} {name}: {bias} ({score:.0f}/100)")
 
     confluence = report.get("confluence", {})
-    score = confluence.get("score", 0)
-    direction = confluence.get("directional_score", 0)
+    cf_score = confluence.get("score", 0)
+    cf_dir = confluence.get("directional_score", 0)
     participating = confluence.get("engines_participating", 0)
     total = confluence.get("engines_total", 0)
     weight_share = confluence.get("participating_weight_share", 0)
@@ -80,18 +91,20 @@ def _build_message(report: dict) -> str:
     risk_reasons = risk.get("reasons", []) if risk else []
 
     lines = [
-        f"{icon} *IATIS — {symbol}*",
+        f"{icon} <b>IATIS — {symbol}</b>",
         f"🕐 {now}",
         "",
-        f"📊 *Regime:* {regime} | vol: {volatility} | confidence: {confidence:.0%} | trend: {trend:+.2f}",
+        f"📊 <b>Regime:</b> {regime} | vol: {volatility} | "
+        f"confidence: {confidence:.0%} | trend: {trend:+.2f}",
         "",
-        "🧠 *Engines:*",
+        "🧠 <b>Engines:</b>",
     ]
     lines.extend(engine_lines)
     lines += [
         "",
-        f"⚖️ *Confluence:* {score:.1f}/100 (dir: {direction:+.1f})",
-        f"   Engines: {participating}/{total} voted | weight coverage: {weight_share:.0%}",
+        f"⚖️ <b>Confluence:</b> {cf_score:.1f}/100 (dir: {cf_dir:+.1f})",
+        f"   Engines: {participating}/{total} voted | "
+        f"weight coverage: {weight_share:.0%}",
     ]
 
     if verdict == "EXECUTE":
@@ -102,46 +115,75 @@ def _build_message(report: dict) -> str:
         risk_pct = risk.get("recommended_risk_pct", 0) if risk else 0
 
         def _fmt_price(v) -> str:
-            return f"{v:.5f}" if isinstance(v, float) else str(v)
+            return f"{v:.5f}" if isinstance(v, float) else _escape(str(v))
 
         lines += [
             "",
-            "💰 *Trade Setup:*",
+            "💰 <b>Trade Setup:</b>",
             f"   Entry: {_fmt_price(entry)}",
             f"   SL:    {_fmt_price(sl)}",
             f"   TP:    {_fmt_price(tp)}",
-            f"   R:R    {rr}",
+            f"   R:R    {_escape(str(rr))}",
             f"   Risk:  {risk_pct:.2%} of account",
         ]
     else:
         if fail_reasons:
-            lines += ["", "❌ *Confluence failed:*"]
+            lines += ["", "❌ <b>Confluence failed:</b>"]
             for r in fail_reasons:
-                lines.append(f"   • {r}")
+                lines.append(f"   • {_escape(r)}")
         if risk_reasons and risk.get("passed") is False:
-            lines += ["", "🛡 *Risk gate failed:*"]
+            lines += ["", "🛡 <b>Risk gate failed:</b>"]
             for r in risk_reasons:
-                lines.append(f"   • {r}")
+                lines.append(f"   • {_escape(r)}")
 
-    lines += ["", f"📋 *Verdict: {verdict}*", f"_{summary}_"]
+    lines += [
+        "",
+        f"📋 <b>Verdict: {_escape(verdict)}</b>",
+        f"<i>{summary}</i>",
+    ]
 
     message = "\n".join(lines)
-    _SUFFIX = "\n\n_(message truncated)_"
+    _SUFFIX = "\n\n<i>(message truncated)</i>"
     if len(message) > MAX_MESSAGE_LENGTH:
         message = message[: MAX_MESSAGE_LENGTH - len(_SUFFIX)] + _SUFFIX
     return message
 
 
+def _post(url: str, payload: dict) -> tuple[bool, str]:
+    """Make the HTTP POST and return (success, error_detail).
+    Logs the full response body on failure so the cause is diagnosable.
+    Never raises.
+    """
+    resp = None
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("ok"):
+            return True, ""
+        detail = data.get("description", "unknown API error")
+        logger.warning(
+            f"Telegram API returned ok=false: {detail} "
+            f"(status={resp.status_code})"
+        )
+        return False, detail
+
+    except requests.RequestException as exc:
+        detail = str(exc)
+        if resp is not None:
+            try:
+                detail += f" | body={resp.text[:300]}"
+            except Exception:
+                pass
+        logger.warning(f"Telegram request failed (non-fatal): {detail}")
+        return False, detail
+
+
 def send_signal(report: dict, token: str = "", chat_id: str = "") -> bool:
     """Send pipeline report to Telegram. Returns True on success.
 
-    Never raises — failures are logged as warnings so the pipeline
-    continues regardless of Telegram availability.
-
-    Args:
-        report: the full dict returned by main.run_pipeline()
-        token: bot token (falls back to TELEGRAM_BOT_TOKEN env var)
-        chat_id: chat id (falls back to TELEGRAM_CHAT_ID env var)
+    Never raises — failures are logged so the pipeline continues
+    regardless of Telegram availability.
     """
     env_token, env_chat_id = _get_credentials()
     token = token or env_token
@@ -155,34 +197,17 @@ def send_signal(report: dict, token: str = "", chat_id: str = "") -> bool:
         return False
 
     message = _build_message(report)
-    url = TELEGRAM_API.format(token=token)
-
-    try:
-        resp = requests.post(
-            url,
-            json={
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "Markdown",
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("ok"):
-            logger.warning(f"Telegram API error: {data.get('description')}")
-            return False
-
+    ok, _ = _post(
+        TELEGRAM_API.format(token=token),
+        {"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+    )
+    if ok:
         logger.info(f"Telegram signal sent: verdict={report.get('final_verdict')}")
-        return True
-
-    except requests.RequestException as exc:
-        logger.warning(f"Telegram send failed (non-fatal): {exc}")
-        return False
+    return ok
 
 
 def send_raw(text: str, token: str = "", chat_id: str = "") -> bool:
-    """Send a plain text message — used for system alerts, errors, startup."""
+    """Send a plain text message — used for system alerts and startup."""
     env_token, env_chat_id = _get_credentials()
     token = token or env_token
     chat_id = chat_id or env_chat_id
@@ -190,23 +215,17 @@ def send_raw(text: str, token: str = "", chat_id: str = "") -> bool:
     if not token or not chat_id:
         return False
 
-    try:
-        resp = requests.post(
-            TELEGRAM_API.format(token=token),
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("ok", False)
-    except requests.RequestException as exc:
-        logger.warning(f"Telegram send_raw failed: {exc}")
-        return False
+    ok, _ = _post(
+        TELEGRAM_API.format(token=token),
+        {"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+    )
+    return ok
 
 
 def test_connection(token: str = "", chat_id: str = "") -> bool:
-    """Send a test message to verify credentials work."""
+    """Send a test message to verify credentials work. Costs 0 API credits."""
     return send_raw(
-        "🤖 *IATIS connected* — Telegram notifications are working.",
+        "🤖 <b>IATIS connected</b> — Telegram notifications are working.",
         token=token,
         chat_id=chat_id,
     )

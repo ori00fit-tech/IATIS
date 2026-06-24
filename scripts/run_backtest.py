@@ -40,14 +40,10 @@ def main():
 
     print(f"Data: {len(df)} bars | {df.index[0].date()} → {df.index[-1].date()}")
 
-    # Detect pip size
-    pip = 0.01 if any(x in args.symbol for x in ("JPY", "jpy")) else 0.0001
-
-    config = BacktestConfig(
-        symbol=args.symbol,
+    config = BacktestConfig.from_profile(
+        args.symbol,
         initial_balance=args.balance,
         risk_per_trade=args.risk,
-        pip_size=pip,
         step_bars=args.step,
     )
 

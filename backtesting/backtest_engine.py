@@ -30,8 +30,44 @@ class BacktestConfig:
     min_rr: float = 3.0
     commission_pips: float = 0.5
     warmup_bars: int = 210
-    step_bars: int = 4          # run pipeline every 4 bars (faster backtest)
-    pip_size: float = 0.0001    # 0.01 for JPY pairs
+    step_bars: int = 4
+    pip_size: float = 0.0001    # 0.01 for JPY pairs, 0.0001 for most FX
+
+    # Asset class controls how P&L is calculated:
+    # 'forex': pnl_usd = pips * pip_size * lot_size * 100000
+    # 'metal': pnl_usd = price_diff * lot_size * contract_size
+    # 'index': pnl_usd = price_diff * lot_size * multiplier
+    asset_class: str = "forex"
+    # For metals/indices: dollar value per 1-point move per 1 lot
+    # Gold: 1 USD/point/lot, Silver: 50 USD/point, Crude: 10 USD/point
+    dollar_per_point: float = 1.0   # only used when asset_class != 'forex'
+
+    @classmethod
+    def from_profile(cls, symbol: str, **kwargs) -> "BacktestConfig":
+        """Create config from asset profile automatically."""
+        try:
+            from core.asset_profiles import get_profile
+            profile = get_profile(symbol.upper())
+            ac = profile.asset_class.lower()
+
+            # Map asset class to calculation method
+            if ac == "forex":
+                return cls(symbol=symbol, asset_class="forex",
+                           pip_size=0.01 if "JPY" in symbol else 0.0001, **kwargs)
+            elif ac == "metals":
+                # Gold: $1 per point per 0.01 lot → $100/point/lot
+                dppt = 100.0 if symbol in ("XAUUSD",) else 500.0  # XAGUSD
+                return cls(symbol=symbol, asset_class="metal",
+                           pip_size=0.01, dollar_per_point=dppt, **kwargs)
+            elif ac == "energy":
+                return cls(symbol=symbol, asset_class="metal",
+                           pip_size=0.01, dollar_per_point=100.0, **kwargs)
+            elif ac in ("indices", "crypto"):
+                return cls(symbol=symbol, asset_class="index",
+                           pip_size=0.01, dollar_per_point=1.0, **kwargs)
+        except (KeyError, ImportError):
+            pass
+        return cls(symbol=symbol, **kwargs)
 
 
 @dataclass
@@ -177,6 +213,16 @@ def run_backtest(
     atr_series = compute_atr(df, period=14)
     balance = config.initial_balance
     open_trade: Trade | None = None
+    ac = config.asset_class
+    dpp = config.dollar_per_point
+
+    def _calc_pnl_usd(price_diff: float, size: float) -> float:
+        """Calculate P&L in USD based on asset class."""
+        if ac == "forex":
+            return (price_diff / config.pip_size) * config.pip_size * size * 100_000
+        else:
+            # Metals/Indices: price_diff in native units × lots × dollar_per_point
+            return price_diff * size * dpp
 
     result = BacktestResult(
         config=config, symbol=config.symbol,
@@ -195,33 +241,45 @@ def run_backtest(
         # --- Check open trade ---
         if open_trade is not None:
             h, l = float(next_bar["high"]), float(next_bar["low"])
-            p = config.pip_size
             if open_trade.direction == "BUY":
                 if l <= open_trade.stop_loss:
-                    pnl = (open_trade.stop_loss - open_trade.entry_price) / p - config.commission_pips
-                    _close_trade(open_trade, i+1, next_bar, open_trade.stop_loss, pnl, p, "SL")
+                    diff = open_trade.stop_loss - open_trade.entry_price
+                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
+                    open_trade.exit_price = open_trade.stop_loss
+                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.pnl_usd -= config.commission_pips * config.pip_size * open_trade.position_size * 100_000 if ac == "forex" else 0
+                    open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
-                    result.trades.append(open_trade)
-                    open_trade = None
+                    result.trades.append(open_trade); open_trade = None
                 elif h >= open_trade.take_profit:
-                    pnl = (open_trade.take_profit - open_trade.entry_price) / p - config.commission_pips
-                    _close_trade(open_trade, i+1, next_bar, open_trade.take_profit, pnl, p, "TP")
+                    diff = open_trade.take_profit - open_trade.entry_price
+                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
+                    open_trade.exit_price = open_trade.take_profit
+                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
-                    result.trades.append(open_trade)
-                    open_trade = None
+                    result.trades.append(open_trade); open_trade = None
             else:  # SELL
                 if h >= open_trade.stop_loss:
-                    pnl = (open_trade.entry_price - open_trade.stop_loss) / p - config.commission_pips
-                    _close_trade(open_trade, i+1, next_bar, open_trade.stop_loss, -pnl, p, "SL")
+                    diff = open_trade.entry_price - open_trade.stop_loss
+                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
+                    open_trade.exit_price = open_trade.stop_loss
+                    open_trade.pnl_pips = -(diff / config.pip_size) - config.commission_pips
+                    open_trade.pnl_usd = _calc_pnl_usd(-diff, open_trade.position_size)
+                    open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
-                    result.trades.append(open_trade)
-                    open_trade = None
+                    result.trades.append(open_trade); open_trade = None
                 elif l <= open_trade.take_profit:
-                    pnl = (open_trade.entry_price - open_trade.take_profit) / p - config.commission_pips
-                    _close_trade(open_trade, i+1, next_bar, open_trade.take_profit, pnl, p, "TP")
+                    diff = open_trade.entry_price - open_trade.take_profit
+                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
+                    open_trade.exit_price = open_trade.take_profit
+                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
-                    result.trades.append(open_trade)
-                    open_trade = None
+                    result.trades.append(open_trade); open_trade = None
 
         result.equity_curve.append(balance)
 
@@ -259,8 +317,13 @@ def run_backtest(
             tp = entry + tp_dist if direction == "BULLISH" else entry - tp_dist
 
             risk_amount = balance * config.risk_per_trade
-            sl_pips = abs(entry - sl) / config.pip_size
-            size = max(0.01, min(round(risk_amount / (sl_pips * 10), 2), 10.0))
+
+            if ac == "forex":
+                sl_pips = abs(entry - sl) / config.pip_size
+                size = max(0.01, min(round(risk_amount / (sl_pips * 10), 2), 10.0))
+            else:
+                # Metals/Indices: size = risk / (sl_dist * dollar_per_point)
+                size = max(0.01, min(round(risk_amount / (sl_dist * dpp), 4), 10.0))
 
             open_trade = Trade(
                 entry_bar=i+1, entry_time=next_bar.name,
@@ -278,12 +341,16 @@ def run_backtest(
     if open_trade is not None:
         last = df.iloc[-1]
         exit_p = float(last["close"])
-        p = config.pip_size
         if open_trade.direction == "BUY":
-            pnl = (exit_p - open_trade.entry_price) / p - config.commission_pips
+            diff = exit_p - open_trade.entry_price
         else:
-            pnl = (open_trade.entry_price - exit_p) / p - config.commission_pips
-        _close_trade(open_trade, len(df)-1, last, exit_p, pnl, p, "FORCED_CLOSE")
+            diff = open_trade.entry_price - exit_p
+        open_trade.exit_bar = len(df)-1
+        open_trade.exit_time = last.name
+        open_trade.exit_price = exit_p
+        open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
+        open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+        open_trade.exit_reason = "FORCED_CLOSE"
         balance += open_trade.pnl_usd
         result.trades.append(open_trade)
 
@@ -300,4 +367,23 @@ def _close_trade(trade: Trade, bar: int, bar_data, exit_price: float,
     trade.exit_price = exit_price
     trade.pnl_pips = pnl_pips
     trade.pnl_usd = pnl_pips * pip_size * trade.position_size * 100000
+    trade.exit_reason = reason
+
+
+# Monkey-patch: override _close_trade with asset-class-aware version
+_orig_close_trade = _close_trade
+
+def _close_trade_v2(trade: Trade, bar: int, bar_data, exit_price: float,
+                    pnl_pips: float, pip_size: float, reason: str,
+                    asset_class: str = "forex",
+                    dollar_per_point: float = 1.0) -> None:
+    trade.exit_bar = bar
+    trade.exit_time = bar_data.name
+    trade.exit_price = exit_price
+    trade.pnl_pips = pnl_pips
+    if asset_class == "forex":
+        trade.pnl_usd = pnl_pips * pip_size * trade.position_size * 100_000
+    else:
+        # Metals/Indices: price_diff (in asset units) × lots × dollar_per_point
+        trade.pnl_usd = pnl_pips * trade.position_size * dollar_per_point
     trade.exit_reason = reason

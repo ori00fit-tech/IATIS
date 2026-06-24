@@ -49,14 +49,13 @@ def main():
 
     for csv_file in csv_files:
         symbol = csv_file.name.split("_")[0]
-        pip = 0.01 if any(x in symbol for x in ("JPY", "jpy")) else 0.0001
 
         print(f"⏳ {symbol} ({csv_file.name})...")
         try:
             df = load_from_csv(str(csv_file))
             print(f"   {len(df)} bars | {df.index[0].date()} → {df.index[-1].date()}")
 
-            config = BacktestConfig(symbol=symbol, pip_size=pip, step_bars=args.step)
+            config = BacktestConfig.from_profile(symbol, step_bars=args.step)
             result = run_backtest(df, config)
 
             out_path = storage_dir / f"backtest_{symbol}_H1_{args.years}y.json"

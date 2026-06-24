@@ -277,8 +277,12 @@ def load_multi_timeframe_from_twelve_data(
 
     client = TwelveDataClient(api_key=api_key)
     views: dict[str, pd.DataFrame] = {}
-    base_df = None          # finest native timeframe fetched
-    base_label = None       # its label (for resample reference)
+    # For resampling H4/D1, use the COARSEST native timeframe (H1 > M15)
+    # because resampling from H1 gives more accurate H4/D1 bars.
+    # Timeframe order from coarsest to finest:
+    _TF_ORDER = {"D1": 0, "H4": 1, "H1": 2, "M15": 3, "M5": 4, "M1": 5}
+    best_base_df = None
+    best_base_label = None
 
     for tf in timeframes:
         if tf in FREE_PLAN_NATIVE:
@@ -288,10 +292,15 @@ def load_multi_timeframe_from_twelve_data(
             )
             df = client.time_series(symbol, tf, outputsize=outputsize, use_cache=use_cache)
             views[tf] = df
-            # track the finest native fetch for resampling higher TFs
-            if base_df is None or len(df) > len(base_df):
-                base_df = df
-                base_label = tf
+            # prefer the coarsest native TF for resampling (H1 > M15)
+            current_order = _TF_ORDER.get(tf, 99)
+            best_order = _TF_ORDER.get(best_base_label, 99) if best_base_label else 99
+            if best_base_df is None or current_order < best_order:
+                best_base_df = df
+                best_base_label = tf
+
+    base_df = best_base_df
+    base_label = best_base_label
 
     # resample any higher timeframes that aren't natively available
     if base_df is not None:

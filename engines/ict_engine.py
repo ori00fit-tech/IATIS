@@ -103,11 +103,14 @@ class ICTEngine(BaseEngine):
     name = "ICT"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        # prefer H1 for ICT analysis (session timing matters most intraday)
-        tf = "H1" if "H1" in mtf_data else next(iter(mtf_data))
-        df = mtf_data[tf]
+        # Use H1 for session/killzone (intraday timing)
+        # Use H4 for dealing range (wider structural context)
+        tf_session = "H1" if "H1" in mtf_data else next(iter(mtf_data))
+        tf_range = "H4" if "H4" in mtf_data and len(mtf_data["H4"]) >= 30 else tf_session
+        df_session = mtf_data[tf_session]
+        df_range = mtf_data[tf_range]
 
-        if len(df) < 30:
+        if len(df_session) < 30:
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
@@ -115,11 +118,13 @@ class ICTEngine(BaseEngine):
                 reasons=["Insufficient data for ICT analysis"],
             )
 
-        session = detect_session_from_df(df)
-        current_price = float(df["close"].iloc[-1])
-        range_low, range_high = _dealing_range(df, lookback=20)
+        session = detect_session_from_df(df_session)
+        current_price = float(df_session["close"].iloc[-1])
+
+        # Dealing range on H4 (wider, more structural) — 20 H4 bars = ~3 days
+        range_low, range_high = _dealing_range(df_range, lookback=20)
         zone, pct = _premium_discount_zone(current_price, range_low, range_high)
-        is_judas, judas_dir = _detect_judas_swing(df, session)
+        is_judas, judas_dir = _detect_judas_swing(df_session, session)
 
         reasons = []
         score = 0.0
@@ -180,7 +185,8 @@ class ICTEngine(BaseEngine):
             bias = Bias.NEUTRAL
 
         raw = {
-            "timeframe_used": tf,
+            "timeframe_session": tf_session,
+            "timeframe_range": tf_range,
             "session": session.primary_session,
             "active_sessions": session.active_sessions,
             "is_killzone": session.is_session_open,

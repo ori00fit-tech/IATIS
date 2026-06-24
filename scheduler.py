@@ -193,6 +193,11 @@ def main() -> None:
     config = load_config()
     if args.source:
         config["data"]["source"] = args.source
+    elif os.environ.get("TWELVE_DATA_API_KEY") and config["data"].get("source") == "synthetic":
+        # Auto-switch to live data if API key is available and config is still on synthetic
+        logger.info("TWELVE_DATA_API_KEY found in .env — switching source to twelve_data")
+        config["data"]["source"] = "twelve_data"
+
     if config["data"]["source"] == "twelve_data":
         api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
         if not api_key:

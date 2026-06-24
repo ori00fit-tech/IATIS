@@ -245,41 +245,72 @@ def load_multi_timeframe_from_twelve_data(
     outputsize: int = 500,
     use_cache: bool = True,
 ) -> dict[str, pd.DataFrame]:
-    """Fetch each timeframe directly from Twelve Data instead of resampling.
+    """Fetch supported timeframes from Twelve Data and resample the rest.
 
-    Why: resampling H1 -> H4 gives only outputsize/4 bars on the higher
-    timeframe, which is often insufficient for swing detection and
-    structural analysis. Fetching each timeframe natively gives full
-    depth for every level, at the cost of one API request per timeframe.
+    Twelve Data Free plan supports: M1, M5, M15, H1 natively.
+    H4 and D1 return 403 Forbidden on Free plan, so we:
+      1. Fetch the finest available native timeframe (usually H1 or M15)
+      2. Resample upward for H4 / D1
 
-    Budget note (Free plan: 800 req/day):
-        3 timeframes = 3 requests per call.
-        Use cache=True (default) so re-runs within the same candle
-        period don't burn extra credits.
+    This means H4/D1 bars are derived from H1 data, not independently
+    fetched — which is fine for structural analysis but means H4 will
+    only cover the same date range as H1 (500 H1 bars ≈ 125 H4 bars).
+    When more timeframe depth is needed, increase outputsize or upgrade
+    the Twelve Data plan.
 
     Args:
         symbol: Twelve Data symbol string, e.g. "EUR/USD"
         timeframes: internal labels, e.g. ["M15", "H1", "H4", "D1"]
         api_key: Twelve Data API key
-        outputsize: bars per timeframe (default 500)
+        outputsize: bars per natively-fetched timeframe (default 500)
         use_cache: use cached response if fresh
 
     Returns:
         dict {timeframe_label: OHLCV DataFrame} — same contract as
-        build_multi_timeframe_view(), so the rest of the pipeline is
-        unchanged.
+        build_multi_timeframe_view().
     """
     from core.twelve_data_client import TwelveDataClient
+    from core.timeframe_sync import resample
+
+    # Twelve Data Free plan: only these intervals work reliably
+    FREE_PLAN_NATIVE = {"M1", "M5", "M15", "H1"}
 
     client = TwelveDataClient(api_key=api_key)
     views: dict[str, pd.DataFrame] = {}
+    base_df = None          # finest native timeframe fetched
+    base_label = None       # its label (for resample reference)
 
     for tf in timeframes:
-        logger.info(
-            f"Fetching {symbol} @ {tf} ({client.remaining_today()} credits remaining)"
+        if tf in FREE_PLAN_NATIVE:
+            logger.info(
+                f"Fetching {symbol} @ {tf} natively "
+                f"({client.remaining_today()} credits remaining)"
+            )
+            df = client.time_series(symbol, tf, outputsize=outputsize, use_cache=use_cache)
+            views[tf] = df
+            # track the finest native fetch for resampling higher TFs
+            if base_df is None or len(df) > len(base_df):
+                base_df = df
+                base_label = tf
+
+    # resample any higher timeframes that aren't natively available
+    if base_df is not None:
+        for tf in timeframes:
+            if tf not in views:
+                logger.info(
+                    f"Resampling {symbol} @ {tf} from {base_label} "
+                    f"(not available on Free plan natively)"
+                )
+                try:
+                    views[tf] = resample(base_df, tf)
+                except Exception as exc:
+                    logger.warning(f"Could not resample {tf}: {exc} — skipping")
+
+    if not views:
+        raise ValueError(
+            f"No timeframes could be fetched for {symbol}. "
+            f"Check API key and plan limits."
         )
-        df = client.time_series(symbol, tf, outputsize=outputsize, use_cache=use_cache)
-        views[tf] = df
 
     return views
 

@@ -11,6 +11,8 @@ system:
 data:
   source: "synthetic"          # synthetic | csv | twelve_data
   symbol: "EURUSD"
+  # Timeframes to analyze. On Twelve Data Free plan, only M1/M5/M15/H1
+  # are natively available — H4/D1 will be resampled from H1 automatically.
   timeframes: ["M15", "H1", "H4", "D1"]
   bars_to_load: 500
 

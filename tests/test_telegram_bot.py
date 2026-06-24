@@ -14,7 +14,7 @@ from execution.telegram_bot import (
     _build_message,
     send_raw,
     send_signal,
-    test_connection,
+    test_connection as tg_test_connection,
 )
 
 # ---------------------------------------------------------------------------

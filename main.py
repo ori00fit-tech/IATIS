@@ -234,6 +234,12 @@ def run_pipeline(config: dict) -> dict:
             "recommended_risk_pct": risk_result.recommended_risk_pct if risk_result else None,
             "position_size_units": risk_result.position_size_units if risk_result else None,
         },
+        # Trade levels — populated only when confluence_pass (risk inputs exist).
+        # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.
+        "entry_price": float(entry) if confluence_pass else None,
+        "stop_loss": float(stop) if confluence_pass else None,
+        "take_profit": float(target) if confluence_pass else None,
+        "risk_reward": f"1:{config['risk']['min_risk_reward']:.0f}" if confluence_pass else None,
         "final_verdict": final_verdict,
     }
 

@@ -1,51 +1,34 @@
 # IATIS — Institutional Adaptive Trading Intelligence System
 
-> **Phase 1 status: architecture skeleton, running on synthetic data.**
-> This is not a working trading signal generator yet. Read "What's real
-> vs. stubbed" below before relying on any output.
+> **Phase 2 status: live data, Telegram notifications, automated scheduler.**
+> Running on real market data via Twelve Data API. See the status table below
+> for what's fully implemented vs. what's still stubbed.
 
-## What this is
-
-A multi-engine market analysis pipeline where independent "expert"
-engines (SMC, ICT, NNFX, Price Action, Quant, Macro) each vote on market
-bias, a confluence layer combines their votes into a weighted score, and
-a risk engine acts as a hard, non-overridable gate before any trade idea
-is allowed to "exist."
-
-Core design principles:
-- Engines never get merged/blended — each votes independently.
-- No opinion is better than a guessed one: engines abstain (`NEUTRAL`,
-  score 0) rather than fabricate a bias when data is insufficient.
-- Risk management is sovereign: it can block a trade regardless of how
-  good the confluence score looks.
-
-## What's real vs. stubbed (Phase 1)
+## What's real vs. stubbed
 
 | Component | Status |
 |---|---|
 | Data loader (synthetic) | ✅ Working |
-| **Data loader (real CSV)** | ✅ Working — generic + MT4/MT5-style formats, see `core/data_loader.py::load_from_csv` |
+| Data loader (real CSV) | ✅ Working — generic + MT4/MT5 formats, headerless + tab-separated |
+| **Data loader (Twelve Data live)** | ✅ Working — rate limiting, per-interval cache, multi-symbol |
 | Data validator | ✅ Working |
-| Multi-timeframe resampling | ✅ Working |
-| Regime detector (trend/range) | ✅ Working (simple heuristic — see code docstring) |
-| SMC engine | ✅ Working (swing structure only — order blocks/FVG/BOS-CHOCH are Phase 3) |
-| Price Action engine | ✅ Working (MA trend + breakout) |
-| ICT / NNFX / Quant / Macro engines | ⏳ Stub — always abstain, disabled in config |
-| Confluence (voting, scoring, contradiction) | ✅ Working (re-normalized, transparent — see fix history below) |
-| Risk engine | ✅ Working (RR floor, drawdown halt, exposure cap) |
-| **Research layer / edge gate** | ✅ Working — blocks unproven engines from being enabled |
-| **Decision log (No-Trade Database)** | ✅ Working — logs every EXECUTE/NO_TRADE with reasons |
-| **Behavior tests** | ✅ Working — hand-crafted OHLCV scenarios for bullish/bearish/contradiction/breakout/drawdown-halt, see `tests/test_behavior.py` |
+| Multi-timeframe sync (resample + native fetch) | ✅ Working |
+| Regime detector (trend/range + ATR volatility) | ✅ Working |
+| SMC engine | ✅ Working (swing structure bias; order blocks/FVG/BOS-CHOCH = Phase 3) |
+| Price Action engine | ✅ Working (sigmoid-scaled MA trend + breakout detection) |
+| ICT / NNFX / Quant / Macro engines | ⏳ Stub — gated behind `edge_gate.py` until hypotheses proven |
+| Confluence (voting, re-normalized score, contradiction) | ✅ Working |
+| Risk engine (sovereign authority) | ✅ Working — RR floor, drawdown halt, exposure cap |
+| Research layer / edge gate | ✅ Working — H001 tested on real data (FAILED, see `research/`) |
+| No-Trade Database | ✅ Working — every decision logged with full reasons |
+| Behavior tests | ✅ Working — hand-crafted OHLCV scenarios |
+| **Telegram notifications** | ✅ Working — HTML formatted, full report per decision |
+| **Scheduler** | ✅ Working — multi-symbol, overlap protection, budget awareness |
+| FastAPI server | ⏳ Stub — Phase 3 |
+| Cloudflare webhook | ⏳ Stub — Phase 3 |
 | Correlation engine | ⏳ Stub — needs multi-symbol data |
 | AI explanation layer | ⏳ Stub — Phase 4 |
-| Telegram / Cloudflare / API server | ⏳ Stub — Phase 2 |
-| Backtesting | ⏳ Stub — Phase 5, deferred until real engines exist |
-
-**Important:** all data right now is synthetically generated
-(`core/data_loader.py::load_synthetic`). It is structurally plausible
-(valid OHLC relationships) but has no relationship to any real market.
-Do not interpret any `EXECUTE` / `NO_TRADE` verdict from this phase as
-real trading advice.
+| Backtesting | ⏳ Stub — Phase 5 |
 
 ## Project structure
 

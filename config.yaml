@@ -5,8 +5,8 @@
 
 system:
   name: "IATIS"
-  version: "0.1.0-phase1"
-  mode: "synthetic"   # synthetic | csv | live  (Phase 1 = synthetic only)
+  version: "0.2.0-phase2"
+  mode: "synthetic"   # synthetic | csv | live
 
 data:
   source: "synthetic"          # synthetic | csv | twelve_data

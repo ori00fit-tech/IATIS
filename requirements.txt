@@ -1,4 +1,4 @@
-# Phase 1 — core only
+# Core
 pandas>=2.0.0
 numpy>=1.24.0
 pydantic>=2.0.0
@@ -6,11 +6,6 @@ PyYAML>=6.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 
-# Phase 2+ (uncomment when needed)
-# fastapi>=0.110.0
-# uvicorn>=0.29.0
-# python-telegram-bot>=21.0
-# requests>=2.31.0
-
-# Phase 5 (backtesting, optional)
-# vectorbt>=0.26.0
+# Phase 2: API server
+fastapi>=0.110.0
+uvicorn>=0.29.0

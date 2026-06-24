@@ -61,12 +61,13 @@ confluence:
     ict: 0.15
     quant: 0.15
     macro: 0.10
-  min_score_to_trade: 75
-  # NOTE: must be <= the number of engines enabled above, or EXECUTE
-  # becomes mathematically unreachable. Currently 2 engines enabled
-  # (smc, price_action) -> min_engines_agreeing must be <= 2.
-  # When ICT/NNFX/Quant get proven edges and are enabled (see
-  # research/edge_gate.py), raise this back toward 3.
+  # min_score_to_trade must be <= max achievable score with enabled engines.
+  # With smc (max=65) + price_action (max=80), re-normalized:
+  #   max = (0.25×65 + 0.20×80) / 0.45 = 71.7
+  # Setting 60 = ~85% of max → requires strong agreement from both engines.
+  # validate_confluence_config() enforces this at startup.
+  min_score_to_trade: 60
+  # min_engines_agreeing must be <= enabled engine count (currently 2)
   min_engines_agreeing: 2
 
 risk:

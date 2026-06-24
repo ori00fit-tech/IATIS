@@ -37,20 +37,59 @@ class ConfluenceConfigError(Exception):
 def validate_confluence_config(config: dict) -> None:
     """Sanity-check confluence settings against the enabled engine count.
 
-    Call this once at startup (main.py does) so a misconfigured
-    min_engines_agreeing fails loudly at boot instead of silently
-    guaranteeing NO_TRADE forever.
+    Checks:
+    1. min_engines_agreeing <= enabled engine count
+       (otherwise EXECUTE is unreachable — too few engines to form a majority)
+    2. min_score_to_trade <= max achievable score with enabled engines
+       (otherwise EXECUTE is unreachable — score ceiling is below threshold)
+
+    Call this once at startup (main.py does) so misconfigured values
+    fail loudly at boot instead of silently guaranteeing NO_TRADE forever.
     """
     enabled = config.get("engines", {}).get("enabled", {})
     enabled_count = sum(1 for v in enabled.values() if v)
     min_engines = config.get("confluence", {}).get("min_engines_agreeing", 0)
+    min_score = config.get("confluence", {}).get("min_score_to_trade", 0)
 
+    # Check 1: enough engines to form a majority
     if min_engines > enabled_count:
         raise ConfluenceConfigError(
             f"confluence.min_engines_agreeing ({min_engines}) exceeds the number of "
             f"enabled engines ({enabled_count}). EXECUTE would be mathematically "
             f"unreachable. Lower min_engines_agreeing or enable more engines."
         )
+
+    # Check 2: min_score_to_trade is achievable given engine weights and max scores.
+    # SMC max score = 65 (majority vote cap), PA max score = 80 (sigmoid cap).
+    # Other engines cap at 80. Re-normalized over enabled engines only.
+    if min_score > 0:
+        weights = config.get("confluence", {}).get("weights", {})
+        # Map config weight keys to engine names
+        _KEY_TO_ENGINE = {
+            "smc": "SMC", "price_action": "PriceAction",
+            "ict": "ICT", "nnfx": "NNFX", "quant": "Quant", "macro": "Macro",
+        }
+        # Per-engine max score caps
+        _MAX_SCORE = {"SMC": 65.0}  # SMC majority-vote formula caps at 65
+        _DEFAULT_MAX = 80.0
+
+        enabled_keys = [k for k, v in enabled.items() if v]
+        participating_weight = sum(weights.get(k, 0) for k in enabled_keys)
+
+        if participating_weight > 0:
+            max_weighted = sum(
+                weights.get(k, 0) * _MAX_SCORE.get(_KEY_TO_ENGINE.get(k, ""), _DEFAULT_MAX)
+                for k in enabled_keys
+            )
+            max_achievable = max_weighted / participating_weight
+
+            if min_score > max_achievable:
+                raise ConfluenceConfigError(
+                    f"confluence.min_score_to_trade ({min_score}) exceeds the maximum "
+                    f"achievable score with current enabled engines "
+                    f"({max_achievable:.1f}). EXECUTE would be mathematically "
+                    f"unreachable. Lower min_score_to_trade to ≤{int(max_achievable)}."
+                )
 
 
 @dataclass

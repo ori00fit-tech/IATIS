@@ -233,9 +233,39 @@ def test_validate_confluence_config_allows_equal_threshold():
     # min_engines_agreeing == enabled_count is the tight-but-valid edge case.
     edge_config = {
         "engines": {"enabled": {"smc": True, "price_action": True}},
-        "confluence": {"min_engines_agreeing": 2},
+        "confluence": {"min_engines_agreeing": 2, "min_score_to_trade": 0,
+                       "weights": {"smc": 0.25, "price_action": 0.20}},
     }
     validate_confluence_config(edge_config)  # must not raise
+
+
+def test_validate_confluence_config_blocks_unreachable_score():
+    """min_score_to_trade=75 with SMC+PA only is unreachable (max≈71.7)."""
+    bad_config = {
+        "engines": {"enabled": {"smc": True, "price_action": True, "ict": False}},
+        "confluence": {
+            "min_engines_agreeing": 2,
+            "min_score_to_trade": 75,
+            "weights": {"smc": 0.25, "price_action": 0.20, "ict": 0.15,
+                        "nnfx": 0.15, "quant": 0.15, "macro": 0.10},
+        },
+    }
+    with pytest.raises(ConfluenceConfigError, match="mathematically unreachable"):
+        validate_confluence_config(bad_config)
+
+
+def test_validate_confluence_config_allows_achievable_score():
+    """min_score_to_trade=60 with SMC+PA is achievable (max≈71.7)."""
+    good_config = {
+        "engines": {"enabled": {"smc": True, "price_action": True, "ict": False}},
+        "confluence": {
+            "min_engines_agreeing": 2,
+            "min_score_to_trade": 60,
+            "weights": {"smc": 0.25, "price_action": 0.20, "ict": 0.15,
+                        "nnfx": 0.15, "quant": 0.15, "macro": 0.10},
+        },
+    }
+    validate_confluence_config(good_config)  # must not raise
 
 
 def test_main_pipeline_raises_before_any_engine_runs_on_bad_config(tmp_path, monkeypatch):

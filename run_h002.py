@@ -32,6 +32,10 @@ def main() -> None:
                         help="Bars per timeframe (default: 5000, max on Free plan)")
     parser.add_argument("--no-cache", action="store_true",
                         help="Force fresh API calls (don't use cache)")
+    parser.add_argument("--atr-multiplier", type=float, default=None,
+                        help="Override ATR_MULTIPLIER in experiment (e.g. 0.3, 0.5)")
+    parser.add_argument("--forward-bars", type=int, default=None,
+                        help="Override FORWARD_BARS in experiment (e.g. 10, 20, 40)")
     args = parser.parse_args()
 
     api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
@@ -70,6 +74,16 @@ def main() -> None:
     )
 
     print(f"\nRunning H002 experiment on {source}...")
+
+    # Apply any overrides before running
+    import research.experiments.H002_qualified_sweep as h002_mod
+    if args.atr_multiplier is not None:
+        h002_mod.ATR_MULTIPLIER = args.atr_multiplier
+        print(f"  ATR_MULTIPLIER overridden to {args.atr_multiplier}")
+    if args.forward_bars is not None:
+        h002_mod.FORWARD_BARS = args.forward_bars
+        print(f"  FORWARD_BARS overridden to {args.forward_bars}")
+
     from research.experiments.H002_qualified_sweep import run_experiment
     result = run_experiment(df_m15, df_h1, source=source)
 

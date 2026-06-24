@@ -38,7 +38,11 @@ MIN_SAMPLE_SIZE = 30
 MIN_WIN_RATE_IMPROVEMENT = 0.05   # 5pp over H001 baseline
 H001_BASELINE_WIN_RATE = 0.4978   # from H001_result.json
 FORWARD_BARS = 20
-ATR_MULTIPLIER = 1.0              # sweep wick must be >= 1× ATR(14)
+ATR_MULTIPLIER = 0.5              # sweep wick >= 0.5x ATR(14)
+                                  # Reduced from 1.0 after INCONCLUSIVE result:
+                                  # 1.0x was too strict — only 5 events in 52 days.
+                                  # 0.5x still filters micro-wicks but allows
+                                  # meaningful sweeps to qualify.
 
 
 class SyntheticDataNotAllowedError(Exception):

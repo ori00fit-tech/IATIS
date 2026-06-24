@@ -49,8 +49,22 @@ Reject H002 if ANY of the following:
     (not worth the added complexity of the filter)
 
 ## Status
-`PENDING` — experiment script ready, requires real data (already available
-in data/EURUSD_M1_2026-03-16_2026-06-19.csv).
+`PENDING (revised)` — First run returned INCONCLUSIVE.
+
+### Run 1 (2026-06-24): INCONCLUSIVE
+- Data: `TwelveData EURUSD M15+H1, 2026-05-03 to 2026-06-24 (52 days)`
+- Raw sweeps: 435 | Qualified (ATR≥1.0): **5** (1.1% retention)
+- Conclusion: `ATR_MULTIPLIER = 1.0` too strict for 52-day window.
+  Almost no sweeps reach 1× ATR in size on EURUSD M15.
+
+### Revision
+ATR_MULTIPLIER lowered to **0.5** (half ATR). Still meaningful —
+filters out micro-wicks but allows moderate sweeps to qualify.
+This is documented before re-running (not cherry-picked after).
+
+### Run 2: PENDING
+Re-run with ATR_MULTIPLIER=0.5 on same data + extended window
+if needed.
 
 ## If PASSED
 Enables: `smc_advanced` engine (order blocks, FVG, BOS/CHOCH detection)

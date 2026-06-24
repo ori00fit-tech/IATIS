@@ -1,0 +1,215 @@
+"""
+scheduler.py
+--------------
+Runs the IATIS pipeline on a schedule without any external dependency.
+Uses Python's built-in sched module — no celery, no cron, no Redis.
+
+Schedule logic:
+  - Runs once immediately on startup
+  - Then repeats every `interval_minutes` (default: 60, i.e. once per H1 candle)
+  - Skips a run if the previous one is still executing (overlap protection)
+  - Sends a startup message to Telegram so you know it's alive
+  - Sends a daily budget warning if Twelve Data credits fall below threshold
+
+Usage:
+  python scheduler.py                    # runs every 60 minutes
+  python scheduler.py --interval 15      # runs every 15 minutes (M15)
+  python scheduler.py --once             # runs once and exits (useful for cron)
+  python scheduler.py --symbols EUR/USD XAU/USD   # override symbols
+
+Budget awareness (Free plan: 800 req/day):
+  With 4 timeframes per symbol:
+    1 symbol  × 4 TFs = 4  req/run → 200 full runs/day (safe for hourly)
+    2 symbols × 4 TFs = 8  req/run → 100 full runs/day (safe for hourly)
+    3 symbols × 4 TFs = 12 req/run →  66 full runs/day (safe for hourly)
+  Cache kicks in within the same candle period, so consecutive runs
+  in the same hour consume far fewer credits.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sched
+import signal
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from execution.telegram_bot import send_raw, send_signal
+from main import run_pipeline
+from utils.helpers import load_config
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_running = threading.Event()
+_running.set()
+_lock = threading.Lock()
+
+
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _credits_warning(config: dict) -> str | None:
+    """Return a warning string if Twelve Data credits are running low."""
+    if config.get("data", {}).get("source") != "twelve_data":
+        return None
+    try:
+        from core.twelve_data_client import RateLimiter
+        remaining = RateLimiter().remaining_today()
+        if remaining < 50:
+            return f"⚠️ Twelve Data credits low: {remaining} remaining today"
+    except Exception:
+        pass
+    return None
+
+
+def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
+    """Run the pipeline for all configured symbols. Returns list of reports."""
+    if not _lock.acquire(blocking=False):
+        logger.warning("Previous run still in progress — skipping this cycle")
+        return []
+
+    reports = []
+    try:
+        active_symbols = symbols or _get_symbols(config)
+        logger.info(
+            f"=== Scheduler run @ {_now_utc()} "
+            f"| {len(active_symbols)} symbol(s): {active_symbols} ==="
+        )
+
+        for sym in active_symbols:
+            sym_config = dict(config)
+            sym_config["data"] = dict(config["data"])
+            sym_config["data"]["twelve_data_symbol"] = sym
+            sym_config["data"]["symbol"] = sym.replace("/", "")
+
+            try:
+                report = run_pipeline(sym_config)
+                reports.append(report)
+            except Exception as exc:
+                logger.error(f"Pipeline failed for {sym}: {exc}")
+                send_raw(
+                    f"🚨 <b>IATIS pipeline error</b> — {sym}\n"
+                    f"<code>{type(exc).__name__}: {exc}</code>"
+                )
+
+        # budget warning (sent once per run, not per symbol)
+        warning = _credits_warning(config)
+        if warning:
+            send_raw(warning)
+
+    finally:
+        _lock.release()
+
+    return reports
+
+
+def _get_symbols(config: dict) -> list[str]:
+    """Get enabled symbols from config.yaml's twelve_data_symbols list."""
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+    enabled = [
+        s["symbol"] for s in symbols_cfg
+        if isinstance(s, dict) and s.get("enabled", True)
+    ]
+    if enabled:
+        return enabled
+    # fallback: single symbol from data.twelve_data_symbol or data.symbol
+    sym = (
+        config["data"].get("twelve_data_symbol")
+        or config["data"].get("symbol", "EURUSD")
+    )
+    return [sym]
+
+
+def run_loop(config: dict, interval_minutes: int, symbols: list[str] | None) -> None:
+    """Main scheduling loop. Runs indefinitely until SIGINT/SIGTERM."""
+    interval_sec = interval_minutes * 60
+
+    # startup Telegram ping
+    sym_list = symbols or _get_symbols(config)
+    source = config.get("data", {}).get("source", "synthetic")
+    send_raw(
+        f"🚀 <b>IATIS Scheduler started</b>\n"
+        f"⏱ Interval: every {interval_minutes} min\n"
+        f"📊 Symbols: {', '.join(sym_list)}\n"
+        f"💾 Source: {source}\n"
+        f"🕐 {_now_utc()}"
+    )
+
+    logger.info(
+        f"Scheduler started: interval={interval_minutes}min "
+        f"symbols={sym_list} source={source}"
+    )
+
+    while _running.is_set():
+        run_once(config, symbols)
+        # wait interval_sec in 1-second chunks so SIGINT is responsive
+        for _ in range(interval_sec):
+            if not _running.is_set():
+                break
+            time.sleep(1)
+
+    logger.info("Scheduler stopped cleanly")
+    send_raw("🛑 <b>IATIS Scheduler stopped</b>")
+
+
+def _handle_signal(signum, frame):
+    logger.info(f"Signal {signum} received — stopping scheduler after current run")
+    _running.clear()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="IATIS Pipeline Scheduler")
+    parser.add_argument(
+        "--interval", type=int, default=60,
+        help="Minutes between runs (default: 60)"
+    )
+    parser.add_argument(
+        "--once", action="store_true",
+        help="Run once and exit (for use with external cron)"
+    )
+    parser.add_argument(
+        "--symbols", nargs="+", default=None,
+        help="Override symbols, e.g. --symbols EUR/USD XAU/USD"
+    )
+    parser.add_argument(
+        "--source", default=None,
+        help="Override data source (synthetic | csv | twelve_data)"
+    )
+    args = parser.parse_args()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    config = load_config()
+    if args.source:
+        config["data"]["source"] = args.source
+    if config["data"]["source"] == "twelve_data":
+        api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
+        if not api_key:
+            sys.exit("ERROR: TWELVE_DATA_API_KEY not set in .env")
+        config["data"]["twelve_data_api_key"] = api_key
+
+    if args.once:
+        reports = run_once(config, args.symbols)
+        for r in reports:
+            print(json.dumps({
+                "symbol": r.get("symbol"),
+                "verdict": r.get("final_verdict"),
+                "summary": r.get("summary"),
+            }, indent=2))
+    else:
+        run_loop(config, args.interval, args.symbols)
+
+
+if __name__ == "__main__":
+    main()

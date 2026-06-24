@@ -149,11 +149,8 @@ def _build_message(report: dict) -> str:
     return message
 
 
-def _post(url: str, payload: dict) -> tuple[bool, str]:
-    """Make the HTTP POST and return (success, error_detail).
-    Logs the full response body on failure so the cause is diagnosable.
-    Never raises.
-    """
+def _post(url: str, payload: dict, token_hint: str = "") -> tuple[bool, str]:
+    """HTTP POST with error logging that never exposes the full token."""
     resp = None
     try:
         resp = requests.post(url, json=payload, timeout=10)
@@ -162,17 +159,14 @@ def _post(url: str, payload: dict) -> tuple[bool, str]:
         if data.get("ok"):
             return True, ""
         detail = data.get("description", "unknown API error")
-        logger.warning(
-            f"Telegram API returned ok=false: {detail} "
-            f"(status={resp.status_code})"
-        )
+        safe_hint = f"token={token_hint[:8]}..." if token_hint else "token=?"
+        logger.warning(f"Telegram API ok=false: {detail} (status={resp.status_code}, {safe_hint})")
         return False, detail
-
     except requests.RequestException as exc:
-        detail = str(exc)
+        detail = type(exc).__name__  # never include URL (contains token)
         if resp is not None:
             try:
-                detail += f" | body={resp.text[:300]}"
+                detail += f" status={resp.status_code}"
             except Exception:
                 pass
         logger.warning(f"Telegram request failed (non-fatal): {detail}")
@@ -200,6 +194,7 @@ def send_signal(report: dict, token: str = "", chat_id: str = "") -> bool:
     ok, _ = _post(
         TELEGRAM_API.format(token=token),
         {"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+        token_hint=token,
     )
     if ok:
         logger.info(f"Telegram signal sent: verdict={report.get('final_verdict')}")

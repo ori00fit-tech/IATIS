@@ -1,4 +1,5 @@
 """
+import os
 storage/decision_db.py
 -----------------------
 SQLite-backed decision store — replaces the flat JSONL log for queries.
@@ -97,12 +98,17 @@ def _conn(path: Path = DB_PATH):
 
 
 def init_db(path: Path = DB_PATH) -> None:
-    """Create tables if they don't exist yet."""
+    """Create tables if they don't exist yet. Sets restrictive permissions."""
     with _conn(path) as con:
         con.execute(_CREATE_DECISIONS)
         con.execute(_CREATE_ENGINE_VOTES)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
+    # Owner read/write only (issue #9)
+    try:
+        os.chmod(str(path), 0o600)
+    except Exception:
+        pass
     logger.debug(f"DB initialized: {path}")
 
 

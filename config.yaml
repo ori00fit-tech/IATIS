@@ -74,23 +74,26 @@ engines:
     price_action: true
     quant: true        # RESEARCH status
     wyckoff: true      # RESEARCH status
-    macro: false       # requires yfinance + Yahoo Finance access
+    macro: false       # requires yfinance network access
 
 confluence:
   weights:
-    smc: 0.20
-    price_action: 0.15
-    ict: 0.18
-    nnfx: 0.15
-    quant: 0.12
-    wyckoff: 0.15
-    macro: 0.05
-  # Max achievable score (all engines at max):
-  # SMC=65×0.20 + PA=80×0.15 + ICT=80×0.18 + NNFX=80×0.15 + Quant=60×0.12 + Wyckoff=75×0.15 + Macro=70×0.05
-  # = 13 + 12 + 14.4 + 12 + 7.2 + 11.25 + 3.5 = 73.35 (normalized over enabled engines)
-  # Setting 62 = ~85% of 73 — requires strong multi-engine agreement
-  min_score_to_trade: 62
-  min_engines_agreeing: 4   # 6 engines enabled → need 4 agreeing
+    smc: 0.30          # raised — most reliable structural signal
+    price_action: 0.25 # raised — MA + breakout, consistent signal
+    ict: 0.15          # ICT often NEUTRAL outside killzones
+    nnfx: 0.15         # NNFX needs 210 bars EMA200 to activate
+    quant: 0.10        # confirmation only
+    wyckoff: 0.05      # often NEUTRAL (needs clear range structure)
+    macro: 0.00
+  # Max achievable score (re-normalized over participating engines):
+  # Best realistic case: SMC(65)×0.30 + PA(80)×0.25 + NNFX(80)×0.15 agree
+  # participating_weight = 0.70 → score = (65×0.30+80×0.25+80×0.15)/0.70 = 72.1
+  # With 2 engines (SMC+PA only): (65×0.30+80×0.25)/0.55 = 71.8
+  # Setting 55 = ~77% of max → realistic threshold
+  min_score_to_trade: 55
+  # With 6 engines, 2-3 typically agree (others NEUTRAL)
+  # Setting 2 allows SMC+PA to trade, which is the current proven combo
+  min_engines_agreeing: 2
 
 risk:
   risk_per_trade_min: 0.0025   # 0.25%

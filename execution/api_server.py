@@ -1,22 +1,28 @@
 """
 execution/api_server.py
 ---------------------------
-Phase 2: FastAPI HTTP server for the IATIS pipeline.
+FastAPI HTTP server — Phase 2. Security-hardened.
 
-Endpoints:
-    GET  /health            — liveness check, returns version + credits remaining
-    POST /analyze/{symbol}  — runs full pipeline for one symbol, returns report
-    GET  /decisions         — last N decisions from the No-Trade Database
-    GET  /budget            — Twelve Data API credits status
-
-Run:
-    uvicorn execution.api_server:app --host 0.0.0.0 --port 8000 --reload
+Security measures applied (see IATIS_Security_Audit.md):
+- P0: Auth fail-closed (API_SERVER_KEY required)
+- P0: Dashboard requires auth
+- P0: All HTML output escaped via html.escape()
+- P1: Symbol input validation (strict regex)
+- P1: Constant-time key comparison (hmac.compare_digest)
+- P1: Generic error messages (details logged only)
+- P2: Swagger disabled in production (ENV=production)
+- P3: SQLite/cache file permissions set at init
+- P3: Config cache thread-safe (threading.Lock)
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
+import html
 import os
+import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -27,7 +33,7 @@ load_dotenv()
 
 try:
     from fastapi import FastAPI, Header, HTTPException, Query
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel
 except ImportError as exc:
     raise ImportError("Run: pip install fastapi uvicorn") from exc
@@ -37,42 +43,123 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Symbol validation — strict allowlist
+# ---------------------------------------------------------------------------
+_SYMBOL_RE = re.compile(r'^[A-Z]{2,6}(/[A-Z]{2,6})?$')
+
+def _validate_symbol(symbol: str) -> str:
+    """Validate and normalize symbol. Raises HTTPException on invalid input."""
+    clean = symbol.upper().strip()
+    if not _SYMBOL_RE.match(clean):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid symbol format. Use EURUSD or EUR/USD (letters only, 2-6 chars each)."
+        )
+    if len(clean) > 14:
+        raise HTTPException(status_code=400, detail="Symbol too long.")
+    return clean
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+_ENV = os.environ.get("ENV", "production").lower()
+_docs_url = "/docs" if _ENV == "development" else None
+
 app = FastAPI(
     title="IATIS API",
     description="Institutional Adaptive Trading Intelligence System",
     version="0.2.0",
-    docs_url="/docs",
+    docs_url=_docs_url,   # disabled in production
     redoc_url=None,
 )
 
 _executor = ThreadPoolExecutor(max_workers=4)
 _config_cache: dict | None = None
+_config_lock = threading.Lock()
 
+# Telegram error cooldown (issue #11 — flood protection)
+_error_cooldown: dict[str, float] = {}
+_COOLDOWN_SECONDS = 1800  # 30 minutes per symbol
 
 def _get_config() -> dict:
+    """Thread-safe config cache (issue #14)."""
     global _config_cache
-    if _config_cache is None:
-        _config_cache = load_config()
-        api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
-        if api_key:
-            _config_cache["data"]["twelve_data_api_key"] = api_key
+    with _config_lock:
+        if _config_cache is None:
+            _config_cache = load_config()
+            api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
+            if api_key:
+                _config_cache["data"]["twelve_data_api_key"] = api_key
     return _config_cache
 
 
 def _check_auth(x_api_key: str | None) -> None:
-    required = os.environ.get("API_SERVER_KEY", "")
-    if required and x_api_key != required:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+    """Fail-closed auth — error if key not configured (issue #3).
+    Constant-time comparison to prevent timing attacks (issue #6).
+    """
+    required = os.environ.get("API_SERVER_KEY")
+    if not required:
+        # In development mode, skip auth. In production, fail-closed.
+        if _ENV == "development":
+            return
+        raise HTTPException(
+            status_code=500,
+            detail="API_SERVER_KEY not configured on server."
+        )
+    if not hmac.compare_digest(x_api_key or "", required):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
 
 
+def _h(value: Any) -> str:
+    """HTML-escape any value for safe dashboard rendering (issue #1)."""
+    return html.escape(str(value) if value is not None else "")
+
+
+def _set_file_permissions(path) -> None:
+    """Restrict file to owner read/write only (issue #9, #10)."""
+    try:
+        from pathlib import Path
+        p = Path(path)
+        if p.exists():
+            os.chmod(p, 0o600)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 class AnalyzeRequest(BaseModel):
     source: str = "twelve_data"
     bars: int = 500
     timeframes: list[str] = ["M15", "H1", "H4", "D1"]
 
 
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def on_startup():
+    from pathlib import Path
+    # Set restrictive permissions on sensitive files (issues #9, #10)
+    for path in ["storage/decisions.db", "storage/td_cache"]:
+        p = Path(path)
+        if p.exists():
+            try:
+                os.chmod(p, 0o700 if p.is_dir() else 0o600)
+            except Exception:
+                pass
+    logger.info(f"IATIS API started (ENV={_ENV}, auth={'required' if os.environ.get('API_SERVER_KEY') else 'dev-mode'})")
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    """Public health check — no auth required."""
     config = _get_config()
     credits = None
     try:
@@ -94,20 +181,24 @@ async def analyze(
     req: AnalyzeRequest = AnalyzeRequest(),
     x_api_key: str | None = Header(default=None),
 ) -> JSONResponse:
+    """Run full pipeline for one symbol. Symbol: EURUSD or EUR/USD."""
     _check_auth(x_api_key)
+    clean_symbol = _validate_symbol(symbol)  # issue #2
 
-    td_symbol = symbol if "/" in symbol else (
-        f"{symbol[:3]}/{symbol[3:]}" if len(symbol) == 6 else symbol
+    td_symbol = clean_symbol if "/" in clean_symbol else (
+        f"{clean_symbol[:3]}/{clean_symbol[3:]}" if len(clean_symbol) == 6 else clean_symbol
     )
-    clean_symbol = td_symbol.replace("/", "")
+    internal_symbol = clean_symbol.replace("/", "")
 
     config = dict(_get_config())
     config["data"] = dict(config["data"])
-    config["data"]["source"] = req.source
-    config["data"]["symbol"] = clean_symbol
-    config["data"]["twelve_data_symbol"] = td_symbol
-    config["data"]["bars_to_load"] = req.bars
-    config["data"]["timeframes"] = req.timeframes
+    config["data"].update({
+        "source": req.source,
+        "symbol": internal_symbol,
+        "twelve_data_symbol": td_symbol,
+        "bars_to_load": req.bars,
+        "timeframes": req.timeframes,
+    })
     config["telegram"] = {"enabled": False}
 
     loop = asyncio.get_event_loop()
@@ -118,8 +209,8 @@ async def analyze(
         report["processing_time_sec"] = round(time.monotonic() - start, 3)
         return JSONResponse(content=report)
     except Exception as exc:
-        logger.error(f"Pipeline error for {symbol}: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Pipeline error for {internal_symbol}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal processing error.")  # issue #7
 
 
 @app.get("/decisions")
@@ -129,17 +220,20 @@ async def decisions(
     x_api_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _check_auth(x_api_key)
-    from storage.decision_log import read_decisions, summarize_decisions
-    all_d = read_decisions()
-    if verdict:
-        all_d = [d for d in all_d if d.get("final_verdict") == verdict.upper()]
-    recent = list(reversed(all_d[-limit:]))
-    return {
-        "total_in_log": len(all_d),
-        "returned": len(recent),
-        "summary": summarize_decisions(),
-        "decisions": recent,
-    }
+    try:
+        from storage.decision_log import read_decisions, summarize_decisions
+        all_d = read_decisions()
+        if verdict:
+            all_d = [d for d in all_d if d.get("final_verdict") == verdict.upper()]
+        return {
+            "total_in_log": len(all_d),
+            "returned": len(all_d[-limit:]),
+            "summary": summarize_decisions(),
+            "decisions": list(reversed(all_d[-limit:])),
+        }
+    except Exception as exc:
+        logger.error(f"Decisions error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
 @app.get("/budget")
@@ -156,39 +250,37 @@ async def budget(x_api_key: str | None = Header(default=None)) -> dict[str, Any]
             "percent_used": round(used / MAX_REQUESTS_PER_DAY * 100, 1),
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Budget error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
 @app.get("/stats")
 async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
-    """Decision analytics from SQLite — regime performance, engine breakdown,
-    top NO_TRADE reasons."""
     _check_auth(x_api_key)
     try:
         from storage.decision_db import summary, regime_performance
-        return {
-            "summary": summary(),
-            "regime_performance": regime_performance(),
-        }
+        return {"summary": summary(), "regime_performance": regime_performance()}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Stats error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
-@app.get("/dashboard", response_class=None)
+@app.get("/dashboard")
 async def dashboard(x_api_key: str | None = Header(default=None)):
-    """Simple HTML dashboard — system health at a glance."""
-    from fastapi.responses import HTMLResponse
-    from storage.decision_db import summary, regime_performance, recent
+    """HTML dashboard — requires auth (issue #4). All values HTML-escaped (issue #1)."""
+    _check_auth(x_api_key)  # issue #4 — was missing
 
     try:
-        s = summary()
+        from storage.decision_db import summary as db_summary, regime_performance, recent
+        s = db_summary()
         regime_perf = regime_performance()
         last_decisions = recent(limit=5)
     except Exception as exc:
-        return HTMLResponse(f"<pre>DB error: {exc}</pre>", status_code=500)
+        logger.error(f"Dashboard DB error: {exc}", exc_info=True)
+        return HTMLResponse("<pre>Dashboard unavailable</pre>", status_code=500)  # issue #7
 
     config = _get_config()
-    version = config.get("system", {}).get("version", "?")
+    version = _h(config.get("system", {}).get("version", "?"))
 
     try:
         from core.twelve_data_client import RateLimiter, MAX_REQUESTS_PER_DAY
@@ -198,28 +290,40 @@ async def dashboard(x_api_key: str | None = Header(default=None)):
     except Exception:
         credits, credit_pct, credit_color = "?", 0, "gray"
 
+    # All values HTML-escaped (issue #1)
     decisions_html = ""
     for d in last_decisions:
-        v = d.get("verdict", "?")
+        v = _h(d.get("verdict", "?"))
         color = "#00cc44" if v == "EXECUTE" else "#ff4444"
-        decisions_html += f"""
-        <tr>
-            <td>{d.get('ts','')[:19]}</td>
-            <td>{d.get('symbol','?')}</td>
-            <td style="color:{color};font-weight:bold">{v}</td>
-            <td>{d.get('regime','?')}</td>
-            <td>{d.get('cf_score') or '—'}</td>
-            <td style="font-size:0.8em;max-width:300px">{(d.get('fail_reason') or d.get('summary',''))[:80]}</td>
-        </tr>"""
+        decisions_html += (
+            f"<tr>"
+            f"<td>{_h(d.get('ts',''))[:19]}</td>"
+            f"<td>{_h(d.get('symbol','?'))}</td>"
+            f"<td style='color:{color};font-weight:bold'>{v}</td>"
+            f"<td>{_h(d.get('regime','?'))}</td>"
+            f"<td>{_h(d.get('cf_score') or '—')}</td>"
+            f"<td style='font-size:0.8em'>{_h((d.get('fail_reason') or d.get('summary',''))[:80])}</td>"
+            f"</tr>"
+        )
 
     regime_html = ""
     for r in regime_perf:
-        total = r.get('total', 1)
-        execs = r.get('executes', 0)
+        total = r.get("total", 1)
+        execs = r.get("executes", 0)
         pct = int(execs / total * 100) if total else 0
-        regime_html += f"<tr><td>{r['regime']}</td><td>{total}</td><td>{execs} ({pct}%)</td><td>{r.get('avg_cf_score','?')}</td></tr>"
+        regime_html += (
+            f"<tr><td>{_h(r['regime'])}</td>"
+            f"<td>{_h(total)}</td>"
+            f"<td>{_h(execs)} ({pct}%)</td>"
+            f"<td>{_h(r.get('avg_cf_score','?'))}</td></tr>"
+        )
 
-    html = f"""<!DOCTYPE html>
+    reasons_html = "".join(
+        f"<tr><td>{_h(r['reason'][:80])}</td><td>{_h(r['count'])}</td></tr>"
+        for r in s.get("top_no_trade_reasons", [])[:5]
+    ) or "<tr><td colspan=2>No data yet</td></tr>"
+
+    html_content = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -237,9 +341,6 @@ async def dashboard(x_api_key: str | None = Header(default=None)):
   th{{background:#161b22;color:#8b949e;text-align:left;padding:8px;font-size:0.85em;}}
   td{{padding:8px;border-bottom:1px solid #21262d;font-size:0.9em;}}
   tr:hover td{{background:#161b22;}}
-  .ok{{color:#3fb950;}} .warn{{color:#d29922;}} .badge{{
-    display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.8em;
-    background:#21262d;margin:2px;}}
 </style>
 </head>
 <body>
@@ -248,17 +349,14 @@ async def dashboard(x_api_key: str | None = Header(default=None)):
 
 <h2>System Status</h2>
 <div class="cards">
-  <div class="card"><div class="val">{s.get('total',0)}</div><div class="lbl">Total Decisions</div></div>
-  <div class="card"><div class="val" style="color:#3fb950">{s.get('execute',0)}</div><div class="lbl">EXECUTE</div></div>
-  <div class="card"><div class="val" style="color:#f85149">{s.get('no_trade',0)}</div><div class="lbl">NO_TRADE</div></div>
-  <div class="card"><div class="val" style="color:{credit_color}">{credits}</div><div class="lbl">API Credits Left</div></div>
+  <div class="card"><div class="val">{_h(s.get('total',0))}</div><div class="lbl">Total Decisions</div></div>
+  <div class="card"><div class="val" style="color:#3fb950">{_h(s.get('execute',0))}</div><div class="lbl">EXECUTE</div></div>
+  <div class="card"><div class="val" style="color:#f85149">{_h(s.get('no_trade',0))}</div><div class="lbl">NO_TRADE</div></div>
+  <div class="card"><div class="val" style="color:{credit_color}">{_h(credits)}</div><div class="lbl">API Credits Left</div></div>
 </div>
 
 <h2>Top NO_TRADE Reasons</h2>
-<table>
-<tr><th>Reason</th><th>Count</th></tr>
-{"".join(f"<tr><td>{r['reason'][:80]}</td><td>{r['count']}</td></tr>" for r in s.get('top_no_trade_reasons',[])[:5]) or "<tr><td colspan=2>No data yet</td></tr>"}
-</table>
+<table><tr><th>Reason</th><th>Count</th></tr>{reasons_html}</table>
 
 <h2>Regime Performance</h2>
 <table>
@@ -273,10 +371,9 @@ async def dashboard(x_api_key: str | None = Header(default=None)):
 </table>
 
 <p style="color:#8b949e;font-size:0.8em;margin-top:32px">
-  IATIS v{version} | <a href="/docs" style="color:#58a6ff">API Docs</a> |
-  <a href="/budget" style="color:#58a6ff">Budget</a> |
+  IATIS v{version} | <a href="/budget" style="color:#58a6ff">Budget</a> |
   <a href="/stats" style="color:#58a6ff">Stats JSON</a>
 </p>
 </body>
 </html>"""
-    return HTMLResponse(html)
+    return HTMLResponse(html_content)

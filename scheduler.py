@@ -54,8 +54,22 @@ _running.set()
 _lock = threading.Lock()
 
 
+_error_cooldown: dict[str, float] = {}
+_COOLDOWN_SECONDS = 1800
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _send_error_once(key: str, message: str) -> None:
+    """Send error alert at most once per COOLDOWN_SECONDS per key."""
+    now = time.time()
+    if key in _error_cooldown and now - _error_cooldown[key] < _COOLDOWN_SECONDS:
+        logger.debug(f"Error alert for '{key}' suppressed (cooldown active)")
+        return
+    _error_cooldown[key] = now
+    send_raw(message)
 
 
 def _credits_warning(config: dict) -> str | None:
@@ -97,9 +111,12 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 reports.append(report)
             except Exception as exc:
                 logger.error(f"Pipeline failed for {sym}: {exc}")
-                send_raw(
-                    f"🚨 <b>IATIS pipeline error</b> — {sym}\n"
-                    f"<code>{type(exc).__name__}: {exc}</code>"
+                _send_error_once(
+                    key=sym,
+                    message=(
+                        f"🚨 <b>IATIS pipeline error</b> — {sym}\n"
+                        f"<code>{type(exc).__name__}: {str(exc)[:200]}</code>"
+                    )
                 )
 
         # budget warning (sent once per run, not per symbol)

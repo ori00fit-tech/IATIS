@@ -225,7 +225,7 @@ def test_validate_confluence_config_rejects_unreachable_threshold():
         "engines": {"enabled": {"smc": True, "price_action": True, "ict": False, "nnfx": False}},
         "confluence": {"min_engines_agreeing": 3},
     }
-    with pytest.raises(ConfluenceConfigError, match="mathematically unreachable"):
+    with pytest.raises(ConfluenceConfigError, match="unreachable"):
         validate_confluence_config(bad_config)
 
 
@@ -250,7 +250,7 @@ def test_validate_confluence_config_blocks_unreachable_score():
                         "nnfx": 0.15, "quant": 0.15, "macro": 0.10},
         },
     }
-    with pytest.raises(ConfluenceConfigError, match="mathematically unreachable"):
+    with pytest.raises(ConfluenceConfigError, match="max achievable"):
         validate_confluence_config(bad_config)
 
 

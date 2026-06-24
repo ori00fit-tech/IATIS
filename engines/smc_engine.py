@@ -38,36 +38,75 @@ def find_swing_points(df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
     return pd.DataFrame({"swing_high": swing_high.fillna(False), "swing_low": swing_low.fillna(False)})
 
 
-def structural_bias(df: pd.DataFrame, window: int = 3) -> tuple[Bias, float, list[str]]:
-    """Determine bias from the sequence of recent swing highs/lows.
+def structural_bias(df: pd.DataFrame, window: int = 3, lookback: int = 6) -> tuple[Bias, float, list[str]]:
+    """Determine directional bias from the sequence of recent swing highs/lows.
 
-    HH + HL pattern -> bullish structure
-    LH + LL pattern -> bearish structure
-    Mixed/insufficient swings -> neutral
+    Uses majority vote over the last `lookback` swing points rather than
+    comparing only the last two. This makes the bias more robust to
+    short-term noise — a single counter-swing doesn't flip the bias.
+
+    Scoring:
+        score = (agreeing_pairs / total_pairs) * 65
+        e.g. 5/5 pairs agreeing → score=65 (strong)
+             3/5 pairs agreeing → score=39 (weak, may not pass threshold)
+
+    HH + HL majority → BULLISH
+    LH + LL majority → BEARISH
+    Mixed / insufficient → NEUTRAL
     """
     swings = find_swing_points(df, window=window)
-    swing_highs = df["high"][swings["swing_high"]].tail(4)
-    swing_lows = df["low"][swings["swing_low"]].tail(4)
+    swing_highs = df["high"][swings["swing_high"]].tail(lookback)
+    swing_lows = df["low"][swings["swing_low"]].tail(lookback)
 
     reasons = []
 
     if len(swing_highs) < 2 or len(swing_lows) < 2:
         return Bias.NEUTRAL, 0.0, ["Not enough swing points to determine structure"]
 
-    highs_rising = swing_highs.iloc[-1] > swing_highs.iloc[-2]
-    lows_rising = swing_lows.iloc[-1] > swing_lows.iloc[-2]
-    highs_falling = swing_highs.iloc[-1] < swing_highs.iloc[-2]
-    lows_falling = swing_lows.iloc[-1] < swing_lows.iloc[-2]
+    # count consecutive pairs that are rising vs falling
+    def _count_direction(series):
+        rising = falling = 0
+        vals = list(series)
+        for i in range(1, len(vals)):
+            if vals[i] > vals[i - 1]:
+                rising += 1
+            elif vals[i] < vals[i - 1]:
+                falling += 1
+        return rising, falling
 
-    if highs_rising and lows_rising:
-        reasons.append("Higher-high and higher-low detected (bullish structure)")
-        return Bias.BULLISH, 65.0, reasons
+    highs_rising, highs_falling = _count_direction(swing_highs)
+    lows_rising, lows_falling = _count_direction(swing_lows)
 
-    if highs_falling and lows_falling:
-        reasons.append("Lower-high and lower-low detected (bearish structure)")
-        return Bias.BEARISH, 65.0, reasons
+    total_pairs = len(swing_highs) - 1 + len(swing_lows) - 1
+    bullish_pairs = highs_rising + lows_rising
+    bearish_pairs = highs_falling + lows_falling
 
-    reasons.append("Mixed swing structure — no clear higher-high/low or lower-high/low pattern")
+    if total_pairs == 0:
+        return Bias.NEUTRAL, 0.0, ["Not enough swing pairs to vote"]
+
+    bull_ratio = bullish_pairs / total_pairs
+    bear_ratio = bearish_pairs / total_pairs
+
+    if bull_ratio > 0.5:
+        score = round(bull_ratio * 65, 1)
+        reasons.append(
+            f"Bullish structure: {bullish_pairs}/{total_pairs} swing pairs rising "
+            f"(HH+HL majority)"
+        )
+        return Bias.BULLISH, score, reasons
+
+    if bear_ratio > 0.5:
+        score = round(bear_ratio * 65, 1)
+        reasons.append(
+            f"Bearish structure: {bearish_pairs}/{total_pairs} swing pairs falling "
+            f"(LH+LL majority)"
+        )
+        return Bias.BEARISH, score, reasons
+
+    reasons.append(
+        f"Mixed structure: {bullish_pairs} bullish vs {bearish_pairs} bearish pairs "
+        f"out of {total_pairs} — no clear majority"
+    )
     return Bias.NEUTRAL, 20.0, reasons
 
 
@@ -99,9 +138,22 @@ class SMCEngine(BaseEngine):
 
     @staticmethod
     def _pick_timeframe(mtf_data: dict[str, pd.DataFrame]) -> str:
-        # prefer H4 if present, else the highest timeframe available
+        """Pick the highest timeframe that has enough bars for reliable
+        swing-point detection (minimum 100 bars after the rolling window
+        consumes its lookback period).
+
+        Why not always use H4: on Twelve Data Free plan, H4 is resampled
+        from 500 H1 bars → only ~125 H4 bars. With the 7-bar rolling
+        window in find_swing_points(), 125 bars is borderline and often
+        produces zero detected swings ('Not enough swing points').
+        H1 with 500 bars is far more reliable in this case.
+        """
+        MIN_BARS = 100
         preference = ["H4", "D1", "H1", "M15"]
+        # first pass: prefer higher TFs that have enough bars
         for tf in preference:
-            if tf in mtf_data:
+            if tf in mtf_data and len(mtf_data[tf]) >= MIN_BARS:
                 return tf
-        return next(iter(mtf_data))
+        # fallback: whatever has the most bars
+        return max(mtf_data.keys(), key=lambda tf: len(mtf_data.get(tf, [])),
+                   default=next(iter(mtf_data)))

@@ -28,10 +28,12 @@ def test_edge_gate_allows_all_disabled():
     check_edge_gate({"smc": False, "ict": False, "nnfx": False, "quant": False})  # should not raise
 
 
-def test_edge_gate_blocks_unproven_engine():
-    # macro has no hypothesis at all — must be blocked
+def test_edge_gate_blocks_unproven_engine(monkeypatch):
+    # any engine with None mapping — use a fake engine name
+    import research.edge_gate as eg
+    monkeypatch.setattr(eg, "ENGINE_HYPOTHESIS_MAP", {"fake_engine": None})
     with pytest.raises(EdgeNotProvenError):
-        check_edge_gate({"macro": True})
+        check_edge_gate({"fake_engine": True})
 
 
 def test_edge_gate_allows_research_status_engine():

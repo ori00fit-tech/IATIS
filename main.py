@@ -26,10 +26,12 @@ from core.data_validator import DataValidationError, validate_ohlcv
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
 from engines.ict_engine import ICTEngine
+from engines.macro_engine import MacroEngine
 from engines.nnfx_engine import NNFXEngine
 from engines.price_action_engine import PriceActionEngine
 from engines.quant_engine import QuantEngine
 from engines.smc_engine import SMCEngine
+from engines.wyckoff_engine import WyckoffEngine
 from regimes.regime_detector import detect_regime
 from research.edge_gate import check_edge_gate
 from risk.risk_engine import RiskInputs, evaluate_risk
@@ -47,7 +49,8 @@ _ALL_ENGINES = {
     "nnfx": NNFXEngine,
     "price_action": PriceActionEngine,
     "quant": QuantEngine,
-    # "macro": MacroEngine,  # not yet created — Phase 4
+    "wyckoff": WyckoffEngine,
+    "macro": MacroEngine,
 }
 
 

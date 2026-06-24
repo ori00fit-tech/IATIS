@@ -69,26 +69,28 @@ regime:
 engines:
   enabled:
     smc: true
-    ict: true          # Phase 3 — RESEARCH status (paper trading only)
-    nnfx: true         # Phase 3 — RESEARCH status (paper trading only)
+    ict: true          # RESEARCH status
+    nnfx: true         # RESEARCH status
     price_action: true
-    quant: true        # Phase 3 — RESEARCH status (paper trading only)
-    macro: false       # Phase 4
+    quant: true        # RESEARCH status
+    wyckoff: true      # RESEARCH status
+    macro: false       # requires yfinance + Yahoo Finance access
 
 confluence:
   weights:
-    smc: 0.25
-    price_action: 0.20
-    ict: 0.20
-    nnfx: 0.20
-    quant: 0.15
-    macro: 0.00
-  # With 5 engines, max achievable score depends on individual caps:
-  # SMC=65, PA=80, ICT=80, NNFX=80, Quant=60
-  # Weighted avg max = (0.25×65 + 0.20×80 + 0.20×80 + 0.20×80 + 0.15×60) / 1.0 = 73.25
-  # Setting 62 = ~85% of 73.25 — requires strong multi-engine agreement
+    smc: 0.20
+    price_action: 0.15
+    ict: 0.18
+    nnfx: 0.15
+    quant: 0.12
+    wyckoff: 0.15
+    macro: 0.05
+  # Max achievable score (all engines at max):
+  # SMC=65×0.20 + PA=80×0.15 + ICT=80×0.18 + NNFX=80×0.15 + Quant=60×0.12 + Wyckoff=75×0.15 + Macro=70×0.05
+  # = 13 + 12 + 14.4 + 12 + 7.2 + 11.25 + 3.5 = 73.35 (normalized over enabled engines)
+  # Setting 62 = ~85% of 73 — requires strong multi-engine agreement
   min_score_to_trade: 62
-  min_engines_agreeing: 3   # now possible with 5 engines
+  min_engines_agreeing: 4   # 6 engines enabled → need 4 agreeing
 
 risk:
   risk_per_trade_min: 0.0025   # 0.25%

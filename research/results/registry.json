@@ -1,41 +1,53 @@
 {
-  "_comment": "Single source of truth for hypothesis status. PASSED = proven edge. RESEARCH = approved for paper trading/data collection only.",
+  "_comment": "PASSED = proven edge. RESEARCH = approved for paper trading/data collection only.",
   "hypotheses": {
     "H001": {
-      "title": "Liquidity sweep + HTF trend alignment improves directional edge",
+      "title": "Liquidity sweep + HTF trend alignment",
       "status": "FAILED",
-      "blocks_engine": "smc_advanced",
       "result_file": "results/H001_result.json",
-      "tested_on": "real:EURUSD_M1_2026-03-16_2026-06-19.csv, sample=225, wr=0.4978, p=0.6251",
+      "tested_on": "EURUSD M15/H4, n=225, wr=0.4978, p=0.6251",
       "last_updated": "2026-06-21"
     },
     "H002": {
-      "title": "Qualified liquidity sweep (ATR size + trending regime) improves win rate over H001",
+      "title": "Qualified liquidity sweep (ATR size + trending regime)",
       "status": "PENDING",
       "blocks_engine": "smc_advanced",
-      "result_file": "results/H002_result.json",
-      "notes": "Ready to run on EURUSD M15/H1 data",
+      "notes": "Ready to run on EURUSD M15/H1",
       "last_updated": "2026-06-24"
     },
     "H003": {
-      "title": "ICT killzone + premium/discount zone bias improves precision vs random entry",
+      "title": "ICT killzone + premium/discount zone bias",
       "status": "RESEARCH",
       "blocks_engine": "ict",
-      "notes": "RESEARCH status = approved for paper trading and data collection. Not proven on real edge yet. Engine may be enabled in config for observation; do not use for live trading until PASSED.",
+      "notes": "Paper trading approved. Collect decision data before testing edge.",
       "last_updated": "2026-06-24"
     },
     "H004": {
-      "title": "NNFX EMA200 baseline + ADX strength filter improves trend entry precision",
+      "title": "NNFX EMA200 baseline + ADX strength filter",
       "status": "RESEARCH",
       "blocks_engine": "nnfx",
-      "notes": "RESEARCH status — engine ready for paper trading observation.",
+      "notes": "Paper trading approved.",
       "last_updated": "2026-06-24"
     },
     "H005": {
-      "title": "Quant RSI + momentum (ROC) confirmation reduces false signals from SMC+PA",
+      "title": "Quant RSI + ROC momentum confirmation",
       "status": "RESEARCH",
       "blocks_engine": "quant",
-      "notes": "RESEARCH status — engine ready for paper trading observation.",
+      "notes": "Paper trading approved.",
+      "last_updated": "2026-06-24"
+    },
+    "H006": {
+      "title": "Wyckoff Spring/Upthrust detection improves reversal precision",
+      "status": "RESEARCH",
+      "blocks_engine": "wyckoff",
+      "notes": "Paper trading approved. Price-only for FX, volume-enhanced for metals/indices.",
+      "last_updated": "2026-06-24"
+    },
+    "H007": {
+      "title": "Macro DXY trend + Risk-On/Off state improves directional bias",
+      "status": "RESEARCH",
+      "blocks_engine": "macro",
+      "notes": "Paper trading approved. Requires yfinance + Yahoo Finance access.",
       "last_updated": "2026-06-24"
     }
   }

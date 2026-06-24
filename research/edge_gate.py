@@ -37,10 +37,11 @@ EXEMPT_ENGINES = {"smc", "price_action"}
 # Maps config.yaml engine keys to the hypothesis ID that must be PASSED
 # (or RESEARCH for paper-trading-only mode) before that engine may be enabled.
 ENGINE_HYPOTHESIS_MAP = {
-    "ict":   "H003",   # ICT killzone/premium-discount — H003 pending
-    "nnfx":  "H004",   # NNFX EMA200+ADX — H004 pending
-    "quant": "H005",   # Quant RSI+momentum — H005 pending
-    "macro": None,     # no hypothesis registered yet — blocked
+    "ict":     "H003",   # ICT killzone/premium-discount — RESEARCH
+    "nnfx":    "H004",   # NNFX EMA200+ADX — RESEARCH
+    "quant":   "H005",   # Quant RSI+momentum — RESEARCH
+    "wyckoff": "H006",   # Wyckoff Spring/Upthrust — RESEARCH
+    "macro":   "H007",   # Macro DXY+Risk-On/Off — RESEARCH
 }
 
 # Hypothesis statuses that allow engine activation

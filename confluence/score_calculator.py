@@ -67,10 +67,16 @@ def validate_confluence_config(config: dict) -> None:
         # Map config weight keys to engine names
         _KEY_TO_ENGINE = {
             "smc": "SMC", "price_action": "PriceAction",
-            "ict": "ICT", "nnfx": "NNFX", "quant": "Quant", "macro": "Macro",
+            "ict": "ICT", "nnfx": "NNFX", "quant": "Quant",
+            "wyckoff": "Wyckoff", "macro": "Macro",
         }
-        # Per-engine max score caps
-        _MAX_SCORE = {"SMC": 65.0}  # SMC majority-vote formula caps at 65
+        # Per-engine max score caps (from each engine's implementation)
+        _MAX_SCORE = {
+            "SMC": 65.0,      # majority-vote formula
+            "Quant": 60.0,    # confirmation role
+            "Wyckoff": 75.0,  # spring/upthrust
+            "Macro": 70.0,    # DXY+risk
+        }
         _DEFAULT_MAX = 80.0
 
         enabled_keys = [k for k, v in enabled.items() if v]
@@ -109,6 +115,7 @@ _ENGINE_NAME_TO_CONFIG_KEY = {
     "NNFX": "nnfx",
     "PriceAction": "price_action",
     "Quant": "quant",
+    "Wyckoff": "wyckoff",
     "Macro": "macro",
 }
 

@@ -1,19 +1,303 @@
 """
 backtesting/backtest_engine.py
 ----------------------------------
-STUB — Phase 5.
+Real walk-forward backtesting engine — Phase 5.
 
-Deliberately deferred until Phase 3 engines (real SMC/ICT/NNFX logic)
-exist — backtesting Phase 1's intentionally-stubbed engines would
-produce meaningless results.
-
-TODO:
-    - run_backtest(historical_data, engines, risk_config) -> BacktestResult
-    - should use vectorbt or backtrader per the project's tech stack notes
+No lookahead bias: at bar N, pipeline only sees bars 0..N.
+Realistic: entries on next-bar open, fixed risk sizing.
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
-def run_backtest(*args, **kwargs):
-    raise NotImplementedError("Backtesting is planned for Phase 5, after real engine logic exists.")
+import numpy as np
+import pandas as pd
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class BacktestConfig:
+    symbol: str = "EURUSD"
+    initial_balance: float = 10_000.0
+    risk_per_trade: float = 0.01
+    min_rr: float = 3.0
+    commission_pips: float = 0.5
+    warmup_bars: int = 210
+    step_bars: int = 4          # run pipeline every 4 bars (faster backtest)
+    pip_size: float = 0.0001    # 0.01 for JPY pairs
+
+
+@dataclass
+class Trade:
+    entry_bar: int
+    entry_time: Any
+    direction: str
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    risk_pct: float
+    position_size: float
+    exit_bar: int = -1
+    exit_time: Any = None
+    exit_price: float = 0.0
+    pnl_pips: float = 0.0
+    pnl_usd: float = 0.0
+    exit_reason: str = ""
+
+
+@dataclass
+class BacktestResult:
+    config: BacktestConfig
+    symbol: str
+    start_date: str
+    end_date: str
+    total_bars: int
+
+    total_runs: int = 0
+    execute_count: int = 0
+    no_trade_count: int = 0
+
+    trades: list = field(default_factory=list)
+    equity_curve: list = field(default_factory=list)
+
+    win_rate: float = 0.0
+    profit_factor: float = 0.0
+    max_drawdown_pct: float = 0.0
+    sharpe_ratio: float = 0.0
+    total_return_pct: float = 0.0
+
+    def compute(self) -> "BacktestResult":
+        closed = [t for t in self.trades if t.exit_bar >= 0]
+        if not closed:
+            return self
+
+        wins = [t for t in closed if t.pnl_usd > 0]
+        losses = [t for t in closed if t.pnl_usd <= 0]
+
+        self.win_rate = len(wins) / len(closed) if closed else 0
+        gross_profit = sum(t.pnl_usd for t in wins)
+        gross_loss = abs(sum(t.pnl_usd for t in losses))
+        self.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+
+        if self.equity_curve:
+            equity = np.array(self.equity_curve)
+            peak = np.maximum.accumulate(equity)
+            dd = (equity - peak) / peak
+            self.max_drawdown_pct = float(abs(dd.min()))
+            self.total_return_pct = float((equity[-1] - equity[0]) / equity[0])
+            returns = np.diff(equity) / equity[:-1]
+            if len(returns) > 1 and returns.std() > 0:
+                self.sharpe_ratio = float(returns.mean() / returns.std() * np.sqrt(252))
+
+        return self
+
+    def summary(self) -> str:
+        closed = [t for t in self.trades if t.exit_bar >= 0]
+        execute_rate = self.execute_count / max(self.total_runs, 1)
+        return (
+            f"\n{'='*55}\n"
+            f"IATIS Backtest — {self.symbol}\n"
+            f"{'='*55}\n"
+            f"Period:        {self.start_date} → {self.end_date}\n"
+            f"Total bars:    {self.total_bars}\n\n"
+            f"Pipeline runs: {self.total_runs}\n"
+            f"  EXECUTE:     {self.execute_count} ({execute_rate:.1%})\n"
+            f"  NO_TRADE:    {self.no_trade_count} ({1-execute_rate:.1%})\n\n"
+            f"Trades:        {len(closed)}\n"
+            f"Win rate:      {self.win_rate:.1%}\n"
+            f"Profit factor: {self.profit_factor:.2f}\n"
+            f"Max drawdown:  {self.max_drawdown_pct:.1%}\n"
+            f"Total return:  {self.total_return_pct:.1%}\n"
+            f"Sharpe ratio:  {self.sharpe_ratio:.2f}\n"
+            f"{'='*55}"
+        )
+
+    def save(self, path: str | Path) -> None:
+        closed = [t for t in self.trades if t.exit_bar >= 0]
+        data = {
+            "symbol": self.symbol,
+            "period": f"{self.start_date} to {self.end_date}",
+            "metrics": {
+                "total_runs": self.total_runs,
+                "execute_count": self.execute_count,
+                "win_rate": round(self.win_rate, 4),
+                "profit_factor": round(self.profit_factor, 3),
+                "max_drawdown_pct": round(self.max_drawdown_pct, 4),
+                "total_return_pct": round(self.total_return_pct, 4),
+                "sharpe_ratio": round(self.sharpe_ratio, 3),
+                "trades_closed": len(closed),
+            },
+            "equity_curve": self.equity_curve,
+        }
+        Path(path).write_text(json.dumps(data, indent=2, default=str))
+        logger.info(f"Backtest saved to {path}")
+
+
+def run_backtest(
+    df: pd.DataFrame,
+    config: BacktestConfig | None = None,
+    engine_config: dict | None = None,
+) -> BacktestResult:
+    """Walk-forward backtest on historical OHLCV data — no lookahead."""
+    from utils.helpers import load_config
+    from core.timeframe_sync import build_multi_timeframe_view
+    from engines.smc_engine import SMCEngine
+    from engines.price_action_engine import PriceActionEngine
+    from engines.ict_engine import ICTEngine
+    from engines.nnfx_engine import NNFXEngine
+    from engines.quant_engine import QuantEngine
+    from engines.wyckoff_engine import WyckoffEngine
+    from confluence.voting_system import tally_votes
+    from confluence.score_calculator import calculate_score
+    from confluence.contradiction_engine import check_contradictions
+    from regimes.volatility_classifier import atr as compute_atr
+
+    if config is None:
+        config = BacktestConfig()
+    if engine_config is None:
+        engine_config = load_config()
+
+    weights = engine_config["confluence"]["weights"]
+    min_score = engine_config["confluence"]["min_score_to_trade"]
+    min_engines = engine_config["confluence"]["min_engines_agreeing"]
+    timeframes = engine_config["data"]["timeframes"]
+
+    engines_list = [
+        SMCEngine(), PriceActionEngine(), ICTEngine(),
+        NNFXEngine(), QuantEngine(), WyckoffEngine(),
+    ]
+
+    atr_series = compute_atr(df, period=14)
+    balance = config.initial_balance
+    open_trade: Trade | None = None
+
+    result = BacktestResult(
+        config=config, symbol=config.symbol,
+        start_date=str(df.index[config.warmup_bars].date()),
+        end_date=str(df.index[-1].date()),
+        total_bars=len(df),
+    )
+    result.equity_curve.append(balance)
+
+    total = len(df) - config.warmup_bars - 1
+    logger.info(f"Backtest: {config.symbol} | {total} bars to process")
+
+    for i in range(config.warmup_bars, len(df) - 1):
+        next_bar = df.iloc[i + 1]
+
+        # --- Check open trade ---
+        if open_trade is not None:
+            h, l = float(next_bar["high"]), float(next_bar["low"])
+            p = config.pip_size
+            if open_trade.direction == "BUY":
+                if l <= open_trade.stop_loss:
+                    pnl = (open_trade.stop_loss - open_trade.entry_price) / p - config.commission_pips
+                    _close_trade(open_trade, i+1, next_bar, open_trade.stop_loss, pnl, p, "SL")
+                    balance += open_trade.pnl_usd
+                    result.trades.append(open_trade)
+                    open_trade = None
+                elif h >= open_trade.take_profit:
+                    pnl = (open_trade.take_profit - open_trade.entry_price) / p - config.commission_pips
+                    _close_trade(open_trade, i+1, next_bar, open_trade.take_profit, pnl, p, "TP")
+                    balance += open_trade.pnl_usd
+                    result.trades.append(open_trade)
+                    open_trade = None
+            else:  # SELL
+                if h >= open_trade.stop_loss:
+                    pnl = (open_trade.entry_price - open_trade.stop_loss) / p - config.commission_pips
+                    _close_trade(open_trade, i+1, next_bar, open_trade.stop_loss, -pnl, p, "SL")
+                    balance += open_trade.pnl_usd
+                    result.trades.append(open_trade)
+                    open_trade = None
+                elif l <= open_trade.take_profit:
+                    pnl = (open_trade.entry_price - open_trade.take_profit) / p - config.commission_pips
+                    _close_trade(open_trade, i+1, next_bar, open_trade.take_profit, pnl, p, "TP")
+                    balance += open_trade.pnl_usd
+                    result.trades.append(open_trade)
+                    open_trade = None
+
+        result.equity_curve.append(balance)
+
+        # Skip if in trade or not on step
+        if open_trade is not None or (i - config.warmup_bars) % config.step_bars != 0:
+            continue
+
+        # --- Run pipeline ---
+        result.total_runs += 1
+        try:
+            window = df.iloc[:i+1]
+            mtf = build_multi_timeframe_view(window, timeframes)
+            outputs = [e.safe_analyze(mtf) for e in engines_list]
+            vote = tally_votes(outputs)
+            score = calculate_score(outputs, weights)
+            contradiction = check_contradictions(outputs)
+
+            ok = (
+                score.final_score >= min_score
+                and vote.agree_count >= min_engines
+                and not contradiction.blocked
+                and vote.winning_bias.value != "NEUTRAL"
+            )
+            if not ok:
+                result.no_trade_count += 1
+                continue
+
+            entry = float(next_bar["open"])
+            atr_val = float(atr_series.iloc[i]) if not pd.isna(atr_series.iloc[i]) else 0.001
+            sl_dist = atr_val * 1.5
+            tp_dist = sl_dist * config.min_rr
+            direction = vote.winning_bias.value
+
+            sl = entry - sl_dist if direction == "BULLISH" else entry + sl_dist
+            tp = entry + tp_dist if direction == "BULLISH" else entry - tp_dist
+
+            risk_amount = balance * config.risk_per_trade
+            sl_pips = abs(entry - sl) / config.pip_size
+            size = max(0.01, min(round(risk_amount / (sl_pips * 10), 2), 10.0))
+
+            open_trade = Trade(
+                entry_bar=i+1, entry_time=next_bar.name,
+                direction="BUY" if direction == "BULLISH" else "SELL",
+                entry_price=entry, stop_loss=sl, take_profit=tp,
+                risk_pct=config.risk_per_trade, position_size=size,
+            )
+            result.execute_count += 1
+
+        except Exception as exc:
+            logger.debug(f"Bar {i} skipped: {exc}")
+            result.no_trade_count += 1
+
+    # Force-close
+    if open_trade is not None:
+        last = df.iloc[-1]
+        exit_p = float(last["close"])
+        p = config.pip_size
+        if open_trade.direction == "BUY":
+            pnl = (exit_p - open_trade.entry_price) / p - config.commission_pips
+        else:
+            pnl = (open_trade.entry_price - exit_p) / p - config.commission_pips
+        _close_trade(open_trade, len(df)-1, last, exit_p, pnl, p, "FORCED_CLOSE")
+        balance += open_trade.pnl_usd
+        result.trades.append(open_trade)
+
+    result.equity_curve.append(balance)
+    result.compute()
+    logger.info(f"Backtest done: {result.execute_count} trades, WR={result.win_rate:.1%}")
+    return result
+
+
+def _close_trade(trade: Trade, bar: int, bar_data, exit_price: float,
+                 pnl_pips: float, pip_size: float, reason: str) -> None:
+    trade.exit_bar = bar
+    trade.exit_time = bar_data.name
+    trade.exit_price = exit_price
+    trade.pnl_pips = pnl_pips
+    trade.pnl_usd = pnl_pips * pip_size * trade.position_size * 100000
+    trade.exit_reason = reason

@@ -30,37 +30,35 @@ data:
   # twelve_data_symbol: "EUR/USD"
   #
   # Symbols to analyze — each runs a full pipeline per cycle
-  # Budget: Free plan = 800 req/day. Each symbol × native_timeframes = credits.
-  # With 2 native TFs (M15+H1) per symbol: 20 symbols = 40 req/run
-  # Hourly runs: 40 × 24 = 960 req/day — slightly over Free plan (800)
-  # Safe schedule: every 2 hours → 40 × 12 = 480 req/day ✅
-  # Or: run only enabled symbols (start with 5-8, expand when on paid plan)
+  # Budget: 20 symbols × 2 TF = 40 req/run
+  # Every 2hr: 40 × 12 = 480 req/day ✅ (well within 800 Free plan)
+  # Scheduler runs: python3 scheduler.py --interval 120
   twelve_data_symbols:
     # FOREX Majors
     - {symbol: "EUR/USD",  enabled: true,  internal: "EURUSD"}
     - {symbol: "GBP/USD",  enabled: true,  internal: "GBPUSD"}
     - {symbol: "USD/JPY",  enabled: true,  internal: "USDJPY"}
-    - {symbol: "USD/CHF",  enabled: false, internal: "USDCHF"}
-    - {symbol: "AUD/USD",  enabled: false, internal: "AUDUSD"}
-    - {symbol: "USD/CAD",  enabled: false, internal: "USDCAD"}
-    - {symbol: "NZD/USD",  enabled: false, internal: "NZDUSD"}
-    - {symbol: "EUR/JPY",  enabled: false, internal: "EURJPY"}
-    - {symbol: "GBP/JPY",  enabled: false, internal: "GBPJPY"}
-    - {symbol: "AUD/JPY",  enabled: false, internal: "AUDJPY"}
-    - {symbol: "EUR/GBP",  enabled: false, internal: "EURGBP"}
-    - {symbol: "EUR/CHF",  enabled: false, internal: "EURCHF"}
+    - {symbol: "USD/CHF",  enabled: true,  internal: "USDCHF"}
+    - {symbol: "AUD/USD",  enabled: true,  internal: "AUDUSD"}
+    - {symbol: "USD/CAD",  enabled: true,  internal: "USDCAD"}
+    - {symbol: "NZD/USD",  enabled: true,  internal: "NZDUSD"}
+    - {symbol: "EUR/JPY",  enabled: true,  internal: "EURJPY"}
+    - {symbol: "GBP/JPY",  enabled: true,  internal: "GBPJPY"}
+    - {symbol: "AUD/JPY",  enabled: true,  internal: "AUDJPY"}
+    - {symbol: "EUR/GBP",  enabled: true,  internal: "EURGBP"}
+    - {symbol: "EUR/CHF",  enabled: true,  internal: "EURCHF"}
     # Metals
     - {symbol: "XAU/USD",  enabled: true,  internal: "XAUUSD"}
-    - {symbol: "XAG/USD",  enabled: false, internal: "XAGUSD"}
+    - {symbol: "XAG/USD",  enabled: true,  internal: "XAGUSD"}
     # Energy
-    - {symbol: "WTI/USD",  enabled: false, internal: "USOIL"}
+    - {symbol: "WTI/USD",  enabled: true,  internal: "USOIL"}
     # Indices
-    - {symbol: "DJI",      enabled: false, internal: "US30"}
-    - {symbol: "NDX",      enabled: false, internal: "NAS100"}
-    - {symbol: "SPX",      enabled: false, internal: "SPX500"}
+    - {symbol: "DJI",      enabled: true,  internal: "US30"}
+    - {symbol: "NDX",      enabled: true,  internal: "NAS100"}
+    - {symbol: "SPX",      enabled: true,  internal: "SPX500"}
     # Crypto
-    - {symbol: "BTC/USD",  enabled: false, internal: "BTCUSD"}
-    - {symbol: "ETH/USD",  enabled: false, internal: "ETHUSD"}
+    - {symbol: "BTC/USD",  enabled: true,  internal: "BTCUSD"}
+    - {symbol: "ETH/USD",  enabled: true,  internal: "ETHUSD"}
 
 regime:
   atr_period: 14

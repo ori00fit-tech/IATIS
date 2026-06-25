@@ -93,11 +93,12 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         return []
 
     reports = []
+    failed_symbols = []
     try:
         active_symbols = symbols or _get_symbols(config)
         logger.info(
             f"=== Scheduler run @ {_now_utc()} "
-            f"| {len(active_symbols)} symbol(s): {active_symbols} ==="
+            f"| {len(active_symbols)} symbol(s) ==="
         )
 
         for sym in active_symbols:
@@ -111,6 +112,7 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 reports.append(report)
             except Exception as exc:
                 logger.error(f"Pipeline failed for {sym}: {exc}")
+                failed_symbols.append(sym)
                 _send_error_once(
                     key=sym,
                     message=(
@@ -119,10 +121,17 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                     )
                 )
 
-        # budget warning (sent once per run, not per symbol)
+        # Budget warning
         warning = _credits_warning(config)
         if warning:
             send_raw(warning)
+
+        # Log run summary
+        execute_count = sum(1 for r in reports if r.get("final_verdict") == "EXECUTE")
+        logger.info(
+            f"=== Run complete: {len(reports)} OK, {len(failed_symbols)} failed, "
+            f"{execute_count} EXECUTE signals ==="
+        )
 
     finally:
         _lock.release()

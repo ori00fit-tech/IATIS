@@ -8,7 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/root/IATIS
 Environment=PATH=/root/IATIS/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-ExecStart=/root/IATIS/venv/bin/python3 scheduler.py --interval 60
+ExecStart=/root/IATIS/venv/bin/python3 scheduler.py --interval 120
 Restart=always
 RestartSec=30
 StandardOutput=journal

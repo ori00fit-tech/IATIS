@@ -112,6 +112,27 @@
         "avg_pf": 3.08
       },
       "last_updated": "2026-06-25"
+    },
+    "H010": {
+      "title": "RSI/MACD Divergence Engine",
+      "status": "RESEARCH",
+      "engine": "divergence",
+      "notes": "Paper trading \u2014 collecting data via engine_tracker",
+      "last_updated": "2026-06-26"
+    },
+    "H011": {
+      "title": "Market Structure BOS/CHoCH/MSS Engine",
+      "status": "RESEARCH",
+      "engine": "market_structure",
+      "notes": "Paper trading \u2014 collecting data via engine_tracker",
+      "last_updated": "2026-06-26"
+    },
+    "H012": {
+      "title": "COT + Retail Sentiment Engine",
+      "status": "RESEARCH",
+      "engine": "sentiment",
+      "notes": "Paper trading \u2014 collecting data via engine_tracker",
+      "last_updated": "2026-06-26"
     }
   },
   "walk_forward_validation": {

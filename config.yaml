@@ -67,12 +67,15 @@ regime:
 engines:
   enabled:
     smc: true
-    ict: true          # RESEARCH status
-    nnfx: true         # RESEARCH status
+    ict: true
+    nnfx: true
     price_action: true
-    quant: true        # RESEARCH status
-    wyckoff: true      # RESEARCH status
-    macro: false       # requires yfinance network access
+    quant: true
+    wyckoff: true
+    divergence: true        # NEW: RSI/MACD divergence detection
+    market_structure: true  # NEW: BOS/CHoCH/MSS structural events
+    sentiment: true         # NEW: COT + retail positioning proxy
+    macro: false
 
 confluence:
   weights:
@@ -87,13 +90,16 @@ confluence:
     #   Quant: 0.126 ← moderate confirmation
     #   ICT:  0.084  ← low (was contrarian before trend filter fix)
     #   Wyckoff: 0.040 ← lowest (high neutral rate 37.7%)
-    smc:          0.242  # was 0.30, reduced (lower contribution vs NNFX)
-    price_action: 0.252  # was 0.25, stable
-    ict:          0.085  # was 0.15, reduced (contrarian → trend filter added)
-    nnfx:         0.282  # was 0.15, RAISED (highest contribution score)
-    quant:        0.091  # was 0.10, stable
-    wyckoff:      0.049  # was 0.05, stable (at floor)
-    macro:        0.000  # disabled
+    smc:              0.200  # reduced to make room for new engines
+    price_action:     0.185  # reduced
+    ict:              0.065  # reduced
+    nnfx:             0.225  # NNFX still highest (data-driven)
+    quant:            0.070
+    wyckoff:          0.040
+    divergence:       0.100  # NEW: RSI/MACD divergence
+    market_structure: 0.085  # NEW: BOS/CHoCH/MSS
+    sentiment:        0.030  # NEW: low until COT integrated
+    macro:            0.000
   # Max achievable score (re-normalized over participating engines):
   # Best realistic case: SMC(65)×0.30 + PA(80)×0.25 + NNFX(80)×0.15 agree
   # participating_weight = 0.70 → score = (65×0.30+80×0.25+80×0.15)/0.70 = 72.1

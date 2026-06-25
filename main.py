@@ -26,11 +26,14 @@ from core.data_loader import load_data, load_multi_timeframe_with_failover
 from core.data_validator import DataValidationError, validate_ohlcv
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
+from engines.divergence_engine import DivergenceEngine
 from engines.ict_engine import ICTEngine
 from engines.macro_engine import MacroEngine
+from engines.market_structure_engine import MarketStructureEngine
 from engines.nnfx_engine import NNFXEngine
 from engines.price_action_engine import PriceActionEngine
 from engines.quant_engine import QuantEngine
+from engines.sentiment_engine import SentimentEngine
 from engines.smc_engine import SMCEngine
 from engines.wyckoff_engine import WyckoffEngine
 from regimes.regime_detector import detect_regime
@@ -52,7 +55,10 @@ _ALL_ENGINES = {
     "nnfx": NNFXEngine,
     "price_action": PriceActionEngine,
     "quant": QuantEngine,
-    "wyckoff": WyckoffEngine,
+    "wyckoff":          WyckoffEngine,
+    "divergence":       DivergenceEngine,
+    "market_structure": MarketStructureEngine,
+    "sentiment":        SentimentEngine,
     "macro": MacroEngine,
 }
 

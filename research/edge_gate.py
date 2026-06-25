@@ -40,8 +40,11 @@ ENGINE_HYPOTHESIS_MAP = {
     "ict":     "H003",   # ICT killzone/premium-discount — RESEARCH
     "nnfx":    "H004",   # NNFX EMA200+ADX — RESEARCH
     "quant":   "H005",   # Quant RSI+momentum — RESEARCH
-    "wyckoff": "H006",   # Wyckoff Spring/Upthrust — RESEARCH
-    "macro":   "H007",   # Macro DXY+Risk-On/Off — RESEARCH
+    "wyckoff":          "H006",   # Wyckoff Spring/Upthrust — RESEARCH
+    "macro":            "H007",   # Macro DXY+Risk-On/Off — RESEARCH
+    "divergence":       "H010",   # RSI/MACD Divergence — RESEARCH
+    "market_structure": "H011",   # BOS/CHoCH/MSS — RESEARCH
+    "sentiment":        "H012",   # COT + Retail Proxy — RESEARCH
 }
 
 # Hypothesis statuses that allow engine activation

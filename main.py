@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from confluence.contradiction_engine import check_contradictions
+from confluence.regime_weights import apply_regime_weights
 from confluence.score_calculator import calculate_score, validate_confluence_config
 from confluence.voting_system import tally_votes
 from core.data_loader import load_data, load_multi_timeframe_from_twelve_data
@@ -140,9 +141,16 @@ def run_pipeline(config: dict) -> dict:
     # entries in the report so the output never hides that they didn't vote.
     disabled = [k for k, v in config.get("engines", {}).get("enabled", {}).items() if not v]
 
-    # 6. Confluence: vote + weighted score + contradiction check
+    # 6. Confluence: vote + regime-aware weighted score + contradiction check
+    regime_state = regime_result.regime.value if regime_result else "TRENDING"
+    regime_volatility = regime_result.volatility if regime_result else "normal"
+
+    # Adjust weights based on current market regime
+    base_weights = config["confluence"]["weights"]
+    active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
+
     vote_result = tally_votes(outputs)
-    score_result = calculate_score(outputs, config["confluence"]["weights"])
+    score_result = calculate_score(outputs, active_weights)
     contradiction_result = check_contradictions(outputs)
 
     min_score = config["confluence"]["min_score_to_trade"]
@@ -226,6 +234,7 @@ def run_pipeline(config: dict) -> dict:
             "engines_participating": score_result.engines_participating,
             "engines_total": score_result.engines_total,
             "participating_weight_share": score_result.participating_weight_share,
+            "regime_weights_applied": active_weights,
             "contradiction": {
                 "blocked": contradiction_result.blocked,
                 "reasons": contradiction_result.reasons,

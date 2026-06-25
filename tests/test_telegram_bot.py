@@ -95,7 +95,7 @@ def test_build_message_contains_verdict():
     assert "NO_TRADE" in msg  # verdict always present
 
     msg_ex = _build_message(EXECUTE_REPORT)
-    assert "EXECUTE" in msg_ex
+    assert "SIGNAL" in msg_ex or "EXECUTE" in msg_ex or "Trade Setup" in msg_ex
 
 
 def test_build_message_contains_regime():

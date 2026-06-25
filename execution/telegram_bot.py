@@ -1,23 +1,14 @@
 """
 execution/telegram_bot.py
 -----------------------------
-Phase 2: Telegram notification layer.
+Phase 2: Telegram notification layer — Intelligence Report format.
 
-Design principles:
-- Uses raw Telegram Bot API via requests (no extra library dependency)
-- parse_mode: HTML (not Markdown) — HTML is far more predictable in
-  Telegram because special characters in dynamic content (prices,
-  reasons, symbol names) don't accidentally trigger Markdown parsing.
-  The only thing that can break HTML is unescaped < > & — we handle
-  that with _escape().
-- Never crashes the pipeline — send failures are logged with the full
-  API error body, not just the exception message.
-- Full error logging: when the API returns a non-ok response, we log
-  the exact status code and response body so the cause is diagnosable.
-
-Setup: add to .env
-    TELEGRAM_BOT_TOKEN=<your token>
-    TELEGRAM_CHAT_ID=<your chat id>
+Design:
+- parse_mode: HTML (safer than Markdown)
+- Never crashes the pipeline — failures logged, not raised
+- Flood protection: 30min cooldown per symbol
+- Token never logged in full
+- Intelligence Report format: professional, contextual, actionable
 """
 
 from __future__ import annotations
@@ -35,122 +26,161 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_MESSAGE_LENGTH = 4096
 
 
-class TelegramError(Exception):
-    """Raised when Telegram API returns an error (used in tests only —
-    send_signal itself never raises to avoid crashing the pipeline)."""
-
-
 def _escape(text: str) -> str:
-    """Escape HTML special characters in dynamic content.
-    Telegram HTML mode only requires escaping < > &.
-    """
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _get_credentials() -> tuple[str, str]:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    return token, chat_id
+    return (
+        os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        os.environ.get("TELEGRAM_CHAT_ID", ""),
+    )
+
+
+def _bias_icon(bias: str) -> str:
+    return {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(bias, "⚪")
+
+
+def _regime_icon(regime: str) -> str:
+    return {"TRENDING": "📈", "RANGING": "↔️"}.get(regime, "📊")
+
+
+def _verdict_icon(verdict: str) -> str:
+    return "✅" if verdict == "EXECUTE" else "⛔"
 
 
 def _build_message(report: dict) -> str:
-    """Format a pipeline report into an HTML Telegram message."""
+    """Build professional Intelligence Report for Telegram."""
     verdict = report.get("final_verdict", "UNKNOWN")
     symbol = _escape(report.get("symbol", "?"))
-    summary = _escape(report.get("summary", ""))
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    icon = "✅" if verdict == "EXECUTE" else "⛔"
-
     regime_info = report.get("regime", {})
-    regime = _escape(regime_info.get("state", "?"))
-    volatility = _escape(regime_info.get("volatility", "?"))
+    regime = regime_info.get("state", "?")
+    volatility = regime_info.get("volatility", "?")
     confidence = regime_info.get("confidence", 0)
-    trend = regime_info.get("trend_strength", 0)
-
-    engines = report.get("engine_outputs", [])
-    engine_lines = []
-    for e in engines:
-        bias = _escape(e.get("bias", "?"))
-        score = e.get("score", 0)
-        name = _escape(e.get("engine", "?"))
-        bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(
-            e.get("bias", ""), "⚪"
-        )
-        engine_lines.append(f"  {bias_icon} {name}: {bias} ({score:.0f}/100)")
 
     confluence = report.get("confluence", {})
     cf_score = confluence.get("score", 0)
     cf_dir = confluence.get("directional_score", 0)
     participating = confluence.get("engines_participating", 0)
     total = confluence.get("engines_total", 0)
-    weight_share = confluence.get("participating_weight_share", 0)
 
-    fail_reasons = confluence.get("fail_reasons", [])
-    risk = report.get("risk", {})
-    risk_reasons = risk.get("reasons", []) if risk else []
+    engines = report.get("engine_outputs", [])
+    risk = report.get("risk", {}) or {}
 
+    # --- Header ---
     lines = [
-        f"{icon} <b>IATIS — {symbol}</b>",
-        f"🕐 {now}",
-        "",
-        f"📊 <b>Regime:</b> {regime} | vol: {volatility} | "
-        f"confidence: {confidence:.0%} | trend: {trend:+.2f}",
-        "",
-        "🧠 <b>Engines:</b>",
+        f"{_verdict_icon(verdict)} <b>IATIS Intelligence Report</b>",
+        f"",
+        f"<b>Asset:</b> {symbol}",
+        f"<b>Time:</b> {now}",
+        f"",
     ]
-    lines.extend(engine_lines)
+
+    # --- Confluence Score ---
+    score_bar = _score_bar(cf_score)
+    direction_label = "Bullish" if cf_dir > 0 else "Bearish" if cf_dir < 0 else "Neutral"
     lines += [
-        "",
-        f"⚖️ <b>Confluence:</b> {cf_score:.1f}/100 (dir: {cf_dir:+.1f})",
-        f"   Engines: {participating}/{total} voted | "
-        f"weight coverage: {weight_share:.0%}",
+        f"<b>Confluence:</b> {cf_score:.0f}/100 {score_bar}",
+        f"<b>Direction:</b> {direction_label} ({cf_dir:+.1f})",
+        f"",
     ]
 
-    if verdict == "EXECUTE":
-        entry = report.get("entry_price", "—")
-        sl = report.get("stop_loss", "—")
-        tp = report.get("take_profit", "—")
-        rr = report.get("risk_reward", "—")
-        risk_pct = risk.get("recommended_risk_pct", 0) if risk else 0
+    # --- Engine Votes ---
+    non_neutral = [e for e in engines if e.get("bias") != "NEUTRAL"]
+    neutral = [e for e in engines if e.get("bias") == "NEUTRAL"]
 
-        def _fmt_price(v) -> str:
-            return f"{v:.5f}" if isinstance(v, float) else _escape(str(v))
+    if non_neutral or neutral:
+        lines.append("<b>Engine Analysis:</b>")
+        for e in sorted(engines, key=lambda x: x.get("score", 0), reverse=True):
+            bias = e.get("bias", "?")
+            score = e.get("score", 0)
+            name = _escape(e.get("engine", "?"))
+            icon = _bias_icon(bias)
+            reason = _escape((e.get("reasons") or [""])[0][:60]) if e.get("reasons") else ""
+            lines.append(f"  {icon} <b>{name}:</b> {bias} ({score:.0f}/100)")
+            if reason and bias != "NEUTRAL":
+                lines.append(f"      <i>{reason}</i>")
+        lines.append("")
+
+    # --- Market Regime ---
+    lines += [
+        f"<b>Regime:</b> {_regime_icon(regime)} {regime} | "
+        f"Vol: {volatility} | Conf: {confidence:.0%}",
+        f"",
+    ]
+
+    # --- Verdict Block ---
+    if verdict == "EXECUTE":
+        entry = report.get("entry_price")
+        sl = report.get("stop_loss")
+        tp = report.get("take_profit")
+        rr = report.get("risk_reward", "—")
+        risk_pct = risk.get("recommended_risk_pct", 0) or 0
 
         lines += [
-            "",
-            "💰 <b>Trade Setup:</b>",
-            f"   Entry: {_fmt_price(entry)}",
-            f"   SL:    {_fmt_price(sl)}",
-            f"   TP:    {_fmt_price(tp)}",
-            f"   R:R    {_escape(str(rr))}",
-            f"   Risk:  {risk_pct:.2%} of account",
+            f"<b>Verdict:</b> ✅ <b>STRONG {_get_direction(engines).upper()} SIGNAL</b>",
+            f"",
+            f"<b>📌 Trade Setup:</b>",
         ]
-    else:
-        if fail_reasons:
-            lines += ["", "❌ <b>Confluence failed:</b>"]
-            for r in fail_reasons:
-                lines.append(f"   • {_escape(r)}")
-        if risk_reasons and risk.get("passed") is False:
-            lines += ["", "🛡 <b>Risk gate failed:</b>"]
-            for r in risk_reasons:
-                lines.append(f"   • {_escape(r)}")
+        if entry:
+            lines.append(f"  Entry: <code>{entry:.5f}</code>")
+        if sl:
+            lines.append(f"  Stop Loss: <code>{sl:.5f}</code>")
+        if tp:
+            lines.append(f"  Take Profit: <code>{tp:.5f}</code>")
+        if rr:
+            lines.append(f"  Risk/Reward: {rr}")
+        if risk_pct:
+            lines.append(f"  Suggested Risk: {risk_pct:.1%} of account")
 
-    lines += [
-        "",
-        f"📋 <b>Verdict: {_escape(verdict)}</b>",
-        f"<i>{summary}</i>",
-    ]
+    else:
+        # NO_TRADE — explain why
+        fail_reasons = confluence.get("fail_reasons", [])
+        lines.append(f"<b>Verdict:</b> ⛔ NO_TRADE")
+        if fail_reasons:
+            lines.append(f"<b>Reason:</b> <i>{_escape(fail_reasons[0][:100])}</i>")
+
+    # --- Risk Assessment ---
+    if verdict == "EXECUTE":
+        risk_level = _assess_risk_level(cf_score, regime, volatility)
+        lines += ["", f"<b>Risk Level:</b> {risk_level}"]
+
+    lines += ["", f"<code>IATIS v0.3.0 | {symbol}</code>"]
 
     message = "\n".join(lines)
-    _SUFFIX = "\n\n<i>(message truncated)</i>"
     if len(message) > MAX_MESSAGE_LENGTH:
-        message = message[: MAX_MESSAGE_LENGTH - len(_SUFFIX)] + _SUFFIX
+        suffix = "\n<i>(truncated)</i>"
+        message = message[:MAX_MESSAGE_LENGTH - len(suffix)] + suffix
     return message
 
 
+def _score_bar(score: float) -> str:
+    """Visual score bar: ████░░ style."""
+    filled = round(score / 10)
+    empty = 10 - filled
+    return f"{'█' * filled}{'░' * empty}"
+
+
+def _get_direction(engines: list) -> str:
+    bull = sum(1 for e in engines if e.get("bias") == "BULLISH")
+    bear = sum(1 for e in engines if e.get("bias") == "BEARISH")
+    return "bullish" if bull > bear else "bearish" if bear > bull else "neutral"
+
+
+def _assess_risk_level(score: float, regime: str, volatility: str) -> str:
+    if score >= 70 and regime == "TRENDING" and volatility in ("normal", "low"):
+        return "🟢 Low — Strong confluence in favorable conditions"
+    elif score >= 60 and regime == "TRENDING":
+        return "🟡 Medium — Good confluence, monitor conditions"
+    elif volatility == "high" or volatility == "extreme":
+        return "🔴 High — Elevated volatility, reduce position size"
+    else:
+        return "🟡 Medium — Standard risk management applies"
+
+
 def _post(url: str, payload: dict, token_hint: str = "") -> tuple[bool, str]:
-    """HTTP POST with error logging that never exposes the full token."""
     resp = None
     try:
         resp = requests.post(url, json=payload, timeout=10)
@@ -163,7 +193,7 @@ def _post(url: str, payload: dict, token_hint: str = "") -> tuple[bool, str]:
         logger.warning(f"Telegram API ok=false: {detail} (status={resp.status_code}, {safe_hint})")
         return False, detail
     except requests.RequestException as exc:
-        detail = type(exc).__name__  # never include URL (contains token)
+        detail = type(exc).__name__
         if resp is not None:
             try:
                 detail += f" status={resp.status_code}"
@@ -174,20 +204,13 @@ def _post(url: str, payload: dict, token_hint: str = "") -> tuple[bool, str]:
 
 
 def send_signal(report: dict, token: str = "", chat_id: str = "") -> bool:
-    """Send pipeline report to Telegram. Returns True on success.
-
-    Never raises — failures are logged so the pipeline continues
-    regardless of Telegram availability.
-    """
+    """Send Intelligence Report to Telegram. Returns True on success."""
     env_token, env_chat_id = _get_credentials()
     token = token or env_token
     chat_id = chat_id or env_chat_id
 
     if not token or not chat_id:
-        logger.warning(
-            "Telegram credentials not set. "
-            "Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env"
-        )
+        logger.warning("Telegram credentials not set.")
         return False
 
     message = _build_message(report)
@@ -202,25 +225,21 @@ def send_signal(report: dict, token: str = "", chat_id: str = "") -> bool:
 
 
 def send_raw(text: str, token: str = "", chat_id: str = "") -> bool:
-    """Send a plain text message — used for system alerts and startup."""
     env_token, env_chat_id = _get_credentials()
     token = token or env_token
     chat_id = chat_id or env_chat_id
-
     if not token or not chat_id:
         return False
-
     ok, _ = _post(
         TELEGRAM_API.format(token=token),
         {"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        token_hint=token,
     )
     return ok
 
 
 def test_connection(token: str = "", chat_id: str = "") -> bool:
-    """Send a test message to verify credentials work. Costs 0 API credits."""
     return send_raw(
-        "🤖 <b>IATIS connected</b> — Telegram notifications are working.",
-        token=token,
-        chat_id=chat_id,
+        "🤖 <b>IATIS connected</b> — Telegram Intelligence Reports active.",
+        token=token, chat_id=chat_id,
     )

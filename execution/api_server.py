@@ -109,6 +109,12 @@ _executor = ThreadPoolExecutor(max_workers=4)
 _config_cache: dict | None = None
 _config_lock = threading.Lock()
 
+# Session store: {session_id: created_timestamp}
+# Sessions expire after 7 days. Stored in memory — resets on restart.
+# For multi-user or persistent sessions: use SQLite (Phase 6+)
+_active_sessions: dict[str, float] = {}
+_SESSION_TTL = 86400 * 7  # 7 days
+
 # Telegram error cooldown (issue #11 — flood protection)
 _error_cooldown: dict[str, float] = {}
 _COOLDOWN_SECONDS = 1800  # 30 minutes per symbol
@@ -126,9 +132,14 @@ def _get_config() -> dict:
 
 
 def _check_auth(x_api_key: str | None, cookie_key: str | None = None) -> None:
-    """Fail-closed auth — accepts X-API-Key header OR iatis_session cookie.
-    Uses constant-time comparison to prevent timing attacks.
-    Cookie is HttpOnly so JS cannot read or steal it.
+    """Fail-closed auth — accepts X-API-Key header OR valid session cookie.
+
+    Security properties:
+    - X-API-Key header: direct key comparison (for curl/API clients)
+    - Session cookie: validates session_id against _active_sessions store
+      The raw API key is NEVER stored in the cookie (session rotation)
+    - hmac.compare_digest: timing-attack protection
+    - HttpOnly cookie: JS cannot read session_id
     """
     required = os.environ.get("API_SERVER_KEY")
     if not required:
@@ -136,10 +147,23 @@ def _check_auth(x_api_key: str | None, cookie_key: str | None = None) -> None:
             return
         raise HTTPException(status_code=500, detail="API_SERVER_KEY not configured.")
 
-    # Accept either header or cookie
-    provided = x_api_key or cookie_key or ""
-    if not hmac.compare_digest(provided, required):
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
+    # Check X-API-Key header (API clients)
+    if x_api_key and hmac.compare_digest(x_api_key, required):
+        return
+
+    # Check session cookie (browser)
+    if cookie_key:
+        now = time.time()
+        expires_before = now - _SESSION_TTL
+        # Clean expired sessions
+        expired = [sid for sid, ts in _active_sessions.items() if ts < expires_before]
+        for sid in expired:
+            _active_sessions.pop(sid, None)
+        # Validate session
+        if cookie_key in _active_sessions:
+            return
+
+    raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
 
 
 def _h(value: Any) -> str:
@@ -555,3 +579,69 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
         except Exception:
             continue
     return {"count": len(results), "results": results}
+
+
+@app.get("/research")
+async def research_dashboard(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research hypotheses status with sample sizes and win rates."""
+    _check_auth(x_api_key, iatis_session)
+    import json
+    from pathlib import Path
+
+    registry_path = Path("research/results/registry.json")
+    results_dir = Path("research/results")
+
+    try:
+        registry = json.loads(registry_path.read_text())
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not read research registry.")
+
+    hypotheses = []
+    for h_id, h_data in registry.get("hypotheses", {}).items():
+        entry = {
+            "id": h_id,
+            "title": h_data.get("title", ""),
+            "status": h_data.get("status", "UNKNOWN"),
+            "notes": h_data.get("notes", ""),
+            "last_updated": h_data.get("last_updated", ""),
+        }
+
+        # Load result file if available
+        result_file = h_data.get("result_file")
+        if result_file:
+            result_path = Path("research") / result_file
+            if result_path.exists():
+                try:
+                    result = json.loads(result_path.read_text())
+                    entry["sample_size"] = (
+                        result.get("n_fvg_entries") or
+                        result.get("qualified_n") or
+                        result.get("sample_size_qualified") or
+                        result.get("total_n")
+                    )
+                    entry["win_rate"] = (
+                        result.get("win_rate") or
+                        result.get("qualified_win_rate") or
+                        result.get("combined_win_rate")
+                    )
+                    entry["p_value"] = result.get("p_value")
+                    entry["improvement"] = (
+                        result.get("improvement") or
+                        result.get("win_rate_improvement")
+                    )
+                except Exception:
+                    pass
+
+        hypotheses.append(entry)
+
+    return {
+        "total_hypotheses": len(hypotheses),
+        "passed": sum(1 for h in hypotheses if h["status"] == "PASSED"),
+        "failed": sum(1 for h in hypotheses if "FAILED" in h["status"]),
+        "research": sum(1 for h in hypotheses if h["status"] == "RESEARCH"),
+        "pending": sum(1 for h in hypotheses if h["status"] == "PENDING"),
+        "hypotheses": hypotheses,
+    }

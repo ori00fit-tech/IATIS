@@ -170,7 +170,11 @@ def _fetch_alpha_vantage(
     interval: str,
     outputsize: int,
 ) -> pd.DataFrame:
-    """Tertiary: Alpha Vantage (25 req/day free, FX + crypto)."""
+    """Tertiary: Alpha Vantage (25 req/day free, FX only on free tier).
+
+    Note: FX_INTRADAY requires Premium on Alpha Vantage free tier.
+    Falls back gracefully if 'Information' key returned (premium required).
+    """
     api_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
     if not api_key:
         raise DataFetchError("ALPHA_VANTAGE_API_KEY not set — skipping Alpha Vantage")
@@ -180,7 +184,6 @@ def _fetch_alpha_vantage(
     except ImportError:
         raise DataFetchError("requests not installed")
 
-    # Alpha Vantage FX intraday endpoint
     AV_INTERVAL_MAP = {
         "M15": "15min", "15min": "15min",
         "H1": "60min", "1h": "60min",
@@ -200,15 +203,23 @@ def _fetch_alpha_vantage(
     }
 
     logger.info(f"Alpha Vantage: fetching {symbol} @ {av_interval}")
-    resp = requests.get(url, params=params, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Alpha Vantage request failed: {exc}")
 
-    # Check for API errors
+    # Handle API-level errors
+    if "Information" in data:
+        raise DataFetchError(
+            f"Alpha Vantage: premium required for intraday FX. "
+            f"Info: {data['Information'][:100]}"
+        )
+    if "Note" in data:
+        raise DataFetchError(f"Alpha Vantage rate limited: {data['Note'][:100]}")
     if "Error Message" in data:
         raise DataFetchError(f"Alpha Vantage error: {data['Error Message']}")
-    if "Note" in data:  # rate limit notice
-        raise DataFetchError(f"Alpha Vantage rate limited: {data['Note'][:100]}")
 
     time_series_key = f"Time Series FX ({av_interval})"
     if time_series_key not in data:
@@ -229,6 +240,99 @@ def _fetch_alpha_vantage(
     df = pd.DataFrame(records).set_index("datetime").sort_index()
     df = df.tail(outputsize)
     logger.info(f"Alpha Vantage: {len(df)} bars for {symbol}")
+    return df
+
+
+def _fetch_finnhub(
+    symbol: str,
+    interval: str,
+    outputsize: int,
+) -> pd.DataFrame:
+    """Quaternary: Finnhub (free tier: 60 req/min, FX + crypto + stocks).
+
+    Requires FINNHUB_API_KEY in .env
+    Free tier supports: OANDA FX pairs, crypto, US stocks
+    """
+    api_key = os.environ.get("FINNHUB_API_KEY", "")
+    if not api_key:
+        raise DataFetchError("FINNHUB_API_KEY not set — skipping Finnhub")
+
+    try:
+        import requests
+        import time as _time
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    # Convert to Finnhub format
+    FINNHUB_SYMBOL_MAP = {
+        "EUR/USD": "OANDA:EUR_USD",
+        "GBP/USD": "OANDA:GBP_USD",
+        "USD/JPY": "OANDA:USD_JPY",
+        "USD/CHF": "OANDA:USD_CHF",
+        "AUD/USD": "OANDA:AUD_USD",
+        "USD/CAD": "OANDA:USD_CAD",
+        "NZD/USD": "OANDA:NZD_USD",
+        "EUR/JPY": "OANDA:EUR_JPY",
+        "GBP/JPY": "OANDA:GBP_JPY",
+        "XAU/USD": "OANDA:XAU_USD",
+        "BTC/USD": "BINANCE:BTCUSDT",
+        "ETH/USD": "BINANCE:ETHUSDT",
+    }
+    fh_symbol = FINNHUB_SYMBOL_MAP.get(symbol)
+    if not fh_symbol:
+        raise DataFetchError(f"Finnhub: no mapping for {symbol}")
+
+    RESOLUTION_MAP = {
+        "M1": "1", "M5": "5", "M15": "15",
+        "H1": "60", "1h": "60",
+        "H4": "240", "D1": "D",
+    }
+    resolution = RESOLUTION_MAP.get(interval, "60")
+
+    # Calculate time range
+    end_ts = int(_time.time())
+    hours_back = outputsize  # approximate: outputsize bars ≈ outputsize hours
+    start_ts = end_ts - hours_back * 3600 * 2  # 2× buffer
+
+    url = "https://finnhub.io/api/v1/forex/candle"
+    params = {
+        "symbol": fh_symbol,
+        "resolution": resolution,
+        "from": start_ts,
+        "to": end_ts,
+        "token": api_key,
+    }
+
+    logger.info(f"Finnhub: fetching {symbol} ({fh_symbol}) @ {resolution}min")
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Finnhub request failed: {exc}")
+
+    if data.get("s") == "no_data":
+        raise DataFetchError(f"Finnhub: no data for {fh_symbol}")
+    if data.get("s") != "ok":
+        raise DataFetchError(f"Finnhub: status={data.get('s')}, error={data.get('error', '?')}")
+
+    records = []
+    for i, ts in enumerate(data.get("t", [])):
+        records.append({
+            "datetime": pd.Timestamp(ts, unit="s", tz="UTC"),
+            "open":   float(data["o"][i]),
+            "high":   float(data["h"][i]),
+            "low":    float(data["l"][i]),
+            "close":  float(data["c"][i]),
+            "volume": float(data.get("v", [0] * len(data["t"]))[i]),
+        })
+
+    if not records:
+        raise DataFetchError(f"Finnhub: empty candles for {fh_symbol}")
+
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
+    df = df.tail(outputsize)
+    logger.info(f"Finnhub: {len(df)} bars for {symbol}")
     return df
 
 
@@ -259,7 +363,7 @@ def fetch_with_failover(
         DataFetchError: all providers failed
     """
     if providers is None:
-        providers = ["twelve_data", "yahoo_finance", "alpha_vantage"]
+        providers = ["twelve_data", "yahoo_finance", "alpha_vantage", "finnhub"]
 
     attempts: list[FetchAttempt] = []
 
@@ -272,6 +376,8 @@ def fetch_with_failover(
                 df = _fetch_yahoo_finance(symbol, interval, outputsize)
             elif provider == "alpha_vantage":
                 df = _fetch_alpha_vantage(symbol, interval, outputsize)
+            elif provider == "finnhub":
+                df = _fetch_finnhub(symbol, interval, outputsize)
             else:
                 raise DataFetchError(f"Unknown provider: {provider}")
 

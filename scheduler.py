@@ -104,8 +104,14 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         for sym in active_symbols:
             sym_config = dict(config)
             sym_config["data"] = dict(config["data"])
+            # Use 'internal' name if available (e.g. SPX → SPX500, DJI → US30)
+            internal = sym.replace("/", "")
+            for sym_entry in config["data"].get("twelve_data_symbols", []):
+                if sym_entry["symbol"] == sym and "internal" in sym_entry:
+                    internal = sym_entry["internal"]
+                    break
+            sym_config["data"]["symbol"] = internal
             sym_config["data"]["twelve_data_symbol"] = sym
-            sym_config["data"]["symbol"] = sym.replace("/", "")
 
             try:
                 report = run_pipeline(sym_config)

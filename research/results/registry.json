@@ -10,7 +10,7 @@
       "last_updated": "2026-06-21"
     },
     "H002": {
-      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) — EURUSD only",
+      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) \u2014 EURUSD only",
       "status": "FAILED",
       "result_file": "results/H002_result.json",
       "tested_on": "EURUSD Yahoo H1 2yr, n=76, wr=0.5789, p=0.2209",
@@ -18,12 +18,12 @@
       "last_updated": "2026-06-25"
     },
     "H002b": {
-      "title": "Qualified sweep — multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
+      "title": "Qualified sweep \u2014 multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
       "status": "FAILED",
       "result_file": "results/H002b_result.json",
       "tested_on": "3 symbols, n=232, combined wr=0.4612 (-3.66pp vs H001), p=0.4337",
       "lesson": "EURUSD WR=57.89% was false positive. At n=232 across 3 symbols, combined WR=46.12% is WORSE than H001 baseline. ATR+regime filter does NOT improve sweep win rate. Do not pursue this direction further.",
-      "conclusion": "ABANDON — liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
+      "conclusion": "ABANDON \u2014 liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
       "last_updated": "2026-06-25"
     },
     "H003": {
@@ -63,10 +63,32 @@
     },
     "H008": {
       "title": "BOS (Break of Structure) + FVG (Fair Value Gap) confluence entry",
-      "status": "PENDING",
-      "blocks_engine": "smc_advanced",
-      "notes": "Next hypothesis after H001+H002+H002b all failed on sweep-based entries. BOS+FVG is structurally different — requires price to FIRST break structure (confirm direction) THEN fill an imbalance (FVG) before entry. Design experiment before running.",
-      "rationale": "H001/H002/H002b tested: enter ON the sweep. H008 tests: enter AFTER BOS confirms the sweep was real, at FVG retracement. This adds two confirmation layers that sweep-only entries lack.",
+      "status": "NEEDS_MORE_DATA",
+      "result_file": "results/H008_result.json",
+      "tested_on": "EURUSD+GBPUSD+XAUUSD H1 2yr Yahoo Finance",
+      "results": {
+        "EURUSD": {
+          "n": 154,
+          "win_rate": 0.5519,
+          "improvement": 0.0541,
+          "p_value": 0.3001
+        },
+        "GBPUSD": {
+          "n": 166,
+          "win_rate": 0.4819,
+          "improvement": -0.0159,
+          "p_value": 0.7563
+        },
+        "XAUUSD": {
+          "n": 105,
+          "win_rate": 0.5524,
+          "improvement": 0.0546,
+          "p_value": 0.3555
+        }
+      },
+      "analysis": "EURUSD+XAUUSD show consistent +5.4pp improvement but p>0.3 at n~150. Need n>=529 per symbol for 80% power at this effect size. GBPUSD shows NO edge. Hypothesis not abandoned \u2014 needs 5yr data for adequate power.",
+      "next_step": "Download 5yr H1 data via Yahoo Finance, re-run H008. If EURUSD+XAUUSD edge persists at n>=400, combine for joint test.",
+      "required_n": 529,
       "last_updated": "2026-06-25"
     }
   }

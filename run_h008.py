@@ -77,3 +77,92 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def run_combined(symbols_to_include: list[str] = None):
+    """Run H008 on multiple symbols and test combined hypothesis.
+    
+    Only includes symbols that individually show positive improvement.
+    Excludes symbols like GBPUSD that show no edge (WR < baseline).
+    """
+    from core.data_loader import load_from_csv
+    from core.timeframe_sync import resample
+    from research.experiments.H008_bos_fvg import detect_bos_fvg_setups, H001_BASELINE
+    from math import erf, sqrt, ceil
+    
+    if symbols_to_include is None:
+        # Only include symbols with positive edge
+        symbols_to_include = ["EURUSD", "XAUUSD"]
+    
+    data_dir = Path("data")
+    all_outcomes = []
+    per_symbol = {}
+    
+    print(f"\n{'='*55}")
+    print("H008b — Combined Symbol Test (positive-edge symbols only)")
+    print(f"Symbols: {symbols_to_include}")
+    print(f"{'='*55}")
+    
+    for sym in symbols_to_include:
+        # Try both 5yr and 2yr files
+        csv_file = (data_dir / f"{sym}_H1_5y.csv") 
+        if not csv_file.exists():
+            csv_file = data_dir / f"{sym}_H1_2y.csv"
+        if not csv_file.exists():
+            print(f"  ⚠️  {sym}: no CSV found")
+            continue
+        
+        print(f"\nLoading {sym} from {csv_file.name}...")
+        df_h1 = load_from_csv(str(csv_file))
+        df_m15 = resample(df_h1, "M15")
+        print(f"  {len(df_h1)} H1 bars | {len(df_m15)} M15 bars")
+        
+        setups = detect_bos_fvg_setups(df_m15)
+        outcomes = [s["won"] for s in setups]
+        n = len(outcomes)
+        wr = sum(outcomes) / n if n > 0 else 0
+        
+        per_symbol[sym] = {"n": n, "win_rate": round(wr, 4)}
+        all_outcomes.extend(outcomes)
+        print(f"  {sym}: n={n}, WR={wr:.1%}")
+    
+    if not all_outcomes:
+        print("No data available.")
+        return
+    
+    total_n = len(all_outcomes)
+    combined_wr = sum(all_outcomes) / total_n
+    improvement = combined_wr - H001_BASELINE
+    
+    # Two-proportion z-test
+    p0 = H001_BASELINE
+    se = sqrt(p0 * (1-p0) * (1/total_n + 1/225))
+    z = (combined_wr - p0) / se if se > 0 else 0
+    p_value = float(2 * (1 - 0.5 * (1 + erf(abs(z) / sqrt(2)))))
+    
+    print(f"\n{'='*55}")
+    print(f"H008b Combined Result:")
+    print(f"  Total setups: {total_n}")
+    print(f"  Combined WR:  {combined_wr:.2%}")
+    print(f"  Baseline:     {H001_BASELINE:.2%}")
+    print(f"  Improvement:  {improvement:+.2%}")
+    print(f"  p-value:      {p_value:.4f}")
+    print(f"  Status:       {'✅ PASSED' if p_value <= 0.05 and improvement >= 0.05 else '❌ FAILED' if p_value > 0.05 else '⚠️ PROMISING'}")
+    
+    # Required n for significance
+    if p_value > 0.05 and improvement > 0:
+        z_req = 1.645 + 0.842
+        effect = improvement / sqrt(p0 * (1-p0))
+        n_needed = ceil((z_req / effect) ** 2) if effect > 0 else 9999
+        print(f"\n  Need n≥{n_needed} for p<0.05 (have {total_n})")
+        print(f"  Run with 5yr data: python3 scripts/download_historical.py")
+        print(f"    --symbols {' '.join(symbols_to_include)} --interval H1 --years 5 --force")
+    print(f"{'='*55}")
+
+
+if __name__ == "__main__":
+    import sys
+    if "--combined" in sys.argv:
+        run_combined()
+    else:
+        main()

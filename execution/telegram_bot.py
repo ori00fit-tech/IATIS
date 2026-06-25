@@ -111,6 +111,21 @@ def _build_message(report: dict) -> str:
         f"",
     ]
 
+    # --- News Risk ---
+    news = report.get("news", {})
+    if news and news.get("news_risk_score", 0) > 0:
+        nr_score = news.get("news_risk_score", 0)
+        nr_level = news.get("risk_level", "LOW")
+        nr_icons = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "EXTREME": "🚨"}
+        nr_icon = nr_icons.get(nr_level, "⚪")
+        next_event = news.get("next_high_impact")
+        nr_line = f"<b>News Risk:</b> {nr_icon} {nr_level} ({nr_score:.0f}/100)"
+        if next_event:
+            nr_line += f" — {_escape(next_event['name'])} in {next_event['minutes_until']}min"
+        lines += [nr_line, ""]
+    elif news and news.get("blackout_active"):
+        lines += [f"<b>News Risk:</b> 🚨 BLACKOUT — {_escape(news.get('blackout_reason',''))}", ""]
+
     # --- Verdict Block ---
     if verdict == "EXECUTE":
         entry = report.get("entry_price")

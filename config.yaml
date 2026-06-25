@@ -101,7 +101,16 @@ risk:
   max_drawdown_reduce: 0.10    # reduce size after 10% DD
   max_drawdown_stop: 0.15      # stop system after 15% DD
 
-logging:
+fundamentals:
+  # News Intelligence Layer — requires JBLANKED_API_KEY in .env
+  # Register free: https://www.jblanked.com/
+  # Fallback: Forex Factory public JSON (no key needed, week data only)
+  news_filter_enabled: true
+  blackout_look_ahead_min: 60    # check for events in next 60 minutes
+  # Blackout windows (automatic NO_TRADE):
+  #   30 min BEFORE high-impact event (NFP, FOMC, CPI, rate decisions)
+  #   15 min AFTER high-impact event
+  #   10 min BEFORE medium-impact event
   level: "INFO"
   file: "storage/system.log"
 

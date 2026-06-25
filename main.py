@@ -39,6 +39,7 @@ from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
 from storage.decision_db import log_decision_db
 from storage.engine_tracker import record_engine_votes
+from fundamentals.news_risk import assess_news_risk, risk_level_icon
 from execution.telegram_bot import send_signal as telegram_send
 from utils.helpers import load_config
 from utils.logger import get_logger
@@ -194,17 +195,41 @@ def run_pipeline(config: dict) -> dict:
         risk_result = evaluate_risk(risk_inputs, config)
 
     risk_pass = risk_result.passed if risk_result else False
-    final_verdict = "EXECUTE" if (confluence_pass and risk_pass) else "NO_TRADE"
 
-    # Plain-language one-liner explaining the verdict, so the report is
-    # readable without parsing every nested field — addresses the
-    # "explainability" feedback: every decision should be self-explaining.
+    # 8. News Risk Gate — veto EXECUTE if high-impact event imminent
+    # Only runs when confluence passed (saves API calls on NO_TRADE)
+    news_risk = None
+    news_blocked = False
+    if confluence_pass and config.get("fundamentals", {}).get("news_filter_enabled", True):
+        try:
+            news_risk = assess_news_risk(
+                symbol=config["data"]["symbol"],
+                look_ahead_minutes=config.get("fundamentals", {}).get(
+                    "blackout_look_ahead_min", 60
+                ),
+            )
+            news_blocked = news_risk.should_block
+            if news_blocked:
+                logger.info(
+                    f"News blackout for {config['data']['symbol']}: "
+                    f"score={news_risk.news_risk_score} reason={news_risk.blackout_reason}"
+                )
+        except Exception as exc:
+            logger.warning(f"News risk check failed (non-fatal): {exc}")
+
+    final_verdict = "EXECUTE" if (confluence_pass and risk_pass and not news_blocked) else "NO_TRADE"
+
+    # Build summary
     if final_verdict == "EXECUTE":
         summary = (
             f"EXECUTE {vote_result.winning_bias.value}: "
             f"{vote_result.agree_count}/{score_result.engines_participating} active engines agreed, "
             f"confluence score {score_result.final_score}/100, risk checks passed."
         )
+        if news_risk:
+            summary += f" News risk: {news_risk.risk_level} ({news_risk.news_risk_score:.0f}/100)."
+    elif news_blocked and news_risk:
+        summary = f"NO_TRADE: {news_risk.blackout_reason}"
     elif not confluence_pass:
         summary = "NO_TRADE: " + "; ".join(confluence_fail_reasons)
     else:
@@ -248,6 +273,14 @@ def run_pipeline(config: dict) -> dict:
             "reasons": risk_result.reasons if risk_result else ["Risk gate not evaluated — confluence failed first"],
             "recommended_risk_pct": risk_result.recommended_risk_pct if risk_result else None,
             "position_size_units": risk_result.position_size_units if risk_result else None,
+        },
+        "news": news_risk.to_dict() if news_risk else {
+            "news_risk_score": 0,
+            "risk_level": "LOW",
+            "blackout_active": False,
+            "blackout_reason": "News filter not evaluated",
+            "upcoming_events_count": 0,
+            "next_high_impact": None,
         },
         # Trade levels — populated only when confluence_pass (risk inputs exist).
         # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.

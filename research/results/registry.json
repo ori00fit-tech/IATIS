@@ -1,5 +1,5 @@
 {
-  "_comment": "PASSED = proven edge. RESEARCH = approved for paper trading/data collection only.",
+  "_comment": "PASSED = proven edge. RESEARCH = paper trading. FAILED_INSUFFICIENT_DATA = promising but need more data.",
   "hypotheses": {
     "H001": {
       "title": "Liquidity sweep + HTF trend alignment",
@@ -9,17 +9,19 @@
       "last_updated": "2026-06-21"
     },
     "H002": {
-      "title": "Qualified liquidity sweep (ATR size + trending regime)",
-      "status": "PENDING",
-      "blocks_engine": "smc_advanced",
-      "notes": "Ready to run on EURUSD M15/H1",
-      "last_updated": "2026-06-24"
+      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime)",
+      "status": "FAILED_INSUFFICIENT_DATA",
+      "result_file": "results/H002_result.json",
+      "notes": "WR=57.89% (+8.11pp over H001) but p=0.2209 at n=76. Need n>=200. Try multi-symbol aggregation (H002b).",
+      "best_result": {"win_rate": 0.5789, "improvement": 0.0811, "p_value": 0.2209, "n": 76},
+      "next_step": "H002b: aggregate EURUSD+GBPUSD+XAUUSD to reach n>=200",
+      "last_updated": "2026-06-25"
     },
     "H003": {
       "title": "ICT killzone + premium/discount zone bias",
       "status": "RESEARCH",
       "blocks_engine": "ict",
-      "notes": "Paper trading approved. Collect decision data before testing edge.",
+      "notes": "Paper trading approved. Data collection in progress via engine_tracker.",
       "last_updated": "2026-06-24"
     },
     "H004": {

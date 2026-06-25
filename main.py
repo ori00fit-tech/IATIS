@@ -94,28 +94,33 @@ def run_pipeline(config: dict) -> dict:
             config["data"].get("twelve_data_api_key")
             or os.environ.get("TWELVE_DATA_API_KEY", "")
         )
-        td_symbol = (
-            config["data"].get("twelve_data_symbol")
-            or config["data"].get("symbol", "EURUSD").replace("USD", "/USD")[:7]
-        )
-        # Failover: Twelve Data → Yahoo Finance → Alpha Vantage
+    # Symbols that require Yahoo Finance (404 on Twelve Data Free)
+    # Failover handles this automatically, but we need correct YF symbol
+    _YF_ONLY = {
+        "USOIL": "WTI/USD",   # CL=F on Yahoo
+        "US30":  "DJI",       # ^DJI on Yahoo
+        "NAS100": "NDX",      # ^IXIC on Yahoo
+        "SPX500": "SPX",      # ^GSPC on Yahoo
+        "XAGUSD": "XAG/USD",  # SI=F on Yahoo
+    }
+
+    internal_sym = config["data"].get("symbol", "EURUSD")
+    td_symbol = (
+        config["data"].get("twelve_data_symbol")
+        or _YF_ONLY.get(internal_sym)
+        or (internal_sym[:3] + "/" + internal_sym[3:] if len(internal_sym) == 6 else internal_sym)
+    )
+
+    # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
+    try:
         mtf_data = load_multi_timeframe_with_failover(
             td_symbol, timeframes,
             outputsize=config["data"].get("bars_to_load", 500),
         )
-        # use the finest timeframe as df_base for regime detection
         df_base = mtf_data[timeframes[0]]
-    else:
+    except Exception as exc:
+        logger.warning(f"Failover fetch failed, trying load_data: {exc}")
         df_base = load_data(config)
-        # 2. Validate
-        try:
-            validate_ohlcv(df_base)
-        except DataValidationError as exc:
-            logger.error(f"Data validation failed: {exc}")
-            failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
-            log_decision(failure_report)
-            return failure_report
-        # 3. Multi-timeframe view (resample from base)
         mtf_data = build_multi_timeframe_view(df_base, timeframes)
 
     # 2b. Validate base timeframe (applies to both paths)

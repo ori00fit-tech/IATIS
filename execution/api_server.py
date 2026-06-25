@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from fastapi import FastAPI, Header, HTTPException, Query
+    from fastapi import Cookie, FastAPI, Header, HTTPException, Query
     from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel
 except ImportError as exc:
@@ -125,20 +125,20 @@ def _get_config() -> dict:
     return _config_cache
 
 
-def _check_auth(x_api_key: str | None) -> None:
-    """Fail-closed auth — error if key not configured (issue #3).
-    Constant-time comparison to prevent timing attacks (issue #6).
+def _check_auth(x_api_key: str | None, cookie_key: str | None = None) -> None:
+    """Fail-closed auth — accepts X-API-Key header OR iatis_session cookie.
+    Uses constant-time comparison to prevent timing attacks.
+    Cookie is HttpOnly so JS cannot read or steal it.
     """
     required = os.environ.get("API_SERVER_KEY")
     if not required:
-        # In development mode, skip auth. In production, fail-closed.
         if _ENV == "development":
             return
-        raise HTTPException(
-            status_code=500,
-            detail="API_SERVER_KEY not configured on server."
-        )
-    if not hmac.compare_digest(x_api_key or "", required):
+        raise HTTPException(status_code=500, detail="API_SERVER_KEY not configured.")
+
+    # Accept either header or cookie
+    provided = x_api_key or cookie_key or ""
+    if not hmac.compare_digest(provided, required):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
 
 
@@ -198,9 +198,10 @@ async def analyze(
     symbol: str,
     req: AnalyzeRequest = AnalyzeRequest(),
     x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
 ) -> JSONResponse:
     """Run full pipeline for one symbol. Symbol: EURUSD or EUR/USD."""
-    _check_auth(x_api_key)
+    _check_auth(x_api_key, iatis_session)
     clean_symbol = _validate_symbol(symbol)  # issue #2
 
     td_symbol = clean_symbol if "/" in clean_symbol else (
@@ -236,8 +237,9 @@ async def decisions(
     limit: int = Query(default=20, ge=1, le=200),
     verdict: str | None = Query(default=None),
     x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    _check_auth(x_api_key)
+    _check_auth(x_api_key, iatis_session)
     try:
         from storage.decision_log import read_decisions, summarize_decisions
         all_d = read_decisions()
@@ -255,8 +257,8 @@ async def decisions(
 
 
 @app.get("/budget")
-async def budget(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
-    _check_auth(x_api_key)
+async def budget(x_api_key: str | None = Header(default=None), iatis_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
     try:
         from core.twelve_data_client import RateLimiter, MAX_REQUESTS_PER_DAY
         remaining = RateLimiter().remaining_today()
@@ -273,8 +275,8 @@ async def budget(x_api_key: str | None = Header(default=None)) -> dict[str, Any]
 
 
 @app.get("/stats")
-async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
-    _check_auth(x_api_key)
+async def stats(x_api_key: str | None = Header(default=None), iatis_session: str | None = Cookie(default=None)) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
     try:
         from storage.decision_db import summary, regime_performance
         return {"summary": summary(), "regime_performance": regime_performance()}
@@ -283,9 +285,31 @@ async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+@app.post("/login")
+async def do_login(request: "Request") -> "Response":
+    """Verify key and set HttpOnly cookie — key never visible to JS."""
+    from fastapi import Request, Response
+    from fastapi.responses import JSONResponse
+    body = await request.json()
+    key = body.get("key", "")
+    required = os.environ.get("API_SERVER_KEY", "")
+    if not required or not hmac.compare_digest(key, required):
+        raise HTTPException(status_code=401, detail="Invalid key")
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key="iatis_session",
+        value=key,
+        httponly=True,       # JS cannot read this
+        secure=True,         # HTTPS only
+        samesite="strict",
+        max_age=86400 * 7,   # 7 days
+    )
+    return response
+
+
 @app.get("/login")
 async def login_page() -> HTMLResponse:
-    """Simple login page — stores API key in browser localStorage."""
+    """Login page — submits key via POST, receives HttpOnly cookie."""
     return HTMLResponse("""<!DOCTYPE html>
 <html>
 <head>
@@ -309,7 +333,7 @@ async def login_page() -> HTMLResponse:
 </head>
 <body>
 <div class="box">
-  <h1>🤖 IATIS</h1>
+  <h1>&#x1F916; IATIS</h1>
   <p>Enter your API key to access the dashboard</p>
   <input type="password" id="key" placeholder="API Server Key" autofocus
          onkeydown="if(event.key==='Enter')login()">
@@ -317,21 +341,20 @@ async def login_page() -> HTMLResponse:
   <div class="err" id="err">Invalid key — try again</div>
 </div>
 <script>
-  // Check if key already stored
-  const stored = localStorage.getItem('iatis_key');
-  if (stored) window.location.href = '/dashboard';
-
-  async function login() {
-    const key = document.getElementById('key').value.trim();
-    if (!key) return;
-    const r = await fetch('/health', {headers: {'X-API-Key': key}});
-    if (r.ok) {
-      localStorage.setItem('iatis_key', key);
-      window.location.href = '/dashboard';
-    } else {
-      document.getElementById('err').style.display = 'block';
-    }
+async function login() {
+  const key = document.getElementById('key').value.trim();
+  if (!key) return;
+  const r = await fetch('/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({key})
+  });
+  if (r.ok) {
+    window.location.href = '/dashboard';
+  } else {
+    document.getElementById('err').style.display = 'block';
   }
+}
 </script>
 </body>
 </html>""")
@@ -387,14 +410,11 @@ async def dashboard():
   <a href="/logout">Logout</a>
 </p>
 <script>
-const key = localStorage.getItem('iatis_key');
-if (!key) { window.location.href = '/login'; }
-
 const H = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
 async function api(path) {
-  const r = await fetch(path, {headers: {'X-API-Key': key}});
-  if (r.status === 401) { localStorage.removeItem('iatis_key'); window.location.href='/login'; }
+  const r = await fetch(path, {credentials: 'include'});
+  if (r.status === 401) { window.location.href='/login'; }
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
@@ -492,9 +512,10 @@ load();
 async def engine_stats_endpoint(
     symbol: str | None = Query(default=None),
     x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     """Per-engine performance statistics and suggested weight adjustments."""
-    _check_auth(x_api_key)
+    _check_auth(x_api_key, iatis_session)
     try:
         from storage.engine_tracker import engine_stats, neutral_rate_by_engine, suggested_weights
         config = _get_config()
@@ -517,9 +538,9 @@ async def engine_stats_endpoint(
 
 
 @app.get("/backtest-results")
-async def backtest_results(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
+async def backtest_results(x_api_key: str | None = Header(default=None), iatis_session: str | None = Cookie(default=None)) -> dict[str, Any]:
     """List all saved backtest result files with key metrics."""
-    _check_auth(x_api_key)
+    _check_auth(x_api_key, iatis_session)
     import json
     from pathlib import Path
     results = []

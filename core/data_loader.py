@@ -238,6 +238,26 @@ def load_from_twelve_data(
     return client.time_series(symbol, interval, outputsize=outputsize, use_cache=use_cache)
 
 
+def load_multi_timeframe_with_failover(
+    symbol: str,
+    timeframes: list[str],
+    outputsize: int = 500,
+    use_cache: bool = True,
+) -> dict[str, pd.DataFrame]:
+    """Fetch multiple timeframes with automatic provider failover.
+
+    Provider order: Twelve Data → Yahoo Finance → Alpha Vantage
+    Falls back automatically if primary provider fails.
+    """
+    from core.data_providers import fetch_multi_timeframe_with_failover
+    return fetch_multi_timeframe_with_failover(
+        symbol=symbol,
+        timeframes=timeframes,
+        outputsize=outputsize,
+        use_cache=use_cache,
+    )
+
+
 def load_multi_timeframe_from_twelve_data(
     symbol: str,
     timeframes: list[str],

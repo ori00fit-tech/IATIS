@@ -22,7 +22,7 @@ from confluence.contradiction_engine import check_contradictions
 from confluence.regime_weights import apply_regime_weights
 from confluence.score_calculator import calculate_score, validate_confluence_config
 from confluence.voting_system import tally_votes
-from core.data_loader import load_data, load_multi_timeframe_from_twelve_data
+from core.data_loader import load_data, load_multi_timeframe_with_failover
 from core.data_validator import DataValidationError, validate_ohlcv
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
@@ -97,8 +97,9 @@ def run_pipeline(config: dict) -> dict:
             config["data"].get("twelve_data_symbol")
             or config["data"].get("symbol", "EURUSD").replace("USD", "/USD")[:7]
         )
-        mtf_data = load_multi_timeframe_from_twelve_data(
-            td_symbol, timeframes, api_key=api_key,
+        # Failover: Twelve Data → Yahoo Finance → Alpha Vantage
+        mtf_data = load_multi_timeframe_with_failover(
+            td_symbol, timeframes,
             outputsize=config["data"].get("bars_to_load", 500),
         )
         # use the finest timeframe as df_base for regime detection

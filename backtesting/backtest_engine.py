@@ -216,27 +216,41 @@ def run_backtest(
     ac = config.asset_class
     dpp = config.dollar_per_point
 
-    def _calc_pnl_usd(price_diff: float, size: float, entry_price: float = 1.0) -> float:
-        """Calculate P&L in USD — correct formula per asset class.
+    def _pip_value_usd(entry_price: float, size: float) -> float:
+        """USD value of 1 pip movement for given position size.
 
-        FOREX standard lots:
-          - USD-quoted (EURUSD, GBPUSD): pnl = price_diff * size * 100,000
-          - JPY-quoted (USDJPY, EURJPY): pnl = price_diff * size * 100,000 / exit_price
-            (convert JPY P&L to USD)
-          - CHF-quoted, CAD-quoted: similar conversion needed
-        Simplified: for backtesting, use price_diff * size * 100,000 for USD-quoted,
-        divide by approximate price for JPY-quoted.
-
-        Metals/Indices: price_diff * size * dollar_per_point
+        USD-quoted (EURUSD, GBPUSD): 1 pip = pip_size × size × 100,000
+          = 0.0001 × 1 lot × 100,000 = $10/lot
+        JPY-quoted (USDJPY, EURJPY): 1 pip = (pip_size / price) × size × 100,000
+          = (0.01 / 150) × 1 lot × 100,000 = $6.67/lot
         """
-        if ac == "forex":
-            pnl = price_diff * size * 100_000
-            # JPY-quoted pairs: divide by current price to convert to USD
-            if config.pip_size == 0.01:  # JPY pairs
-                pnl = pnl / max(entry_price, 1.0)
-            return pnl
-        else:
+        if ac != "forex":
+            return dpp * size
+        if config.pip_size == 0.01:  # JPY pairs
+            return (config.pip_size / max(entry_price, 1.0)) * size * 100_000
+        return config.pip_size * size * 100_000
+
+    def _calc_pnl_usd(price_diff: float, size: float, entry_price: float = 1.0) -> float:
+        """Calculate P&L in USD — consistent with position sizing."""
+        if ac != "forex":
             return price_diff * size * dpp
+        pips = price_diff / config.pip_size
+        pip_val = _pip_value_usd(entry_price, size)
+        return pips * pip_val
+
+    def _calc_position_size(sl_dist: float, risk_amount: float,
+                            entry_price: float) -> float:
+        """Position size in lots consistent with _calc_pnl_usd."""
+        if ac != "forex":
+            return max(0.01, min(round(risk_amount / (sl_dist * dpp), 4), 10.0))
+        # pip_value_per_lot depends on price for JPY
+        if config.pip_size == 0.01:  # JPY
+            pip_val_per_lot = (config.pip_size / max(entry_price, 1.0)) * 100_000
+        else:
+            pip_val_per_lot = config.pip_size * 100_000  # = 10 USD for standard
+        sl_pips = sl_dist / config.pip_size
+        size = risk_amount / (sl_pips * pip_val_per_lot)
+        return max(0.01, min(round(size, 2), 10.0))
 
     result = BacktestResult(
         config=config, symbol=config.symbol,
@@ -331,13 +345,7 @@ def run_backtest(
             tp = entry + tp_dist if direction == "BULLISH" else entry - tp_dist
 
             risk_amount = balance * config.risk_per_trade
-
-            if ac == "forex":
-                sl_pips = abs(entry - sl) / config.pip_size
-                size = max(0.01, min(round(risk_amount / (sl_pips * 10), 2), 10.0))
-            else:
-                # Metals/Indices: size = risk / (sl_dist * dollar_per_point)
-                size = max(0.01, min(round(risk_amount / (sl_dist * dpp), 4), 10.0))
+            size = _calc_position_size(sl_dist, risk_amount, entry)
 
             open_trade = Trade(
                 entry_bar=i+1, entry_time=next_bar.name,

@@ -138,16 +138,20 @@ class RateLimiter:
                     f"Resets at UTC midnight."
                 )
 
-            # per-minute sliding window
+            # per-minute sliding window — WAIT instead of raise
             now = time.monotonic()
             self._minute_timestamps = [t for t in self._minute_timestamps if now - t < 60]
             if len(self._minute_timestamps) >= MAX_REQUESTS_PER_MINUTE:
                 oldest = self._minute_timestamps[0]
-                wait = 60 - (now - oldest)
-                raise RateLimitExceeded(
-                    f"Per-minute limit hit ({MAX_REQUESTS_PER_MINUTE} req/min). "
-                    f"Retry in {wait:.1f}s."
+                wait = 60 - (now - oldest) + 1.0  # +1s safety margin
+                logger.info(
+                    f"Rate limit: {MAX_REQUESTS_PER_MINUTE} req/min reached. "
+                    f"Waiting {wait:.1f}s..."
                 )
+                time.sleep(wait)
+                # refresh timestamps after sleep
+                now = time.monotonic()
+                self._minute_timestamps = [t for t in self._minute_timestamps if now - t < 60]
 
             usage["count"] += 1
             self._minute_timestamps.append(now)
@@ -275,6 +279,17 @@ class TwelveDataClient:
                 return _parse_response(cached)
 
         # check + increment BEFORE making the network call
+        # Minimum delay between requests: 60s / 8 req = 7.5s to avoid burst 429
+        _MIN_REQUEST_INTERVAL = 7.5
+        now = time.monotonic()
+        if hasattr(self, '_last_request_time'):
+            elapsed = now - self._last_request_time
+            if elapsed < _MIN_REQUEST_INTERVAL:
+                sleep_time = _MIN_REQUEST_INTERVAL - elapsed
+                logger.debug(f"Rate throttle: sleeping {sleep_time:.1f}s")
+                time.sleep(sleep_time)
+        self._last_request_time = time.monotonic()
+
         self._rate_limiter.check_and_increment()
 
         params = {

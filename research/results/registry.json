@@ -1,56 +1,73 @@
 {
-  "_comment": "PASSED = proven edge. RESEARCH = paper trading. FAILED_INSUFFICIENT_DATA = promising but need more data.",
+  "_comment": "Single source of truth. PASSED=proven edge. RESEARCH=paper trading only. FAILED=edge not present.",
   "hypotheses": {
     "H001": {
       "title": "Liquidity sweep + HTF trend alignment",
       "status": "FAILED",
       "result_file": "results/H001_result.json",
       "tested_on": "EURUSD M15/H4, n=225, wr=0.4978, p=0.6251",
+      "lesson": "Unfiltered sweeps have no directional edge.",
       "last_updated": "2026-06-21"
     },
     "H002": {
-      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime)",
-      "status": "FAILED_INSUFFICIENT_DATA",
+      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) — EURUSD only",
+      "status": "FAILED",
       "result_file": "results/H002_result.json",
-      "notes": "WR=57.89% (+8.11pp over H001) but p=0.2209 at n=76. Need n>=200. Try multi-symbol aggregation (H002b).",
-      "best_result": {"win_rate": 0.5789, "improvement": 0.0811, "p_value": 0.2209, "n": 76},
-      "next_step": "H002b: aggregate EURUSD+GBPUSD+XAUUSD to reach n>=200",
+      "tested_on": "EURUSD Yahoo H1 2yr, n=76, wr=0.5789, p=0.2209",
+      "lesson": "EURUSD appeared promising at n=76 but was false positive.",
+      "last_updated": "2026-06-25"
+    },
+    "H002b": {
+      "title": "Qualified sweep — multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
+      "status": "FAILED",
+      "result_file": "results/H002b_result.json",
+      "tested_on": "3 symbols, n=232, combined wr=0.4612 (-3.66pp vs H001), p=0.4337",
+      "lesson": "EURUSD WR=57.89% was false positive. At n=232 across 3 symbols, combined WR=46.12% is WORSE than H001 baseline. ATR+regime filter does NOT improve sweep win rate. Do not pursue this direction further.",
+      "conclusion": "ABANDON — liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
       "last_updated": "2026-06-25"
     },
     "H003": {
       "title": "ICT killzone + premium/discount zone bias",
       "status": "RESEARCH",
       "blocks_engine": "ict",
-      "notes": "Paper trading approved. Data collection in progress via engine_tracker.",
+      "notes": "Paper trading. Data collecting via engine_tracker.",
       "last_updated": "2026-06-24"
     },
     "H004": {
       "title": "NNFX EMA200 baseline + ADX strength filter",
       "status": "RESEARCH",
       "blocks_engine": "nnfx",
-      "notes": "Paper trading approved.",
+      "notes": "Paper trading.",
       "last_updated": "2026-06-24"
     },
     "H005": {
       "title": "Quant RSI + ROC momentum confirmation",
       "status": "RESEARCH",
       "blocks_engine": "quant",
-      "notes": "Paper trading approved.",
+      "notes": "Paper trading.",
       "last_updated": "2026-06-24"
     },
     "H006": {
-      "title": "Wyckoff Spring/Upthrust detection improves reversal precision",
+      "title": "Wyckoff Spring/Upthrust detection",
       "status": "RESEARCH",
       "blocks_engine": "wyckoff",
-      "notes": "Paper trading approved. Price-only for FX, volume-enhanced for metals/indices.",
+      "notes": "Paper trading. Price-only for FX, volume for metals.",
       "last_updated": "2026-06-24"
     },
     "H007": {
-      "title": "Macro DXY trend + Risk-On/Off state improves directional bias",
+      "title": "Macro DXY trend + Risk-On/Off state",
       "status": "RESEARCH",
       "blocks_engine": "macro",
-      "notes": "Paper trading approved. Requires yfinance + Yahoo Finance access.",
+      "notes": "Paper trading. Requires yfinance.",
       "last_updated": "2026-06-24"
+    },
+    "H008": {
+      "title": "BOS (Break of Structure) + FVG (Fair Value Gap) confluence entry",
+      "status": "PENDING",
+      "blocks_engine": "smc_advanced",
+      "notes": "Next hypothesis after H001+H002+H002b all failed on sweep-based entries. BOS+FVG is structurally different — requires price to FIRST break structure (confirm direction) THEN fill an imbalance (FVG) before entry. Design experiment before running.",
+      "rationale": "H001/H002/H002b tested: enter ON the sweep. H008 tests: enter AFTER BOS confirms the sweep was real, at FVG retracement. This adds two confirmation layers that sweep-only entries lack.",
+      "last_updated": "2026-06-25"
     }
   }
 }

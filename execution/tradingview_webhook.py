@@ -1,16 +1,11 @@
 """
 execution/tradingview_webhook.py
-------------------------------------
-STUB — Phase 2.
+---------------------------------
+Phase 5 placeholder — TradingView webhook receiver.
 
-TODO:
-    - FastAPI route that receives TradingView alert webhooks (via the
-      Cloudflare Worker gateway in cloudflare/worker.js), validates the
-      payload, and triggers the main pipeline for the relevant symbol.
+Planned: Receive alerts from TradingView Pine Script strategies
+and feed them into the IATIS pipeline as additional confirmation.
+
+Status: PHASE_5_NOT_IMPLEMENTED
 """
-
-from __future__ import annotations
-
-
-def handle_webhook(payload: dict) -> dict:
-    raise NotImplementedError("TradingView webhook handling is planned for Phase 2.")
+# Not implemented yet. See ROADMAP Phase 5.

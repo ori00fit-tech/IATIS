@@ -130,22 +130,45 @@ class ICTEngine(BaseEngine):
         score = 0.0
         bias = Bias.NEUTRAL
 
-        # --- Premium/Discount zone bias ---
-        # ICT: sell from premium, buy from discount
+        # --- Premium/Discount zone bias (with trend filter) ---
+        # ICT: sell from premium, buy from discount — BUT only in non-trending markets
+        h1_df = mtf_data.get("H1", df_session)
+        in_uptrend = in_downtrend = False
+        if len(h1_df) >= 50:
+            ema20 = float(h1_df["close"].ewm(span=20).mean().iloc[-1])
+            ema50 = float(h1_df["close"].ewm(span=50).mean().iloc[-1])
+            in_uptrend = ema20 > ema50 * 1.001    # 0.1% buffer
+            in_downtrend = ema20 < ema50 * 0.999
+
         if zone == "DISCOUNT":
-            bias = Bias.BULLISH
-            score += 35.0
-            reasons.append(
-                f"Price in DISCOUNT zone ({pct:.0%} of range) — "
-                f"ICT expects bullish move toward equilibrium"
-            )
+            # Buy from discount only if not in a strong downtrend
+            if not in_downtrend:
+                bias = Bias.BULLISH
+                score += 35.0
+                reasons.append(
+                    f"Price in DISCOUNT zone ({pct:.0%} of range) — "
+                    f"ICT expects bullish move toward equilibrium"
+                )
+            else:
+                # Downtrend: discount is not a reversal signal, stay neutral
+                reasons.append(
+                    f"Price in DISCOUNT zone ({pct:.0%}) but H1 downtrend active — "
+                    f"no reversal bias (trend filter)"
+                )
         elif zone == "PREMIUM":
-            bias = Bias.BEARISH
-            score += 35.0
-            reasons.append(
-                f"Price in PREMIUM zone ({pct:.0%} of range) — "
-                f"ICT expects bearish move toward equilibrium"
-            )
+            # Sell from premium only if not in a strong uptrend
+            if not in_uptrend:
+                bias = Bias.BEARISH
+                score += 35.0
+                reasons.append(
+                    f"Price in PREMIUM zone ({pct:.0%} of range) — "
+                    f"ICT expects bearish move toward equilibrium"
+                )
+            else:
+                reasons.append(
+                    f"Price in PREMIUM zone ({pct:.0%}) but H1 uptrend active — "
+                    f"no reversal bias (trend filter)"
+                )
         else:
             reasons.append(f"Price at EQUILIBRIUM ({pct:.0%}) — no zone bias")
 

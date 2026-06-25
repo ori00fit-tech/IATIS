@@ -76,13 +76,24 @@ engines:
 
 confluence:
   weights:
-    smc: 0.30          # raised — most reliable structural signal
-    price_action: 0.25 # raised — MA + breakout, consistent signal
-    ict: 0.15          # ICT often NEUTRAL outside killzones
-    nnfx: 0.15         # NNFX needs 210 bars EMA200 to activate
-    quant: 0.10        # confirmation only
-    wyckoff: 0.05      # often NEUTRAL (needs clear range structure)
-    macro: 0.00
+    # Data-driven weights (updated 2026-06-25 from engine_tracker 292 votes):
+    # Blend: 70% data-driven contribution + 30% prior weights
+    # Constraints: min=0.05, max=0.35
+    #
+    # Engine contribution scores (agreement × active_rate × avg_score):
+    #   NNFX: 0.491  ← highest (agreement=84.7%, avg_score=58)
+    #   PA:   0.368  ← strong (agreement=89.8%, always votes)
+    #   SMC:  0.316  ← reliable (agreement=97.0%)
+    #   Quant: 0.126 ← moderate confirmation
+    #   ICT:  0.084  ← low (was contrarian before trend filter fix)
+    #   Wyckoff: 0.040 ← lowest (high neutral rate 37.7%)
+    smc:          0.242  # was 0.30, reduced (lower contribution vs NNFX)
+    price_action: 0.252  # was 0.25, stable
+    ict:          0.085  # was 0.15, reduced (contrarian → trend filter added)
+    nnfx:         0.282  # was 0.15, RAISED (highest contribution score)
+    quant:        0.091  # was 0.10, stable
+    wyckoff:      0.049  # was 0.05, stable (at floor)
+    macro:        0.000  # disabled
   # Max achievable score (re-normalized over participating engines):
   # Best realistic case: SMC(65)×0.30 + PA(80)×0.25 + NNFX(80)×0.15 agree
   # participating_weight = 0.70 → score = (65×0.30+80×0.25+80×0.15)/0.70 = 72.1

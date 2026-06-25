@@ -49,13 +49,13 @@ data:
     - {symbol: "EUR/CHF",  enabled: true,  internal: "EURCHF"}
     # Metals
     - {symbol: "XAU/USD",  enabled: true,  internal: "XAUUSD"}
-    - {symbol: "XAG/USD",  enabled: true,  internal: "XAGUSD"}
+    - {symbol: "XAG/USD",  enabled: false, internal: "XAGUSD"}   # 404 on Free plan
     # Energy
-    - {symbol: "WTI/USD",  enabled: true,  internal: "USOIL"}
+    - {symbol: "WTI/USD",  enabled: false, internal: "USOIL"}    # 404 on Free plan
     # Indices
-    - {symbol: "DJI",      enabled: true,  internal: "US30"}
-    - {symbol: "NDX",      enabled: true,  internal: "NAS100"}
-    - {symbol: "SPX",      enabled: true,  internal: "SPX500"}
+    - {symbol: "DJI",      enabled: false, internal: "US30"}     # 404 on Free plan
+    - {symbol: "NDX",      enabled: false, internal: "NAS100"}   # 404 on Free plan
+    - {symbol: "SPX",      enabled: false, internal: "SPX500"}   # 404 on Free plan
     # Crypto
     - {symbol: "BTC/USD",  enabled: true,  internal: "BTCUSD"}
     - {symbol: "ETH/USD",  enabled: true,  internal: "ETHUSD"}

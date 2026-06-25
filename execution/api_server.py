@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from fastapi import Cookie, FastAPI, Header, HTTPException, Query
+    from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
     from fastapi.responses import HTMLResponse, JSONResponse
     from pydantic import BaseModel
 except ImportError as exc:
@@ -286,10 +286,8 @@ async def stats(x_api_key: str | None = Header(default=None), iatis_session: str
 
 
 @app.post("/login")
-async def do_login(request: "Request") -> "Response":
+async def do_login(request: Request) -> Response:
     """Verify key and set HttpOnly cookie — key never visible to JS."""
-    from fastapi import Request, Response
-    from fastapi.responses import JSONResponse
     body = await request.json()
     key = body.get("key", "")
     required = os.environ.get("API_SERVER_KEY", "")

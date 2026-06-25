@@ -283,144 +283,210 @@ async def stats(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+@app.get("/login")
+async def login_page() -> HTMLResponse:
+    """Simple login page — stores API key in browser localStorage."""
+    return HTMLResponse("""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IATIS — Login</title>
+<style>
+  body{font-family:monospace;background:#0d1117;color:#c9d1d9;display:flex;
+    align-items:center;justify-content:center;height:100vh;margin:0}
+  .box{background:#161b22;border:1px solid #30363d;border-radius:12px;
+    padding:40px;width:320px;text-align:center}
+  h1{color:#58a6ff;margin:0 0 8px}
+  p{color:#8b949e;font-size:0.85em;margin:0 0 24px}
+  input{width:100%;box-sizing:border-box;padding:10px;background:#0d1117;
+    border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:1em;margin-bottom:12px}
+  button{width:100%;padding:10px;background:#238636;border:none;border-radius:6px;
+    color:#fff;font-size:1em;cursor:pointer}
+  button:hover{background:#2ea043}
+  .err{color:#f85149;font-size:0.85em;margin-top:8px;display:none}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>🤖 IATIS</h1>
+  <p>Enter your API key to access the dashboard</p>
+  <input type="password" id="key" placeholder="API Server Key" autofocus
+         onkeydown="if(event.key==='Enter')login()">
+  <button onclick="login()">Login</button>
+  <div class="err" id="err">Invalid key — try again</div>
+</div>
+<script>
+  // Check if key already stored
+  const stored = localStorage.getItem('iatis_key');
+  if (stored) window.location.href = '/dashboard';
+
+  async function login() {
+    const key = document.getElementById('key').value.trim();
+    if (!key) return;
+    const r = await fetch('/health', {headers: {'X-API-Key': key}});
+    if (r.ok) {
+      localStorage.setItem('iatis_key', key);
+      window.location.href = '/dashboard';
+    } else {
+      document.getElementById('err').style.display = 'block';
+    }
+  }
+</script>
+</body>
+</html>""")
+
+
+@app.get("/logout")
+async def logout() -> HTMLResponse:
+    """Clear stored key."""
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body>
+<script>localStorage.removeItem('iatis_key'); window.location.href='/login';</script>
+</body></html>""")
+
+
 @app.get("/dashboard")
-async def dashboard(x_api_key: str | None = Header(default=None)):
-    """HTML dashboard - requires auth. All values HTML-escaped."""
-    _check_auth(x_api_key)
+async def dashboard():
+    """
+    HTML dashboard — no server-side auth needed here.
+    The page itself loads data via JS fetch() calls that include
+    the API key from localStorage. If key is missing, redirects to /login.
+    """
+    return HTMLResponse("""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IATIS Dashboard</title>
+<style>
+  body{font-family:monospace;background:#0d1117;color:#c9d1d9;margin:20px}
+  h1{color:#58a6ff}h2{color:#79c0ff;border-bottom:1px solid #30363d;padding-bottom:4px}
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+  .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 24px;min-width:140px}
+  .val{font-size:2em;font-weight:bold;color:#58a6ff}.lbl{color:#8b949e;font-size:0.85em}
+  table{width:100%;border-collapse:collapse;margin:8px 0}
+  th{background:#161b22;color:#8b949e;text-align:left;padding:8px;font-size:0.85em}
+  td{padding:8px;border-bottom:1px solid #21262d;font-size:0.9em}
+  tr:hover td{background:#161b22}
+  .ok{color:#3fb950}.bad{color:#f85149}.warn{color:#d29922}
+  a{color:#58a6ff;text-decoration:none}
+  #status{color:#8b949e;font-size:0.85em;margin-bottom:16px}
+</style>
+</head>
+<body>
+<h1>&#x1F916; IATIS Dashboard</h1>
+<p id="status">Loading...</p>
+<div id="content"></div>
+<p style="color:#8b949e;font-size:0.8em;margin-top:32px">
+  <a href="/budget">Budget</a> |
+  <a href="/stats">Stats JSON</a> |
+  <a href="/engine-stats">Engine Stats</a> |
+  <a href="/backtest-results">Backtest Results</a> |
+  <a href="/logout">Logout</a>
+</p>
+<script>
+const key = localStorage.getItem('iatis_key');
+if (!key) { window.location.href = '/login'; }
 
-    try:
-        from storage.decision_db import summary as db_summary, regime_performance, recent
-        s = db_summary()
-        regime_perf = regime_performance()
-        last_decisions = recent(limit=5)
-    except Exception as exc:
-        logger.error(f"Dashboard DB error: {exc}", exc_info=True)
-        return HTMLResponse("<pre>Dashboard unavailable</pre>", status_code=500)
+const H = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-    config = _get_config()
-    version = _h(config.get("system", {}).get("version", "?"))
+async function api(path) {
+  const r = await fetch(path, {headers: {'X-API-Key': key}});
+  if (r.status === 401) { localStorage.removeItem('iatis_key'); window.location.href='/login'; }
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
 
-    try:
-        from core.twelve_data_client import RateLimiter, MAX_REQUESTS_PER_DAY
-        credits = RateLimiter().remaining_today()
-        credit_pct = int(credits / MAX_REQUESTS_PER_DAY * 100)
-        credit_color = "green" if credit_pct > 50 else "orange" if credit_pct > 20 else "red"
-    except Exception:
-        credits, credit_pct, credit_color = "?", 0, "gray"
+async function load() {
+  try {
+    const [health, stats, decisions, bt] = await Promise.all([
+      api('/health'), api('/stats'), api('/decisions?limit=5'), api('/backtest-results')
+    ]);
 
-    decisions_html = ""
-    for d in last_decisions:
-        v = _h(d.get("verdict", "?"))
-        color = "#00cc44" if v == "EXECUTE" else "#ff4444"
-        decisions_html += (
-            f"<tr>"
-            f"<td>{_h(d.get('ts',''))[:19]}</td>"
-            f"<td>{_h(d.get('symbol','?'))}</td>"
-            f"<td style='color:{color};font-weight:bold'>{v}</td>"
-            f"<td>{_h(d.get('regime','?'))}</td>"
-            f"<td>{_h(d.get('cf_score') or '--')}</td>"
-            f"<td style='font-size:0.8em'>{_h((d.get('fail_reason') or d.get('summary',''))[:80])}</td>"
-            f"</tr>"
-        )
+    const s = stats.summary || {};
+    const total = s.total || 0;
+    const execRate = total > 0 ? ((s.execute||0)/total*100).toFixed(1)+'%' : '--';
+    const credits = health.twelve_data_credits_remaining ?? '?';
+    const creditColor = credits > 400 ? 'ok' : credits > 100 ? 'warn' : 'bad';
 
-    regime_html = ""
-    for r in regime_perf:
-        total = r.get("total", 1)
-        execs = r.get("executes", 0)
-        pct = int(execs / total * 100) if total else 0
-        regime_html += (
-            f"<tr><td>{_h(r['regime'])}</td>"
-            f"<td>{_h(total)}</td>"
-            f"<td>{_h(execs)} ({pct}%)</td>"
-            f"<td>{_h(r.get('avg_cf_score','?'))}</td></tr>"
-        )
+    let html = `
+      <div class="cards">
+        <div class="card"><div class="val">${H(total)}</div><div class="lbl">Total Decisions</div></div>
+        <div class="card"><div class="val ok">${H(s.execute||0)}</div><div class="lbl">EXECUTE</div></div>
+        <div class="card"><div class="val bad">${H(s.no_trade||0)}</div><div class="lbl">NO_TRADE</div></div>
+        <div class="card"><div class="val ${creditColor}">${H(credits)}</div><div class="lbl">API Credits</div></div>
+        <div class="card"><div class="val">${execRate}</div><div class="lbl">EXECUTE Rate</div></div>
+      </div>`;
 
-    reasons_html = "".join(
-        f"<tr><td>{_h(r['reason'][:80])}</td><td>{_h(r['count'])}</td></tr>"
-        for r in s.get("top_no_trade_reasons", [])[:5]
-    ) or "<tr><td colspan=2>No data yet</td></tr>"
+    // Backtest results
+    if (bt.results && bt.results.length) {
+      html += '<h2>Backtest Results</h2><table><tr><th>Symbol</th><th>Period</th><th>Trades</th><th>WR</th><th>PF</th><th>Return</th><th>Max DD</th></tr>';
+      const seen = new Set();
+      for (const r of bt.results) {
+        if (seen.has(r.symbol)) continue; seen.add(r.symbol);
+        const m = r.metrics || {};
+        const pf = parseFloat(m.profit_factor||0);
+        const wr = parseFloat(m.win_rate||0);
+        const ret = parseFloat(m.total_return_pct||0);
+        const pfColor = pf > 1.5 ? '#3fb950' : '#d29922';
+        html += `<tr><td>${H(r.symbol)}</td><td>${H((r.period||'').slice(0,30))}</td>
+          <td>${H(m.trades_closed||0)}</td><td>${(wr*100).toFixed(1)}%</td>
+          <td style="color:${pfColor}">${pf.toFixed(2)}</td>
+          <td>${(ret*100).toFixed(1)}%</td>
+          <td>${H(m.max_drawdown_pct ? (m.max_drawdown_pct*100).toFixed(1)+'%' : '--')}</td></tr>`;
+      }
+      html += '</table>';
+    }
 
-    backtest_html = ""
-    try:
-        import json as _json
-        from pathlib import Path as _Path
-        for f in sorted(_Path("storage").glob("backtest_*.json"))[:5]:
-            try:
-                d = _json.loads(f.read_text())
-                m = d.get("metrics", {})
-                pf = float(m.get("profit_factor", 0))
-                wr = float(m.get("win_rate", 0))
-                ret = float(m.get("total_return_pct", 0))
-                color = "#3fb950" if pf > 1.5 else "#d29922"
-                backtest_html += (
-                    f"<tr><td>{_h(d.get('symbol','?'))}</td>"
-                    f"<td>{_h(d.get('period','?'))[:30]}</td>"
-                    f"<td>{_h(m.get('trades_closed','?'))}</td>"
-                    f"<td>{wr:.1%}</td>"
-                    f"<td style='color:{color}'>{pf:.2f}</td>"
-                    f"<td>{ret:.1%}</td>"
-                    f"<td>{_h(m.get('max_drawdown_pct','?'))}</td></tr>"
-                )
-            except Exception:
-                continue
-    except Exception:
-        pass
+    // NO_TRADE reasons
+    const reasons = s.top_no_trade_reasons || [];
+    if (reasons.length) {
+      html += '<h2>Top NO_TRADE Reasons</h2><table><tr><th>Reason</th><th>Count</th></tr>';
+      for (const r of reasons) html += `<tr><td>${H(r.reason)}</td><td>${H(r.count)}</td></tr>`;
+      html += '</table>';
+    }
 
-    backtest_section = ""
-    if backtest_html:
-        backtest_section = (
-            "<h2>Backtest Results</h2><table>"
-            "<tr><th>Symbol</th><th>Period</th><th>Trades</th>"
-            "<th>WR</th><th>PF</th><th>Return</th><th>Max DD</th></tr>"
-            + backtest_html + "</table>"
-        )
+    // Regime performance
+    const regimes = stats.regime_performance || [];
+    if (regimes.length) {
+      html += '<h2>Regime Performance</h2><table><tr><th>Regime</th><th>Total</th><th>EXECUTE</th><th>Avg Score</th></tr>';
+      for (const r of regimes) {
+        const pct = r.total > 0 ? Math.round(r.executes/r.total*100) : 0;
+        html += `<tr><td>${H(r.regime)}</td><td>${H(r.total)}</td><td>${H(r.executes)} (${pct}%)</td><td>${H(r.avg_cf_score)}</td></tr>`;
+      }
+      html += '</table>';
+    }
 
-    st = (
-        "body{font-family:monospace;background:#0d1117;color:#c9d1d9;margin:20px}"
-        "h1{color:#58a6ff}h2{color:#79c0ff;border-bottom:1px solid #30363d;padding-bottom:4px}"
-        ".cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}"
-        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 24px;min-width:140px}"
-        ".card .val{font-size:2em;font-weight:bold;color:#58a6ff}"
-        ".card .lbl{color:#8b949e;font-size:0.85em}"
-        "table{width:100%;border-collapse:collapse;margin:8px 0}"
-        "th{background:#161b22;color:#8b949e;text-align:left;padding:8px;font-size:0.85em}"
-        "td{padding:8px;border-bottom:1px solid #21262d;font-size:0.9em}"
-        "tr:hover td{background:#161b22}"
-    )
+    // Last decisions
+    const dec = (decisions.decisions || []).slice(0,5);
+    html += '<h2>Last 5 Decisions</h2><table><tr><th>Time</th><th>Symbol</th><th>Verdict</th><th>Regime</th><th>Score</th><th>Reason</th></tr>';
+    for (const d of dec) {
+      const color = d.verdict === 'EXECUTE' ? '#3fb950' : '#f85149';
+      html += `<tr>
+        <td>${H((d.ts||'').slice(0,19))}</td><td>${H(d.symbol)}</td>
+        <td style="color:${color};font-weight:bold">${H(d.verdict)}</td>
+        <td>${H(d.regime)}</td><td>${H(d.cf_score)}</td>
+        <td style="font-size:0.8em">${H((d.fail_reason||d.summary||'').slice(0,70))}</td></tr>`;
+    }
+    if (!dec.length) html += '<tr><td colspan=6>No decisions yet</td></tr>';
+    html += '</table>';
 
-    html_content = (
-        "<!DOCTYPE html><html><head>"
-        "<meta charset=\'utf-8\'>"
-        "<meta name=\'viewport\' content=\'width=device-width,initial-scale=1\'>"
-        "<title>IATIS Dashboard</title>"
-        "<meta http-equiv=\'refresh\' content=\'60\'>"
-        f"<style>{st}</style>"
-        "</head><body>"
-        f"<h1>IATIS Dashboard <span style=\'font-size:0.5em;color:#8b949e\'>v{version}</span></h1>"
-        "<p style=\'color:#8b949e\'>Auto-refreshes every 60s</p>"
-        "<h2>System Status</h2>"
-        "<div class=\'cards\'>"
-        f"<div class=\'card\'><div class=\'val\'>{_h(s.get('total',0))}</div><div class=\'lbl\'>Total</div></div>"
-        f"<div class=\'card\'><div class=\'val\' style=\'color:#3fb950\'>{_h(s.get('execute',0))}</div><div class=\'lbl\'>EXECUTE</div></div>"
-        f"<div class=\'card\'><div class=\'val\' style=\'color:#f85149\'>{_h(s.get('no_trade',0))}</div><div class=\'lbl\'>NO_TRADE</div></div>"
-        f"<div class=\'card\'><div class=\'val\' style=\'color:{credit_color}\'>{_h(credits)}</div><div class=\'lbl\'>API Credits</div></div>"
-        "</div>"
-        + backtest_section
-        + "<h2>Top NO_TRADE Reasons</h2><table><tr><th>Reason</th><th>Count</th></tr>"
-        + reasons_html + "</table>"
-        + "<h2>Regime Performance</h2><table><tr><th>Regime</th><th>Total</th><th>EXECUTE</th><th>Avg Score</th></tr>"
-        + (regime_html or "<tr><td colspan=4>No data yet</td></tr>") + "</table>"
-        + "<h2>Last 5 Decisions</h2><table>"
-        + "<tr><th>Time</th><th>Symbol</th><th>Verdict</th><th>Regime</th><th>Score</th><th>Reason</th></tr>"
-        + (decisions_html or "<tr><td colspan=6>No decisions yet</td></tr>") + "</table>"
-        + "<p style=\'color:#8b949e;font-size:0.8em;margin-top:32px\'>"
-        + "<a href=\'/budget\' style=\'color:#58a6ff\'>Budget</a> | "
-        + "<a href=\'/stats\' style=\'color:#58a6ff\'>Stats</a> | "
-        + "<a href=\'/engine-stats\' style=\'color:#58a6ff\'>Engine Stats</a> | "
-        + "<a href=\'/backtest-results\' style=\'color:#58a6ff\'>Backtest Results</a>"
-        + "</p></body></html>"
-    )
-    return HTMLResponse(html_content)
+    document.getElementById('content').innerHTML = html;
+    document.getElementById('status').textContent = `v${H(health.version)} · Updated ${new Date().toLocaleTimeString()}`;
+
+    // Auto-refresh every 60s
+    setTimeout(load, 60000);
+  } catch(e) {
+    document.getElementById('status').textContent = 'Error loading data: ' + e.message;
+    setTimeout(load, 15000);
+  }
+}
+load();
+</script>
+</body>
+</html>""")
 
 @app.get("/engine-stats")
 async def engine_stats_endpoint(

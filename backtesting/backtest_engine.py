@@ -216,12 +216,26 @@ def run_backtest(
     ac = config.asset_class
     dpp = config.dollar_per_point
 
-    def _calc_pnl_usd(price_diff: float, size: float) -> float:
-        """Calculate P&L in USD based on asset class."""
+    def _calc_pnl_usd(price_diff: float, size: float, entry_price: float = 1.0) -> float:
+        """Calculate P&L in USD — correct formula per asset class.
+
+        FOREX standard lots:
+          - USD-quoted (EURUSD, GBPUSD): pnl = price_diff * size * 100,000
+          - JPY-quoted (USDJPY, EURJPY): pnl = price_diff * size * 100,000 / exit_price
+            (convert JPY P&L to USD)
+          - CHF-quoted, CAD-quoted: similar conversion needed
+        Simplified: for backtesting, use price_diff * size * 100,000 for USD-quoted,
+        divide by approximate price for JPY-quoted.
+
+        Metals/Indices: price_diff * size * dollar_per_point
+        """
         if ac == "forex":
-            return (price_diff / config.pip_size) * config.pip_size * size * 100_000
+            pnl = price_diff * size * 100_000
+            # JPY-quoted pairs: divide by current price to convert to USD
+            if config.pip_size == 0.01:  # JPY pairs
+                pnl = pnl / max(entry_price, 1.0)
+            return pnl
         else:
-            # Metals/Indices: price_diff in native units × lots × dollar_per_point
             return price_diff * size * dpp
 
     result = BacktestResult(
@@ -247,7 +261,7 @@ def run_backtest(
                     open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
                     open_trade.exit_price = open_trade.stop_loss
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
                     open_trade.pnl_usd -= config.commission_pips * config.pip_size * open_trade.position_size * 100_000 if ac == "forex" else 0
                     open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
@@ -257,7 +271,7 @@ def run_backtest(
                     open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
                     open_trade.exit_price = open_trade.take_profit
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
                     open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -267,7 +281,7 @@ def run_backtest(
                     open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
                     open_trade.exit_price = open_trade.stop_loss
                     open_trade.pnl_pips = -(diff / config.pip_size) - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(-diff, open_trade.position_size)
+                    open_trade.pnl_usd = _calc_pnl_usd(-diff, open_trade.position_size, open_trade.entry_price)
                     open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -276,7 +290,7 @@ def run_backtest(
                     open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
                     open_trade.exit_price = open_trade.take_profit
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
                     open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -349,7 +363,7 @@ def run_backtest(
         open_trade.exit_time = last.name
         open_trade.exit_price = exit_p
         open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-        open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size)
+        open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
         open_trade.exit_reason = "FORCED_CLOSE"
         balance += open_trade.pnl_usd
         result.trades.append(open_trade)

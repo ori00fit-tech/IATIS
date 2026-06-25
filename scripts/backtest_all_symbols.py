@@ -47,7 +47,6 @@ def run_backtest_for_symbol(symbol: str, csv_path: Path, step: int) -> dict | No
             dollar_per_point=dpp,
             step_bars=step,
         )
-
         result = run_backtest(df, config)
 
         # Save individual JSON

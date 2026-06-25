@@ -62,11 +62,13 @@
       "last_updated": "2026-06-24"
     },
     "H008": {
-      "title": "BOS (Break of Structure) + FVG (Fair Value Gap) confluence entry",
+      "title": "BOS + FVG confluence entry (EURUSD/XAUUSD specific)",
       "status": "NEEDS_MORE_DATA",
-      "result_file": "results/H008_result.json",
-      "tested_on": "EURUSD+GBPUSD+XAUUSD H1 2yr Yahoo Finance",
-      "results": {
+      "result_files": {
+        "EURUSD": "results/H008_result.json",
+        "per_symbol": "research/results/H008_multisymbol_summary"
+      },
+      "per_symbol": {
         "EURUSD": {
           "n": 154,
           "win_rate": 0.5519,
@@ -86,9 +88,20 @@
           "p_value": 0.3555
         }
       },
-      "analysis": "EURUSD+XAUUSD show consistent +5.4pp improvement but p>0.3 at n~150. Need n>=529 per symbol for 80% power at this effect size. GBPUSD shows NO edge. Hypothesis not abandoned \u2014 needs 5yr data for adequate power.",
-      "next_step": "Download 5yr H1 data via Yahoo Finance, re-run H008. If EURUSD+XAUUSD edge persists at n>=400, combine for joint test.",
-      "required_n": 529,
+      "analysis": "EURUSD+XAUUSD show consistent +5.4pp edge on 259 combined setups (p=0.23). GBPUSD shows no edge (-1.6pp). Pattern appears symbol-specific. Statistical significance requires n\u2265600 setups which needs ~8yr H1 data OR higher frequency (M5) data. Edge is too small at +5.4pp to reach significance with 2yr data.",
+      "lesson": "BOS+FVG is NOT a universal edge \u2014 GBPUSD behaves differently. But EURUSD+XAUUSD show consistent direction. Before abandoning: try H008b with tighter filters to raise WR to 60%+",
+      "next_step": "H008b: Add session filter (London open BOS only) + ATR quality filter to target WR>60% on EURUSD+XAUUSD subset",
+      "last_updated": "2026-06-25"
+    },
+    "H008b": {
+      "title": "BOS+FVG with session filter (London open) + ATR quality filter",
+      "status": "PENDING",
+      "rationale": "H008 showed +5.4pp edge on EURUSD+XAUUSD but p=0.23. To reach significance with available data, need to RAISE win rate to 60%+ by adding: (1) London session filter (02:00-10:00 UTC) when BOS is most reliable, (2) minimum ATR size for the BOS candle to exclude weak breaks",
+      "pre_registered_criteria": {
+        "PASS": "p<=0.05 AND WR>=60% AND n>=50 on EURUSD (XAUUSD optional)",
+        "FAIL": "p>0.05 at n>=50 with session+ATR filters",
+        "INCONCLUSIVE": "n<50 even with session filter"
+      },
       "last_updated": "2026-06-25"
     }
   }

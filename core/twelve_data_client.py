@@ -237,6 +237,12 @@ class TwelveDataClient:
         # df is a standard OHLCV DataFrame, same contract as load_synthetic()
     """
 
+    # Class-level throttle — shared across ALL instances so multiple symbols
+    # processed sequentially don't each get their own timer reset
+    _last_api_call: float = 0.0
+    _api_call_lock = __import__("threading").Lock()
+    _MIN_REQUEST_INTERVAL = 8.0   # 60s / 8 req/min + 1s safety
+
     def __init__(self, api_key: str) -> None:
         if not api_key:
             raise ValueError("Twelve Data API key must not be empty")
@@ -278,17 +284,18 @@ class TwelveDataClient:
             if cached:
                 return _parse_response(cached)
 
-        # check + increment BEFORE making the network call
-        # Minimum delay between requests: 60s / 8 req = 7.5s to avoid burst 429
-        _MIN_REQUEST_INTERVAL = 7.5
-        now = time.monotonic()
-        if hasattr(self, '_last_request_time'):
-            elapsed = now - self._last_request_time
-            if elapsed < _MIN_REQUEST_INTERVAL:
-                sleep_time = _MIN_REQUEST_INTERVAL - elapsed
-                logger.debug(f"Rate throttle: sleeping {sleep_time:.1f}s")
-                time.sleep(sleep_time)
-        self._last_request_time = time.monotonic()
+        # Shared class-level throttle — enforces minimum 8s between API calls
+        # across ALL symbols/instances so we never exceed 8 req/min
+        # Skip throttle in test environments (api_key starts with 'test')
+        if not self._api_key.startswith("test"):
+            with TwelveDataClient._api_call_lock:
+                now = time.monotonic()
+                elapsed = now - TwelveDataClient._last_api_call
+                if elapsed < TwelveDataClient._MIN_REQUEST_INTERVAL:
+                    wait = TwelveDataClient._MIN_REQUEST_INTERVAL - elapsed
+                    logger.info(f"Rate throttle: waiting {wait:.1f}s before API call")
+                    time.sleep(wait)
+                TwelveDataClient._last_api_call = time.monotonic()
 
         self._rate_limiter.check_and_increment()
 

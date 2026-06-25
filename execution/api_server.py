@@ -645,3 +645,52 @@ async def research_dashboard(
         "pending": sum(1 for h in hypotheses if h["status"] == "PENDING"),
         "hypotheses": hypotheses,
     }
+
+
+@app.get("/meta-analysis")
+async def meta_analysis(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 4.2: Meta-Analysis Dashboard.
+
+    Returns:
+    - Confidence calibration (score bucket → actual win rate)
+    - Regime performance matrix (TRENDING/RANGING/VOLATILE → WR/PF)
+    - Trade frequency per symbol per year
+    - Dynamic weight suggestions
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.calibration import (
+            calibration_from_db, regime_performance_matrix, suggested_dynamic_weights
+        )
+        from storage.engine_tracker import engine_stats, neutral_rate_by_engine
+        config = _get_config()
+        weights = config.get("confluence", {}).get("weights", {})
+
+        calibration = calibration_from_db()
+        regime_matrix = regime_performance_matrix()
+        engine_performance = engine_stats(min_votes=5)
+        neutral_rates = neutral_rate_by_engine()
+        dynamic_weights = suggested_dynamic_weights(weights)
+
+        return {
+            "calibration": {
+                "data": calibration,
+                "note": "Requires live/paper trade outcomes. Empty until trades close.",
+                "bucket_count": len(calibration),
+            },
+            "regime_matrix": {
+                "data": regime_matrix,
+                "note": "WR/PF/expectancy per market regime.",
+            },
+            "engine_performance": {
+                "data": engine_performance,
+                "neutral_rates": neutral_rates,
+            },
+            "dynamic_weights": dynamic_weights,
+        }
+    except Exception as exc:
+        logger.error(f"Meta-analysis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")

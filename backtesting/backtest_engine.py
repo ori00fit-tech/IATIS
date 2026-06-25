@@ -276,7 +276,8 @@ def run_backtest(
                     open_trade.exit_price = open_trade.stop_loss
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
                     open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-                    open_trade.pnl_usd -= config.commission_pips * config.pip_size * open_trade.position_size * 100_000 if ac == "forex" else 0
+                    # Commission: use _pip_value_usd for consistency
+                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
                     open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None

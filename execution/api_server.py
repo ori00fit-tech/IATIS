@@ -66,12 +66,43 @@ def _validate_symbol(symbol: str) -> str:
 _ENV = os.environ.get("ENV", "production").lower()
 _docs_url = "/docs" if _ENV == "development" else None
 
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Startup/shutdown lifecycle handler."""
+    # Startup
+    from pathlib import Path
+    for path in ["storage/decisions.db", "storage/engine_tracker.db"]:
+        p = Path(path)
+        if p.exists():
+            try:
+                os.chmod(p, 0o600)
+            except Exception:
+                pass
+    for path in ["storage/td_cache"]:
+        p = Path(path)
+        if p.is_dir():
+            try:
+                os.chmod(p, 0o700)
+            except Exception:
+                pass
+    logger.info(
+        f"IATIS API started "
+        f"(ENV={_ENV}, auth={'required' if os.environ.get('API_SERVER_KEY') else 'dev-mode'})"
+    )
+    yield
+    # Shutdown (nothing needed)
+
+
 app = FastAPI(
     title="IATIS API",
     description="Institutional Adaptive Trading Intelligence System",
-    version="0.2.0",
-    docs_url=_docs_url,   # disabled in production
+    version="0.3.0",
+    docs_url=_docs_url,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -139,19 +170,6 @@ class AnalyzeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
-@app.on_event("startup")
-async def on_startup():
-    from pathlib import Path
-    # Set restrictive permissions on sensitive files (issues #9, #10)
-    for path in ["storage/decisions.db", "storage/td_cache"]:
-        p = Path(path)
-        if p.exists():
-            try:
-                os.chmod(p, 0o700 if p.is_dir() else 0o600)
-            except Exception:
-                pass
-    logger.info(f"IATIS API started (ENV={_ENV}, auth={'required' if os.environ.get('API_SERVER_KEY') else 'dev-mode'})")
-
 
 # ---------------------------------------------------------------------------
 # Endpoints

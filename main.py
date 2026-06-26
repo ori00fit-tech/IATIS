@@ -25,6 +25,7 @@ from confluence.score_calculator import calculate_score, validate_confluence_con
 from confluence.voting_system import tally_votes
 from core.data_loader import load_data, load_multi_timeframe_with_failover
 from core.data_validator import DataValidationError, validate_ohlcv
+from core.market_quality import assess_market_quality, MQS_THRESHOLD_FAIR
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
 from engines.divergence_engine import DivergenceEngine
@@ -139,6 +140,22 @@ def run_pipeline(config: dict) -> dict:
         failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
         log_decision(failure_report)
         return failure_report
+
+    # 3. Market Quality Score — gate before running 9 engines
+    mqs_result = assess_market_quality(
+        df=df_base,
+        symbol=config["data"].get("symbol", ""),
+    )
+    if not mqs_result.should_trade:
+        mqs_report = {
+            "final_verdict": "NO_TRADE",
+            "symbol": config["data"].get("symbol", ""),
+            "summary": f"NO_TRADE: Market Quality Score={mqs_result.score:.0f}/100 ({mqs_result.grade}) — {'; '.join(mqs_result.reasons)}",
+            "market_quality": mqs_result.to_dict(),
+        }
+        log_decision(mqs_report)
+        log_decision_db(mqs_report)
+        return mqs_report
 
     # 4. Regime detection
     regime_cfg = config.get("regime", {})

@@ -150,3 +150,25 @@ execution:
   dry_run: true           # true=log only | false=place orders on OANDA
   max_open_trades: 5      # maximum concurrent open positions
   min_score_to_execute: 60.0  # extra safety above confluence.min_score_to_trade
+
+  # ─── cTrader / IC Markets (Recommended for Morocco) ─────────────────────────
+  broker: "ctrader"     # "ctrader" or "oanda"
+  ctrader_enabled: false
+  # Setup:
+  #   1. Demo account: https://www.icmarkets.com/ar/open-trading-account/demo/
+  #      Choose: cTrader Demo
+  #   2. cTrader → Settings → API → Create Application
+  #      App Name: IATIS, Redirect URI: http://localhost
+  #      → Copy Client ID + Client Secret
+  #   3. Add to .env:
+  #        CTRADER_CLIENT_ID=12345
+  #        CTRADER_CLIENT_SECRET=abcdef
+  #        CTRADER_ACCOUNT_ID=your_numeric_id
+  #        CTRADER_ACCESS_TOKEN=your_token
+  #        CTRADER_ENVIRONMENT=demo
+  #
+  # Recommended leverage for IATIS (1% risk, 1:3 RR):
+  #   FX Majors:    1:30 to 1:50  (safe)
+  #   Gold/Silver:  1:20           (volatile)
+  #   Oil/Indices:  1:20           (volatile)
+  #   Crypto:       1:5 to 1:10  (high risk)

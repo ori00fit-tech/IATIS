@@ -66,10 +66,11 @@ class ExecutionResult:
 
 
 class TradeExecutor:
-    """Executes IATIS signals via OANDA API.
+    """Executes IATIS signals via broker API (OANDA or cTrader/IC Markets).
 
     Args:
-        dry_run: if True, logs orders but doesn't place them
+        dry_run: if True, logs orders but doesn't place them (default: True)
+        broker: "ctrader" (IC Markets) or "oanda"
         max_open_trades: maximum concurrent positions allowed
         min_score: minimum confluence score to execute (extra safety)
     """
@@ -77,25 +78,32 @@ class TradeExecutor:
     def __init__(
         self,
         dry_run: bool = True,
+        broker: str = "ctrader",
         max_open_trades: int = 5,
         min_score: float = 60.0,
     ):
         self.dry_run = dry_run
+        self.broker = broker
         self.max_open_trades = max_open_trades
         self.min_score = min_score
         self._client = None
 
-        mode = "DRY RUN (paper)" if dry_run else "LIVE"
+        mode = "DRY RUN" if dry_run else f"LIVE ({broker.upper()})"
         logger.info(
-            f"TradeExecutor initialized: mode={mode}, "
+            f"TradeExecutor: mode={mode}, "
             f"max_trades={max_open_trades}, min_score={min_score}"
         )
 
     def _get_client(self):
-        """Lazy-load OANDA client."""
+        """Lazy-load broker client."""
         if self._client is None:
-            from execution.oanda_client import OandaClient
-            self._client = OandaClient()
+            if self.broker == "ctrader":
+                from execution.ctrader_client import CTraderClient
+                self._client = CTraderClient()
+                self._client.connect()
+            else:
+                from execution.oanda_client import OandaClient
+                self._client = OandaClient()
         return self._client
 
     def execute_from_report(self, report: dict) -> ExecutionResult:
@@ -178,78 +186,114 @@ class TradeExecutor:
         try:
             client = self._get_client()
 
-            # Check duplicate position
-            if client.has_open_position(symbol):
-                return ExecutionResult(
-                    executed=False,
+            if self.broker == "ctrader":
+                # cTrader execution path
+                from execution.ctrader_client import CTraderOrder
+
+                # Get account info for position sizing
+                account = client.get_account_info()
+                if not account:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason="Could not fetch cTrader account info",
+                        dry_run=False,
+                    )
+
+                sl_distance = abs(float(entry) - float(sl))
+                risk_per_trade = report.get("risk", {}).get("recommended_risk_pct", 0.01)
+                volume = client.calculate_volume(
                     symbol=symbol,
-                    skip_reason=f"Already have open position for {symbol}",
-                    dry_run=self.dry_run,
+                    balance=account.balance,
+                    risk_pct=risk_per_trade,
+                    sl_distance_price=sl_distance,
                 )
 
-            # Check max open trades
-            account = client.get_account_summary()
-            if account.open_trade_count >= self.max_open_trades:
-                return ExecutionResult(
-                    executed=False,
-                    symbol=symbol,
-                    skip_reason=(
-                        f"Max open trades reached "
-                        f"({account.open_trade_count}/{self.max_open_trades})"
-                    ),
-                    dry_run=self.dry_run,
-                )
+                if volume <= 0:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Invalid volume calculated ({volume})",
+                        dry_run=False,
+                    )
 
-            # Calculate position size
-            sl_distance = abs(float(entry) - float(sl))
-            risk_per_trade = report.get("risk", {}).get("recommended_risk_pct", 0.01)
-            risk_usd = account.balance * risk_per_trade
-            units = client.calculate_units(symbol, risk_usd, sl_distance)
-
-            if units <= 0:
-                return ExecutionResult(
-                    executed=False,
-                    symbol=symbol,
-                    skip_reason=f"Invalid units calculated ({units})",
-                    dry_run=self.dry_run,
-                )
-
-            from execution.oanda_client import TradeOrder
-            order = TradeOrder(
-                symbol=symbol,
-                direction=direction,
-                units=units,
-                stop_loss=float(sl),
-                take_profit=float(tp),
-                client_id=f"IATIS_{symbol}_{datetime.now(timezone.utc).strftime('%H%M')}",
-            )
-
-            result = client.place_market_order(order)
-
-            if result.success:
-                logger.info(
-                    f"✅ ORDER PLACED: {direction} {units} {symbol} "
-                    f"entry={result.entry_price} "
-                    f"trade_id={result.trade_id}"
-                )
-                return ExecutionResult(
-                    executed=True,
+                ct_order = CTraderOrder(
                     symbol=symbol,
                     direction=direction,
-                    units=units,
-                    entry_price=result.entry_price,
+                    volume=volume,
                     stop_loss=float(sl),
                     take_profit=float(tp),
-                    trade_id=result.trade_id,
-                    dry_run=False,
+                    comment=f"IATIS_{symbol}",
                 )
+
+                result = client.place_market_order(ct_order)
+
+                if result.success:
+                    logger.info(
+                        f"✅ cTrader ORDER: {direction} {symbol} "
+                        f"vol={volume} pos_id={result.position_id}"
+                    )
+                    return ExecutionResult(
+                        executed=True, symbol=symbol,
+                        direction=direction, units=volume,
+                        entry_price=result.entry_price,
+                        stop_loss=float(sl), take_profit=float(tp),
+                        trade_id=result.position_id, dry_run=False,
+                    )
+                else:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"cTrader error: {result.error}",
+                        dry_run=False,
+                    )
+
             else:
-                return ExecutionResult(
-                    executed=False,
-                    symbol=symbol,
-                    skip_reason=f"OANDA error: {result.error}",
-                    dry_run=self.dry_run,
+                # OANDA execution path (original)
+                if client.has_open_position(symbol):
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Already have open position for {symbol}",
+                        dry_run=False,
+                    )
+
+                account = client.get_account_summary()
+                if account.open_trade_count >= self.max_open_trades:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Max open trades ({account.open_trade_count}/{self.max_open_trades})",
+                        dry_run=False,
+                    )
+
+                sl_distance = abs(float(entry) - float(sl))
+                risk_per_trade = report.get("risk", {}).get("recommended_risk_pct", 0.01)
+                risk_usd = account.balance * risk_per_trade
+                units = client.calculate_units(symbol, risk_usd, sl_distance)
+
+                if units <= 0:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Invalid units ({units})", dry_run=False,
+                    )
+
+                from execution.oanda_client import TradeOrder
+                order = TradeOrder(
+                    symbol=symbol, direction=direction, units=units,
+                    stop_loss=float(sl), take_profit=float(tp),
+                    client_id=f"IATIS_{symbol}_{datetime.now(timezone.utc).strftime('%H%M')}",
                 )
+                result = client.place_market_order(order)
+
+                if result.success:
+                    return ExecutionResult(
+                        executed=True, symbol=symbol,
+                        direction=direction, units=units,
+                        entry_price=result.entry_price,
+                        stop_loss=float(sl), take_profit=float(tp),
+                        trade_id=result.trade_id, dry_run=False,
+                    )
+                else:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"OANDA error: {result.error}", dry_run=False,
+                    )
 
         except Exception as exc:
             logger.error(f"Execution failed for {symbol}: {exc}", exc_info=True)

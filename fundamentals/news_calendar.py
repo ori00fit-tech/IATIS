@@ -20,6 +20,7 @@ Fallback: Forex Factory public JSON (no key needed, limited data)
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, timezone, timedelta
@@ -105,27 +106,90 @@ def _jblanked_request(endpoint: str) -> list[dict] | None:
 
 def _forex_factory_fallback() -> list[dict]:
     """Fallback: Forex Factory public calendar JSON (no API key)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; IATIS-Trading-Bot/1.0)",
+        "Accept": "application/json",
+    }
+    urls = [
+        "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+        "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json",
+    ]
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            raw = resp.json()
+            events = []
+            for e in raw:
+                events.append({
+                    "name": e.get("title", ""),
+                    "currency": e.get("country", "").upper()[:3],
+                    "date": e.get("date", ""),
+                    "impact": e.get("impact", "Low"),
+                    "actual": e.get("actual", ""),
+                    "forecast": e.get("forecast", ""),
+                    "previous": e.get("previous", ""),
+                    "source": "forex_factory",
+                })
+            logger.info(f"Forex Factory fallback: {len(events)} events this week")
+            return events
+        except Exception as exc:
+            logger.warning(f"Forex Factory fallback failed ({url}): {exc}")
+            continue
+
+    # Last resort: return known high-impact events for today
+    # This ensures blackout system never fails completely
+    logger.warning("All calendar sources failed — using minimal hardcoded schedule")
+    return _minimal_us_schedule()
+
+
+def _minimal_us_schedule() -> list[dict]:
+    """Emergency fallback: known US high-impact recurring events.
+
+    When all APIs fail, assume standard US economic schedule.
+    Conservative approach: better to miss a trade than trade during NFP.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # 0=Mon, 4=Fri
+    hour = now.hour
+
+    events = []
+    # NFP: First Friday of month, 12:30 UTC
+    if weekday == 4 and hour in (11, 12, 13):
+        events.append({
+            "name": "Non-Farm Payrolls (possible — verify manually)",
+            "currency": "USD",
+            "date": now.strftime("%Y-%m-%d") + "T12:30:00",
+            "impact": "High",
+            "source": "hardcoded_fallback",
+        })
+
+    return events
+
+
+CACHE_PATH = Path(__file__).resolve().parent.parent / "storage" / "calendar_cache.json"
+
+
+def _read_cache() -> list[dict]:
+    """Read locally cached calendar (updated by scripts/cache_calendar.py)."""
+    if not CACHE_PATH.exists():
+        return []
     try:
-        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        raw = resp.json()
-        events = []
-        for e in raw:
-            events.append({
-                "name": e.get("title", ""),
-                "currency": e.get("country", "").upper()[:3],
-                "date": e.get("date", ""),
-                "impact": e.get("impact", "Low"),
-                "actual": e.get("actual", ""),
-                "forecast": e.get("forecast", ""),
-                "previous": e.get("previous", ""),
-                "source": "forex_factory",
-            })
-        logger.info(f"Forex Factory fallback: {len(events)} events this week")
+        data = json.loads(CACHE_PATH.read_text())
+        fetched_at = data.get("fetched_at", "")
+        # Only use cache if less than 25 hours old
+        if fetched_at:
+            from datetime import datetime, timezone, timedelta
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(fetched_at)
+            if age.total_seconds() > 25 * 3600:
+                logger.warning("Calendar cache is stale (>25h) — ignoring")
+                return []
+        events = data.get("events", [])
+        logger.info(f"Calendar cache: {len(events)} events (fetched {fetched_at[:10]})")
         return events
     except Exception as exc:
-        logger.warning(f"Forex Factory fallback failed: {exc}")
+        logger.warning(f"Calendar cache read failed: {exc}")
         return []
 
 
@@ -133,23 +197,38 @@ def get_calendar_today() -> list[dict]:
     """Get today's economic events. Uses jblanked API with FF fallback."""
     # Try jblanked first
     events = _jblanked_request("calendar/today/")
-    if events is not None:
+    if events:
         logger.info(f"JBlanked calendar: {len(events)} events today")
         return events
 
-    # Fallback: filter this week's FF calendar to today
+    # Try local cache (updated by scripts/cache_calendar.py)
+    cached = _read_cache()
+    if cached:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_events = [e for e in cached if e.get("date", "").startswith(today)]
+        if today_events:
+            logger.info(f"Calendar cache (today): {len(today_events)} events")
+            return today_events
+
+    # Fallback: Forex Factory public JSON
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     all_week = _forex_factory_fallback()
     today_events = [e for e in all_week if e.get("date", "").startswith(today)]
+    logger.info(f"Forex Factory today: {len(today_events)} events")
     return today_events
 
 
 def get_calendar_week() -> list[dict]:
     """Get this week's economic events."""
     events = _jblanked_request("calendar/week/")
-    if events is not None:
+    if events:
         logger.info(f"JBlanked calendar: {len(events)} events this week")
         return events
+
+    cached = _read_cache()
+    if cached:
+        return cached
+
     return _forex_factory_fallback()
 
 

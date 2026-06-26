@@ -131,11 +131,27 @@ def backtest_symbol_full_pipeline(
         from regimes.regime_detector import detect_regime
         from regimes.volatility_classifier import classify_volatility
         from confluence.regime_weights import apply_regime_weights
-        
+
         regime_result = detect_regime(df_h1)
-        regime_state = regime_result.regime.value if regime_result else "TRENDING"
-        vol_result = classify_volatility(df_h1)
-        volatility = vol_result.level if vol_result else "normal"
+        regime_state = "TRENDING"
+        if regime_result is not None:
+            try:
+                regime_state = regime_result.regime.value
+            except Exception:
+                pass
+
+        volatility = "normal"
+        try:
+            vol_result = classify_volatility(df_h1)
+            if vol_result is not None and not isinstance(vol_result, Exception):
+                # vol_result may be a Series or object
+                if hasattr(vol_result, 'level'):
+                    volatility = str(vol_result.level)
+                elif hasattr(vol_result, 'iloc'):
+                    # It's a pandas Series — get last value
+                    volatility = str(vol_result.iloc[-1]) if len(vol_result) > 0 else "normal"
+        except Exception:
+            pass
         
         # 3. Run engines
         cfg = build_config(symbol)

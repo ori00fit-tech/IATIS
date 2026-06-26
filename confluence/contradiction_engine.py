@@ -37,7 +37,7 @@ def check_contradictions(
     """
     reasons: list[str] = []
     THRESHOLD = 40
-    REVERSAL_THRESHOLD = 20  # reversal engines use lower scores naturally
+    REVERSAL_THRESHOLD = 40  # raised from 20 — lower was blocking 38% of signals
 
     # 1. Standard contradiction
     bullish = [o for o in outputs if o.bias == Bias.BULLISH and o.score >= THRESHOLD]
@@ -50,7 +50,8 @@ def check_contradictions(
         )
 
     # 2. H013: Reversal engine group contradiction
-    # If 3+ reversal engines agree on direction OPPOSITE to trend engines
+    # Requires ALL 3 reversal engines (not just 2) to agree on opposite direction
+    # AND each must have score >= 40 (genuine signal, not noise)
     winning_bias = None
     trend_votes = [o for o in outputs if o.engine_name in TREND_ENGINES
                    and o.bias != Bias.NEUTRAL and o.score >= THRESHOLD]
@@ -67,11 +68,11 @@ def check_contradictions(
             and o.bias == opposite
             and o.score >= REVERSAL_THRESHOLD
         ]
-        if len(reversal_agrees) >= 2:  # 2+ reversal engines agree on opposite
+        if len(reversal_agrees) >= 3:  # ALL 3 reversal engines must agree (was 2)
             names = [o.engine_name for o in reversal_agrees]
             reasons.append(
-                f"Reversal signal: {names} all signal {opposite.value} "
-                f"vs trend engines {winning_bias.value} — possible reversal (H013)"
+                f"H013 Reversal consensus: {names} all signal {opposite.value} "
+                f"vs trend {winning_bias.value} with score>={REVERSAL_THRESHOLD}"
             )
 
     if upcoming_high_impact_news:

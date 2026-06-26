@@ -86,7 +86,9 @@ def _jblanked_request(endpoint: str) -> list[dict] | None:
     if not api_key:
         return None
 
-    url = f"https://www.jblanked.com/news/api/{endpoint}"
+    # New endpoint structure (updated Feb 2026):
+    # /news/api/ is deprecated → use /news/api/mql5/ or /news/api/forex-factory/
+    url = f"https://www.jblanked.com/news/api/mql5/{endpoint}"
     headers = {
         "Authorization": f"Api-Key {api_key}",
         "Content-Type": "application/json",

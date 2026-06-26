@@ -112,7 +112,18 @@ def check_mtf_confirmation(
             confirming=False,
         )
 
-    # Compare with H1 bias
+    # Compare with H1 bias — NEUTRAL H1 = no conflict
+    if h1_bias == "NEUTRAL":
+        return MTFResult(
+            d1_bias=d1_bias,
+            d1_adx=round(adx, 1),
+            d1_ema20=round(ema20, 5),
+            d1_ema50=round(ema50, 5),
+            score_adjustment=0.0,
+            reason=f"H1 signal NEUTRAL — no MTF adjustment applied",
+            confirming=False,
+        )
+
     confirming = (h1_bias == d1_bias)
 
     if confirming:

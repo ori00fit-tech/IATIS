@@ -763,14 +763,35 @@ async def system_health_full(
 
     # 2. Scheduler last run
     try:
-        sched_log = Path("storage/system.log")
+        import re as _re
+        # Try multiple log locations
+        log_candidates = [
+            Path("storage/system.log"),
+            Path("/var/log/iatis-scheduler.log"),
+        ]
         last_run = None
         last_execute_count = 0
-        if sched_log.exists():
-            lines = sched_log.read_text().splitlines()
-            for line in reversed(lines[-200:]):
+        for sched_log in log_candidates:
+            if sched_log.exists():
+                lines = sched_log.read_text().splitlines()
+                for line in reversed(lines[-500:]):
+                    if "Run complete" in line:
+                        last_run = line.split("|")[0].strip()
+                        m = _re.search(r"(\d+) EXECUTE", line)
+                        if m: last_execute_count = int(m.group(1))
+                        break
+                if last_run:
+                    break
+        # Also try journalctl
+        if not last_run:
+            import subprocess
+            result = subprocess.run(
+                ["journalctl", "-u", "iatis-scheduler", "-n", "100", "--no-pager", "--output=cat"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in reversed(result.stdout.splitlines()):
                 if "Run complete" in line:
-                    last_run = line.split("|")[0].strip()
+                    last_run = line[:30].strip()
                     m = _re.search(r"(\d+) EXECUTE", line)
                     if m: last_execute_count = int(m.group(1))
                     break
@@ -784,11 +805,12 @@ async def system_health_full(
 
     # 3. SQLite decisions DB
     try:
-        from storage.decision_db import _conn as db_conn, DB_PATH as decision_db_path
+        from storage.decision_db import _conn as db_conn
         with db_conn() as con:
             total = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+            # column is 'ts' not 'timestamp'
             recent = con.execute(
-                "SELECT COUNT(*) FROM decisions WHERE timestamp > datetime('now','-24 hours')"
+                "SELECT COUNT(*) FROM decisions WHERE ts > datetime('now','-24 hours')"
             ).fetchone()[0]
         checks["database"] = {"status": "ok", "total_decisions": total, "last_24h": recent}
     except Exception as e:

@@ -20,6 +20,7 @@ import json
 
 from confluence.contradiction_engine import check_contradictions
 from confluence.mtf_confirmation import check_mtf_confirmation
+from confluence.meta_decision import evaluate_meta_decision
 from confluence.regime_weights import apply_regime_weights
 from confluence.score_calculator import calculate_score, validate_confluence_config
 from confluence.voting_system import tally_votes
@@ -264,6 +265,24 @@ def run_pipeline(config: dict) -> dict:
 
     final_verdict = "EXECUTE" if (confluence_pass and risk_pass and not news_blocked) else "NO_TRADE"
 
+    # Meta Decision Layer — confidence + stability + engine contributions
+    meta = None
+    if final_verdict == "EXECUTE":
+        try:
+            meta = evaluate_meta_decision(
+                outputs=outputs,
+                weights=active_weights,
+                adjusted_score=adjusted_score,
+                vote_result=vote_result,
+                report_context={"market_quality": mqs_result.to_dict()},
+            )
+            # Meta can downgrade EXECUTE to NO_TRADE if confidence too low
+            if meta.verdict == "BLOCK":
+                final_verdict = "NO_TRADE"
+                logger.info(f"Meta Decision BLOCKED: {meta.reason}")
+        except Exception as exc:
+            logger.warning(f"Meta Decision failed (non-fatal): {exc}")
+
     # Build summary
     if final_verdict == "EXECUTE":
         summary = (
@@ -344,6 +363,7 @@ def run_pipeline(config: dict) -> dict:
         "take_profit": float(target) if confluence_pass else None,
         "risk_reward": f"1:{config['risk']['min_risk_reward']:.0f}" if confluence_pass else None,
         "final_verdict": final_verdict,
+        "meta_decision": meta.to_dict() if meta else None,
     }
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")

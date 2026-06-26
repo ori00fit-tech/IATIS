@@ -133,6 +133,26 @@
       "engine": "sentiment",
       "notes": "Paper trading \u2014 collecting data via engine_tracker",
       "last_updated": "2026-06-26"
+    },
+    "H013": {
+      "title": "Reversal Engine Group Agreement as Counter-Signal",
+      "status": "RESEARCH",
+      "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines \u2014 market reversed BULLISH confirming reversal engines.",
+      "hypothesis": "If Divergence+Wyckoff+Sentiment all agree on direction X, and trend engines agree on -X, lower confidence or block the trade.",
+      "evidence": {
+        "case_1": {
+          "date": "2026-06-26",
+          "symbols": [
+            "ETHUSD",
+            "BTCUSD"
+          ],
+          "trend_engines": "BEARISH (SMC+NNFX+PA+Quant)",
+          "reversal_engines": "BULLISH (Divergence+Wyckoff+Sentiment)",
+          "market_outcome": "BULLISH \u2014 reversal engines were correct",
+          "trade_result": "loss (5 trades hit SL)"
+        }
+      },
+      "last_updated": "2026-06-26"
     }
   },
   "walk_forward_validation": {

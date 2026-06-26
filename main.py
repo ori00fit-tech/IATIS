@@ -43,6 +43,7 @@ from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
 from storage.decision_db import log_decision_db
 from storage.engine_tracker import record_engine_votes
+from storage.outcome_tracker import log_signal as log_outcome_signal
 from fundamentals.news_risk import assess_news_risk, risk_level_icon
 from execution.telegram_bot import send_signal as telegram_send
 from utils.helpers import load_config
@@ -327,7 +328,14 @@ def run_pipeline(config: dict) -> dict:
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
     log_decision(report)
     log_decision_db(report)
-    record_engine_votes(report)   # per-engine performance attribution
+    record_engine_votes(report)
+
+    # Log EXECUTE signals to outcome tracker (for calibration + regime matrix)
+    if final_verdict == "EXECUTE":
+        try:
+            log_outcome_signal(report)
+        except Exception as exc:
+            logger.warning(f"Outcome tracker log failed (non-fatal): {exc}")
 
     # Send to Telegram — non-fatal if credentials missing or network fails.
     # Controlled by TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env.

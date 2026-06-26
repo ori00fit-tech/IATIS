@@ -694,3 +694,38 @@ async def meta_analysis(
     except Exception as exc:
         logger.error(f"Meta-analysis error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/outcomes")
+async def get_outcomes(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Get recent signals and performance summary for outcome tracking."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.outcome_tracker import recent_signals, performance_summary, get_open_signals
+        return {
+            "summary": performance_summary(),
+            "open_signals": get_open_signals(),
+            "recent": recent_signals(limit=limit),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/outcomes/{signal_id}/close")
+async def close_outcome(
+    signal_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+    exit_price: float = 0.0,
+    outcome: str = "win",
+    notes: str = "",
+) -> dict[str, Any]:
+    """Record the outcome of a trade. outcome: win/loss/breakeven"""
+    _check_auth(x_api_key, iatis_session)
+    from storage.outcome_tracker import close_signal
+    success = close_signal(signal_id, exit_price, outcome, notes=notes)
+    return {"success": success, "signal_id": signal_id, "outcome": outcome}

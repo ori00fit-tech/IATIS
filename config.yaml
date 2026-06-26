@@ -135,3 +135,18 @@ telegram:
   enabled: true
   # Credentials loaded from .env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
   # Set enabled: false to silence notifications without touching .env
+
+execution:
+  # ─── OANDA Paper/Live Trading ───────────────────────────────────────────────
+  # Setup:
+  #   1. Register free at https://www.oanda.com/
+  #   2. Create Practice (demo) account
+  #   3. Manage API Access → Generate token
+  #   4. Add to .env:
+  #        OANDA_API_KEY=your_token
+  #        OANDA_ACCOUNT_ID=101-001-XXXXXXX-001
+  #        OANDA_ENVIRONMENT=practice
+  oanda_enabled: false    # true after adding OANDA credentials to .env
+  dry_run: true           # true=log only | false=place orders on OANDA
+  max_open_trades: 5      # maximum concurrent open positions
+  min_score_to_execute: 60.0  # extra safety above confluence.min_score_to_trade

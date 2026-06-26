@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from execution.telegram_bot import send_raw, send_signal
+from execution.trade_executor import TradeExecutor
 from main import run_pipeline
 from risk.correlation_engine import check_correlation, portfolio_exposure_summary
 from utils.helpers import load_config
@@ -135,6 +136,24 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 reports.append(report)
                 if report.get("final_verdict") == "EXECUTE":
                     execute_signals.append(internal)
+                    # B1: Execute trade via OANDA (dry_run=True until configured)
+                    oanda_enabled = config.get("execution", {}).get("oanda_enabled", False)
+                    dry_run = config.get("execution", {}).get("dry_run", True)
+                    if oanda_enabled or dry_run:
+                        try:
+                            executor = TradeExecutor(
+                                dry_run=dry_run,
+                                max_open_trades=config.get("execution", {}).get("max_open_trades", 5),
+                                min_score=config.get("execution", {}).get("min_score_to_execute", 60.0),
+                            )
+                            exec_result = executor.execute_from_report(report)
+                            if exec_result.executed and not exec_result.dry_run:
+                                logger.info(
+                                    f"✅ TRADE EXECUTED: {exec_result.direction} "
+                                    f"{exec_result.symbol} trade_id={exec_result.trade_id}"
+                                )
+                        except Exception as exc:
+                            logger.warning(f"Trade execution skipped for {internal}: {exc}")
             except Exception as exc:
                 logger.error(f"Pipeline failed for {sym}: {exc}")
                 failed_symbols.append(sym)

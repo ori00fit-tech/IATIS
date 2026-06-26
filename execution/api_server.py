@@ -897,3 +897,52 @@ async def symbol_health_endpoint(
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/ai/optimize-weights")
+async def ai_optimize_weights(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AI Dynamic Weight Optimizer — uses Claude to suggest engine weights.
+
+    Analyzes live engine performance + outcome data.
+    dry_run=True: returns suggestions without applying.
+    dry_run=False: applies weights to config.yaml.
+
+    Requires 20+ closed trades in outcome_tracker for meaningful analysis.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.dynamic_weights import analyze_and_suggest_weights, apply_weights_to_config
+        from storage.engine_tracker import engine_stats
+        from storage.outcome_tracker import performance_summary
+        from storage.calibration import regime_performance_matrix
+
+        config = _get_config()
+        current_weights = config.get("confluence", {}).get("weights", {})
+
+        stats = engine_stats(min_votes=5)
+        outcomes = performance_summary()
+        regime_data = regime_performance_matrix()
+
+        result = analyze_and_suggest_weights(
+            engine_stats=stats,
+            outcome_summary=outcomes,
+            current_weights=current_weights,
+            regime_data=regime_data,
+        )
+
+        if not dry_run and result.get("status") == "success":
+            applied = apply_weights_to_config(
+                result["suggested_weights"],
+                dry_run=False
+            )
+            result["applied"] = applied
+
+        return result
+
+    except Exception as exc:
+        logger.error(f"AI weight optimization failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))

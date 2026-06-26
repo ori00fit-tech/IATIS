@@ -95,37 +95,49 @@ def backtest_symbol_full_pipeline(
     contradiction_blocks = 0
     correlation_blocks = 0
     score_blocks = 0
+    news_blocks = 0
     total_runs = 0
     execute_signals_this_run: list[str] = []
 
     n = len(df)
-    
+
     for i in range(warmup, n - 1, step):
         total_runs += 1
         df_slice = df.iloc[:i+1].copy()
-        
-        # Reset correlation tracking each "run" (simulates scheduler run)
-        if total_runs % 19 == 0:  # ~19 symbols per run
+
+        # Reset correlation tracking each "run"
+        if total_runs % 19 == 0:
             execute_signals_this_run = []
-        
+
         # Build multi-timeframe view
         from core.timeframe_sync import build_multi_timeframe_view
         mtf = build_multi_timeframe_view(df_slice, ["M15","H1","H4","D1"])
         df_h1 = mtf.get("H1", df_slice)
-        
+
         if len(df_h1) < 50:
             continue
-        
+
         # 1. Market Quality Score
         bar_time = df_h1.index[-1]
         if hasattr(bar_time, 'to_pydatetime'):
             bar_time = bar_time.to_pydatetime()
-        
+
         from core.market_quality import assess_market_quality
         mqs = assess_market_quality(df_h1, symbol, now=bar_time)
         if not mqs.should_trade:
             mqs_blocks += 1
             continue
+
+        # 1b. Historical News Blackout (if news data available)
+        try:
+            from scripts.download_historical_news import get_events_in_window
+            news_events = get_events_in_window(symbol, bar_time, look_ahead_min=60)
+            if news_events and any(abs(e.get("minutes_until", 999)) <= 30
+                                   for e in news_events):
+                news_blocks += 1
+                continue
+        except Exception:
+            pass  # news data not downloaded yet — skip silently
         
         # 2. Regime detection
         from regimes.regime_detector import detect_regime
@@ -349,6 +361,7 @@ def backtest_symbol_full_pipeline(
         "mqs_blocks": mqs_blocks,
         "contradiction_blocks": contradiction_blocks,
         "correlation_blocks": correlation_blocks,
+        "news_blocks": news_blocks,
         "score_blocks": score_blocks,
         "execute_rate_pct": round(len(trades) / max(total_runs, 1) * 100, 1),
         "error": None,

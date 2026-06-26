@@ -218,11 +218,15 @@ def run_pipeline(config: dict) -> dict:
     risk_result = None
     if confluence_pass:
         entry = df_base["close"].iloc[-1]
-        # illustrative SL/TP — Phase 3 should derive these from SMC/ATR levels
         atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
         direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
-        stop = entry - direction * atr_estimate * 1.5
-        target = entry + direction * atr_estimate * 1.5 * config["risk"]["min_risk_reward"]
+
+        # SL at 2.5×ATR: gives room beyond normal H1 noise (ATR×1.5 too tight)
+        # TP at SL×min_risk_reward (default 3.0)
+        # Research shows ATR×2.5 reduces premature SL hits significantly
+        sl_multiplier = config.get("risk", {}).get("sl_atr_multiplier", 2.5)
+        stop = entry - direction * atr_estimate * sl_multiplier
+        target = entry + direction * atr_estimate * sl_multiplier * config["risk"]["min_risk_reward"]
 
         risk_inputs = RiskInputs(
             account_balance=10_000.0,

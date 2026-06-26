@@ -115,6 +115,7 @@ risk:
   risk_per_trade_max: 0.01     # 1%
   max_exposure: 0.05           # 5%
   min_risk_reward: 3.0         # 1:3
+  sl_atr_multiplier: 2.5       # SL at 2.5×ATR14 (was 1.5 — too tight for H1)
   max_drawdown_reduce: 0.10    # reduce size after 10% DD
   max_drawdown_stop: 0.15      # stop system after 15% DD
 

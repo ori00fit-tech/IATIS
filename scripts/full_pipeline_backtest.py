@@ -215,8 +215,10 @@ def backtest_symbol_full_pipeline(
         
         atr = float((df_h1["high"] - df_h1["low"]).tail(14).mean())
         direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
-        sl = entry - direction * atr * 1.5
-        tp = entry + direction * atr * 1.5 * 3
+        # ATR×2.5 SL — ATR×1.5 too tight for H1 (causes random-walk WR=25%)
+        sl_mult = cfg.get("risk", {}).get("sl_atr_multiplier", 2.5)
+        sl = entry - direction * atr * sl_mult
+        tp = entry + direction * atr * sl_mult * cfg["risk"]["min_risk_reward"]
         
         # Position sizing
         sl_dist = abs(entry - sl)

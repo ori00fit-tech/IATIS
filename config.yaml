@@ -114,7 +114,9 @@ risk:
   risk_per_trade_min: 0.0025   # 0.25%
   risk_per_trade_max: 0.01     # 1%
   max_exposure: 0.05           # 5%
-  min_risk_reward: 3.0         # 1:3
+  min_risk_reward: 2.0       # 1:2 RR — optimal for 9-engine confluence WR=30-35%
+                              # RR=3 requires WR>25% just to break even, WR>40% for PF>2
+                              # RR=2 requires WR>33% to break even, achievable with 9 engines
   sl_atr_multiplier: 2.5       # SL at 2.5×ATR14 (was 1.5 — too tight for H1)
   max_drawdown_reduce: 0.10    # reduce size after 10% DD
   max_drawdown_stop: 0.15      # stop system after 15% DD

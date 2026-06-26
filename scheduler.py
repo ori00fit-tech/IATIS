@@ -44,6 +44,7 @@ load_dotenv()
 
 from execution.telegram_bot import send_raw, send_signal
 from main import run_pipeline
+from risk.correlation_engine import check_correlation, portfolio_exposure_summary
 from utils.helpers import load_config
 from utils.logger import get_logger
 
@@ -101,6 +102,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             f"| {len(active_symbols)} symbol(s) ==="
         )
 
+        execute_signals: list[str] = []  # track for correlation filter
+
         for sym in active_symbols:
             sym_config = dict(config)
             sym_config["data"] = dict(config["data"])
@@ -113,9 +116,25 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             sym_config["data"]["symbol"] = internal
             sym_config["data"]["twelve_data_symbol"] = sym
 
+            # A1: Correlation Filter — skip if correlated symbol already EXECUTE
+            corr_check = check_correlation(internal, execute_signals)
+            if not corr_check.allowed:
+                logger.info(
+                    f"[CORRELATION] {internal} blocked: {corr_check.message}"
+                )
+                reports.append({
+                    "final_verdict": "NO_TRADE",
+                    "symbol": internal,
+                    "summary": f"NO_TRADE: {corr_check.message}",
+                    "correlation_blocked": True,
+                })
+                continue
+
             try:
                 report = run_pipeline(sym_config)
                 reports.append(report)
+                if report.get("final_verdict") == "EXECUTE":
+                    execute_signals.append(internal)
             except Exception as exc:
                 logger.error(f"Pipeline failed for {sym}: {exc}")
                 failed_symbols.append(sym)
@@ -126,6 +145,12 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                         f"<code>{type(exc).__name__}: {str(exc)[:200]}</code>"
                     )
                 )
+
+        # Log portfolio exposure summary
+        if execute_signals:
+            exposure = portfolio_exposure_summary(execute_signals)
+            if exposure:
+                logger.info(f"Portfolio exposure: {exposure}")
 
         # Budget warning
         warning = _credits_warning(config)

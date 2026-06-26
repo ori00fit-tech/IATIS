@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from confluence.contradiction_engine import check_contradictions
+from confluence.mtf_confirmation import check_mtf_confirmation
 from confluence.regime_weights import apply_regime_weights
 from confluence.score_calculator import calculate_score, validate_confluence_config
 from confluence.voting_system import tally_votes
@@ -166,13 +167,24 @@ def run_pipeline(config: dict) -> dict:
     score_result = calculate_score(outputs, active_weights)
     contradiction_result = check_contradictions(outputs)
 
+    # A2: Multi-TF Confirmation — D1 trend must align with H1 signal
+    mtf_result = check_mtf_confirmation(
+        h1_bias=vote_result.winning_bias.value,
+        mtf_data=mtf_data,
+    )
+    # Apply MTF score adjustment
+    adjusted_score = round(
+        max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
+    )
+
     min_score = config["confluence"]["min_score_to_trade"]
     min_engines = config["confluence"]["min_engines_agreeing"]
 
     confluence_fail_reasons: list[str] = []
-    if score_result.final_score < min_score:
+    if adjusted_score < min_score:
         confluence_fail_reasons.append(
-            f"Confluence score {score_result.final_score} below minimum required {min_score}"
+            f"Confluence score {adjusted_score} below minimum required {min_score}"
+            + (f" (MTF adjustment: {mtf_result.score_adjustment:+.1f})" if mtf_result.score_adjustment != 0 else "")
         )
     if vote_result.agree_count < min_engines:
         confluence_fail_reasons.append(
@@ -235,10 +247,12 @@ def run_pipeline(config: dict) -> dict:
         summary = (
             f"EXECUTE {vote_result.winning_bias.value}: "
             f"{vote_result.agree_count}/{score_result.engines_participating} active engines agreed, "
-            f"confluence score {score_result.final_score}/100, risk checks passed."
+            f"confluence score {adjusted_score}/100, risk checks passed."
         )
         if news_risk:
             summary += f" News risk: {news_risk.risk_level} ({news_risk.news_risk_score:.0f}/100)."
+        if mtf_result.score_adjustment > 0:
+            summary += f" D1 confirms direction (+{mtf_result.score_adjustment:.0f}pts)."
     elif news_blocked and news_risk:
         summary = f"NO_TRADE: {news_risk.blackout_reason}"
     elif not confluence_pass:
@@ -265,7 +279,15 @@ def run_pipeline(config: dict) -> dict:
                 "total_engines": vote_result.total_engines,
                 "breakdown": vote_result.breakdown,
             },
-            "score": score_result.final_score,
+            "score": adjusted_score,
+            "raw_score": score_result.final_score,
+            "mtf": {
+                "d1_bias": mtf_result.d1_bias,
+                "d1_adx": mtf_result.d1_adx,
+                "adjustment": mtf_result.score_adjustment,
+                "confirming": mtf_result.confirming,
+                "reason": mtf_result.reason,
+            },
             "directional_score": score_result.directional_score,
             "contributions": score_result.contributions,
             "engines_participating": score_result.engines_participating,

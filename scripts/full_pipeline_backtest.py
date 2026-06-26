@@ -77,7 +77,7 @@ def backtest_symbol_full_pipeline(
     Returns performance metrics dict.
     """
     import pandas as pd
-    from backtesting.backtest_engine import BacktestConfig, _calc_position_size_standalone
+    from backtesting.backtest_engine import BacktestConfig
     from core.market_quality import assess_market_quality
     from confluence.contradiction_engine import check_contradictions
     from risk.correlation_engine import check_correlation

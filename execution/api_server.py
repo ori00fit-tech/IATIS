@@ -739,45 +739,52 @@ async def system_health_full(
     """System Health Dashboard — full status of all components."""
     _check_auth(x_api_key, iatis_session)
 
-    import psutil, time
+    import psutil
+    import time as _time
     from pathlib import Path
+    import re as _re
 
-    checks = {}
     now_utc = datetime.now(timezone.utc).isoformat()
+    checks: dict[str, Any] = {}
+    issues: list[str] = []
 
-    # CPU / RAM / Disk
-    checks["system"] = {
-        "cpu_pct": psutil.cpu_percent(interval=0.5),
-        "ram_pct": psutil.virtual_memory().percent,
-        "disk_pct": psutil.disk_usage("/").percent,
-        "uptime_hours": round((time.time() - psutil.boot_time()) / 3600, 1),
-    }
+    # 1. CPU / RAM / Disk
+    try:
+        checks["system"] = {
+            "cpu_pct": psutil.cpu_percent(interval=0.5),
+            "ram_pct": psutil.virtual_memory().percent,
+            "disk_pct": psutil.disk_usage("/").percent,
+            "uptime_hours": round((_time.time() - psutil.boot_time()) / 3600, 1),
+        }
+        if checks["system"]["ram_pct"] > 85: issues.append("High RAM usage")
+        if checks["system"]["disk_pct"] > 80: issues.append("High disk usage")
+    except Exception as e:
+        checks["system"] = {"error": str(e)[:80]}
 
-    # Scheduler status
-    sched_log = Path("storage/system.log")
-    last_run = None
-    last_execute_count = 0
-    if sched_log.exists():
-        try:
+    # 2. Scheduler last run
+    try:
+        sched_log = Path("storage/system.log")
+        last_run = None
+        last_execute_count = 0
+        if sched_log.exists():
             lines = sched_log.read_text().splitlines()
             for line in reversed(lines[-200:]):
                 if "Run complete" in line:
                     last_run = line.split("|")[0].strip()
-                    import re
-                    m = re.search(r"(\d+) EXECUTE", line)
+                    m = _re.search(r"(\d+) EXECUTE", line)
                     if m: last_execute_count = int(m.group(1))
                     break
-        except Exception:
-            pass
-    checks["scheduler"] = {
-        "last_run": last_run,
-        "last_execute_count": last_execute_count,
-        "status": "running" if last_run else "unknown",
-    }
+        checks["scheduler"] = {
+            "last_run": last_run,
+            "last_execute_count": last_execute_count,
+            "status": "running" if last_run else "unknown",
+        }
+    except Exception as e:
+        checks["scheduler"] = {"status": "error", "error": str(e)[:80]}
 
-    # SQLite
+    # 3. SQLite decisions DB
     try:
-        from storage.decision_db import _conn as db_conn, DB_PATH
+        from storage.decision_db import _conn as db_conn, DB_PATH as decision_db_path
         with db_conn() as con:
             total = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
             recent = con.execute(
@@ -787,10 +794,10 @@ async def system_health_full(
     except Exception as e:
         checks["database"] = {"status": "error", "error": str(e)[:100]}
 
-    # Calendar cache
-    cache_path = Path("storage/calendar_cache.json")
-    if cache_path.exists():
-        try:
+    # 4. Calendar cache
+    try:
+        cache_path = Path("storage/calendar_cache.json")
+        if cache_path.exists():
             import json as _json
             cache_data = _json.loads(cache_path.read_text())
             checks["calendar"] = {
@@ -798,12 +805,13 @@ async def system_health_full(
                 "fetched_at": cache_data.get("fetched_at", "?"),
                 "event_count": cache_data.get("count", 0),
             }
-        except Exception:
-            checks["calendar"] = {"status": "error"}
-    else:
-        checks["calendar"] = {"status": "no_cache", "note": "Run scripts/cache_calendar.py"}
+        else:
+            checks["calendar"] = {"status": "no_cache", "note": "Run scripts/cache_calendar.py"}
+            issues.append("Calendar cache missing — run scripts/cache_calendar.py")
+    except Exception as e:
+        checks["calendar"] = {"status": "error", "error": str(e)[:80]}
 
-    # Outcome tracker
+    # 5. Outcome tracker
     try:
         from storage.outcome_tracker import performance_summary
         summary = performance_summary()
@@ -816,7 +824,7 @@ async def system_health_full(
     except Exception as e:
         checks["outcome_tracker"] = {"status": "error", "error": str(e)[:80]}
 
-    # Data providers
+    # 6. Data providers
     checks["data_providers"] = {
         "twelve_data": "configured" if os.environ.get("TWELVE_DATA_API_KEY") else "missing",
         "alpha_vantage": "configured" if os.environ.get("ALPHA_VANTAGE_API_KEY") else "missing",
@@ -825,20 +833,15 @@ async def system_health_full(
         "yahoo_finance": "always_available",
     }
 
-    # cTrader
+    # 7. cTrader
+    ct_token = os.environ.get("CTRADER_ACCESS_TOKEN", "")
     checks["ctrader"] = {
-        "configured": bool(os.environ.get("CTRADER_ACCESS_TOKEN") and
-                          os.environ.get("CTRADER_ACCESS_TOKEN") != "TOKEN_HERE"),
+        "configured": bool(ct_token and ct_token != "TOKEN_HERE"),
         "account_id": os.environ.get("CTRADER_ACCOUNT_ID", "not_set"),
         "environment": os.environ.get("CTRADER_ENVIRONMENT", "not_set"),
     }
-
-    # Overall health
-    issues = []
-    if checks["system"]["ram_pct"] > 85: issues.append("High RAM usage")
-    if checks["system"]["disk_pct"] > 80: issues.append("High disk usage")
-    if not checks["ctrader"]["configured"]: issues.append("cTrader token not set")
-    if checks["calendar"]["status"] == "no_cache": issues.append("Calendar cache missing")
+    if not checks["ctrader"]["configured"]:
+        issues.append("cTrader access token not set")
 
     return {
         "status": "healthy" if not issues else "degraded",
@@ -846,3 +849,29 @@ async def system_health_full(
         "checked_at": now_utc,
         **checks,
     }
+
+
+@app.get("/symbol-health")
+async def symbol_health_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Symbol Health Index for all active symbols."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.symbol_health import get_all_symbol_health
+        config = _get_config()
+        symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+        active = [s["internal"] for s in symbols_cfg if s.get("enabled")]
+        health = get_all_symbol_health(active)
+        paused = [h for h in health if h["status"] == "PAUSED"]
+        caution = [h for h in health if h["status"] == "CAUTION"]
+        return {
+            "total": len(health),
+            "healthy": len(health) - len(paused) - len(caution),
+            "caution": len(caution),
+            "paused": len(paused),
+            "symbols": health,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -131,6 +131,22 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 })
                 continue
 
+            # Symbol Health Index — skip paused symbols
+            try:
+                from storage.symbol_health import get_symbol_health
+                shi = get_symbol_health(internal)
+                if shi.status == "PAUSED":
+                    logger.info(f"[HEALTH] {internal} PAUSED (SHI={shi.shi_score:.0f}): {shi.reason}")
+                    reports.append({
+                        "final_verdict": "NO_TRADE",
+                        "symbol": internal,
+                        "summary": f"NO_TRADE: Symbol PAUSED (SHI={shi.shi_score:.0f}) — {shi.reason}",
+                        "health_paused": True,
+                    })
+                    continue
+            except Exception as exc:
+                logger.debug(f"Symbol health check skipped for {internal}: {exc}")
+
             try:
                 report = run_pipeline(sym_config)
                 reports.append(report)

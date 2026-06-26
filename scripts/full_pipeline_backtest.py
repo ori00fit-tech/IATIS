@@ -219,32 +219,38 @@ def backtest_symbol_full_pipeline(
         else:
             size = max(0.01, min(risk_usd / (sl_dist * dpp), 10.0))
         
-        # 7. Simulate trade on next bars
+        # 7. Simulate trade on next H1 bars
         execute_signals_this_run.append(symbol)
-        trade_open = True
         outcome = None
         exit_price = None
-        
-        for j in range(i+1, min(i+1+200, n)):
-            future_bar = df.iloc[j]
-            h = float(future_bar.get("high", future_bar.iloc[1] if len(future_bar) > 1 else entry))
-            l = float(future_bar.get("low", future_bar.iloc[2] if len(future_bar) > 2 else entry))
-            
+
+        # Use the original df (H1 data) for trade simulation
+        df_for_sim = df_slice  # already H1
+        sim_start = len(df_for_sim)
+
+        for j in range(sim_start, min(sim_start + 200, n)):
+            try:
+                future_bar = df.iloc[j]
+                h = float(future_bar["high"])
+                l = float(future_bar["low"])
+            except Exception:
+                continue
+
             if direction == 1:  # BUY
-                if l <= sl:
+                if bool(l <= sl):
                     outcome = "loss"
                     exit_price = sl
                     break
-                if h >= tp:
+                if bool(h >= tp):
                     outcome = "win"
                     exit_price = tp
                     break
             else:  # SELL
-                if h >= sl:
+                if bool(h >= sl):
                     outcome = "loss"
                     exit_price = sl
                     break
-                if l <= tp:
+                if bool(l <= tp):
                     outcome = "win"
                     exit_price = tp
                     break

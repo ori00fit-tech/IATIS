@@ -946,3 +946,81 @@ async def ai_optimize_weights(
     except Exception as exc:
         logger.error(f"AI weight optimization failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/research")
+async def research_center(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Center — hypothesis status + engine performance + calibration."""
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+    from pathlib import Path
+
+    # Hypotheses
+    registry_path = Path("research/results/registry.json")
+    hypotheses = {}
+    if registry_path.exists():
+        try:
+            data = _json.loads(registry_path.read_text())
+            hypotheses = data.get("hypotheses", {})
+        except Exception:
+            pass
+
+    # Engine stats
+    try:
+        from storage.engine_tracker import engine_stats
+        stats = engine_stats(min_votes=1)
+    except Exception:
+        stats = []
+
+    # Outcome summary
+    try:
+        from storage.outcome_tracker import performance_summary
+        outcomes = performance_summary()
+    except Exception:
+        outcomes = {"total_closed": 0, "win_rate": 0}
+
+    # Backtest results
+    backtest_files = sorted(
+        Path("storage").glob("full_pipeline_backtest_*.json"),
+        reverse=True
+    )
+    latest_backtest = None
+    if backtest_files:
+        try:
+            bt = _json.loads(backtest_files[0].read_text())
+            latest_backtest = {
+                "file": backtest_files[0].name,
+                "generated_at": bt.get("generated_at", ""),
+                "summary": bt.get("summary", {}),
+                "top_symbols": sorted(
+                    [r for r in bt.get("results", []) if not r.get("error") and r.get("trades", 0) >= 10],
+                    key=lambda x: x.get("profit_factor", 0), reverse=True
+                )[:5],
+            }
+        except Exception:
+            pass
+
+    return {
+        "hypotheses": {
+            k: {
+                "status": v.get("status"),
+                "title": v.get("title", k),
+                "description": v.get("description", "")[:120],
+                "last_updated": v.get("last_updated", ""),
+            }
+            for k, v in hypotheses.items()
+        },
+        "hypothesis_summary": {
+            "total": len(hypotheses),
+            "passed": sum(1 for v in hypotheses.values() if v.get("status") == "PASSED"),
+            "failed": sum(1 for v in hypotheses.values() if v.get("status") in ("FAILED", "ABANDONED")),
+            "research": sum(1 for v in hypotheses.values() if v.get("status") == "RESEARCH"),
+            "needs_data": sum(1 for v in hypotheses.values() if v.get("status") == "NEEDS_MORE_DATA"),
+        },
+        "engine_performance": stats,
+        "outcome_summary": outcomes,
+        "latest_backtest": latest_backtest,
+    }

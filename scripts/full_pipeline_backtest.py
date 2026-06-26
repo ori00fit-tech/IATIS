@@ -215,16 +215,39 @@ def backtest_symbol_full_pipeline(
         
         atr = float((df_h1["high"] - df_h1["low"]).tail(14).mean())
         direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
-        # ATR×2.5 SL — ATR×1.5 too tight for H1 (causes random-walk WR=25%)
-        sl_mult = cfg.get("risk", {}).get("sl_atr_multiplier", 2.5)
-        sl = entry - direction * atr * sl_mult
-        tp = entry + direction * atr * sl_mult * cfg["risk"]["min_risk_reward"]
-        
-        # Position sizing
+
+        # Swing-based SL — same as backtest_engine.py (gives WR=56-68%)
+        # BUY: SL below nearest swing low | SELL: SL above nearest swing high
+        try:
+            from engines.smc_engine import find_swing_points
+            swings = find_swing_points(df_h1, window=3)
+            sl = None
+            if direction == 1:  # BUY → SL below last swing low
+                swing_lows = df_h1["low"][swings["swing_low"]].tail(10)
+                if len(swing_lows) >= 1:
+                    # SL = recent swing low minus small buffer
+                    sl = float(swing_lows.iloc[-1]) - atr * 0.3
+            else:  # SELL → SL above last swing high
+                swing_highs = df_h1["high"][swings["swing_high"]].tail(10)
+                if len(swing_highs) >= 1:
+                    sl = float(swing_highs.iloc[-1]) + atr * 0.3
+
+            # Fallback to ATR if no swing found
+            if sl is None or abs(entry - sl) < atr * 0.5:
+                sl_mult = cfg.get("risk", {}).get("sl_atr_multiplier", 2.5)
+                sl = entry - direction * atr * sl_mult
+
+        except Exception:
+            sl_mult = cfg.get("risk", {}).get("sl_atr_multiplier", 2.5)
+            sl = entry - direction * atr * sl_mult
+
         sl_dist = abs(entry - sl)
-        if sl_dist <= 0:
+        if sl_dist <= 0 or sl_dist > atr * 8:  # reject unrealistic SL
             continue
-        
+
+        tp = entry + direction * sl_dist * cfg["risk"]["min_risk_reward"]
+
+        # Position sizing
         risk_usd = balance * 0.01
         
         if ac == "forex":

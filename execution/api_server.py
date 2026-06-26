@@ -582,68 +582,90 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
 
 
 @app.get("/research")
-async def research_dashboard(
+async def research_center(
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    """Research hypotheses status with sample sizes and win rates."""
+    """Research Center — hypothesis status, engine performance, backtest results."""
     _check_auth(x_api_key, iatis_session)
-    import json
+    import json as _json
     from pathlib import Path
 
     registry_path = Path("research/results/registry.json")
-    results_dir = Path("research/results")
-
-    try:
-        registry = json.loads(registry_path.read_text())
-    except Exception:
-        raise HTTPException(status_code=500, detail="Could not read research registry.")
+    hypotheses_raw = {}
+    if registry_path.exists():
+        try:
+            hypotheses_raw = _json.loads(registry_path.read_text()).get("hypotheses", {})
+        except Exception:
+            pass
 
     hypotheses = []
-    for h_id, h_data in registry.get("hypotheses", {}).items():
+    for h_id, h_data in hypotheses_raw.items():
         entry = {
             "id": h_id,
             "title": h_data.get("title", ""),
             "status": h_data.get("status", "UNKNOWN"),
-            "notes": h_data.get("notes", ""),
+            "description": h_data.get("description", "")[:120],
             "last_updated": h_data.get("last_updated", ""),
         }
-
-        # Load result file if available
+        # Load result file if exists
         result_file = h_data.get("result_file")
         if result_file:
-            result_path = Path("research") / result_file
-            if result_path.exists():
+            rp = Path("research") / result_file
+            if rp.exists():
                 try:
-                    result = json.loads(result_path.read_text())
-                    entry["sample_size"] = (
-                        result.get("n_fvg_entries") or
-                        result.get("qualified_n") or
-                        result.get("sample_size_qualified") or
-                        result.get("total_n")
-                    )
-                    entry["win_rate"] = (
-                        result.get("win_rate") or
-                        result.get("qualified_win_rate") or
-                        result.get("combined_win_rate")
-                    )
-                    entry["p_value"] = result.get("p_value")
-                    entry["improvement"] = (
-                        result.get("improvement") or
-                        result.get("win_rate_improvement")
-                    )
+                    r = _json.loads(rp.read_text())
+                    entry["sample_size"] = (r.get("n_fvg_entries") or
+                        r.get("qualified_n") or r.get("total_n"))
+                    entry["win_rate"] = (r.get("win_rate") or
+                        r.get("qualified_win_rate"))
+                    entry["p_value"] = r.get("p_value")
                 except Exception:
                     pass
-
         hypotheses.append(entry)
 
+    try:
+        from storage.engine_tracker import engine_stats
+        stats = engine_stats(min_votes=1)
+    except Exception:
+        stats = []
+
+    try:
+        from storage.outcome_tracker import performance_summary
+        outcomes = performance_summary()
+    except Exception:
+        outcomes = {"total_closed": 0, "win_rate": 0}
+
+    backtest_files = sorted(Path("storage").glob("full_pipeline_backtest_*.json"), reverse=True)
+    latest_backtest = None
+    if backtest_files:
+        try:
+            bt = _json.loads(backtest_files[0].read_text())
+            valid = [r for r in bt.get("results", [])
+                     if not r.get("error") and r.get("trades", 0) >= 10]
+            latest_backtest = {
+                "file": backtest_files[0].name,
+                "generated_at": bt.get("generated_at", ""),
+                "summary": bt.get("summary", {}),
+                "avg_wr": round(sum(r.get("win_rate",0) for r in valid)/len(valid), 1) if valid else 0,
+                "avg_pf": round(sum(r.get("profit_factor",0) for r in valid)/len(valid), 2) if valid else 0,
+                "top_symbols": sorted(valid, key=lambda x: x.get("profit_factor",0), reverse=True)[:5],
+            }
+        except Exception:
+            pass
+
     return {
-        "total_hypotheses": len(hypotheses),
-        "passed": sum(1 for h in hypotheses if h["status"] == "PASSED"),
-        "failed": sum(1 for h in hypotheses if "FAILED" in h["status"]),
-        "research": sum(1 for h in hypotheses if h["status"] == "RESEARCH"),
-        "pending": sum(1 for h in hypotheses if h["status"] == "PENDING"),
+        "hypothesis_summary": {
+            "total": len(hypotheses),
+            "passed": sum(1 for h in hypotheses if h["status"] == "PASSED"),
+            "failed": sum(1 for h in hypotheses if "FAILED" in h["status"]),
+            "research": sum(1 for h in hypotheses if h["status"] == "RESEARCH"),
+            "needs_data": sum(1 for h in hypotheses if h["status"] == "NEEDS_MORE_DATA"),
+        },
         "hypotheses": hypotheses,
+        "engine_performance": stats,
+        "outcome_summary": outcomes,
+        "latest_backtest": latest_backtest,
     }
 
 
@@ -947,80 +969,3 @@ async def ai_optimize_weights(
         logger.error(f"AI weight optimization failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
-
-@app.get("/research")
-async def research_center(
-    x_api_key: str | None = Header(default=None),
-    iatis_session: str | None = Cookie(default=None),
-) -> dict[str, Any]:
-    """Research Center — hypothesis status + engine performance + calibration."""
-    _check_auth(x_api_key, iatis_session)
-    import json as _json
-    from pathlib import Path
-
-    # Hypotheses
-    registry_path = Path("research/results/registry.json")
-    hypotheses = {}
-    if registry_path.exists():
-        try:
-            data = _json.loads(registry_path.read_text())
-            hypotheses = data.get("hypotheses", {})
-        except Exception:
-            pass
-
-    # Engine stats
-    try:
-        from storage.engine_tracker import engine_stats
-        stats = engine_stats(min_votes=1)
-    except Exception:
-        stats = []
-
-    # Outcome summary
-    try:
-        from storage.outcome_tracker import performance_summary
-        outcomes = performance_summary()
-    except Exception:
-        outcomes = {"total_closed": 0, "win_rate": 0}
-
-    # Backtest results
-    backtest_files = sorted(
-        Path("storage").glob("full_pipeline_backtest_*.json"),
-        reverse=True
-    )
-    latest_backtest = None
-    if backtest_files:
-        try:
-            bt = _json.loads(backtest_files[0].read_text())
-            latest_backtest = {
-                "file": backtest_files[0].name,
-                "generated_at": bt.get("generated_at", ""),
-                "summary": bt.get("summary", {}),
-                "top_symbols": sorted(
-                    [r for r in bt.get("results", []) if not r.get("error") and r.get("trades", 0) >= 10],
-                    key=lambda x: x.get("profit_factor", 0), reverse=True
-                )[:5],
-            }
-        except Exception:
-            pass
-
-    return {
-        "hypotheses": {
-            k: {
-                "status": v.get("status"),
-                "title": v.get("title", k),
-                "description": v.get("description", "")[:120],
-                "last_updated": v.get("last_updated", ""),
-            }
-            for k, v in hypotheses.items()
-        },
-        "hypothesis_summary": {
-            "total": len(hypotheses),
-            "passed": sum(1 for v in hypotheses.values() if v.get("status") == "PASSED"),
-            "failed": sum(1 for v in hypotheses.values() if v.get("status") in ("FAILED", "ABANDONED")),
-            "research": sum(1 for v in hypotheses.values() if v.get("status") == "RESEARCH"),
-            "needs_data": sum(1 for v in hypotheses.values() if v.get("status") == "NEEDS_MORE_DATA"),
-        },
-        "engine_performance": stats,
-        "outcome_summary": outcomes,
-        "latest_backtest": latest_backtest,
-    }

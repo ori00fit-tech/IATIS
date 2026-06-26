@@ -461,7 +461,7 @@ def main():
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     out_path = Path("storage") / f"full_pipeline_backtest_{date_str}.json"
-    out_path.write_text(json.dumps(output, indent=2, default=str))
+    out_path.write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
     print(f"\nSaved: {out_path}")
     print(f"\n⚠️  Caveats: in-sample, no slippage, no real news filter, commission=0")
 

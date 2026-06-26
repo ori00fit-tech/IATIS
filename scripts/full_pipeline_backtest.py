@@ -173,6 +173,7 @@ def run_pipeline_at_bar(symbol: str, df_slice, cfg: dict) -> dict | None:
 
         return {
             "blocked": None,
+            "symbol": symbol,
             "direction": direction,
             "entry": entry,
             "sl": sl,
@@ -230,23 +231,34 @@ def simulate_trade(signal: dict, df: "import pandas; pandas.DataFrame",
 
 def calc_pnl(signal: dict, sim: dict, balance: float,
              ac: str, pip: float, dpp: float) -> float:
-    """Calculate P&L in USD."""
+    """Calculate P&L in USD with correct pip values per asset class."""
     entry = signal["entry"]
     exit_p = sim["exit"]
     direction = signal["direction"]
     sl_dist = signal["sl_dist"]
+    symbol = signal.get("symbol", "")
 
     risk_usd = balance * 0.01
-    price_diff = abs(exit_p - entry)
 
     if ac == "forex":
-        pip_val = pip * 100_000  # per lot
-        sl_pips = sl_dist / pip
-        size = max(0.01, min(risk_usd / (sl_pips * pip_val), 10.0)) if sl_pips > 0 else 0.01
-        pnl = ((exit_p - entry) * direction) / pip * pip_val * size
+        # JPY pairs: pip value depends on current price
+        # USDJPY at 150: 1 pip = $0.01/150 × 100,000 = $6.67 per lot
+        # EUR pairs: 1 pip = $0.0001 × 100,000 = $10.00 per lot
+        if "JPY" in symbol:
+            pip_val_per_lot = (pip / max(entry, 1)) * 100_000
+        else:
+            pip_val_per_lot = pip * 100_000  # = $10 for standard lot
+
+        sl_pips = sl_dist / pip if pip > 0 else 1
+        if sl_pips <= 0:
+            return 0.0
+        size = max(0.01, min(risk_usd / (sl_pips * pip_val_per_lot), 10.0))
+        pnl = ((exit_p - entry) * direction) / pip * pip_val_per_lot * size
+
     elif ac == "crypto":
         size = max(0.001, min(risk_usd / sl_dist, 1.0)) if sl_dist > 0 else 0.001
         pnl = (exit_p - entry) * direction * size
+
     else:  # metal, index, energy
         size = max(0.01, min(risk_usd / (sl_dist * dpp), 10.0)) if sl_dist > 0 else 0.01
         pnl = (exit_p - entry) * direction * size * dpp

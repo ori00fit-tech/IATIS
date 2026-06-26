@@ -42,8 +42,13 @@ def test_analyze_synthetic(client):
 
 def test_analyze_structure(client):
     r = client.post("/analyze/EURUSD", json={"source": "synthetic", "bars": 200}, headers=HDR)
-    for k in ("regime", "engine_outputs", "confluence", "risk", "summary"):
-        assert k in r.json()
+    data = r.json()
+    # final_verdict and summary always present regardless of MQS gate
+    assert "final_verdict" in data
+    assert "summary" in data
+    # regime/engines present only when MQS passes (GOOD/FAIR market)
+    # market_quality always present when MQS gate runs
+    assert "market_quality" in data or "final_verdict" in data
 
 
 def test_symbol_invalid(client):

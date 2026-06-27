@@ -201,7 +201,13 @@ def run_pipeline(config: dict) -> dict:
         max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
     )
 
-    min_score = config["confluence"]["min_score_to_trade"]
+    # Per-symbol min_score override
+    symbol_cfg_for_score = next(
+        (s for s in config.get("data", {}).get("twelve_data_symbols", [])
+         if s.get("internal") == config["data"].get("symbol", "")),
+        {}
+    )
+    min_score = symbol_cfg_for_score.get("min_score") or config["confluence"]["min_score_to_trade"]
     min_engines = config["confluence"]["min_engines_agreeing"]
 
     confluence_fail_reasons: list[str] = []
@@ -240,12 +246,11 @@ def run_pipeline(config: dict) -> dict:
         atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
         direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
 
-        # SL at 2.5×ATR: gives room beyond normal H1 noise (ATR×1.5 too tight)
-        # TP at SL×min_risk_reward (default 3.0)
-        # Research shows ATR×2.5 reduces premature SL hits significantly
+        # Per-symbol RR override
+        symbol_rr = symbol_cfg_for_score.get("rr") or config["risk"]["min_risk_reward"]
         sl_multiplier = config.get("risk", {}).get("sl_atr_multiplier", 2.5)
         stop = entry - direction * atr_estimate * sl_multiplier
-        target = entry + direction * atr_estimate * sl_multiplier * config["risk"]["min_risk_reward"]
+        target = entry + direction * atr_estimate * sl_multiplier * symbol_rr
 
         risk_inputs = RiskInputs(
             account_balance=10_000.0,
@@ -282,6 +287,23 @@ def run_pipeline(config: dict) -> dict:
             logger.warning(f"News risk check failed (non-fatal): {exc}")
 
     final_verdict = "EXECUTE" if (confluence_pass and risk_pass and not news_blocked) else "NO_TRADE"
+
+    # Per-symbol overrides: RR, min_score, regime_filter
+    symbol = config["data"].get("symbol", "")
+    symbol_cfg = next(
+        (s for s in config.get("data", {}).get("twelve_data_symbols", [])
+         if s.get("internal") == symbol),
+        {}
+    )
+    # Apply per-symbol regime filter (Tier 2 symbols: TRENDING only)
+    if final_verdict == "EXECUTE" and symbol_cfg.get("regime_filter"):
+        required_regime = symbol_cfg["regime_filter"]
+        if regime_state != required_regime:
+            final_verdict = "NO_TRADE"
+            logger.info(
+                f"Per-symbol regime filter: {symbol} requires {required_regime}, "
+                f"got {regime_state} → NO_TRADE"
+            )
 
     # Meta Decision Layer — confidence + stability + engine contributions
     meta = None

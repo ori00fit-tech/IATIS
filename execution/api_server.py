@@ -311,20 +311,30 @@ async def stats(x_api_key: str | None = Header(default=None), iatis_session: str
 
 @app.post("/login")
 async def do_login(request: Request) -> Response:
-    """Verify key and set HttpOnly cookie — key never visible to JS."""
+    """Verify key and set HttpOnly session cookie.
+
+    Security: generates a random session ID — the raw API key
+    is NEVER stored in the cookie or exposed to the client.
+    """
+    import secrets
     body = await request.json()
     key = body.get("key", "")
     required = os.environ.get("API_SERVER_KEY", "")
     if not required or not hmac.compare_digest(key, required):
         raise HTTPException(status_code=401, detail="Invalid key")
+
+    # Generate random session ID (NOT the raw key)
+    session_id = secrets.token_urlsafe(32)
+    _active_sessions[session_id] = time.time()
+
     response = JSONResponse({"ok": True})
     response.set_cookie(
         key="iatis_session",
-        value=key,
-        httponly=True,       # JS cannot read this
-        secure=True,         # HTTPS only
+        value=session_id,    # session ID, NOT raw key
+        httponly=True,        # JS cannot read this
+        secure=False,         # allow HTTP for VPS without TLS; set True behind nginx+TLS
         samesite="strict",
-        max_age=86400 * 7,   # 7 days
+        max_age=86400 * 7,    # 7 days
     )
     return response
 
@@ -383,13 +393,17 @@ async function login() {
 
 
 @app.get("/logout")
-async def logout() -> HTMLResponse:
-    """Clear stored key."""
-    return HTMLResponse("""<!DOCTYPE html>
+async def logout(iatis_session: str | None = Cookie(default=None)) -> Response:
+    """Clear session cookie and invalidate server-side session."""
+    if iatis_session and iatis_session in _active_sessions:
+        _active_sessions.pop(iatis_session, None)
+    response = HTMLResponse("""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body>
 <script>localStorage.removeItem('iatis_key'); window.location.href='/login';</script>
 </body></html>""")
+    response.delete_cookie("iatis_session")
+    return response
 
 
 @app.get("/dashboard")
@@ -734,7 +748,8 @@ async def get_outcomes(
             "recent": recent_signals(limit=limit),
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Outcomes error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
 @app.post("/outcomes/{signal_id}/close")
@@ -918,7 +933,8 @@ async def symbol_health_endpoint(
             "symbols": health,
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Symbol health error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
 @app.post("/ai/optimize-weights")
@@ -967,5 +983,5 @@ async def ai_optimize_weights(
 
     except Exception as exc:
         logger.error(f"AI weight optimization failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Internal error.")
 

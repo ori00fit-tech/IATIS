@@ -136,6 +136,7 @@ class SentimentEngine(BaseEngine):
     Research status: RESEARCH (H012)
     Lower weight until COT integration complete.
     """
+    name = "Sentiment"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
         df = mtf_data.get("H1", mtf_data.get("D1", next(iter(mtf_data.values()))))

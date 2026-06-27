@@ -144,6 +144,7 @@ class DivergenceEngine(BaseEngine):
     Hypothesis H010: divergence on H1 + trend confirmation
     improves win rate over random entry (to be tested).
     """
+    name = "Divergence"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
         df = mtf_data.get("H1", mtf_data.get("M15", next(iter(mtf_data.values()))))

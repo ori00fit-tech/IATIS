@@ -137,6 +137,7 @@ class MarketStructureEngine(BaseEngine):
 
     Research status: RESEARCH (H011)
     """
+    name = "MarketStructure"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
         df_h1 = mtf_data.get("H1", next(iter(mtf_data.values())))

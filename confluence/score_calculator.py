@@ -136,11 +136,14 @@ def validate_confluence_config(config: dict) -> None:
 
     if min_score > 0:
         weights = config.get("confluence", {}).get("weights", {})
-        _MAX_SCORE = {"SMC": 65.0, "Quant": 60.0, "Wyckoff": 75.0, "Macro": 70.0}
+        _MAX_SCORE = {"SMC": 65.0, "Quant": 60.0, "Wyckoff": 75.0, "Macro": 70.0,
+                      "Divergence": 90.0, "MarketStructure": 85.0, "Sentiment": 75.0}
         _DEFAULT_MAX = 80.0
         _KEY_TO_ENGINE = {
             "smc": "SMC", "price_action": "PriceAction", "ict": "ICT",
             "nnfx": "NNFX", "quant": "Quant", "wyckoff": "Wyckoff", "macro": "Macro",
+            "divergence": "Divergence", "market_structure": "MarketStructure",
+            "sentiment": "Sentiment",
         }
         enabled_keys = [k for k, v in enabled.items() if v]
         pw = sum(weights.get(k, 0) for k in enabled_keys)

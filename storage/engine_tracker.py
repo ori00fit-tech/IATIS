@@ -208,6 +208,8 @@ def suggested_weights(
     _ENGINE_TO_KEY = {
         "SMC": "smc", "PriceAction": "price_action", "ICT": "ict",
         "NNFX": "nnfx", "Quant": "quant", "Wyckoff": "wyckoff", "Macro": "macro",
+        "Divergence": "divergence", "MarketStructure": "market_structure",
+        "Sentiment": "sentiment",
     }
 
     # Compute score for each engine: agreement_rate × (1 - neutral_pct/100)

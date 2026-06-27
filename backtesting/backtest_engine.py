@@ -295,7 +295,7 @@ def run_backtest(
                     diff = open_trade.entry_price - open_trade.stop_loss
                     open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
                     open_trade.exit_price = open_trade.stop_loss
-                    open_trade.pnl_pips = -(diff / config.pip_size) - config.commission_pips
+                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
                     open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
                     open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd

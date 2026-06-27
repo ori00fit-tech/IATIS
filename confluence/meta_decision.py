@@ -86,10 +86,17 @@ def _engine_contribution(
     Positive contribution: engine agrees and pushes score up
     Negative contribution: engine disagrees or is neutral
     """
+    _NAME_TO_KEY = {
+        "SMC": "smc", "ICT": "ict", "NNFX": "nnfx",
+        "PriceAction": "price_action", "Quant": "quant",
+        "Wyckoff": "wyckoff", "Macro": "macro",
+        "Divergence": "divergence", "MarketStructure": "market_structure",
+        "Sentiment": "sentiment",
+    }
     contributions = {}
 
     for output in outputs:
-        name = output.engine_name.lower().replace(" ", "_")
+        name = _NAME_TO_KEY.get(output.engine_name, output.engine_name.lower())
         w = weights.get(name, 0.0)
 
         if output.bias == winning_bias:

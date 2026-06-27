@@ -95,15 +95,9 @@ def run_pipeline(config: dict) -> dict:
     timeframes = config["data"]["timeframes"]
 
     if source == "twelve_data":
-        # Fetch each timeframe natively from Twelve Data so each level
-        # has its full depth (500 bars) rather than being resampled from
-        # the lowest timeframe and ending up with only outputsize/N bars.
-        # Cost: 1 API credit per timeframe per run (cached within TTL).
-        import os
-        api_key = (
-            config["data"].get("twelve_data_api_key")
-            or os.environ.get("TWELVE_DATA_API_KEY", "")
-        )
+        # Data loading is handled by load_multi_timeframe_with_failover()
+        # which reads TWELVE_DATA_API_KEY from env internally.
+        pass
     # Symbols that require Yahoo Finance (404 on Twelve Data Free)
     # Failover handles this automatically, but we need correct YF symbol
     _YF_ONLY = {

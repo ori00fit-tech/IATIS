@@ -36,6 +36,9 @@ _REGIME_MULTIPLIERS: dict[str, dict[str, float]] = {
         "nnfx": 1.3,         # EMA200 trend filter strongest here
         "quant": 0.8,        # RSI/momentum less reliable in trends
         "wyckoff": 0.7,      # range patterns rare in trends
+        "divergence": 0.7,   # divergence = counter-trend, less useful in trends
+        "market_structure": 1.3,  # BOS confirms trend continuation
+        "sentiment": 1.0,    # neutral until COT integrated
         "macro": 1.0,
     },
     "RANGING": {
@@ -45,6 +48,9 @@ _REGIME_MULTIPLIERS: dict[str, dict[str, float]] = {
         "nnfx": 0.7,         # EMA200 trend filter less useful
         "quant": 1.2,        # RSI mean-reversion better in ranges
         "wyckoff": 1.4,      # spring/upthrust most relevant in ranges
+        "divergence": 1.3,   # divergence works well for range reversals
+        "market_structure": 0.8,  # structural events less clear in ranges
+        "sentiment": 1.0,
         "macro": 1.0,
     },
     "VOLATILE": {
@@ -54,6 +60,9 @@ _REGIME_MULTIPLIERS: dict[str, dict[str, float]] = {
         "nnfx": 0.8,
         "quant": 1.3,        # statistical signals more robust
         "wyckoff": 1.0,
+        "divergence": 1.1,   # divergence useful in volatile reversals
+        "market_structure": 0.9,
+        "sentiment": 1.0,
         "macro": 1.1,        # macro context more important in volatility
     },
 }

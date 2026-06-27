@@ -350,6 +350,14 @@ def load_data(config: dict) -> pd.DataFrame:
     bars = config.get("data", {}).get("bars_to_load", 500)
     symbol = config.get("data", {}).get("symbol", "EURUSD")
 
+    # Backtest injection — pre-sliced DataFrame passed directly
+    if source == "injected":
+        df = config["data"].get("_injected_df")
+        if df is not None and len(df) > 0:
+            return df.copy()
+        # Fallback to synthetic if injection failed
+        return load_synthetic(bars=bars, timeframe=config["data"]["timeframes"][1])
+
     if source == "synthetic":
         return load_synthetic(bars=bars, timeframe=config["data"]["timeframes"][1])
 

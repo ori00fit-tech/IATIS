@@ -398,15 +398,27 @@ async def login_page() -> HTMLResponse:
 async function login() {
   const key = document.getElementById('key').value.trim();
   if (!key) return;
-  const r = await fetch('/login', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({key})
-  });
-  if (r.ok) {
-    window.location.href = '/dashboard';
-  } else {
+  document.querySelector('button').textContent = 'Connecting...';
+  try {
+    const r = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({key})
+    });
+    if (r.ok) {
+      // Save key as fallback for browsers that block cookies
+      sessionStorage.setItem('iatis_key', key);
+      localStorage.setItem('iatis_key', key);
+      window.location.replace('/dashboard');
+    } else {
+      document.getElementById('err').style.display = 'block';
+      document.querySelector('button').textContent = 'Login';
+    }
+  } catch(e) {
+    document.getElementById('err').textContent = 'Connection error: ' + e.message;
     document.getElementById('err').style.display = 'block';
+    document.querySelector('button').textContent = 'Login';
   }
 }
 </script>
@@ -627,8 +639,15 @@ setInterval(() => {
 }, 1000);
 
 async function api(path) {
-  const r = await fetch(path, {credentials:'include'});
-  if (r.status === 401) { window.location.href='/login'; throw new Error('auth'); }
+  // Try cookie auth first, fallback to stored key
+  const storedKey = sessionStorage.getItem('iatis_key') || localStorage.getItem('iatis_key');
+  const headers = storedKey ? {'X-API-Key': storedKey} : {};
+  const r = await fetch(path, {credentials:'include', headers});
+  if (r.status === 401) {
+    // Cookie expired and no stored key — go to login
+    window.location.href='/login';
+    throw new Error('auth');
+  }
   if (!r.ok) throw new Error(r.status + ' ' + path);
   return r.json();
 }

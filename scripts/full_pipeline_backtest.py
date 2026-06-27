@@ -82,7 +82,6 @@ def calc_pnl(entry, exit_p, direction, sl_dist, balance, symbol, ac, pip, dpp):
 
 def backtest_symbol(symbol, df, step=6, warmup=220):
     from main import run_pipeline
-    from core.data_loader import DataLoader
 
     pip = PIP_SIZE.get(symbol, 0.0001)
     ac = ASSET_CLASS.get(symbol, "forex")

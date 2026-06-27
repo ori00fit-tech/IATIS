@@ -424,7 +424,10 @@ def run_pipeline(config: dict) -> dict:
     # Set telegram.enabled: false in config.yaml to disable without
     # touching .env.
     if config.get("telegram", {}).get("enabled", True):
-        telegram_send(report)
+        if final_verdict == "EXECUTE":
+            telegram_send(report)
+        else:
+            logger.debug(f"Telegram skipped: {final_verdict} for {config['data']['symbol']}")
 
     return report
 

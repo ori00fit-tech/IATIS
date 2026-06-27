@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from execution.telegram_bot import send_raw, send_signal
+from storage.outcome_tracker import auto_close_outcomes
 from execution.trade_executor import TradeExecutor
 from main import run_pipeline
 from risk.correlation_engine import check_correlation, portfolio_exposure_summary
@@ -191,6 +192,19 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         warning = _credits_warning(config)
         if warning:
             send_raw(warning)
+
+        # Auto-close open outcomes when SL/TP hit
+        try:
+            closed = auto_close_outcomes()
+            if closed:
+                for c in closed:
+                    icon = "✅" if c["outcome"] == "win" else "❌"
+                    send_raw(
+                        f"{icon} <b>Auto-closed:</b> {c['symbol']} "
+                        f"→ {c['outcome'].upper()} at {c['exit_price']}"
+                    )
+        except Exception as exc:
+            logger.warning(f"Auto-close check failed (non-fatal): {exc}")
 
         # Log run summary
         execute_count = sum(1 for r in reports if r.get("final_verdict") == "EXECUTE")

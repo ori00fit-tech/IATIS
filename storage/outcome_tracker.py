@@ -288,3 +288,152 @@ def recent_signals(limit: int = 10, path: Path = DB_PATH) -> list[dict]:
             "SELECT * FROM outcomes ORDER BY entry_time DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── Auto-Close ────────────────────────────────────────────────────────────
+
+def auto_close_outcomes(
+    current_prices: dict[str, dict] | None = None,
+    path: Path = DB_PATH,
+) -> list[dict]:
+    """Automatically close open signals when SL or TP is hit.
+
+    Called after each scheduler cycle. Checks every open signal
+    against the latest price data (high/low since entry).
+
+    Args:
+        current_prices: dict of {symbol: {"high": float, "low": float, "close": float}}
+                        If None, fetches from yfinance/cache.
+
+    Returns:
+        List of signals that were closed this run.
+    """
+    _init_db(path)
+    open_sigs = get_open_signals(path)
+
+    if not open_sigs:
+        return []
+
+    closed = []
+
+    for sig in open_sigs:
+        symbol = sig.get("symbol", "")
+        entry = sig.get("entry_price")
+        sl = sig.get("stop_loss")
+        tp = sig.get("take_profit")
+        direction = sig.get("direction", "BUY")
+        signal_id = sig.get("signal_id", "")
+
+        if not all([entry, sl, tp]):
+            continue
+
+        # Get price data for this symbol
+        prices = None
+        if current_prices and symbol in current_prices:
+            prices = current_prices[symbol]
+        else:
+            prices = _fetch_price_for_symbol(symbol)
+
+        if not prices:
+            continue
+
+        high = float(prices.get("high", 0))
+        low = float(prices.get("low", 0))
+        close = float(prices.get("close", 0))
+
+        if high == 0 or low == 0:
+            continue
+
+        # Check SL/TP hit
+        hit = None
+        exit_price = None
+
+        if direction == "BUY":
+            if low <= sl:
+                hit = "loss"
+                exit_price = sl
+            elif high >= tp:
+                hit = "win"
+                exit_price = tp
+        else:  # SELL
+            if high >= sl:
+                hit = "loss"
+                exit_price = sl
+            elif low <= tp:
+                hit = "win"
+                exit_price = tp
+
+        if hit and exit_price:
+            ok = close_signal(
+                signal_id=signal_id,
+                exit_price=exit_price,
+                outcome=hit,
+                notes=f"Auto-closed: {hit.upper()} — {'SL' if hit == 'loss' else 'TP'} hit",
+                path=path,
+            )
+            if ok:
+                closed.append({
+                    "signal_id": signal_id,
+                    "symbol": symbol,
+                    "outcome": hit,
+                    "exit_price": exit_price,
+                })
+                logger.info(
+                    f"Auto-closed {signal_id}: {hit.upper()} at {exit_price}"
+                )
+
+    if closed:
+        logger.info(f"Auto-close: {len(closed)} signal(s) closed")
+
+    return closed
+
+
+def _fetch_price_for_symbol(symbol: str) -> dict | None:
+    """Fetch latest price data for a symbol from cache or yfinance."""
+    # Try cached Twelve Data first (storage/td_cache/)
+    cache_dir = Path(__file__).resolve().parent / "td_cache"
+    if cache_dir.exists():
+        import re
+        safe = re.sub(r'[^A-Za-z0-9_]', '_', symbol)
+        candidates = sorted(cache_dir.glob(f"{safe}_H1_*.json"), reverse=True)
+        if candidates:
+            try:
+                import json as _json
+                data = _json.loads(candidates[0].read_text())
+                bars = data.get("values", data.get("data", []))
+                if bars and isinstance(bars, list):
+                    # Get recent bars high/low/close
+                    recent = bars[:24]  # last 24 H1 bars
+                    high = max(float(b.get("high", 0)) for b in recent)
+                    low = min(float(b.get("low", 0)) for b in recent)
+                    close = float(recent[0].get("close", 0))
+                    if high > 0:
+                        return {"high": high, "low": low, "close": close}
+            except Exception:
+                pass
+
+    # Fallback: yfinance
+    try:
+        import yfinance as yf
+        _YF_MAP = {
+            "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
+            "AUDUSD": "AUDUSD=X", "USDCAD": "USDCAD=X", "NZDUSD": "NZDUSD=X",
+            "USDCHF": "USDCHF=X", "EURJPY": "EURJPY=X", "EURGBP": "EURGBP=X",
+            "EURCHF": "EURCHF=X", "AUDJPY": "AUDJPY=X",
+            "XAUUSD": "GC=F", "XAGUSD": "SI=F", "USOIL": "CL=F",
+            "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD",
+            "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+        }
+        yf_sym = _YF_MAP.get(symbol, f"{symbol}=X")
+        ticker = yf.Ticker(yf_sym)
+        hist = ticker.history(period="1d")
+        if not hist.empty:
+            return {
+                "high": float(hist["High"].max()),
+                "low": float(hist["Low"].min()),
+                "close": float(hist["Close"].iloc[-1]),
+            }
+    except Exception as exc:
+        logger.debug(f"yfinance price fetch failed for {symbol}: {exc}")
+
+    return None

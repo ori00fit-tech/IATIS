@@ -407,9 +407,7 @@ async function login() {
       body: JSON.stringify({key})
     });
     if (r.ok) {
-      // Save key as fallback for browsers that block cookies
-      sessionStorage.setItem('iatis_key', key);
-      localStorage.setItem('iatis_key', key);
+      // Session cookie set by server — no localStorage needed
       window.location.replace('/dashboard');
     } else {
       document.getElementById('err').style.display = 'block';
@@ -434,15 +432,29 @@ async def logout(iatis_session: str | None = Cookie(default=None)) -> Response:
     response = HTMLResponse("""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body>
-<script>localStorage.removeItem('iatis_key'); window.location.href='/login';</script>
+<script>window.location.href='/login';</script>
 </body></html>""")
     response.delete_cookie("iatis_session")
     return response
 
 
 @app.get("/dashboard")
-async def dashboard():
-    """IATIS Dashboard — Market Intelligence Platform."""
+async def dashboard(iatis_session: str | None = Cookie(default=None)):
+    """IATIS Dashboard — requires valid session cookie.
+
+    If no valid session exists, redirects to /login server-side
+    (no localStorage dependency — works on Android/mobile).
+    """
+    from starlette.responses import RedirectResponse
+
+    # Server-side session check — no JS needed
+    if not iatis_session or iatis_session not in _active_sessions:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # Refresh session TTL on dashboard access
+    _active_sessions[iatis_session] = time.time()
+    _save_sessions(_active_sessions)
+
     return HTMLResponse("""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -639,10 +651,8 @@ setInterval(() => {
 }, 1000);
 
 async function api(path) {
-  // Try cookie auth first, fallback to stored key
-  const storedKey = sessionStorage.getItem('iatis_key') || localStorage.getItem('iatis_key');
-  const headers = storedKey ? {'X-API-Key': storedKey} : {};
-  const r = await fetch(path, {credentials:'include', headers});
+  // Auth via HttpOnly session cookie (server-side redirect handles expired sessions)
+  const r = await fetch(path, {credentials:'include'});
   if (r.status === 401) {
     // Cookie expired and no stored key — go to login
     window.location.href='/login';

@@ -123,9 +123,10 @@ def test_voting_system_picks_majority():
 
 
 def test_contradiction_engine_blocks_on_disagreement():
+    # Use actual TREND engine names — contradiction only fires for trend engines
     outputs = [
-        EngineOutput("A", Bias.BULLISH, 70),
-        EngineOutput("B", Bias.BEARISH, 65),
+        EngineOutput("SMC", Bias.BULLISH, 70),
+        EngineOutput("NNFX", Bias.BEARISH, 65),
     ]
     result = check_contradictions(outputs)
     assert result.blocked is True
@@ -133,8 +134,19 @@ def test_contradiction_engine_blocks_on_disagreement():
 
 def test_contradiction_engine_passes_on_agreement():
     outputs = [
-        EngineOutput("A", Bias.BULLISH, 70),
-        EngineOutput("B", Bias.BULLISH, 60),
+        EngineOutput("SMC", Bias.BULLISH, 70),
+        EngineOutput("NNFX", Bias.BULLISH, 60),
+    ]
+    result = check_contradictions(outputs)
+    assert result.blocked is False
+
+
+def test_contradiction_reversal_does_not_block():
+    # Divergence BULLISH vs NNFX BEARISH = normal, should NOT block
+    outputs = [
+        EngineOutput("NNFX", Bias.BEARISH, 65),
+        EngineOutput("PriceAction", Bias.BEARISH, 70),
+        EngineOutput("Divergence", Bias.BULLISH, 45),  # reversal engine — OK
     ]
     result = check_contradictions(outputs)
     assert result.blocked is False

@@ -80,13 +80,16 @@ def calc_pnl(entry, exit_p, direction, sl_dist, balance, symbol, ac, pip, dpp):
     return round(pnl, 2)
 
 
-def backtest_symbol(symbol, df, step=6, warmup=220):
+def backtest_symbol(symbol, df, step=8, warmup=220):
     from main import run_pipeline
 
     pip = PIP_SIZE.get(symbol, 0.0001)
     ac = ASSET_CLASS.get(symbol, "forex")
     dpp = DOLLAR_PER_POINT.get(symbol, 1.0)
+
+    # Build config ONCE — update only _injected_df each iteration
     cfg = build_config(symbol)
+    cfg["data"]["source"] = "injected"
 
     balance = 10_000.0
     peak = balance
@@ -102,26 +105,25 @@ def backtest_symbol(symbol, df, step=6, warmup=220):
         if i <= open_until:
             continue
 
-        # Inject historical data slice into config
-        cfg["data"]["source"] = "injected"
-        cfg["data"]["_injected_df"] = df.iloc[:i+1].copy()
-        cfg["data"]["symbol"] = symbol
+        # Use iloc view (no copy) to save memory
+        cfg["data"]["_injected_df"] = df.iloc[:i+1]
 
         try:
             report = run_pipeline(cfg)
         except Exception:
             continue
+        finally:
+            # Free reference after each call
+            cfg["data"]["_injected_df"] = None
 
         verdict = report.get("final_verdict", "NO_TRADE")
 
-        # Track blocks
-        summary = report.get("summary", "")
-        reason = report.get("reason", summary)
-        if "Market Quality" in str(reason) or "MQS" in str(reason):
+        reason = str(report.get("reason", report.get("summary", "")))
+        if "Market Quality" in reason or "MQS" in reason:
             blocks["mqs"] += 1
-        elif "news" in str(reason).lower() or "blackout" in str(reason).lower():
+        elif "news" in reason.lower() or "blackout" in reason.lower():
             blocks["news"] += 1
-        elif "contradiction" in str(reason).lower():
+        elif "contradiction" in reason.lower():
             blocks["contradiction"] += 1
         elif verdict == "NO_TRADE":
             blocks["score"] += 1
@@ -129,7 +131,6 @@ def backtest_symbol(symbol, df, step=6, warmup=220):
         if verdict != "EXECUTE":
             continue
 
-        # Extract SL/TP from report
         entry = report.get("entry_price")
         sl = report.get("stop_loss")
         tp = report.get("take_profit")
@@ -144,7 +145,6 @@ def backtest_symbol(symbol, df, step=6, warmup=220):
         if sl_dist <= 0 or sl_dist > abs(tp - entry):
             continue
 
-        # Simulate trade
         sim = simulate_trade(entry, sl, tp, direction, df, i+1)
         pnl = calc_pnl(entry, sim["exit"], direction, sl_dist,
                        balance, symbol, ac, pip, dpp)

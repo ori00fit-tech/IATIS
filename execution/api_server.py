@@ -110,10 +110,30 @@ _config_cache: dict | None = None
 _config_lock = threading.Lock()
 
 # Session store: {session_id: created_timestamp}
-# Sessions expire after 7 days. Stored in memory — resets on restart.
-# For multi-user or persistent sessions: use SQLite (Phase 6+)
-_active_sessions: dict[str, float] = {}
-_SESSION_TTL = 86400 * 7  # 7 days
+# Sessions persist to disk — survive server restarts
+_SESSION_TTL = 86400 * 30  # 30 days
+_SESSION_FILE = Path("storage/sessions.json")
+
+def _load_sessions() -> dict:
+    try:
+        if _SESSION_FILE.exists():
+            import json as _sj
+            data = _sj.loads(_SESSION_FILE.read_text())
+            cutoff = time.time() - _SESSION_TTL
+            return {k: v for k, v in data.items() if v > cutoff}
+    except Exception:
+        pass
+    return {}
+
+def _save_sessions(sessions: dict) -> None:
+    try:
+        import json as _sj
+        _SESSION_FILE.parent.mkdir(exist_ok=True)
+        _SESSION_FILE.write_text(_sj.dumps(sessions))
+    except Exception:
+        pass
+
+_active_sessions: dict[str, float] = _load_sessions()
 
 # Telegram error cooldown (issue #11 — flood protection)
 _error_cooldown: dict[str, float] = {}
@@ -326,15 +346,16 @@ async def do_login(request: Request) -> Response:
     # Generate random session ID (NOT the raw key)
     session_id = secrets.token_urlsafe(32)
     _active_sessions[session_id] = time.time()
+    _save_sessions(_active_sessions)  # persist to disk
 
     response = JSONResponse({"ok": True})
     response.set_cookie(
         key="iatis_session",
-        value=session_id,    # session ID, NOT raw key
-        httponly=True,        # JS cannot read this
-        secure=False,         # allow HTTP for VPS without TLS; set True behind nginx+TLS
+        value=session_id,
+        httponly=True,
+        secure=False,
         samesite="strict",
-        max_age=86400 * 7,    # 7 days
+        max_age=86400 * 30,  # 30 days
     )
     return response
 

@@ -39,14 +39,20 @@ def check_contradictions(
     THRESHOLD = 40
     REVERSAL_THRESHOLD = 40  # raised from 20 — lower was blocking 38% of signals
 
-    # 1. Standard contradiction
-    bullish = [o for o in outputs if o.bias == Bias.BULLISH and o.score >= THRESHOLD]
-    bearish = [o for o in outputs if o.bias == Bias.BEARISH and o.score >= THRESHOLD]
+    # 1. Standard contradiction — TREND engines only
+    # Reversal engines (Divergence, Wyckoff, Sentiment) are DESIGNED to disagree
+    # with trend — that's their purpose. Only block when TREND engines disagree.
+    trend_bullish = [o for o in outputs
+                     if o.engine_name in TREND_ENGINES
+                     and o.bias == Bias.BULLISH and o.score >= THRESHOLD]
+    trend_bearish = [o for o in outputs
+                     if o.engine_name in TREND_ENGINES
+                     and o.bias == Bias.BEARISH and o.score >= THRESHOLD]
 
-    if bullish and bearish:
+    if trend_bullish and trend_bearish:
         reasons.append(
-            f"Active disagreement: {[o.engine_name for o in bullish]} bullish "
-            f"vs {[o.engine_name for o in bearish]} bearish, both score>={THRESHOLD}"
+            f"Trend engine disagreement: {[o.engine_name for o in trend_bullish]} bullish "
+            f"vs {[o.engine_name for o in trend_bearish]} bearish (score>={THRESHOLD})"
         )
 
     # 2. H013: Reversal engine group contradiction

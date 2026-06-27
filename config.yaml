@@ -17,10 +17,11 @@ data:
   source: synthetic
   symbol: EURUSD
   timeframes:
-  - M15
-  - H1
-  - H4
-  - D1
+  - H1   # base: fetched from API (1 request per symbol)
+  - H4   # resampled from H1 (free)
+  - D1   # resampled from H1 (free)
+  # M15 removed: saves 50% of API credits (9×2→9×1 requests per run)
+  # M15 data was resampled from H1 anyway (no real difference)
   twelve_data_symbols:
   - enabled: true
     internal: EURUSD

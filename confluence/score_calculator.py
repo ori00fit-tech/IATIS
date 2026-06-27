@@ -42,7 +42,23 @@ _ENGINE_NAME_TO_CONFIG_KEY = {
     "SMC": "smc", "ICT": "ict", "NNFX": "nnfx",
     "PriceAction": "price_action", "Quant": "quant",
     "Wyckoff": "wyckoff", "Macro": "macro",
+    # H010-H012 engines (added in v0.4)
+    "Divergence": "divergence",
+    "MarketStructure": "market_structure",
+    "Sentiment": "sentiment",
 }
+
+
+def _engine_key(engine_name: str) -> str | None:
+    """Convert engine_name to config weight key.
+    Handles: direct map, CamelCase→snake_case, lowercase fallback.
+    """
+    if engine_name in _ENGINE_NAME_TO_CONFIG_KEY:
+        return _ENGINE_NAME_TO_CONFIG_KEY[engine_name]
+    # Auto: CamelCase → snake_case fallback
+    import re
+    snake = re.sub(r'(?<!^)(?=[A-Z])', '_', engine_name).lower()
+    return snake if snake else None
 
 
 def calculate_score(outputs: list[EngineOutput], weights: dict[str, float]) -> ScoreResult:
@@ -64,7 +80,7 @@ def calculate_score(outputs: list[EngineOutput], weights: dict[str, float]) -> S
         total_w = 0.0
         total_ws = 0.0
         for o in engines_subset:
-            key = _ENGINE_NAME_TO_CONFIG_KEY.get(o.engine_name)
+            key = _engine_key(o.engine_name)
             w = weights.get(key, 0.0) if key else 0.0
             total_w += w
             total_ws += w * o.score
@@ -74,7 +90,7 @@ def calculate_score(outputs: list[EngineOutput], weights: dict[str, float]) -> S
     bear_score, bear_weight = _weighted_score(bear_engines)
 
     for o in outputs:
-        key = _ENGINE_NAME_TO_CONFIG_KEY.get(o.engine_name)
+        key = _engine_key(o.engine_name)
         w = weights.get(key, 0.0) if key else 0.0
         sign = 1 if o.bias == Bias.BULLISH else -1 if o.bias == Bias.BEARISH else 0
         contributions[o.engine_name] = round(w * o.score * sign / 100, 4)

@@ -128,6 +128,7 @@ def _retail_sentiment_proxy(
 
 
 class SentimentEngine(BaseEngine):
+    name = "Sentiment"
     """Market sentiment analysis using COT data and retail positioning proxy.
 
     Primary: COT Large Speculator net position trend (when available)

@@ -138,6 +138,7 @@ def _detect_divergence(
 
 
 class DivergenceEngine(BaseEngine):
+    name = "Divergence"
     """Detects RSI and MACD divergence on H1 timeframe.
 
     Research status: RESEARCH

@@ -130,6 +130,7 @@ def _classify_structure(highs: list, lows: list) -> dict:
 
 
 class MarketStructureEngine(BaseEngine):
+    name = "MarketStructure"
     """Advanced market structure analysis: BOS, CHoCH, MSS.
 
     Uses H4 for macro structure and H1 for current structure.

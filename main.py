@@ -115,17 +115,27 @@ def run_pipeline(config: dict) -> dict:
         or (internal_sym[:3] + "/" + internal_sym[3:] if len(internal_sym) == 6 else internal_sym)
     )
 
-    # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
-    try:
-        mtf_data = load_multi_timeframe_with_failover(
-            td_symbol, timeframes,
-            outputsize=config["data"].get("bars_to_load", 500),
-        )
-        df_base = mtf_data[timeframes[0]]
-    except Exception as exc:
-        logger.warning(f"Failover fetch failed, trying load_data: {exc}")
-        df_base = load_data(config)
-        mtf_data = build_multi_timeframe_view(df_base, timeframes)
+    # Backtest injection: skip all API calls, use pre-sliced DataFrame directly
+    if config["data"].get("source") == "injected":
+        injected_df = config["data"].get("_injected_df")
+        if injected_df is not None and len(injected_df) > 0:
+            df_base = injected_df.copy()
+            mtf_data = build_multi_timeframe_view(df_base, timeframes)
+        else:
+            df_base = load_data(config)
+            mtf_data = build_multi_timeframe_view(df_base, timeframes)
+    else:
+        # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
+        try:
+            mtf_data = load_multi_timeframe_with_failover(
+                td_symbol, timeframes,
+                outputsize=config["data"].get("bars_to_load", 500),
+            )
+            df_base = mtf_data[timeframes[0]]
+        except Exception as exc:
+            logger.warning(f"Failover fetch failed, trying load_data: {exc}")
+            df_base = load_data(config)
+            mtf_data = build_multi_timeframe_view(df_base, timeframes)
 
     # 2b. Validate base timeframe (applies to both paths)
     try:

@@ -354,9 +354,9 @@ async def do_login(request: Request) -> Response:
         key="iatis_session",
         value=session_id,
         httponly=True,
-        secure=False,
-        samesite="strict",
-        max_age=86400 * 30,  # 30 days
+        secure=True,        # Cloudflare serves HTTPS
+        samesite="lax",     # strict blocks cross-origin redirects via Cloudflare
+        max_age=86400 * 30,
     )
     return response
 

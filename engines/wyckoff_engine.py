@@ -61,9 +61,9 @@ def _identify_trading_range(
     recent_low = float(df["low"].tail(10).min())
 
     in_range = (
-        spread < 0.03  # range < 3% of price
-        and abs(recent_high - high) / high < 0.005  # recent highs near range high
-        or abs(recent_low - low) / low < 0.005      # recent lows near range low
+        spread < 0.03
+        and (abs(recent_high - high) / high < 0.005
+             or abs(recent_low - low) / low < 0.005)
     )
     return low, high, bool(in_range)
 
@@ -110,7 +110,8 @@ def _effort_vs_result(df: pd.DataFrame, lookback: int = 10) -> tuple[str, str]:
     avg_spread = float((window["high"] - window["low"]).mean())
     avg_body = float((window["close"] - window["open"]).abs().mean())
 
-    effort = "high" if avg_spread > avg_spread * 1.2 else "low"
+    last_spread = float(df["high"].iloc[-1] - df["low"].iloc[-1])
+    effort = "high" if last_spread > avg_spread * 1.2 else "low"
     result = "strong" if avg_body > avg_spread * 0.5 else "weak"
     return effort, result
 

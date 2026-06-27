@@ -93,11 +93,11 @@ class QuantEngine(BaseEngine):
             bearish_signals += 1
             reasons.append(f"RSI overbought ({rsi_val:.1f}) — bearish momentum exhaustion")
         elif rsi_val < 45:
-            bullish_signals += 0.5
-            reasons.append(f"RSI bearish territory ({rsi_val:.1f}) but not extreme")
-        elif rsi_val > 55:
             bearish_signals += 0.5
-            reasons.append(f"RSI bullish territory ({rsi_val:.1f}) but not extreme")
+            reasons.append(f"RSI leaning bearish ({rsi_val:.1f}) but not extreme")
+        elif rsi_val > 55:
+            bullish_signals += 0.5
+            reasons.append(f"RSI leaning bullish ({rsi_val:.1f}) but not extreme")
         total_signals += 1
 
         # Momentum (ROC)

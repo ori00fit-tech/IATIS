@@ -286,6 +286,8 @@ def suggested_dynamic_weights(
     _ENGINE_TO_KEY = {
         "SMC": "smc", "PriceAction": "price_action", "ICT": "ict",
         "NNFX": "nnfx", "Quant": "quant", "Wyckoff": "wyckoff", "Macro": "macro",
+        "Divergence": "divergence", "MarketStructure": "market_structure",
+        "Sentiment": "sentiment",
     }
 
     # Compute data-driven scores

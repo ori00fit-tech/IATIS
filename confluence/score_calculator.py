@@ -42,6 +42,9 @@ _ENGINE_NAME_TO_CONFIG_KEY = {
     "SMC": "smc", "ICT": "ict", "NNFX": "nnfx",
     "PriceAction": "price_action", "Quant": "quant",
     "Wyckoff": "wyckoff", "Macro": "macro",
+    "Divergence": "divergence",
+    "MarketStructure": "market_structure",
+    "Sentiment": "sentiment",
 }
 
 

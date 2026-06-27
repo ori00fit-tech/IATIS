@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 from confluence.contradiction_engine import check_contradictions
+from confluence.reversal_veto import check_reversal_veto
 from confluence.mtf_confirmation import check_mtf_confirmation
 from confluence.meta_decision import evaluate_meta_decision
 from confluence.regime_weights import apply_regime_weights
@@ -216,6 +217,19 @@ def run_pipeline(config: dict) -> dict:
     if contradiction_result.blocked:
         confluence_fail_reasons.extend(contradiction_result.reasons)
 
+    # H013: Reversal Engine Group Veto
+    # When 2+ reversal engines (Divergence, Wyckoff, Sentiment)
+    # unanimously oppose the trend direction → block or reduce size
+    reversal_veto = check_reversal_veto(outputs, vote_result.winning_bias)
+    if reversal_veto.vetoed:
+        confluence_fail_reasons.append(reversal_veto.reason)
+    elif reversal_veto.soft_veto:
+        # Soft veto: don't block, but reduce adjusted_score proportionally
+        adjusted_score = round(adjusted_score * reversal_veto.confidence_multiplier, 2)
+        logger.info(
+            f"H013 soft veto applied: score {score_result.final_score} → {adjusted_score}"
+        )
+
     confluence_pass = len(confluence_fail_reasons) == 0
 
     # 7. Risk gate (only meaningful if confluence passed — but in Phase 1
@@ -343,6 +357,7 @@ def run_pipeline(config: dict) -> dict:
                 "blocked": contradiction_result.blocked,
                 "reasons": contradiction_result.reasons,
             },
+            "reversal_veto": reversal_veto.to_dict(),
             "passed": confluence_pass,
             "fail_reasons": confluence_fail_reasons,
         },

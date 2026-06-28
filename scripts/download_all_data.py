@@ -212,10 +212,8 @@ def fetch_finnhub(sym_info: dict, tf_info: dict, internal: str) -> "pd.DataFrame
 # ── Main download logic ────────────────────────────────────────────────────
 
 PROVIDERS = [
-    ("TwelveData", fetch_twelve_data),
-    ("Yahoo",      fetch_yahoo),
-    ("AlphaVantage", fetch_alpha_vantage),
-    ("Finnhub",    fetch_finnhub),
+    ("Yahoo",      fetch_yf),
+    ("TwelveData", fetch_td),
 ]
 
 

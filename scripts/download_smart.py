@@ -269,48 +269,30 @@ def download_symbol_tf(sym: str, tf: str, force: bool = False) -> dict:
 
     results = []
 
-    # Strategy 1: Yahoo Finance (best for long history, free)
-    print(f"      → Yahoo Finance...", end=" ", flush=True)
+    # Strategy 1: Yahoo Finance (free, best coverage for 1h/4h)
+    print(f"      → Yahoo...", end=" ", flush=True)
     df_yf = fetch_yf(sym, tf)
     if df_yf is not None and len(df_yf) > 10:
-        print(f"✅ {len(df_yf)} bars")
+        print(f"✅ {len(df_yf)} bars ({str(df_yf.index[0])[:10]} → {str(df_yf.index[-1])[:10]})")
         results.append(df_yf)
         time.sleep(0.5)
     else:
         print("❌")
 
-    # Strategy 2: Twelve Data (highest quality, limited credits)
-    print(f"      → Twelve Data...", end=" ", flush=True)
+    # Strategy 2: Twelve Data (paid but we have credits, fills gaps)
+    print(f"      → TwelveData...", end=" ", flush=True)
     df_td = fetch_td(sym, tf)
     if df_td is not None and len(df_td) > 10:
-        print(f"✅ {len(df_td)} bars")
+        print(f"✅ {len(df_td)} bars ({str(df_td.index[0])[:10]} → {str(df_td.index[-1])[:10]})")
         results.append(df_td)
-        time.sleep(8)  # rate limit
+        time.sleep(8)
     else:
         print("❌")
         time.sleep(1)
 
-    # Strategy 3: Finnhub (good for forex/crypto ranges)
-    if not results or (results and len(results[0]) < 1000):
-        print(f"      → Finnhub...", end=" ", flush=True)
-        df_fh = fetch_finnhub(sym, tf, target_start, now)
-        if df_fh is not None and len(df_fh) > 10:
-            print(f"✅ {len(df_fh)} bars")
-            results.append(df_fh)
-        else:
-            print("❌")
-        time.sleep(1)
-
-    # Strategy 4: Alpha Vantage (fallback)
-    if not results:
-        print(f"      → Alpha Vantage...", end=" ", flush=True)
-        df_av = fetch_av(sym, tf)
-        if df_av is not None and len(df_av) > 10:
-            print(f"✅ {len(df_av)} bars")
-            results.append(df_av)
-        else:
-            print("❌")
-        time.sleep(15)  # AV rate limit
+    # Note: AlphaVantage FX_INTRADAY = premium ($$$)
+    # Note: Finnhub forex candles = not available on free plan
+    # → Only Yahoo + TwelveData are actually free and working
 
     if not results:
         return {"status": "failed", "bars": 0, "days": 0}
@@ -360,7 +342,11 @@ def main():
     print(f"Symbols:    {list(symbols.keys())}")
     print(f"Timeframes: {list(timeframes.keys())}")
     print(f"Target:     {total} files | up to 2 years each")
-    print(f"Providers:  Yahoo → TwelveData → Finnhub → AlphaVantage")
+    print(f"Providers:  Yahoo Finance (free) → Twelve Data (credits)")
+    print(f"Note:       AV FX_INTRADAY=premium, Finnhub forex=not free")
+    print(f"Coverage:")
+    print(f"  5m/15m/30m: Yahoo 60d + TwelveData 5000bars")
+    print(f"  1h/4h:      Yahoo 730d + TwelveData 5000bars → ~2 years ✅")
     print(f"{'='*60}\n")
 
     t_start = time.monotonic()

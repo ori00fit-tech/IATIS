@@ -182,7 +182,8 @@ def close_signal(
             0.001 if symbol in ("XAGUSD",) else
             0.0001
         )
-        price_diff = (exit_price - entry) if direction == "BUY" else (entry - exit_price)
+        is_buy = direction in ("BUY", "BULLISH")
+        price_diff = (exit_price - entry) if is_buy else (entry - exit_price)
         pnl_pips = round(price_diff / pip_size, 1)
 
         # Approximate USD P&L (1 lot basis)
@@ -348,14 +349,17 @@ def auto_close_outcomes(
         hit = None
         exit_price = None
 
-        if direction == "BUY":
+        # Direction is stored as BULLISH/BEARISH from winning_bias
+        is_buy = direction in ("BUY", "BULLISH")
+
+        if is_buy:
             if low <= sl:
                 hit = "loss"
                 exit_price = sl
             elif high >= tp:
                 hit = "win"
                 exit_price = tp
-        else:  # SELL
+        else:  # SELL / BEARISH
             if high >= sl:
                 hit = "loss"
                 exit_price = sl
@@ -399,10 +403,11 @@ def _fetch_price_for_symbol(symbol: str) -> dict | None:
         if candidates:
             try:
                 import json as _json
-                data = _json.loads(candidates[0].read_text())
-                bars = data.get("values", data.get("data", []))
-                if bars and isinstance(bars, list):
-                    # Get recent bars high/low/close
+                raw = _json.loads(candidates[0].read_text())
+                # Cache format: {"cached_at": "...", "data": {"values": [...]}}
+                inner = raw.get("data", raw)  # unwrap cache envelope
+                bars = inner.get("values", [])
+                if bars and isinstance(bars, list) and len(bars) >= 1:
                     recent = bars[:24]  # last 24 H1 bars
                     high = max(float(b.get("high", 0)) for b in recent)
                     low = min(float(b.get("low", 0)) for b in recent)

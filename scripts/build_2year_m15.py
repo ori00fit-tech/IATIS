@@ -85,49 +85,21 @@ def merge_dfs(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 
 # ── Strategy A: Yahoo batches ──────────────────────────────────────────────
-def fetch_yahoo_batches(yf_sym: str, days: int = 730) -> pd.DataFrame | None:
-    """Fetch M15 from Yahoo in 55-day batches (max 60d per request)."""
+def fetch_yahoo_recent(yf_sym: str) -> pd.DataFrame | None:
+    """Fetch M15 from Yahoo — ONLY last 60 days (Yahoo hard limit)."""
     try:
         import yfinance as yf
-        frames = []
-        end = datetime.now(timezone.utc)
-        start_total = end - timedelta(days=days)
-        batch_days = 55  # stay under 60d limit
-        current_end = end
-        batches = 0
-
-        print(f"      Yahoo: {days}d ÷ {batch_days}d = {days//batch_days+1} batches")
-
-        while current_end > start_total:
-            current_start = max(current_end - timedelta(days=batch_days), start_total)
-            try:
-                df = yf.download(
-                    yf_sym,
-                    start=current_start.strftime("%Y-%m-%d"),
-                    end=current_end.strftime("%Y-%m-%d"),
-                    interval="15m",
-                    auto_adjust=True,
-                    progress=False,
-                    multi_level_index=False,
-                )
-                if df is not None and len(df) > 5:
-                    df = normalize_df(df)
-                    frames.append(df)
-                    batches += 1
-                    print(f"        batch {batches}: {len(df)} bars ({current_start.date()} → {current_end.date()})")
-            except Exception as e:
-                print(f"        batch error: {str(e)[:40]}")
-            current_end = current_start - timedelta(minutes=15)
-            time.sleep(0.5)
-
-        if not frames:
+        df = yf.download(
+            yf_sym, period="60d", interval="15m",
+            auto_adjust=True, progress=False, multi_level_index=False,
+        )
+        if df is None or len(df) < 5:
             return None
-        result = merge_dfs(frames)
-        print(f"      Yahoo total: {len(result)} bars")
-        return result
-
+        df = normalize_df(df)
+        print(f"      Yahoo: {len(df)} bars (last 60d)")
+        return df
     except Exception as e:
-        print(f"      Yahoo failed: {e}")
+        print(f"      Yahoo failed: {str(e)[:50]}")
         return None
 
 
@@ -175,7 +147,7 @@ def fetch_binance_full(ccxt_sym: str, days: int = 730) -> pd.DataFrame | None:
 
 # ── Strategy C: TwelveData batches ────────────────────────────────────────
 def fetch_td_batches(td_sym: str, days: int = 730) -> pd.DataFrame | None:
-    """Fetch M15 from TwelveData in batches using start_date."""
+    """Fetch M15 from TwelveData in batches — each batch = 5000 bars = 52 days."""
     try:
         from core.twelve_data_client import TwelveDataClient
         key = os.environ.get("TWELVE_DATA_API_KEY", "")
@@ -185,32 +157,61 @@ def fetch_td_batches(td_sym: str, days: int = 730) -> pd.DataFrame | None:
         client = TwelveDataClient(api_key=key)
         frames = []
         end = datetime.now(timezone.utc)
-        start_total = end - timedelta(days=days)
-        # 5000 M15 bars = ~52 days
-        batch_days = 50
-        current_start = start_total
+        current_end = end
+        target_start = end - timedelta(days=days)
         batch = 0
+        max_batches = (days // 50) + 2  # safety limit
 
-        total_batches = days // batch_days + 1
-        print(f"      TwelveData: {total_batches} batches needed (~{total_batches*1} credits)")
+        print(f"      TwelveData: ~{max_batches} batches needed (~{max_batches} credits)")
 
-        while current_start < end:
+        while current_end > target_start and batch < max_batches:
             batch += 1
+            current_start = current_end - timedelta(days=52)
+            if current_start < target_start:
+                current_start = target_start
+
             try:
-                df = client.time_series(
-                    td_sym, "15min",
-                    outputsize=5000,
-                    start_date=current_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    end_date=min(current_start + timedelta(days=batch_days), end).strftime("%Y-%m-%d %H:%M:%S"),
+                # TwelveData supports start_date/end_date in time_series
+                import requests
+                url = (
+                    f"https://api.twelvedata.com/time_series"
+                    f"?symbol={td_sym}&interval=15min&outputsize=5000"
+                    f"&start_date={current_start.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"&end_date={current_end.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"&timezone=UTC&apikey={key}"
                 )
-                if df is not None and len(df) > 5:
-                    frames.append(df)
-                    print(f"        batch {batch}: {len(df)} bars")
-                else:
-                    print(f"        batch {batch}: empty")
+                r = requests.get(url, timeout=30)
+                data = r.json()
+
+                if data.get("status") == "error":
+                    print(f"        batch {batch}: {data.get('message','error')[:50]}")
+                    break
+
+                values = data.get("values", [])
+                if not values:
+                    break
+
+                rows = []
+                for v in values:
+                    rows.append({
+                        "datetime": v["datetime"],
+                        "open": float(v["open"]),
+                        "high": float(v["high"]),
+                        "low": float(v["low"]),
+                        "close": float(v["close"]),
+                        "volume": float(v.get("volume", 0)),
+                    })
+
+                df = pd.DataFrame(rows)
+                df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+                df = df.set_index("datetime").sort_index()
+                frames.append(df)
+                print(f"        batch {batch}: {len(df)} bars ({str(df.index[0])[:10]} → {str(df.index[-1])[:10]})")
+
             except Exception as e:
-                print(f"        batch {batch} error: {str(e)[:40]}")
-            current_start += timedelta(days=batch_days)
+                print(f"        batch {batch} error: {str(e)[:50]}")
+
+            current_end = current_start - timedelta(minutes=15)
             time.sleep(8)  # rate limit
 
         if not frames:
@@ -246,28 +247,30 @@ def build_symbol(sym: str, info: dict, days: int) -> int:
 
     print(f"\n  [{sym}]")
 
-    # Strategy B: Binance (crypto)
+    # Strategy B: Binance (crypto only — free, unlimited)
     if info.get("ccxt"):
-        print(f"    Strategy B: Binance pagination")
+        print(f"    Strategy B: Binance (free, unlimited)")
         df = fetch_binance_full(info["ccxt"], days)
         if df is not None:
             frames.append(df)
 
-    # Strategy A: Yahoo batches (all)
+    # Strategy A: Yahoo recent 60 days only
     if info.get("yf"):
-        print(f"    Strategy A: Yahoo batches")
-        df = fetch_yahoo_batches(info["yf"], days)
+        print(f"    Strategy A: Yahoo (last 60d only)")
+        df = fetch_yahoo_recent(info["yf"])
         if df is not None:
             frames.append(df)
 
-    # Strategy C: TwelveData (if Yahoo insufficient)
-    current_bars = len(merge_dfs(frames)) if frames else 0
-    target_bars = days * 24 * 4  # M15 bars per day = 96
-    if current_bars < target_bars * 0.5 and info.get("td"):
-        print(f"    Strategy C: TwelveData batches (need more data)")
-        df = fetch_td_batches(info["td"], days)
-        if df is not None:
-            frames.append(df)
+    # Strategy C: TwelveData batches for full history
+    # Use for all symbols — Yahoo only gives 60d for M15
+    if info.get("td"):
+        current_bars = len(merge_dfs(frames)) if frames else 0
+        target_bars = days * 96
+        if current_bars < target_bars * 0.9:
+            print(f"    Strategy C: TwelveData batches (need {target_bars - current_bars:,} more bars)")
+            df = fetch_td_batches(info["td"], days)
+            if df is not None:
+                frames.append(df)
 
     if not frames:
         print(f"  ❌ {sym}: all strategies failed")

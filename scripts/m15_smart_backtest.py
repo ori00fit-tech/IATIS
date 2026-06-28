@@ -39,9 +39,9 @@ ALL_SYMBOLS = {
 }
 
 RR = 3.0
-MIN_AGREE = 3  # min 3 of 4 CORE engines
-WARMUP = 500   # M15 bars warmup (~5 days)
-STEP = 4       # evaluate every 4 M15 bars (= 1 hour)
+MIN_AGREE = 3      # min 3 of 4 CORE engines
+WARMUP = 200       # M15 bars warmup (~2 days) — reduced for limited data
+STEP = 2           # evaluate every 2 M15 bars (= 30 min) — more signals
 
 
 def _find_csv(symbol: str) -> Path | None:

@@ -163,6 +163,36 @@
         },
         "date_implemented": "2026-06-27"
       }
+    },
+    "H014": {
+      "title": "Engine Orthogonality Test",
+      "status": "RESEARCH",
+      "description": "Measure pairwise correlation between engine vote directions. If SMC↔ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
+      "implementation": {
+        "file": "scripts/engine_research.py",
+        "function": "run_h014"
+      },
+      "last_updated": "2026-06-28"
+    },
+    "H015": {
+      "title": "Ablation Study — Minimum Engine Set",
+      "status": "RESEARCH",
+      "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
+      "implementation": {
+        "file": "scripts/engine_research.py",
+        "function": "run_h015"
+      },
+      "last_updated": "2026-06-28"
+    },
+    "H016": {
+      "title": "Engine Pair Synergy Analysis",
+      "status": "RESEARCH",
+      "description": "Evaluate WR when engine pairs AGREE vs DISAGREE. If Wyckoff+Divergence agreement gives 45% WR vs 28% when they disagree, this pair has high synergy lift.",
+      "implementation": {
+        "file": "scripts/engine_research.py",
+        "function": "run_h016"
+      },
+      "last_updated": "2026-06-28"
     }
   },
   "walk_forward_validation": {

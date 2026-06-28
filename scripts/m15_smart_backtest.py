@@ -45,13 +45,21 @@ STEP = 4       # evaluate every 4 M15 bars (= 1 hour)
 
 
 def _find_csv(symbol: str) -> Path | None:
-    """Find CSV: M15 first, fallback to H1."""
+    """Find CSV: M15/15m first, fallback to H1, then any available."""
     data = Path("data")
-    for pattern in [f"{symbol}_M15*.csv", f"{symbol}_M15_*.csv",
-                    f"{symbol}_H1_2y.csv", f"{symbol}_H1_5y.csv"]:
-        matches = list(data.glob(pattern))
-        if matches:
-            return matches[0]
+    # Priority: real M15 data → H1 data
+    for pattern in [
+        f"{symbol}_15m_2y.csv",
+        f"{symbol}_M15_2y.csv",
+        f"{symbol}_M15_5y.csv",
+        f"{symbol}_1h_2y.csv",
+        f"{symbol}_H1_2y.csv",
+        f"{symbol}_1h_5y.csv",
+        f"{symbol}_H1_5y.csv",
+    ]:
+        p = data / pattern
+        if p.exists() and p.stat().st_size > 10_000:
+            return p
     return None
 
 

@@ -85,7 +85,7 @@ data:
   - enabled: false
     internal: US30
     symbol: DJI
-  - enabled: true
+  - enabled: false
     internal: NAS100
     min_score: 60
     regime_filter: TRENDING

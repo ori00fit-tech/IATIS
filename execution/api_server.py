@@ -34,7 +34,7 @@ load_dotenv()
 
 try:
     from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
     from pydantic import BaseModel
 except ImportError as exc:
     raise ImportError("Run: pip install fastapi uvicorn") from exc
@@ -441,8 +441,17 @@ async def logout(iatis_session: str | None = Cookie(default=None)) -> Response:
 
 
 @app.get("/dashboard")
-async def dashboard():
-    """IATIS Dashboard — Market Intelligence Platform."""
+async def dashboard(
+    request: Request,
+    iatis_session: str | None = Cookie(default=None),
+):
+    """Dashboard — requires valid session, redirects to login if not authenticated."""
+    # Server-side session check — no JS required
+    if not iatis_session or iatis_session not in _active_sessions:
+        return RedirectResponse(url="/login", status_code=302)
+    # Refresh session TTL
+    _active_sessions[iatis_session] = time.time()
+    _save_sessions(_active_sessions)
     return HTMLResponse("""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -639,15 +648,10 @@ setInterval(() => {
 }, 1000);
 
 async function api(path) {
-  // Try cookie auth first, fallback to stored key
   const storedKey = sessionStorage.getItem('iatis_key') || localStorage.getItem('iatis_key');
   const headers = storedKey ? {'X-API-Key': storedKey} : {};
   const r = await fetch(path, {credentials:'include', headers});
-  if (r.status === 401) {
-    // Cookie expired and no stored key — go to login
-    window.location.href='/login';
-    throw new Error('auth');
-  }
+  if (r.status === 401) { window.location.href='/login'; throw new Error('auth'); }
   if (!r.ok) throw new Error(r.status + ' ' + path);
   return r.json();
 }

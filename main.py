@@ -419,12 +419,16 @@ def run_pipeline(config: dict) -> dict:
         except Exception as exc:
             logger.warning(f"Outcome tracker log failed (non-fatal): {exc}")
 
-    # Send to Telegram — non-fatal if credentials missing or network fails.
-    # Controlled by TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env.
-    # Set telegram.enabled: false in config.yaml to disable without
-    # touching .env.
+    # Telegram: EXECUTE signals only — no NO_TRADE spam
+    # 9 symbols × 12 runs/day = 108 msgs/day if all sent → filter to EXECUTE only
     if config.get("telegram", {}).get("enabled", True):
-        telegram_send(report)
+        if final_verdict == "EXECUTE":
+            telegram_send(report)
+        else:
+            logger.debug(
+                f"Telegram skipped ({final_verdict}) for "
+                f"{config['data'].get('symbol','?')} — only EXECUTE signals sent"
+            )
 
     return report
 

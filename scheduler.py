@@ -199,6 +199,26 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             f"{execute_count} EXECUTE signals ==="
         )
 
+        # Auto-close open outcomes based on current prices
+        try:
+            from storage.outcome_tracker import auto_close_outcomes
+            current_prices = {}
+            for r in reports:
+                sym = r.get("symbol") or r.get("data", {}).get("symbol")
+                price = r.get("entry_price") or r.get("current_price")
+                if not price:
+                    # Try from risk section
+                    risk = r.get("risk", {})
+                    price = risk.get("entry_price")
+                if sym and price:
+                    current_prices[sym] = float(price)
+            if current_prices:
+                closed = auto_close_outcomes(current_prices)
+                if closed:
+                    logger.info(f"Auto-closed {closed} outcome(s) this run")
+        except Exception as exc:
+            logger.warning(f"Auto-close outcomes failed (non-fatal): {exc}")
+
     finally:
         _lock.release()
 

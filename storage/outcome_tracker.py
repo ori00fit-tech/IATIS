@@ -288,3 +288,68 @@ def recent_signals(limit: int = 10, path: Path = DB_PATH) -> list[dict]:
             "SELECT * FROM outcomes ORDER BY entry_time DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── Auto-Close ────────────────────────────────────────────────────────────
+
+def auto_close_outcomes(current_prices: dict[str, float], path: Path = DB_PATH) -> int:
+    """Check open signals against current prices and auto-close if TP/SL hit.
+
+    Called automatically at the end of each scheduler run.
+
+    Args:
+        current_prices: {symbol: current_price} from latest pipeline data
+        path: DB path
+
+    Returns:
+        Number of signals closed
+    """
+    _init_db(path)
+    open_signals = get_open_signals(path)
+    closed = 0
+
+    for sig in open_signals:
+        symbol = sig.get("symbol", "")
+        price = current_prices.get(symbol)
+        if price is None:
+            continue
+
+        entry = sig.get("entry_price") or 0
+        sl = sig.get("stop_loss") or 0
+        tp = sig.get("take_profit") or 0
+        direction = sig.get("direction", "")
+        sig_id = sig.get("signal_id", "")
+
+        if not all([entry, sl, tp, sig_id]):
+            continue
+
+        # Check TP/SL hit
+        hit = None
+        if direction == "BUY":
+            if price >= tp:
+                hit = ("win", tp)
+            elif price <= sl:
+                hit = ("loss", sl)
+        elif direction == "SELL":
+            if price <= tp:
+                hit = ("win", tp)
+            elif price >= sl:
+                hit = ("loss", sl)
+
+        if hit:
+            outcome, exit_px = hit
+            success = close_signal(
+                signal_id=sig_id,
+                exit_price=exit_px,
+                outcome=outcome,
+                notes=f"auto_close: price={price:.5f} hit {'TP' if outcome=='win' else 'SL'}",
+                path=path,
+            )
+            if success:
+                closed += 1
+                logger.info(
+                    f"Auto-closed {sig_id} ({symbol} {direction}): "
+                    f"{outcome} @ {exit_px:.5f} (price={price:.5f})"
+                )
+
+    return closed

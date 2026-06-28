@@ -205,10 +205,25 @@ def run_backtest(
     min_engines = engine_config["confluence"]["min_engines_agreeing"]
     timeframes = engine_config["data"]["timeframes"]
 
-    engines_list = [
-        SMCEngine(), PriceActionEngine(), ICTEngine(),
-        NNFXEngine(), QuantEngine(), WyckoffEngine(),
-    ]
+    engines_list = []
+
+    # Use ALL enabled engines from config (not just 6 hardcoded)
+    from engines.divergence_engine import DivergenceEngine
+    from engines.market_structure_engine import MarketStructureEngine
+    from engines.sentiment_engine import SentimentEngine
+
+    _ENGINE_MAP = {
+        "smc": SMCEngine, "price_action": PriceActionEngine,
+        "ict": ICTEngine, "nnfx": NNFXEngine,
+        "quant": QuantEngine, "wyckoff": WyckoffEngine,
+        "divergence": DivergenceEngine,
+        "market_structure": MarketStructureEngine,
+        "sentiment": SentimentEngine,
+    }
+    enabled = engine_config.get("engines", {}).get("enabled", {})
+    for key, cls in _ENGINE_MAP.items():
+        if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
+            engines_list.append(cls())
 
     atr_series = compute_atr(df, period=14)
     balance = config.initial_balance
@@ -325,7 +340,7 @@ def run_backtest(
             window = df.iloc[:i+1]
             mtf = build_multi_timeframe_view(window, timeframes)
             outputs = [e.safe_analyze(mtf) for e in engines_list]
-            vote = tally_votes(outputs)
+            vote = tally_votes(outputs, weights)
             score = calculate_score(outputs, weights)
             contradiction = check_contradictions(outputs)
 

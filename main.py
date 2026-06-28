@@ -187,7 +187,7 @@ def run_pipeline(config: dict) -> dict:
     base_weights = config["confluence"]["weights"]
     active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
 
-    vote_result = tally_votes(outputs)
+    vote_result = tally_votes(outputs, active_weights)
     score_result = calculate_score(outputs, active_weights)
     contradiction_result = check_contradictions(outputs)
 

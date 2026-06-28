@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 
 # Score adjustments
 MTF_CONFIRM_BONUS = 8.0    # D1 agrees with H1 → +8 points
-MTF_COUNTER_PENALTY = 15.0  # D1 contradicts H1 → -15 points
+MTF_COUNTER_PENALTY = 8.0  # D1 contradicts H1 → -8 points (was -15, too aggressive)
 MTF_MIN_ADX = 20.0          # D1 trend must be strong enough to matter
 
 

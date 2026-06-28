@@ -105,16 +105,19 @@ data:
     symbol: ETH/USD
 engines:
   enabled:
-    divergence: true
-    ict: true
-    macro: false
-    market_structure: true
-    nnfx: true
-    price_action: true
-    quant: true
-    sentiment: true
-    smc: true
-    wyckoff: true
+    # CORE_4: best ablation result (PnL=+$13,640 vs ALL_9=+$8,212)
+    # Research H015 shows: fewer orthogonal engines = better performance
+    smc: true           # SMC — anchor engine, WR=32%
+    nnfx: true          # NNFX — highest weight 0.225, complementary
+    price_action: true  # PriceAction — complementary to NNFX (lift=+15.7%)
+    wyckoff: true       # Wyckoff — best pair with Quant (lift=+23.8%)
+    # DISABLED: redundant or low-value based on H014+H015 research
+    quant: false        # corr=0.975 with NNFX+PA → redundant
+    ict: false          # WR=36.3% best but adds little lift
+    divergence: false   # lift negative with PriceAction (-3.8%)
+    market_structure: false  # corr=0.858 with NNFX → redundant
+    sentiment: false    # kept only when paired with SMC (+10.3%)
+    macro: false        # no live data available
 execution:
   broker: ctrader
   ctrader_enabled: false

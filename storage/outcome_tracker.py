@@ -182,7 +182,8 @@ def close_signal(
             0.001 if symbol in ("XAGUSD",) else
             0.0001
         )
-        price_diff = (exit_price - entry) if direction == "BUY" else (entry - exit_price)
+        is_buy = direction in ("BUY", "BULLISH")
+        price_diff = (exit_price - entry) if is_buy else (entry - exit_price)
         pnl_pips = round(price_diff / pip_size, 1)
 
         # Approximate USD P&L (1 lot basis)

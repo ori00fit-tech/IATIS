@@ -407,9 +407,7 @@ async function login() {
       body: JSON.stringify({key})
     });
     if (r.ok) {
-      // Save key as fallback for browsers that block cookies
-      sessionStorage.setItem('iatis_key', key);
-      localStorage.setItem('iatis_key', key);
+      // Session cookie set by server — no localStorage needed
       window.location.replace('/dashboard');
     } else {
       document.getElementById('err').style.display = 'block';
@@ -434,7 +432,7 @@ async def logout(iatis_session: str | None = Cookie(default=None)) -> Response:
     response = HTMLResponse("""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body>
-<script>localStorage.removeItem('iatis_key'); window.location.href='/login';</script>
+<script>window.location.href='/login';</script>
 </body></html>""")
     response.delete_cookie("iatis_session")
     return response
@@ -813,139 +811,73 @@ async function load() {
   }
 }
 load();
-
-    // KPIs
-    const s = stats.summary || {};
-    const total = s.total || 0;
-    const exec = s.execute || 0;
-    const credits = health.twelve_data_credits_remaining ?? '?';
-    const execRate = total > 0 ? (exec/total*100).toFixed(1)+'%' : '--';
-    const creditClass = credits > 400 ? 'green' : credits > 100 ? 'amber' : 'red';
-
-    document.getElementById('kpis').innerHTML = `
-      <div class="kpi blue"><div class="val">${H(total)}</div><div class="lbl">Total Decisions</div></div>
-      <div class="kpi green"><div class="val">${H(exec)}</div><div class="lbl">EXECUTE</div></div>
-      <div class="kpi ${creditClass}"><div class="val">${H(credits)}</div><div class="lbl">API Credits</div></div>
-      <div class="kpi purple"><div class="val">${execRate}</div><div class="lbl">Execute Rate</div></div>
-      <div class="kpi"><div class="val">${H(total - exec)}</div><div class="lbl">NO_TRADE</div></div>
-    `;
-
-    // Decisions
-    const dec = decisions.decisions || [];
-    if (dec.length) {
-      let html = '';
-      for (const d of dec) {
-        const isExec = d.verdict === 'EXECUTE';
-        const sym = d.symbol || '?';
-        const score = parseFloat(d.cf_score||0);
-        const reason = (d.fail_reason || d.summary || '').slice(0, 60);
-        const ts = (d.ts||'').slice(11,19);
-        html += `<div class="signal">
-          <div>
-            <div class="signal-sym">${H(sym)}</div>
-            <div style="font-size:0.7em;color:var(--muted)">${ts}</div>
-          </div>
-          <div class="signal-info">
-            <span class="badge ${isExec ? 'exec' : 'no-trade'}">${H(d.verdict)}</span>
-            ${H(d.regime||'')}
-            <div style="color:var(--muted);font-size:0.9em;margin-top:2px">${H(reason)}</div>
-          </div>
-          <div class="signal-score" style="color:${scoreColor(score)}">${score.toFixed(0)}</div>
-        </div>`;
-      }
-      document.getElementById('decisions-panel').innerHTML = html;
-    } else {
-      document.getElementById('decisions-panel').innerHTML = '<div class="empty">No decisions yet</div>';
-    }
-
-    // Last run time
-    const lastRun = dec[0]?.ts?.slice(0,19) || '—';
-    document.getElementById('last-run').textContent = lastRun;
-
-    // Symbol Health
-    try {
-      const sh = await api('/symbol-health');
-      const syms = sh.symbols || [];
-      let shHtml = '<table><tr><th>Symbol</th><th>SHI</th><th>Status</th><th>WR</th><th>Trades</th></tr>';
-      for (const s of syms) {
-        const statusColor = s.status === 'HEALTHY' ? 'var(--green)' : s.status === 'CAUTION' ? 'var(--amber)' : 'var(--red)';
-        const wr = s.win_rate != null ? s.win_rate.toFixed(1)+'%' : '—';
-        shHtml += `<tr>
-          <td style="font-weight:700;color:var(--accent)">${H(s.symbol)}</td>
-          <td>${H(s.shi_score)}</td>
-          <td style="color:${statusColor};font-weight:700">${H(s.status)}</td>
-          <td>${wr}</td>
-          <td style="color:var(--muted)">${H(s.trades_count)}</td>
-        </tr>`;
-      }
-      shHtml += '</table>';
-      document.getElementById('health-panel').innerHTML = shHtml || '<div class="empty">No data</div>';
-    } catch(e) {
-      document.getElementById('health-panel').innerHTML = '<div class="empty">No symbol health data yet</div>';
-    }
-
-    // Backtest results
-    try {
-      const bt = await api('/backtest-results');
-      const results = bt.results || [];
-      if (results.length) {
-        let btHtml = '<table><tr><th>Symbol</th><th>Trades</th><th>WR%</th><th>PF</th><th>DD%</th><th>Return%</th></tr>';
-        const sorted = [...results].filter(r => !r.error && r.trades >= 10)
-          .sort((a,b) => (b.profit_factor||0) - (a.profit_factor||0));
-        for (const r of sorted) {
-          const badge = pfBadge(r.profit_factor);
-          btHtml += `<tr>
-            <td style="font-weight:700;color:var(--accent)">${H(r.symbol)}</td>
-            <td>${H(r.trades)}</td>
-            <td style="color:${scoreColor(r.win_rate/100*65)}">${H(r.win_rate)}%</td>
-            <td><span class="badge ${badge}">${parseFloat(r.profit_factor||0).toFixed(2)}</span></td>
-            <td style="color:var(--red)">${H(r.max_drawdown_pct)}%</td>
-            <td style="color:${r.total_return_pct>=0?'var(--green)':'var(--red)'}">${H(r.total_return_pct)}%</td>
-          </tr>`;
-        }
-        btHtml += '</table>';
-        document.getElementById('bt-panel').innerHTML = btHtml;
-      } else {
-        document.getElementById('bt-panel').innerHTML = '<div class="empty">No backtest results yet — run full_pipeline_backtest.py</div>';
-      }
-    } catch(e) {
-      document.getElementById('bt-panel').innerHTML = '<div class="empty">No backtest data</div>';
-    }
-
-    // Open outcomes
-    const open = outcomes.open_signals || [];
-    if (open.length) {
-      let oHtml = '<table><tr><th>Signal ID</th><th>Symbol</th><th>Direction</th><th>Entry</th><th>Score</th></tr>';
-      for (const o of open) {
-        const dir = o.direction || '?';
-        const dirColor = dir === 'BULLISH' ? 'var(--green)' : 'var(--red)';
-        oHtml += `<tr>
-          <td style="font-size:0.75em;color:var(--muted)">${H(o.signal_id)}</td>
-          <td style="font-weight:700;color:var(--accent)">${H(o.symbol)}</td>
-          <td style="color:${dirColor};font-weight:700">${H(dir)}</td>
-          <td>${H(o.entry_price)}</td>
-          <td style="color:${scoreColor(o.cf_score)}">${H(o.cf_score)}</td>
-        </tr>`;
-      }
-      oHtml += '</table>';
-      document.getElementById('outcomes-panel').innerHTML = oHtml;
-    }
-
-    dot.className = 'dot';
-    st.textContent = `Live · Last refresh ${new Date().toLocaleTimeString()} UTC · v${H(health.version)}`;
-    setTimeout(load, 60000);
-
-  } catch(e) {
-    dot.className = 'dot err';
-    st.textContent = 'Error: ' + e.message + ' — retrying in 15s';
-    setTimeout(load, 15000);
-  }
-}
-
-load();
 </script>
 </body>
 </html>""")
+
+@app.get("/experience/summary")
+async def experience_summary_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Experience Database summary — MROS Level 1."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import experience_summary
+        return experience_summary()
+    except Exception as exc:
+        logger.error(f"Experience summary error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/experience/query")
+async def experience_query_endpoint(
+    symbol: str | None = Query(default=None),
+    regime: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+    verdict: str | None = Query(default=None),
+    min_score: float | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Query experiences with filters."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import query_experiences
+        results = query_experiences(
+            symbol=symbol, regime=regime, session=session,
+            verdict=verdict, min_score=min_score, limit=limit,
+        )
+        return {"count": len(results), "experiences": results}
+    except Exception as exc:
+        logger.error(f"Experience query error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/experience/pattern")
+async def experience_pattern_endpoint(
+    regime: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    min_score: float | None = Query(default=None),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Pattern analysis — WR for specific market conditions."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import pattern_analysis
+        filters = {}
+        if regime: filters["regime"] = regime
+        if session: filters["session"] = session
+        if symbol: filters["symbol"] = symbol
+        if min_score: filters["min_score"] = min_score
+        return pattern_analysis(filters)
+    except Exception as exc:
+        logger.error(f"Pattern analysis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
 
 @app.get("/engine-stats")
 async def engine_stats_endpoint(

@@ -205,10 +205,25 @@ def run_backtest(
     min_engines = engine_config["confluence"]["min_engines_agreeing"]
     timeframes = engine_config["data"]["timeframes"]
 
-    engines_list = [
-        SMCEngine(), PriceActionEngine(), ICTEngine(),
-        NNFXEngine(), QuantEngine(), WyckoffEngine(),
-    ]
+    engines_list = []
+
+    # Use ALL enabled engines from config (not just 6 hardcoded)
+    from engines.divergence_engine import DivergenceEngine
+    from engines.market_structure_engine import MarketStructureEngine
+    from engines.sentiment_engine import SentimentEngine
+
+    _ENGINE_MAP = {
+        "smc": SMCEngine, "price_action": PriceActionEngine,
+        "ict": ICTEngine, "nnfx": NNFXEngine,
+        "quant": QuantEngine, "wyckoff": WyckoffEngine,
+        "divergence": DivergenceEngine,
+        "market_structure": MarketStructureEngine,
+        "sentiment": SentimentEngine,
+    }
+    enabled = engine_config.get("engines", {}).get("enabled", {})
+    for key, cls in _ENGINE_MAP.items():
+        if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
+            engines_list.append(cls())
 
     atr_series = compute_atr(df, period=14)
     balance = config.initial_balance
@@ -287,6 +302,7 @@ def run_backtest(
                     open_trade.exit_price = open_trade.take_profit
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
                     open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
+                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
                     open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -297,6 +313,7 @@ def run_backtest(
                     open_trade.exit_price = open_trade.stop_loss
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
                     open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
+                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
                     open_trade.exit_reason = "SL"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -306,6 +323,7 @@ def run_backtest(
                     open_trade.exit_price = open_trade.take_profit
                     open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
                     open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
+                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
                     open_trade.exit_reason = "TP"
                     balance += open_trade.pnl_usd
                     result.trades.append(open_trade); open_trade = None
@@ -322,7 +340,7 @@ def run_backtest(
             window = df.iloc[:i+1]
             mtf = build_multi_timeframe_view(window, timeframes)
             outputs = [e.safe_analyze(mtf) for e in engines_list]
-            vote = tally_votes(outputs)
+            vote = tally_votes(outputs, weights)
             score = calculate_score(outputs, weights)
             contradiction = check_contradictions(outputs)
 
@@ -373,6 +391,7 @@ def run_backtest(
         open_trade.exit_price = exit_p
         open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
         open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
+        open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
         open_trade.exit_reason = "FORCED_CLOSE"
         balance += open_trade.pnl_usd
         result.trades.append(open_trade)

@@ -1,17 +1,17 @@
 confluence:
   min_engines_agreeing: 2
-  min_score_to_trade: 55
+  min_score_to_trade: 58
   weights:
-    divergence: 0.1
-    ict: 0.065
+    divergence: 0.0606
+    ict: 0.0657
     macro: 0.0
-    market_structure: 0.085
-    nnfx: 0.225
-    price_action: 0.185
-    quant: 0.07
-    sentiment: 0.03
-    smc: 0.2
-    wyckoff: 0.04
+    market_structure: 0.0859
+    nnfx: 0.2273
+    price_action: 0.1869
+    quant: 0.0707
+    sentiment: 0.0303
+    smc: 0.202
+    wyckoff: 0.0707
 data:
   bars_to_load: 500
   source: synthetic
@@ -21,14 +21,15 @@ data:
   - H4
   - D1
   twelve_data_symbols:
-  - enabled: true
+  - enabled: false
     internal: EURUSD
     min_score: 65
     rr: 2.0
     symbol: EUR/USD
   - enabled: true
     internal: GBPUSD
-    min_score: 65
+    min_score: 62
+    regime_filter: TRENDING
     rr: 2.0
     symbol: GBP/USD
   - enabled: false
@@ -37,11 +38,17 @@ data:
   - enabled: false
     internal: USDCHF
     symbol: USD/CHF
-  - enabled: false
+  - enabled: true
     internal: AUDUSD
+    min_score: 58
+    regime_filter: TRENDING
+    rr: 2.0
     symbol: AUD/USD
-  - enabled: false
+  - enabled: true
     internal: USDCAD
+    min_score: 62
+    regime_filter: TRENDING
+    rr: 2.0
     symbol: USD/CAD
   - enabled: false
     internal: NZDUSD
@@ -64,6 +71,7 @@ data:
   - enabled: true
     internal: XAUUSD
     min_score: 55
+    regime_filter: TRENDING
     rr: 2.5
     symbol: XAU/USD
   - enabled: true
@@ -78,16 +86,17 @@ data:
   - enabled: false
     internal: US30
     symbol: DJI
-  - enabled: true
+  - enabled: false
     internal: NAS100
-    min_score: 55
+    min_score: 60
+    regime_filter: TRENDING
     rr: 2.5
     symbol: NDX
-  - enabled: true
+  - enabled: false
     internal: SPX500
-    min_score: 58
+    min_score: 55
     regime_filter: TRENDING
-    rr: 2.0
+    rr: 2.5
     symbol: SPX
   - enabled: true
     internal: BTCUSD
@@ -98,6 +107,7 @@ data:
   - enabled: true
     internal: ETHUSD
     min_score: 55
+    regime_filter: TRENDING
     rr: 2.5
     symbol: ETH/USD
 engines:

@@ -268,6 +268,23 @@ def download_symbol_tf(sym: str, tf: str, force: bool = False) -> dict:
             return {"status": "cached", "bars": bars, "days": coverage_days}
 
     results = []
+    is_crypto = sym in ("BTCUSD", "ETHUSD")
+
+    # Strategy 0: CCXT/Binance for crypto (FREE, unlimited history since 2017)
+    if is_crypto:
+        print(f"      → Binance/ccxt...", end=" ", flush=True)
+        try:
+            from core.ccxt_provider import fetch_ccxt
+            tf_map = {"5m":"5m","15m":"15m","30m":"30m","1h":"1h","4h":"4h"}
+            df_ccxt = fetch_ccxt(sym, tf_map.get(tf, "1h"), days=730)
+            if df_ccxt is not None and len(df_ccxt) > 100:
+                print(f"✅ {len(df_ccxt)} bars ({str(df_ccxt.index[0])[:10]} → {str(df_ccxt.index[-1])[:10]})")
+                results.append(df_ccxt)
+            else:
+                print("❌")
+        except Exception as e:
+            print(f"❌ {str(e)[:40]}")
+        time.sleep(0.5)
 
     # Strategy 1: Yahoo Finance (free, best coverage for 1h/4h)
     print(f"      → Yahoo...", end=" ", flush=True)
@@ -292,7 +309,7 @@ def download_symbol_tf(sym: str, tf: str, force: bool = False) -> dict:
 
     # Note: AlphaVantage FX_INTRADAY = premium ($$$)
     # Note: Finnhub forex candles = not available on free plan
-    # → Only Yahoo + TwelveData are actually free and working
+    # → Providers: Binance/ccxt (crypto) + Yahoo (forex/metals) + TwelveData
 
     if not results:
         return {"status": "failed", "bars": 0, "days": 0}

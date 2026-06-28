@@ -259,23 +259,29 @@ def build_base_tf(sym: str, info: dict, tf: str) -> pd.DataFrame | None:
                 frames.append(df)
 
     elif tf == "5m":
-        # Binance for crypto (free, best quality)
+        # Binance for crypto (free, best quality, 2 years)
         if info.get("ccxt"):
             df = from_binance(info["ccxt"], "5m", DAYS)
             if df is not None:
                 print(f"      ✅ Binance: {coverage(df)}")
                 frames.append(df)
-        # TwelveData for forex/metals
-        else:
-            df = from_twelvedata_batches(info["td"], "5min", DAYS)
-            if df is not None:
-                print(f"      ✅ TwelveData: {coverage(df)}")
-                frames.append(df)
-        # Yahoo recent 60d as supplement
+        
+        # Yahoo recent 60d (free, always available)
         df = from_yahoo(info["yf"], "5m", "60d")
         if df is not None:
             print(f"      ✅ Yahoo (60d): {coverage(df)}")
             frames.append(df)
+
+        # Check if we need more data
+        current = merge(*frames)
+        current_days = (current.index[-1] - current.index[0]).days if current is not None else 0
+        
+        if current_days < DAYS * 0.8:
+            # TwelveData batches (only if credits available)
+            df = from_twelvedata_batches(info["td"], "5min", DAYS)
+            if df is not None:
+                print(f"      ✅ TwelveData: {coverage(df)}")
+                frames.append(df)
 
     elif tf == "1m":
         # Only crypto from Binance (forex 1m = too many credits)
@@ -422,3 +428,82 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── Standalone gap-filler (no TwelveData) ─────────────────────────────────
+def fill_gaps_free(sym: str, info: dict) -> None:
+    """Fill 5m gaps using only free sources: Yahoo batches via pandas."""
+    out = DATA_DIR / f"{sym}_5m_2y.csv"
+    existing = load_existing(out)
+    
+    if existing is not None:
+        days_covered = (existing.index[-1] - existing.index[0]).days
+        print(f"  {sym} 5m: {days_covered}d covered, trying to extend...")
+    
+    frames = [existing] if existing is not None else []
+    
+    # Yahoo 60d — always free
+    df = from_yahoo(info["yf"], "5m", "60d")
+    if df is not None:
+        frames.append(df)
+        print(f"  {sym}: Yahoo 5m 60d ✅ {len(df)} bars")
+    
+    # Try multiple Yahoo periods by manipulating dates
+    # yfinance supports specific date ranges
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta, timezone
+        
+        end = datetime.now(timezone.utc)
+        # Try going back in chunks of 50 days
+        for days_back in range(60, 400, 50):
+            chunk_end = end - timedelta(days=days_back - 50)
+            chunk_start = end - timedelta(days=days_back)
+            try:
+                df_chunk = yf.download(
+                    info["yf"],
+                    start=chunk_start.strftime("%Y-%m-%d"),
+                    end=chunk_end.strftime("%Y-%m-%d"),
+                    interval="5m",
+                    auto_adjust=True, progress=False, multi_level_index=False,
+                )
+                if df_chunk is not None and len(df_chunk) > 10:
+                    df_chunk = norm(df_chunk)
+                    frames.append(df_chunk)
+                    print(f"  {sym}: Yahoo chunk {chunk_start.date()}→{chunk_end.date()} ✅ {len(df_chunk)} bars")
+            except Exception:
+                pass  # Yahoo rejects dates older than 60d silently
+    except Exception as e:
+        print(f"  {sym}: Yahoo extended failed: {str(e)[:40]}")
+    
+    if frames:
+        result = merge(*frames)
+        if result is not None:
+            n = save(result, out)
+            days = (result.index[-1] - result.index[0]).days
+            print(f"  {sym} 5m: saved {n:,} bars ({days}d)")
+    
+    # Also derive 15m/30m from whatever we have
+    df_5m = load_existing(out)
+    if df_5m is not None:
+        build_derived(sym, df_5m, "5m", "15m", "15min")
+        build_derived(sym, df_5m, "5m", "30m", "30min")
+
+
+if __name__ == "__main__":
+    # Also support --fill-gaps mode
+    import sys
+    if "--fill-gaps" in sys.argv:
+        symbols_arg = []
+        for i, arg in enumerate(sys.argv):
+            if arg == "--sym" and i + 1 < len(sys.argv):
+                symbols_arg = sys.argv[i+1:]
+                break
+        
+        syms = {k: v for k, v in SYMBOLS.items() 
+                if not symbols_arg or k in symbols_arg}
+        print(f"\nFilling gaps for: {list(syms.keys())}")
+        for sym, info in syms.items():
+            fill_gaps_free(sym, info)
+    else:
+        main()

@@ -823,6 +823,70 @@ load();
 </body>
 </html>""")
 
+@app.get("/experience/summary")
+async def experience_summary_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Experience Database summary — MROS Level 1."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import experience_summary
+        return experience_summary()
+    except Exception as exc:
+        logger.error(f"Experience summary error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/experience/query")
+async def experience_query_endpoint(
+    symbol: str | None = Query(default=None),
+    regime: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+    verdict: str | None = Query(default=None),
+    min_score: float | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Query experiences with filters."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import query_experiences
+        results = query_experiences(
+            symbol=symbol, regime=regime, session=session,
+            verdict=verdict, min_score=min_score, limit=limit,
+        )
+        return {"count": len(results), "experiences": results}
+    except Exception as exc:
+        logger.error(f"Experience query error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/experience/pattern")
+async def experience_pattern_endpoint(
+    regime: str | None = Query(default=None),
+    session: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    min_score: float | None = Query(default=None),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict:
+    """Pattern analysis — WR for specific market conditions."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.experience_db import pattern_analysis
+        filters = {}
+        if regime: filters["regime"] = regime
+        if session: filters["session"] = session
+        if symbol: filters["symbol"] = symbol
+        if min_score: filters["min_score"] = min_score
+        return pattern_analysis(filters)
+    except Exception as exc:
+        logger.error(f"Pattern analysis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
 @app.get("/engine-stats")
 async def engine_stats_endpoint(
     symbol: str | None = Query(default=None),

@@ -376,6 +376,18 @@ def auto_close_outcomes(
                 path=path,
             )
             if ok:
+                # Also record outcome in Experience DB
+                try:
+                    from storage.experience_db import record_outcome as exp_record_outcome
+                    exp_record_outcome(
+                        symbol=symbol,
+                        outcome=hit,
+                        exit_price=exit_price,
+                        exit_reason="SL" if hit == "loss" else "TP",
+                    )
+                except Exception:
+                    pass
+
                 closed.append({
                     "signal_id": signal_id,
                     "symbol": symbol,

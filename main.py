@@ -47,6 +47,7 @@ from storage.decision_log import log_decision
 from storage.decision_db import log_decision_db
 from storage.engine_tracker import record_engine_votes
 from storage.outcome_tracker import log_signal as log_outcome_signal
+from storage.experience_db import record_experience, find_similar
 from fundamentals.news_risk import assess_news_risk, risk_level_icon
 from execution.telegram_bot import send_signal as telegram_send
 from utils.helpers import load_config
@@ -411,6 +412,27 @@ def run_pipeline(config: dict) -> dict:
     log_decision(report)
     log_decision_db(report)
     record_engine_votes(report)
+
+    # Experience Database — record EVERY decision (EXECUTE + NO_TRADE)
+    # This is the foundation for MROS: learning from every decision
+    try:
+        exp_id = record_experience(report)
+
+        # For EXECUTE signals: check historical similarity (Market Memory)
+        if final_verdict == "EXECUTE":
+            similar = find_similar(report)
+            if isinstance(similar, dict) and similar.get("similar_count", 0) >= 5:
+                report["historical_similarity"] = {
+                    "matches": similar["similar_count"],
+                    "historical_wr": similar["historical_wr"],
+                    "recommendation": similar["recommendation"],
+                }
+                logger.info(
+                    f"Market Memory: {similar['similar_count']} similar situations, "
+                    f"historical WR={similar['historical_wr']}% → {similar['recommendation']}"
+                )
+    except Exception as exc:
+        logger.debug(f"Experience DB recording skipped: {exc}")
 
     # Log EXECUTE signals to outcome tracker (for calibration + regime matrix)
     if final_verdict == "EXECUTE":

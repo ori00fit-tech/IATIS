@@ -170,6 +170,7 @@ def assess_market_quality(
     df: pd.DataFrame,
     symbol: str = "",
     now: datetime | None = None,
+    timeframe: str = "H1",
 ) -> MarketQualityResult:
     """
     Calculate Market Quality Score for current market conditions.
@@ -189,9 +190,20 @@ def assess_market_quality(
     weekday = now.weekday()  # 0=Mon, 6=Sun
     reasons = []
 
+    # Detect asset class for session scoring
+    is_crypto = any(c in symbol.upper() for c in ["BTC","ETH","XRP","LTC","SOL"])
+    is_short_tf = timeframe in ("M1","M5","M15","5m","15m","30m") if timeframe else False
+
     # 1. Session score (35 pts max)
+    # Crypto trades 24/7 — session matters less
+    # Short TF (M15) — session penalty reduced
     active = _active_sessions(hour_utc)
-    session_pts, session_reason = _session_score(active)
+    if is_crypto:
+        session_pts, session_reason = 25.0, "Crypto 24/7 (session neutral)"
+    else:
+        session_pts, session_reason = _session_score(active)
+        if is_short_tf and session_pts < 15:
+            session_pts = max(session_pts, 15.0)  # M15 less sensitive to session
     main_session = active[0] if active else "None"
     reasons.append(f"Session: {session_reason}")
 

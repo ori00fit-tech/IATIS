@@ -177,9 +177,9 @@ def backtest_symbol(symbol: str, info: dict) -> dict:
         atr = float((df_slice["high"] - df_slice["low"]).tail(14).mean())
         entry = float(df_slice["close"].iloc[-1])
 
-        # MQS gate
+        # MQS gate — pass timeframe for correct scoring
         try:
-            mqs = assess_market_quality(df_slice, symbol)
+            mqs = assess_market_quality(df_slice, symbol, timeframe="15m")
             if not mqs.should_trade:
                 mqs_blocks += 1
                 continue

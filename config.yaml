@@ -23,12 +23,12 @@ data:
   twelve_data_symbols:
   - enabled: true
     internal: EURUSD
-    min_score: 62
+    min_score: 60
     rr: 2.0
     symbol: EUR/USD
   - enabled: true
     internal: GBPUSD
-    min_score: 62
+    min_score: 58
     rr: 2.0
     symbol: GBP/USD
   - enabled: false
@@ -37,17 +37,17 @@ data:
   - enabled: false
     internal: USDCHF
     symbol: USD/CHF
-  - enabled: true
+  - enabled: false
     internal: AUDUSD
     min_score: 55
     rr: 2.0
     symbol: AUD/USD
   - enabled: true
     internal: USDCAD
-    min_score: 60
+    min_score: 58
     rr: 2.0
     symbol: USD/CAD
-  - enabled: true
+  - enabled: false
     internal: NZDUSD
     min_score: 60
     rr: 2.0
@@ -100,24 +100,21 @@ data:
     symbol: BTC/USD
   - enabled: true
     internal: ETHUSD
-    min_score: 55
+    min_score: 60
     rr: 2.0
     symbol: ETH/USD
 engines:
   enabled:
-    # CORE_4: best ablation result (PnL=+$13,640 vs ALL_9=+$8,212)
-    # Research H015 shows: fewer orthogonal engines = better performance
-    smc: true           # SMC — anchor engine, WR=32%
-    nnfx: true          # NNFX — highest weight 0.225, complementary
-    price_action: true  # PriceAction — complementary to NNFX (lift=+15.7%)
-    wyckoff: true       # Wyckoff — best pair with Quant (lift=+23.8%)
-    # DISABLED: redundant or low-value based on H014+H015 research
-    quant: false        # corr=0.975 with NNFX+PA → redundant
-    ict: false          # WR=36.3% best but adds little lift
-    divergence: false   # lift negative with PriceAction (-3.8%)
-    market_structure: false  # corr=0.858 with NNFX → redundant
-    sentiment: false    # kept only when paired with SMC (+10.3%)
-    macro: false        # no live data available
+    divergence: false
+    ict: false
+    macro: false
+    market_structure: false
+    nnfx: true
+    price_action: true
+    quant: false
+    sentiment: false
+    smc: true
+    wyckoff: true
 execution:
   broker: ctrader
   ctrader_enabled: false

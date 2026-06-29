@@ -44,26 +44,27 @@ def _identify_trading_range(
 ) -> tuple[float, float, bool]:
     """Identify if price is in a trading range (consolidation).
 
-    Returns (range_low, range_high, is_in_range).
-    A trading range is where price oscillates within a bounded zone
-    without making new highs/lows — the precondition for Wyckoff
-    accumulation or distribution.
+    Uses ATR-normalized spread instead of raw % to handle both
+    low-price forex (1.08) and high-price crypto (60,000+).
     """
     window = df.tail(lookback)
     high = float(window["high"].max())
     low = float(window["low"].min())
     close = float(df["close"].iloc[-1])
-    spread = (high - low) / low
 
-    # In a trading range: spread is moderate (not trending strongly)
-    # and recent highs/lows are within the range
+    # ATR-normalized spread (works for any price level)
+    atr = float((df["high"] - df["low"]).tail(14).mean())
+    price_range = high - low
+    spread_in_atr = price_range / atr if atr > 0 else 99
+
     recent_high = float(df["high"].tail(10).max())
-    recent_low = float(df["low"].tail(10).min())
+    recent_low  = float(df["low"].tail(10).min())
 
+    # In range: price_range < 8× ATR AND recent extremes near range boundaries
     in_range = (
-        spread < 0.03
-        and (abs(recent_high - high) / high < 0.005
-             or abs(recent_low - low) / low < 0.005)
+        spread_in_atr < 8.0
+        and (abs(recent_high - high) / (atr + 1e-10) < 1.0
+             or abs(recent_low - low) / (atr + 1e-10) < 1.0)
     )
     return low, high, bool(in_range)
 

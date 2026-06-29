@@ -117,6 +117,25 @@ class NNFXEngine(BaseEngine):
             if score < 15:
                 bias = Bias.NEUTRAL
 
+        # --- RSI second confirmation (NNFX methodology) ---
+        rsi_period = 14
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(rsi_period).mean()
+        loss = (-delta.clip(upper=0)).rolling(rsi_period).mean()
+        rs = gain / loss.replace(0, np.nan)
+        rsi = 100 - (100 / (1 + rs))
+        rsi_val = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+
+        if bias == Bias.BULLISH and rsi_val > 50:
+            score += 15.0
+            reasons.append(f"RSI={rsi_val:.1f} confirms bullish (>50)")
+        elif bias == Bias.BEARISH and rsi_val < 50:
+            score += 15.0
+            reasons.append(f"RSI={rsi_val:.1f} confirms bearish (<50)")
+        elif bias != Bias.NEUTRAL:
+            reasons.append(f"RSI={rsi_val:.1f} does not confirm direction — reduced confidence")
+            score = max(0, score - 10)
+
         score = min(round(score, 1), 80.0)
 
         raw = {
@@ -125,6 +144,7 @@ class NNFXEngine(BaseEngine):
             "ema100": round(e100, 5),
             "ema200": round(e200, 5),
             "adx": round(adx_val, 1),
+            "rsi": round(rsi_val, 1),
             "price_vs_ema200_pct": round((current - e200) / e200 * 100, 3),
         }
 

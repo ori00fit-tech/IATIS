@@ -230,6 +230,8 @@ class CTraderClient:
 
     # Response wait budgets (seconds)
     ORDER_TIMEOUT = 15.0
+    AUTH_TIMEOUT = 15.0        # app/account auth round-trips
+    BOOTSTRAP_TIMEOUT = 20.0   # trader info / symbols list / symbol details
 
     def __init__(
         self,
@@ -330,14 +332,24 @@ class CTraderClient:
             req.clientId = self.client_id
             req.clientSecret = self.client_secret
             logger.debug("📤 Sending: ProtoOAApplicationAuthReq")
-            d = client.send(req)
-            d.addCallback(lambda _: self._on_app_auth(client))
+            d = client.send(req, responseTimeoutInSeconds=self.AUTH_TIMEOUT)
+            d.addCallback(lambda res: self._on_app_auth(client, res))
             d.addErrback(lambda f: self._on_error("app_auth", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send app auth: {exc}")
             self._set_state(ConnectionState.ERROR)
 
-    def _on_app_auth(self, client: Any) -> None:
+    def _on_app_auth(self, client: Any, response: Any) -> None:
+        """Proceed only if the server actually returned an ApplicationAuthRes."""
+        if response.__class__.__name__ != "ProtoOAApplicationAuthRes":
+            logger.error(
+                f"❌ App auth failed — unexpected response "
+                f"{response.__class__.__name__} "
+                f"(code={getattr(response, 'errorCode', '')} "
+                f"{getattr(response, 'description', '')})"
+            )
+            self._set_state(ConnectionState.ERROR)
+            return
         self._set_state(ConnectionState.APP_AUTH_OK)
         logger.info("✅ Application authenticated")
         self._send_account_auth(client)
@@ -352,14 +364,24 @@ class CTraderClient:
             req.ctidTraderAccountId = self.account_id
             req.accessToken = self.access_token
             logger.debug(f"📤 Sending: ProtoOAAccountAuthReq (account {self.account_id})")
-            d = client.send(req)
-            d.addCallback(lambda _: self._on_account_auth(client))
+            d = client.send(req, responseTimeoutInSeconds=self.AUTH_TIMEOUT)
+            d.addCallback(lambda res: self._on_account_auth(client, res))
             d.addErrback(lambda f: self._on_error("account_auth", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send account auth: {exc}")
             self._set_state(ConnectionState.ERROR)
 
-    def _on_account_auth(self, client: Any) -> None:
+    def _on_account_auth(self, client: Any, response: Any) -> None:
+        """Proceed only if the server actually returned an AccountAuthRes."""
+        if response.__class__.__name__ != "ProtoOAAccountAuthRes":
+            logger.error(
+                f"❌ Account auth failed — unexpected response "
+                f"{response.__class__.__name__} "
+                f"(code={getattr(response, 'errorCode', '')} "
+                f"{getattr(response, 'description', '')})"
+            )
+            self._set_state(ConnectionState.ERROR)
+            return
         self._set_state(ConnectionState.ACCOUNT_AUTH_OK)
         logger.info(f"✅ Account authorized: {self.account_id}")
         self._send_trader_req(client)
@@ -372,7 +394,7 @@ class CTraderClient:
             req = ProtoOATraderReq()
             req.ctidTraderAccountId = self.account_id
             logger.debug("📤 Sending: ProtoOATraderReq")
-            d = client.send(req)
+            d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
             d.addErrback(lambda f: self._on_error("trader_req", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send trader req: {exc}")
@@ -386,7 +408,7 @@ class CTraderClient:
             req = ProtoOASymbolsListReq()
             req.ctidTraderAccountId = self.account_id
             logger.debug("📤 Sending: ProtoOASymbolsListReq")
-            d = client.send(req)
+            d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
             d.addErrback(lambda f: self._on_error("symbols_list", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send symbols list req: {exc}")
@@ -408,7 +430,7 @@ class CTraderClient:
             req.ctidTraderAccountId = self.account_id
             req.symbolId.extend(symbol_ids)
             logger.debug(f"📤 Sending: ProtoOASymbolByIdReq ({len(symbol_ids)} ids)")
-            d = client.send(req)
+            d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
             d.addErrback(lambda f: self._on_error("symbol_details", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send symbol details req: {exc}")
@@ -428,10 +450,20 @@ class CTraderClient:
                 self._on_symbol_details_res(message)
             elif msg_type == "ProtoOAExecutionEvent":
                 self._on_execution_event(message)
+            elif msg_type == "ProtoOAErrorRes":
+                self._on_error_res(message)
             elif msg_type == "ProtoOAOrderErrorEvent":
                 self._on_order_error_event(message)
+            elif msg_type in ("ProtoOAApplicationAuthRes", "ProtoOAAccountAuthRes"):
+                # Handled by the correlated auth callbacks; nothing to do here.
+                logger.debug(f"↩ {msg_type}")
             else:
-                logger.debug(f"⚠️ Unhandled message type: {msg_type}")
+                code = getattr(message, "errorCode", "")
+                extra = (
+                    f" errorCode={code} desc={getattr(message, 'description', '')}"
+                    if code else ""
+                )
+                logger.warning(f"⚠️ Unhandled message type: {msg_type}{extra}")
         except Exception as exc:
             logger.error(f"❌ Error in message dispatcher ({msg_type}): {exc}")
 
@@ -573,7 +605,21 @@ class CTraderClient:
             logger.error(f"❌ Error processing ProtoOAExecutionEvent: {exc}")
 
     def _on_order_error_event(self, message: Any) -> None:
-        logger.error(f"❌ Order error event: {message}")
+        code = getattr(message, "errorCode", "")
+        desc = getattr(message, "description", "")
+        logger.error(f"❌ Order error event: {code} — {desc}")
+
+    def _on_error_res(self, message: Any) -> None:
+        """Handle ProtoOAErrorRes: surface the server's reason and fail fast.
+
+        This is the message the server returns when app/account auth, the trader
+        request, or the symbols request is rejected. Previously it was swallowed
+        at DEBUG, so a rejected bootstrap looked like a blind connect timeout.
+        """
+        code = getattr(message, "errorCode", "")
+        desc = getattr(message, "description", "")
+        logger.error(f"❌ Server error (ProtoOAErrorRes): {code} — {desc}")
+        self._set_state(ConnectionState.ERROR)
 
     def _on_disconnect(self, client: Any, reason: Any) -> None:
         self._set_state(ConnectionState.DISCONNECTED)
@@ -589,7 +635,7 @@ class CTraderClient:
 
     # ─── Connection ──────────────────────────────────────────────────────────
 
-    def connect(self, timeout: float = 15.0) -> bool:
+    def connect(self, timeout: float = 30.0) -> bool:
         """Establish an authenticated, READY connection to the cTrader API."""
         try:
             from ctrader_open_api import Client, TcpProtocol

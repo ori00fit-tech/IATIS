@@ -81,8 +81,8 @@ IATIS_TO_CTRADER: dict[str, str] = {
     "XAUUSD": "XAUUSD",   "XAGUSD": "XAGUSD",
     # Energy
     "USOIL":  "XTIUSD",
-    # Indices
-    "US30":   "DJ30",     "NAS100": "NAS100",    "SPX500": "SP500",
+    # Indices (verified against broker symbol list on 2026-07-02)
+    "US30":   "US30",     "NAS100": "USTEC",     "SPX500": "US500",
     # Crypto
     "BTCUSD": "BTCUSD",   "ETHUSD": "ETHUSD",
 }
@@ -106,28 +106,6 @@ ASSET_CLASS = {
     "US30":   "index",  "NAS100": "index",  "SPX500": "index",
     "BTCUSD": "crypto", "ETHUSD": "crypto",
 }
-
-# Last-resort contract sizes, expressed in the cTrader `volume` unit (1/100 of
-# the base-asset unit) that corresponds to 1.00 lot. These are BROKER-SPECIFIC
-# and are used ONLY when the live symbol details could not be fetched. The
-# authoritative value is always the `lotSize` returned by ProtoOASymbolByIdRes.
-_FALLBACK_LOT_SIZE: dict[str, int] = {
-    "XAUUSD": 10_000,    # 100 oz
-    "XAGUSD": 500_000,   # 5000 oz
-    "USOIL":  100_000,   # 1000 barrels (XTIUSD)
-    "US30":   100,       # index — VERIFY against broker contract spec
-    "NAS100": 100,       # index — VERIFY against broker contract spec
-    "SPX500": 100,       # index — VERIFY against broker contract spec
-    "BTCUSD": 100,       # 1 BTC
-    "ETHUSD": 100,       # 1 ETH
-}
-_DEFAULT_FOREX_LOT_SIZE = 10_000_000  # 1 lot = 100_000 units
-
-
-def _fallback_lot_size(iatis_symbol: str) -> int:
-    """Return a best-effort lotSize when live symbol details are unavailable."""
-    return _FALLBACK_LOT_SIZE.get(iatis_symbol, _DEFAULT_FOREX_LOT_SIZE)
-
 
 # ─── Data classes ─────────────────────────────────────────────────────────
 
@@ -268,6 +246,7 @@ class CTraderClient:
         # Async → sync bridge for account info.
         self._message_queue: Queue = Queue()
         self._result_event = threading.Event()
+        self._details_event = threading.Event()
 
         self._validate_credentials()
 
@@ -416,10 +395,11 @@ class CTraderClient:
             logger.error(f"❌ Failed to send symbols list req: {exc}")
 
     def _send_symbol_details_req(self, client: Any, symbol_ids: list[int]) -> None:
-        """Fetch full trading specs (lotSize/digits/min/step) for mapped symbols.
+        """Fetch full trading specs (lotSize/digits/min/step) for symbols.
 
-        Best-effort: READY does not block on this. If it never arrives,
-        place_market_order() falls back to _FALLBACK_LOT_SIZE with a warning.
+        Best-effort at bootstrap: READY does not block on this. If a spec is
+        missing when an order is placed, place_market_order() fetches it on
+        demand via _ensure_symbol_details() and refuses rather than guessing.
         """
         if not symbol_ids:
             return
@@ -578,6 +558,7 @@ class CTraderClient:
                         max_volume=int(getattr(sym, "maxVolume", 0) or 0),
                     )
             logger.info(f"🧾 Loaded trading specs for {len(symbols)} symbol(s)")
+            self._details_event.set()
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOASymbolByIdRes: {exc}")
 
@@ -791,37 +772,64 @@ class CTraderClient:
         centi_lots = max(1, min(int(lots * 100), 10_000))  # 0.01 .. 100 lots
         return centi_lots
 
-    def _to_api_volume(self, iatis_symbol: str, ct_symbol: str, centi_lots: int) -> int:
-        """Convert centi-lots → broker `volume` unit using live lotSize.
+    def _to_api_volume(
+        self, details: "_SymbolDetails", centi_lots: int
+    ) -> tuple[int, str]:
+        """Convert centi-lots → broker `volume` unit using live specs.
 
-        FIX C3. Falls back to _FALLBACK_LOT_SIZE (with a warning) if details are
-        not loaded, and snaps to stepVolume / clamps to [minVolume, maxVolume]
-        when those are known.
+        Returns (volume, error). error is non-empty when the order must be
+        refused. We never guess a lotSize and never inflate the size above the
+        risk-derived amount just to satisfy the broker minimum — doing so would
+        silently exceed the intended risk budget.
         """
         lots = centi_lots / 100.0
-        symbol_id = self._symbol_name_to_id.get(ct_symbol)
-        details = self._symbol_details.get(symbol_id) if symbol_id is not None else None
+        raw = int(round(lots * details.lot_size))
 
-        if details and details.lot_size > 0:
-            lot_size = details.lot_size
-        else:
-            lot_size = _fallback_lot_size(iatis_symbol)
-            logger.warning(
-                f"⚠️ Using FALLBACK lotSize={lot_size} for {iatis_symbol} "
-                f"(live symbol details unavailable). Verify before live trading."
+        if details.min_volume > 0 and raw < details.min_volume:
+            return 0, (
+                f"Risk-sized volume ({raw}) is below the broker minimum "
+                f"({details.min_volume}). Increase risk_pct or account balance; "
+                f"refusing to inflate size beyond the risk budget."
             )
 
-        volume = int(round(lots * lot_size))
+        volume = raw
+        if details.max_volume > 0:
+            volume = min(volume, details.max_volume)
+        if details.step_volume > 0:
+            volume = (volume // details.step_volume) * details.step_volume
+        # Guard against a step-floor dropping just under the (already-cleared) min.
+        if details.min_volume > 0 and volume < details.min_volume:
+            volume = details.min_volume
 
-        if details:
-            if details.max_volume > 0:
-                volume = min(volume, details.max_volume)
-            if details.step_volume > 0:
-                volume = (volume // details.step_volume) * details.step_volume
-            if details.min_volume > 0:
-                volume = max(volume, details.min_volume)
+        if volume <= 0:
+            return 0, f"Computed API volume is 0 (centi_lots={centi_lots})."
+        return volume, ""
 
-        return max(0, volume)
+    def _ensure_symbol_details(
+        self, symbol_id: int, timeout: float = 10.0
+    ) -> "_SymbolDetails | None":
+        """Return live specs for a symbol, fetching them on demand if needed.
+
+        Bootstrap loads specs best-effort; if a spec is not present when an order
+        is placed, fetch just this one synchronously rather than guessing.
+        """
+        with self._lock:
+            d = self._symbol_details.get(symbol_id)
+        if d and d.lot_size > 0:
+            return d
+
+        try:
+            from twisted.internet import reactor
+            self._details_event.clear()
+            reactor.callFromThread(
+                self._send_symbol_details_req, self._client, [symbol_id]
+            )
+            self._details_event.wait(timeout=timeout)
+        except Exception as exc:
+            logger.error(f"❌ On-demand symbol-details fetch failed: {exc}")
+
+        with self._lock:
+            return self._symbol_details.get(symbol_id)
 
     # ─── Orders ──────────────────────────────────────────────────────────────
 
@@ -853,11 +861,17 @@ class CTraderClient:
                 error=f"Symbol {ct_symbol} not in loaded symbol list.",
             )
 
-        api_volume = self._to_api_volume(order.symbol, ct_symbol, order.volume)
-        if api_volume <= 0:
+        details = self._ensure_symbol_details(symbol_id)
+        if not details or details.lot_size <= 0:
             return CTraderResult(
                 success=False, symbol=order.symbol,
-                error=f"Computed API volume is 0 (centi_lots={order.volume}).",
+                error=f"No live lotSize for {ct_symbol}; refusing to size by guess.",
+            )
+
+        api_volume, vol_error = self._to_api_volume(details, order.volume)
+        if vol_error:
+            return CTraderResult(
+                success=False, symbol=order.symbol, error=vol_error,
             )
 
         try:

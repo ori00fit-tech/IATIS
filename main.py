@@ -42,6 +42,7 @@ from engines.smc_engine import SMCEngine
 from engines.wyckoff_engine import WyckoffEngine
 from regimes.regime_detector import detect_regime
 from research.edge_gate import check_edge_gate
+from risk.live_portfolio_state import compute_portfolio_state
 from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
 from storage.decision_db import log_decision_db
@@ -253,14 +254,21 @@ def run_pipeline(config: dict) -> dict:
         stop = entry - direction * atr_estimate * sl_multiplier
         target = entry + direction * atr_estimate * sl_multiplier * symbol_rr
 
+        # Live portfolio state (drawdown / open risk / correlated exposure)
+        # derived from the outcomes DB — previously hardcoded zeros, which
+        # silently disabled the drawdown stop and exposure caps.
+        portfolio_state = compute_portfolio_state(
+            symbol=config["data"].get("symbol", ""),
+            config=config,
+        )
         risk_inputs = RiskInputs(
-            account_balance=10_000.0,
+            account_balance=portfolio_state.account_balance,
             entry_price=float(entry),
             stop_loss_price=float(stop),
             take_profit_price=float(target),
-            current_open_risk_pct=0.0,
-            current_drawdown_pct=0.0,
-            correlated_exposure_pct=0.0,
+            current_open_risk_pct=portfolio_state.current_open_risk_pct,
+            current_drawdown_pct=portfolio_state.current_drawdown_pct,
+            correlated_exposure_pct=portfolio_state.correlated_exposure_pct,
         )
         risk_result = evaluate_risk(risk_inputs, config)
 

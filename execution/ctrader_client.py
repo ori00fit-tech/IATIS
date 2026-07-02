@@ -341,6 +341,7 @@ class CTraderClient:
 
     def _on_app_auth(self, client: Any, response: Any) -> None:
         """Proceed only if the server actually returned an ApplicationAuthRes."""
+        response = self._extract(response)
         if response.__class__.__name__ != "ProtoOAApplicationAuthRes":
             logger.error(
                 f"❌ App auth failed — unexpected response "
@@ -373,6 +374,7 @@ class CTraderClient:
 
     def _on_account_auth(self, client: Any, response: Any) -> None:
         """Proceed only if the server actually returned an AccountAuthRes."""
+        response = self._extract(response)
         if response.__class__.__name__ != "ProtoOAAccountAuthRes":
             logger.error(
                 f"❌ Account auth failed — unexpected response "
@@ -437,8 +439,26 @@ class CTraderClient:
 
     # ─── Universal message dispatcher ────────────────────────────────────────
 
+    @staticmethod
+    def _extract(message: Any) -> Any:
+        """Return the concrete protobuf message from a ProtoMessage envelope.
+
+        ctrader-open-api delivers the raw ProtoMessage (payloadType + payload) to
+        both the message callback and each send() Deferred. The concrete type is
+        obtained via Protobuf.extract(). If the object is already concrete (older
+        or future library behaviour), it is returned unchanged.
+        """
+        try:
+            if message.__class__.__name__ == "ProtoMessage":
+                from ctrader_open_api import Protobuf
+                return Protobuf.extract(message)
+        except Exception as exc:
+            logger.error(f"❌ Failed to extract ProtoMessage payload: {exc}")
+        return message
+
     def _on_message(self, client: Any, message: Any) -> None:
         """Route every inbound protobuf message to its handler by type name."""
+        message = self._extract(message)
         msg_type = message.__class__.__name__
         logger.debug(f"📨 Received: {msg_type}")
         try:
@@ -888,6 +908,7 @@ class CTraderClient:
             def on_response(response: Any) -> None:
                 # FIX C2: parse ProtoOAExecutionEvent correctly.
                 try:
+                    response = self._extract(response)
                     result_holder[0] = self._parse_execution_response(order, response)
                 except Exception as exc:
                     logger.error(f"❌ Error parsing order response: {exc}")

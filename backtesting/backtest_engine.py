@@ -27,8 +27,16 @@ class BacktestConfig:
     symbol: str = "EURUSD"
     initial_balance: float = 10_000.0
     risk_per_trade: float = 0.01
-    min_rr: float = 3.0
+    # Aligned with production config.yaml (risk.min_risk_reward) — was 3.0,
+    # which meant the backtest validated a different system than production.
+    min_rr: float = 2.0
     commission_pips: float = 0.5
+    # Slippage applied against the trader on entry AND on SL exits
+    # (limit-like TP exits are assumed filled at price). 0 to disable.
+    slippage_pips: float = 0.5
+    # SL distance = ATR * this multiplier. Aligned with production
+    # config.yaml risk.sl_atr_multiplier (was hardcoded 1.5 in the loop).
+    sl_atr_multiplier: float = 2.5
     warmup_bars: int = 210
     step_bars: int = 4
     pip_size: float = 0.0001    # 0.01 for JPY pairs, 0.0001 for most FX
@@ -88,6 +96,54 @@ class Trade:
     exit_reason: str = ""
 
 
+def check_exit(trade: "Trade", bar, slip: float) -> tuple[float, str] | None:
+    """Determine exit on this bar, modeling gaps and SL slippage.
+
+    Pure function (no side effects) so its assumptions are unit-testable.
+
+    Rules (conservative, deterministic):
+    - Gap through SL at the open → filled at the OPEN (worse than SL),
+      not at the SL price. Stop orders cannot fill better than the market;
+      the previous code exited at the exact SL price, overstating results.
+    - Gap through TP at the open → filled at the open as well
+      (symmetric treatment; favorable gaps do occur for limit exits).
+    - Intrabar: SL is checked BEFORE TP. When both are touched within one
+      bar the true sequence is unknowable from OHLC, so we take the
+      pessimistic assumption.
+    - SL fills incur ``slip`` (price units) against the trader; TP fills
+      are limit-like and assumed filled at price.
+
+    Args:
+        trade: the open trade (direction, stop_loss, take_profit).
+        bar: OHLC row supporting ``bar["open"|"high"|"low"]``.
+        slip: slippage in PRICE units (slippage_pips * pip_size).
+
+    Returns:
+        (exit_price, exit_reason) or None if no exit on this bar.
+    """
+    o = float(bar["open"])
+    h, l = float(bar["high"]), float(bar["low"])
+    if trade.direction == "BUY":
+        if o <= trade.stop_loss:
+            return o - slip, "SL_GAP"
+        if o >= trade.take_profit:
+            return o, "TP_GAP"
+        if l <= trade.stop_loss:
+            return trade.stop_loss - slip, "SL"
+        if h >= trade.take_profit:
+            return trade.take_profit, "TP"
+    else:  # SELL
+        if o >= trade.stop_loss:
+            return o + slip, "SL_GAP"
+        if o <= trade.take_profit:
+            return o, "TP_GAP"
+        if h >= trade.stop_loss:
+            return trade.stop_loss + slip, "SL"
+        if l <= trade.take_profit:
+            return trade.take_profit, "TP"
+    return None
+
+
 @dataclass
 class BacktestResult:
     config: BacktestConfig
@@ -99,6 +155,10 @@ class BacktestResult:
     total_runs: int = 0
     execute_count: int = 0
     no_trade_count: int = 0
+    # Pipeline exceptions are NOT the same as a genuine NO_TRADE decision.
+    # Counting them separately prevents a structurally broken run (e.g. bad
+    # input schema) from silently reporting as "0 trades, all NO_TRADE".
+    error_count: int = 0
 
     trades: list = field(default_factory=list)
     equity_curve: list = field(default_factory=list)
@@ -278,55 +338,41 @@ def run_backtest(
     total = len(df) - config.warmup_bars - 1
     logger.info(f"Backtest: {config.symbol} | {total} bars to process")
 
+    slip = config.slippage_pips * config.pip_size
+
+    def _close_trade(trade: Trade, exit_price: float, exit_reason: str,
+                     bar_idx: int, bar_time) -> float:
+        """Finalize a trade at ``exit_price`` and return its pnl_usd.
+
+        Single close path (was duplicated 4× for BUY/SELL × SL/TP).
+        Commission is charged once per round trip, consistently via
+        _pip_value_usd for forex.
+        """
+        sign = 1.0 if trade.direction == "BUY" else -1.0
+        diff = sign * (exit_price - trade.entry_price)
+        trade.exit_bar, trade.exit_time = bar_idx, bar_time
+        trade.exit_price = exit_price
+        trade.pnl_pips = diff / config.pip_size - config.commission_pips
+        trade.pnl_usd = _calc_pnl_usd(diff, trade.position_size, trade.entry_price)
+        if ac == "forex":
+            trade.pnl_usd -= config.commission_pips * _pip_value_usd(
+                trade.entry_price, trade.position_size
+            )
+        trade.exit_reason = exit_reason
+        return trade.pnl_usd
+
     for i in range(config.warmup_bars, len(df) - 1):
         next_bar = df.iloc[i + 1]
 
-        # --- Check open trade ---
+        # --- Check open trade (gap-aware, slippage-aware) ---
         if open_trade is not None:
-            h, l = float(next_bar["high"]), float(next_bar["low"])
-            if open_trade.direction == "BUY":
-                if l <= open_trade.stop_loss:
-                    diff = open_trade.stop_loss - open_trade.entry_price
-                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
-                    open_trade.exit_price = open_trade.stop_loss
-                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-                    # Commission: use _pip_value_usd for consistency
-                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
-                    open_trade.exit_reason = "SL"
-                    balance += open_trade.pnl_usd
-                    result.trades.append(open_trade); open_trade = None
-                elif h >= open_trade.take_profit:
-                    diff = open_trade.take_profit - open_trade.entry_price
-                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
-                    open_trade.exit_price = open_trade.take_profit
-                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
-                    open_trade.exit_reason = "TP"
-                    balance += open_trade.pnl_usd
-                    result.trades.append(open_trade); open_trade = None
-            else:  # SELL
-                if h >= open_trade.stop_loss:
-                    diff = open_trade.entry_price - open_trade.stop_loss
-                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
-                    open_trade.exit_price = open_trade.stop_loss
-                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
-                    open_trade.exit_reason = "SL"
-                    balance += open_trade.pnl_usd
-                    result.trades.append(open_trade); open_trade = None
-                elif l <= open_trade.take_profit:
-                    diff = open_trade.entry_price - open_trade.take_profit
-                    open_trade.exit_bar, open_trade.exit_time = i+1, next_bar.name
-                    open_trade.exit_price = open_trade.take_profit
-                    open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-                    open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-                    open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
-                    open_trade.exit_reason = "TP"
-                    balance += open_trade.pnl_usd
-                    result.trades.append(open_trade); open_trade = None
+            exit_hit = check_exit(open_trade, next_bar, slip)
+            if exit_hit is not None:
+                exit_price, reason = exit_hit
+                balance += _close_trade(open_trade, exit_price, reason,
+                                        i + 1, next_bar.name)
+                result.trades.append(open_trade)
+                open_trade = None
 
         result.equity_curve.append(balance)
 
@@ -354,11 +400,14 @@ def run_backtest(
                 result.no_trade_count += 1
                 continue
 
-            entry = float(next_bar["open"])
-            atr_val = float(atr_series.iloc[i]) if not pd.isna(atr_series.iloc[i]) else 0.001
-            sl_dist = atr_val * 1.5
-            tp_dist = sl_dist * config.min_rr
             direction = vote.winning_bias.value
+            # Market entry at next bar open, with slippage AGAINST the trader.
+            raw_entry = float(next_bar["open"])
+            entry = raw_entry + slip if direction == "BULLISH" else raw_entry - slip
+            atr_val = float(atr_series.iloc[i]) if not pd.isna(atr_series.iloc[i]) else 0.001
+            # Aligned with production (config.yaml risk.sl_atr_multiplier).
+            sl_dist = atr_val * config.sl_atr_multiplier
+            tp_dist = sl_dist * config.min_rr
 
             sl = entry - sl_dist if direction == "BULLISH" else entry + sl_dist
             tp = entry + tp_dist if direction == "BULLISH" else entry - tp_dist
@@ -376,56 +425,36 @@ def run_backtest(
 
         except Exception as exc:
             logger.debug(f"Bar {i} skipped: {exc}")
-            result.no_trade_count += 1
+            result.error_count += 1
+            # First error is logged at WARNING with detail so structural
+            # problems (e.g. missing columns) surface immediately instead
+            # of masquerading as thousands of silent NO_TRADEs.
+            if result.error_count == 1:
+                logger.warning(f"First pipeline error at bar {i}: {exc!r}")
 
-    # Force-close
+    # Force-close any position still open at the end of data
     if open_trade is not None:
         last = df.iloc[-1]
-        exit_p = float(last["close"])
-        if open_trade.direction == "BUY":
-            diff = exit_p - open_trade.entry_price
-        else:
-            diff = open_trade.entry_price - exit_p
-        open_trade.exit_bar = len(df)-1
-        open_trade.exit_time = last.name
-        open_trade.exit_price = exit_p
-        open_trade.pnl_pips = diff / config.pip_size - config.commission_pips
-        open_trade.pnl_usd = _calc_pnl_usd(diff, open_trade.position_size, open_trade.entry_price)
-        open_trade.pnl_usd -= config.commission_pips * _pip_value_usd(open_trade.entry_price, open_trade.position_size) if ac == "forex" else 0
-        open_trade.exit_reason = "FORCED_CLOSE"
-        balance += open_trade.pnl_usd
+        balance += _close_trade(open_trade, float(last["close"]),
+                                "FORCED_CLOSE", len(df) - 1, last.name)
         result.trades.append(open_trade)
 
     result.equity_curve.append(balance)
     result.compute()
-    logger.info(f"Backtest done: {result.execute_count} trades, WR={result.win_rate:.1%}")
+    logger.info(
+        f"Backtest done: {result.execute_count} trades, WR={result.win_rate:.1%}, "
+        f"errors={result.error_count}/{result.total_runs}"
+    )
+    # A structurally broken run must not masquerade as a valid "0 trades"
+    # result — that would silently invalidate any walk-forward conclusion.
+    if result.total_runs > 0 and result.error_count == result.total_runs:
+        raise RuntimeError(
+            f"Backtest invalid: all {result.total_runs} pipeline runs raised "
+            f"exceptions (see first WARNING above). Check input data schema."
+        )
     return result
 
 
-def _close_trade(trade: Trade, bar: int, bar_data, exit_price: float,
-                 pnl_pips: float, pip_size: float, reason: str) -> None:
-    trade.exit_bar = bar
-    trade.exit_time = bar_data.name
-    trade.exit_price = exit_price
-    trade.pnl_pips = pnl_pips
-    trade.pnl_usd = pnl_pips * pip_size * trade.position_size * 100000
-    trade.exit_reason = reason
-
-
-# Monkey-patch: override _close_trade with asset-class-aware version
-_orig_close_trade = _close_trade
-
-def _close_trade_v2(trade: Trade, bar: int, bar_data, exit_price: float,
-                    pnl_pips: float, pip_size: float, reason: str,
-                    asset_class: str = "forex",
-                    dollar_per_point: float = 1.0) -> None:
-    trade.exit_bar = bar
-    trade.exit_time = bar_data.name
-    trade.exit_price = exit_price
-    trade.pnl_pips = pnl_pips
-    if asset_class == "forex":
-        trade.pnl_usd = pnl_pips * pip_size * trade.position_size * 100_000
-    else:
-        # Metals/Indices: price_diff (in asset units) × lots × dollar_per_point
-        trade.pnl_usd = pnl_pips * trade.position_size * dollar_per_point
-    trade.exit_reason = reason
+# NOTE (2026-07-02 review): legacy module-level _close_trade,
+# _orig_close_trade and _close_trade_v2 removed — dead code superseded by
+# the asset-class-aware close path inside run_backtest().

@@ -206,6 +206,9 @@ class CTraderClient:
     LIVE_HOST = "live.ctraderapi.com"
     PORT = 5035
 
+    # cTrader spot bid/ask and relative SL/TP are in 1/100000 of price units.
+    SPOT_SCALE = 100_000
+
     # Response wait budgets (seconds)
     ORDER_TIMEOUT = 15.0
     AUTH_TIMEOUT = 15.0        # app/account auth round-trips
@@ -247,6 +250,8 @@ class CTraderClient:
         self._message_queue: Queue = Queue()
         self._result_event = threading.Event()
         self._details_event = threading.Event()
+        self._spots: dict[int, tuple[int, int]] = {}  # symbol_id -> (bid, ask) scaled
+        self._spot_event = threading.Event()
 
         self._validate_credentials()
 
@@ -450,6 +455,8 @@ class CTraderClient:
                 self._on_symbol_details_res(message)
             elif msg_type == "ProtoOAExecutionEvent":
                 self._on_execution_event(message)
+            elif msg_type == "ProtoOASpotEvent":
+                self._on_spot_event(message)
             elif msg_type == "ProtoOAErrorRes":
                 self._on_error_res(message)
             elif msg_type == "ProtoOAOrderErrorEvent":
@@ -831,6 +838,82 @@ class CTraderClient:
         with self._lock:
             return self._symbol_details.get(symbol_id)
 
+    def _on_spot_event(self, message: Any) -> None:
+        """Store the latest bid/ask (scaled) for a symbol from a spot stream."""
+        try:
+            sid = int(getattr(message, "symbolId", 0))
+            if not sid:
+                return
+            bid = int(getattr(message, "bid", 0) or 0)
+            ask = int(getattr(message, "ask", 0) or 0)
+            with self._lock:
+                prev_bid, prev_ask = self._spots.get(sid, (0, 0))
+                self._spots[sid] = (bid or prev_bid, ask or prev_ask)
+            self._spot_event.set()
+        except Exception as exc:
+            logger.error(f"❌ Error processing ProtoOASpotEvent: {exc}")
+
+    def _get_spot_scaled(
+        self, symbol_id: int, timeout: float = 8.0
+    ) -> "tuple[int, int] | None":
+        """Subscribe briefly and return (bid, ask) scaled ints, then unsubscribe."""
+        try:
+            from twisted.internet import reactor
+            from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+                ProtoOASubscribeSpotsReq,
+                ProtoOAUnsubscribeSpotsReq,
+            )
+
+            def subscribe() -> None:
+                req = ProtoOASubscribeSpotsReq()
+                req.ctidTraderAccountId = self.account_id
+                req.symbolId.append(symbol_id)
+                d = self._client.send(req, responseTimeoutInSeconds=timeout)
+                d.addErrback(lambda f: self._on_error("subscribe_spots", f))
+
+            with self._lock:
+                self._spots.pop(symbol_id, None)
+            self._spot_event.clear()
+            reactor.callFromThread(subscribe)
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                self._spot_event.wait(timeout=0.5)
+                self._spot_event.clear()
+                with self._lock:
+                    bid, ask = self._spots.get(symbol_id, (0, 0))
+                if bid > 0 and ask > 0:
+                    break
+
+            def unsubscribe() -> None:
+                req = ProtoOAUnsubscribeSpotsReq()
+                req.ctidTraderAccountId = self.account_id
+                req.symbolId.append(symbol_id)
+                d = self._client.send(req, responseTimeoutInSeconds=timeout)
+                d.addErrback(lambda f: None)
+
+            reactor.callFromThread(unsubscribe)
+
+            with self._lock:
+                bid, ask = self._spots.get(symbol_id, (0, 0))
+            return (bid, ask) if (bid > 0 and ask > 0) else None
+        except Exception as exc:
+            logger.error(f"❌ Spot fetch failed: {exc}")
+            return None
+
+    def get_spot(self, iatis_symbol: str) -> "tuple[float, float] | None":
+        """Return (bid, ask) as real prices for an IATIS symbol, or None."""
+        ct_symbol = IATIS_TO_CTRADER.get(iatis_symbol)
+        if not ct_symbol:
+            return None
+        symbol_id = self._symbol_name_to_id.get(ct_symbol)
+        if symbol_id is None:
+            return None
+        scaled = self._get_spot_scaled(symbol_id)
+        if not scaled:
+            return None
+        return (scaled[0] / self.SPOT_SCALE, scaled[1] / self.SPOT_SCALE)
+
     # ─── Orders ──────────────────────────────────────────────────────────────
 
     def place_market_order(self, order: CTraderOrder) -> CTraderResult:
@@ -874,6 +957,55 @@ class CTraderClient:
                 success=False, symbol=order.symbol, error=vol_error,
             )
 
+        # cTrader rejects ABSOLUTE stopLoss/takeProfit on MARKET orders; it wants
+        # relativeStopLoss/relativeTakeProfit (distance from fill, in 1/100000 of
+        # price). Derive that distance from a live spot price rather than a
+        # guessed entry.
+        rel_sl = rel_tp = 0
+        if order.stop_loss > 0 or order.take_profit > 0:
+            spot = self._get_spot_scaled(symbol_id)
+            if not spot:
+                return CTraderResult(
+                    success=False, symbol=order.symbol,
+                    error=f"No live spot price for {ct_symbol}; cannot set SL/TP.",
+                )
+            bid_scaled, ask_scaled = spot
+            entry_scaled = ask_scaled if order.direction == "BUY" else bid_scaled
+            entry_price = entry_scaled / self.SPOT_SCALE
+
+            # Sanity: reject if the derived entry is wildly off the SL/TP band
+            # (guards against any price-scale mismatch instead of trading on it).
+            ref = order.take_profit or order.stop_loss
+            if ref and not (0.2 <= entry_price / ref <= 5.0):
+                return CTraderResult(
+                    success=False, symbol=order.symbol,
+                    error=(f"Spot sanity check failed for {ct_symbol}: "
+                           f"entry≈{entry_price} vs SL/TP {order.stop_loss}/"
+                           f"{order.take_profit} (raw bid/ask={bid_scaled}/"
+                           f"{ask_scaled})."),
+                )
+
+            # Directional validation.
+            if order.direction == "BUY":
+                if order.stop_loss > 0 and order.stop_loss >= entry_price:
+                    return CTraderResult(success=False, symbol=order.symbol,
+                        error=f"BUY: SL {order.stop_loss} must be below entry ≈{entry_price:.5f}.")
+                if order.take_profit > 0 and order.take_profit <= entry_price:
+                    return CTraderResult(success=False, symbol=order.symbol,
+                        error=f"BUY: TP {order.take_profit} must be above entry ≈{entry_price:.5f}.")
+            else:
+                if order.stop_loss > 0 and order.stop_loss <= entry_price:
+                    return CTraderResult(success=False, symbol=order.symbol,
+                        error=f"SELL: SL {order.stop_loss} must be above entry ≈{entry_price:.5f}.")
+                if order.take_profit > 0 and order.take_profit >= entry_price:
+                    return CTraderResult(success=False, symbol=order.symbol,
+                        error=f"SELL: TP {order.take_profit} must be below entry ≈{entry_price:.5f}.")
+
+            if order.stop_loss > 0:
+                rel_sl = int(round(abs(entry_price - order.stop_loss) * self.SPOT_SCALE))
+            if order.take_profit > 0:
+                rel_tp = int(round(abs(order.take_profit - entry_price) * self.SPOT_SCALE))
+
         try:
             from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOANewOrderReq
             from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
@@ -895,17 +1027,18 @@ class CTraderClient:
                         else ProtoOATradeSide.SELL
                     )
                     req.volume = api_volume
-                    # FIX C1: absolute SL/TP prices — no entry reference needed.
-                    if order.stop_loss > 0:
-                        req.stopLoss = float(order.stop_loss)
-                    if order.take_profit > 0:
-                        req.takeProfit = float(order.take_profit)
+                    # MARKET orders require RELATIVE SL/TP (1/100000 of price),
+                    # computed from the live spot above.
+                    if rel_sl > 0:
+                        req.relativeStopLoss = rel_sl
+                    if rel_tp > 0:
+                        req.relativeTakeProfit = rel_tp
                     req.label = "IATIS"
                     req.comment = order.comment[:100]
 
                     logger.info(
                         f"📤 Order: {order.direction} {ct_symbol} vol={api_volume} "
-                        f"SL={order.stop_loss} TP={order.take_profit}"
+                        f"relSL={rel_sl} relTP={rel_tp}"
                     )
                     d = self._client.send(
                         req, responseTimeoutInSeconds=self.ORDER_TIMEOUT

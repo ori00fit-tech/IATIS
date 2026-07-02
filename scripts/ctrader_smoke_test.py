@@ -123,8 +123,22 @@ def run_order_test(
         print("❌ No account info; aborting order test.")
         return
 
-    # Size from risk; if no SL provided, use a nominal distance just for sizing.
-    sizing_distance = abs((sl - tp) / 2) if (sl and tp) else 0.0030
+    # Derive valid SL/TP from the live price so the order is always on the
+    # correct side. Fixed CLI --sl/--tp are only used if the live spot is
+    # unavailable.
+    spot = client.get_spot(symbol)
+    if spot:
+        bid, ask = spot
+        entry = ask  # BUY fills near ask
+        pip = 0.01 if "JPY" in symbol else 0.0001
+        sl = round(entry - 300 * pip, 5)   # ~30 pips below
+        tp = round(entry + 600 * pip, 5)   # ~60 pips above (RR 2.0)
+        print(f"   Live entry ≈ {entry} → SL {sl} / TP {tp}")
+        sizing_distance = abs(entry - sl)
+    else:
+        print("   ⚠️ No live spot; using CLI --sl/--tp as provided.")
+        sizing_distance = abs((sl - tp) / 2) if (sl and tp) else 0.0030
+
     volume = client.calculate_volume(
         symbol=symbol,
         balance=info.balance,

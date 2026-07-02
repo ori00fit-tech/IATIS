@@ -40,6 +40,16 @@ class BacktestConfig:
     warmup_bars: int = 210
     step_bars: int = 4
     pip_size: float = 0.0001    # 0.01 for JPY pairs, 0.0001 for most FX
+    # ── Gate parity with production (main.py) ─────────────────────────
+    # Default ON: the backtest must simulate the SAME system that trades.
+    # Individual flags exist ONLY for ablation studies (measuring each
+    # gate's contribution). Tuning gate on/off combinations to make a
+    # walk-forward pass is curve fitting — results produced with any
+    # gate disabled are labeled as ablations in the result manifest.
+    use_mqs_gate: bool = True           # Gate 1: Market Quality Score
+    use_regime_weights: bool = True     # regime-adaptive engine weights
+    use_mtf_confirmation: bool = True   # D1/H1 alignment score adjustment
+    use_reversal_veto: bool = True      # H013 hard/soft veto
 
     # Asset class controls how P&L is calculated:
     # 'forex': pnl_usd = pips * pip_size * lot_size * 100000
@@ -73,8 +83,12 @@ class BacktestConfig:
             elif ac in ("indices", "crypto"):
                 return cls(symbol=symbol, asset_class="index",
                            pip_size=0.01, dollar_per_point=1.0, **kwargs)
-        except (KeyError, ImportError):
-            pass
+        except (KeyError, ImportError) as exc:
+            logger.warning(
+                f"{symbol}: no asset profile ({exc}) — falling back to FOREX "
+                f"P&L math. For metals/indices/crypto this MISPRICES results; "
+                f"add the symbol to core/asset_profiles.py."
+            )
         return cls(symbol=symbol, **kwargs)
 
 
@@ -159,6 +173,15 @@ class BacktestResult:
     # Counting them separately prevents a structurally broken run (e.g. bad
     # input schema) from silently reporting as "0 trades, all NO_TRADE".
     error_count: int = 0
+    # Which gate rejected how many bars — turns "0/4 CONSISTENT" from a
+    # dead end into a diagnosable funnel (mqs / score / votes /
+    # contradiction / reversal_veto).
+    gate_rejections: dict = field(
+        default_factory=lambda: {
+            "mqs": 0, "score": 0, "votes": 0,
+            "contradiction": 0, "reversal_veto": 0,
+        }
+    )
 
     trades: list = field(default_factory=list)
     equity_curve: list = field(default_factory=list)
@@ -253,6 +276,11 @@ def run_backtest(
     from confluence.voting_system import tally_votes
     from confluence.score_calculator import calculate_score
     from confluence.contradiction_engine import check_contradictions
+    from confluence.mtf_confirmation import check_mtf_confirmation
+    from confluence.regime_weights import apply_regime_weights
+    from confluence.reversal_veto import check_reversal_veto
+    from core.market_quality import assess_market_quality
+    from regimes.regime_detector import detect_regime
     from regimes.volatility_classifier import atr as compute_atr
 
     if config is None:
@@ -380,24 +408,79 @@ def run_backtest(
         if open_trade is not None or (i - config.warmup_bars) % config.step_bars != 0:
             continue
 
-        # --- Run pipeline ---
+        # --- Run pipeline (gate parity with main.py) ---
         result.total_runs += 1
         try:
             window = df.iloc[:i+1]
+            bar_time = window.index[-1].to_pydatetime()
+
+            # Gate 1 — Market Quality Score. CRITICAL: pass the BAR time,
+            # not wall-clock now; session/Friday/Monday penalties must be
+            # evaluated at the data's timestamp or the whole gate is noise.
+            if config.use_mqs_gate:
+                mqs = assess_market_quality(
+                    df=window, symbol=config.symbol, now=bar_time
+                )
+                if not mqs.should_trade:
+                    result.no_trade_count += 1
+                    result.gate_rejections["mqs"] += 1
+                    continue
+
             mtf = build_multi_timeframe_view(window, timeframes)
             outputs = [e.safe_analyze(mtf) for e in engines_list]
-            vote = tally_votes(outputs, weights)
-            score = calculate_score(outputs, weights)
+
+            # Regime-adaptive weights (same call chain as production).
+            active_weights = weights
+            if config.use_regime_weights:
+                regime = detect_regime(window)
+                active_weights = apply_regime_weights(
+                    weights, regime.regime.value, regime.volatility
+                )
+
+            vote = tally_votes(outputs, active_weights)
+            score = calculate_score(outputs, active_weights)
             contradiction = check_contradictions(outputs)
 
+            # MTF confirmation — D1/H1 alignment adjusts the score
+            # exactly as in main.py (clamped to [0, 100]).
+            adjusted_score = score.final_score
+            if config.use_mtf_confirmation:
+                mtf_res = check_mtf_confirmation(
+                    h1_bias=vote.winning_bias.value, mtf_data=mtf
+                )
+                adjusted_score = round(
+                    max(0.0, min(100.0, adjusted_score + mtf_res.score_adjustment)), 2
+                )
+
+            # H013 reversal veto — hard veto blocks, soft veto scales the
+            # score by confidence_multiplier (identical to production).
+            veto_blocked = False
+            if config.use_reversal_veto:
+                veto = check_reversal_veto(outputs, vote.winning_bias)
+                if veto.vetoed:
+                    veto_blocked = True
+                elif veto.soft_veto:
+                    adjusted_score = round(
+                        adjusted_score * veto.confidence_multiplier, 2
+                    )
+
             ok = (
-                score.final_score >= min_score
+                adjusted_score >= min_score
                 and vote.agree_count >= min_engines
                 and not contradiction.blocked
+                and not veto_blocked
                 and vote.winning_bias.value != "NEUTRAL"
             )
             if not ok:
                 result.no_trade_count += 1
+                if veto_blocked:
+                    result.gate_rejections["reversal_veto"] += 1
+                elif adjusted_score < min_score:
+                    result.gate_rejections["score"] += 1
+                elif contradiction.blocked:
+                    result.gate_rejections["contradiction"] += 1
+                else:
+                    result.gate_rejections["votes"] += 1
                 continue
 
             direction = vote.winning_bias.value

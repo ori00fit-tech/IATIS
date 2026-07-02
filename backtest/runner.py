@@ -212,25 +212,19 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
 # Per-symbol run
 # ─────────────────────────────────────────────────────────────────────────
 
-def _pip_size_for(symbol: str) -> float:
-    """Pip size from the asset profile registry (asset-aware math)."""
-    try:
-        from core.asset_profiles import get_profile
-        return float(get_profile(symbol).pip_size)
-    except Exception:  # noqa: BLE001 — profile registry optional per symbol
-        return 0.01 if symbol.endswith("JPY") else 0.0001
-
-
 def run_symbol(
     symbol: str,
     df: pd.DataFrame,
     runner_config: RunnerConfig,
 ) -> SymbolRunResult:
-    """Run the full backtest → metrics → MC → report chain for one symbol."""
-    engine_cfg = BacktestConfig(
-        symbol=symbol,
-        pip_size=_pip_size_for(symbol),
-        **runner_config.engine_overrides,
+    """Run the full backtest → metrics → MC → report chain for one symbol.
+
+    Engine config comes from ``BacktestConfig.from_profile`` — the single
+    source of truth for pip size, asset class, and dollar-per-point.
+    Bypassing it silently prices metals/crypto P&L with forex math.
+    """
+    engine_cfg = BacktestConfig.from_profile(
+        symbol, **runner_config.engine_overrides
     )
     result = run_backtest(df, engine_cfg)
 

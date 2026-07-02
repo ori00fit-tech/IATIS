@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 import pandas as pd
 
@@ -115,6 +115,7 @@ class WindowResult:
     max_drawdown_pct: float
     expectancy_usd: float
     pipeline_errors: int
+    gate_rejections: dict
     verdict: WindowVerdict
 
 
@@ -175,7 +176,6 @@ def run_walk_forward(
     df: pd.DataFrame,
     wf_config: WalkForwardConfig,
     parameter_selector: ParameterSelector | None = None,
-    pip_size: float = 0.0001,
 ) -> WalkForwardResult:
     """Run walk-forward validation for one symbol.
 
@@ -186,7 +186,6 @@ def run_walk_forward(
         parameter_selector: optional optimizer hook (see Protocol). When
             provided, it receives ONLY the data strictly before each test
             window — enforced here, not trusted to the selector.
-        pip_size: asset pip size for the engine.
     """
     windows = split_windows(df, wf_config.n_windows, wf_config.warmup_bars)
     results: list[WindowResult] = []
@@ -196,9 +195,8 @@ def run_walk_forward(
             train_df = df.loc[: test_start].iloc[:-1]  # strictly past data
             engine_cfg = parameter_selector(train_df, symbol)
         else:
-            engine_cfg = BacktestConfig(
-                symbol=symbol,
-                pip_size=pip_size,
+            engine_cfg = BacktestConfig.from_profile(
+                symbol,
                 warmup_bars=wf_config.warmup_bars,
                 **wf_config.engine_overrides,
             )
@@ -226,6 +224,7 @@ def run_walk_forward(
                 max_drawdown_pct=round(m.max_drawdown, 2),
                 expectancy_usd=round(m.expectancy, 2),
                 pipeline_errors=bt.error_count,
+                gate_rejections=dict(bt.gate_rejections),
                 verdict=verdict,
             )
         )
@@ -249,23 +248,17 @@ def run_walk_forward_suite(
     data_dir: Path,
     wf_config: WalkForwardConfig,
     output_dir: Path = Path("reports"),
-    pip_size_fn: Callable[[str], float] | None = None,
 ) -> dict[str, WalkForwardResult]:
     """Run walk-forward across symbols and persist a JSON report.
 
     One symbol's failure (missing data, invalid schema) is logged and
     excluded; it never aborts the suite.
     """
-    from backtest.runner import _pip_size_for
-
-    pip_fn = pip_size_fn or _pip_size_for
     out: dict[str, WalkForwardResult] = {}
     for symbol in symbols:
         try:
             df = load_symbol_data(symbol, data_dir)
-            out[symbol] = run_walk_forward(
-                symbol, df, wf_config, pip_size=pip_fn(symbol)
-            )
+            out[symbol] = run_walk_forward(symbol, df, wf_config)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: walk-forward failed — {exc}")
 
@@ -283,8 +276,12 @@ def run_walk_forward_suite(
             "note": (
                 "Fixed-parameter multi-period OOS consistency test "
                 "(no per-window optimization). Windows are disjoint with "
-                f"a {wf_config.warmup_bars}-bar untraded embargo/warmup."
+                f"a {wf_config.warmup_bars}-bar untraded embargo/warmup. "
+                "Gate parity with production: MQS + regime weights + "
+                "MTF confirmation + H013 reversal veto all active unless "
+                "engine_overrides disabled them (which marks an ablation)."
             ),
+            "engine_overrides": wf_config.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
         path.write_text(json.dumps(payload, indent=2))

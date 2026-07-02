@@ -176,7 +176,7 @@ def _wr(index: int, trades: int, pf: float, verdict: WindowVerdict) -> WindowRes
     return WindowResult(
         index=index, start="", end="", bars=500, trades=trades,
         profit_factor=pf, win_rate=0.5, max_drawdown_pct=0.05,
-        expectancy_usd=1.0, pipeline_errors=0, verdict=verdict,
+        expectancy_usd=1.0, pipeline_errors=0, gate_rejections={}, verdict=verdict,
     )
 
 

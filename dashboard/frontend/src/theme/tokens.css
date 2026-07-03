@@ -1,0 +1,18 @@
+/*
+ * Ported verbatim from execution/api_server.py's existing /dashboard SSR page
+ * (lines 460-472) so the new SPA feels like a continuation of the same
+ * terminal, not a redesign.
+ */
+:root {
+  --bg: #080c14;
+  --surface: #0e1420;
+  --border: #1a2236;
+  --accent: #00d4ff;
+  --accent2: #7c5cfc;
+  --green: #00e676;
+  --red: #ff5252;
+  --amber: #ffab40;
+  --text: #e2e8f0;
+  --muted: #64748b;
+  --card-bg: #111827;
+}

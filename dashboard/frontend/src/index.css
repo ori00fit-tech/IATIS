@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+@import './theme/tokens.css';
+
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent2: var(--accent2);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --color-amber: var(--amber);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-card: var(--card-bg);
+  --font-mono: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

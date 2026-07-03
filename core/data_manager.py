@@ -101,6 +101,14 @@ RESAMPLE_FROM = {
     "1w":  ("1d",  7),
 }
 
+# ── Timeframe metadata (for cache_status — dashboard Data Center) ─────────
+TIMEFRAME_MINUTES = {
+    "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080,
+}
+TIMEFRAME_FREQ = {
+    "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1D", "1w": "1W",
+}
+
 
 # ── Provider implementations ───────────────────────────────────────────────
 
@@ -366,6 +374,40 @@ class DataManager:
             if df is not None and len(df) > 0:
                 result[tf] = df
         return result
+
+    def cache_status(self, symbol: str, timeframe: str) -> dict:
+        """Inspect the local cache without fetching — read-only status for
+        the dashboard's Data Center. Never triggers a provider call."""
+        cache_path = self._cache_path(symbol, timeframe)
+        cached = self._load_cache(cache_path)
+        if cached is None or cached.empty:
+            return {"status": "MISSING", "bars": 0, "last_bar_time": None,
+                     "age_minutes": None, "gap_count_30d": 0}
+
+        bar_minutes = TIMEFRAME_MINUTES.get(timeframe, 60)
+        last_bar_time = cached.index[-1]
+        age_minutes = (datetime.now(timezone.utc) - last_bar_time.to_pydatetime()).total_seconds() / 60
+
+        status = "STALE" if age_minutes > bar_minutes * 1.5 else "OK"
+
+        gap_count = 0
+        tail_window = cached[cached.index >= cached.index[-1] - pd.Timedelta(days=30)]
+        if len(tail_window) > 1:
+            try:
+                from core.data_validator import find_gaps
+                gap_count = len(find_gaps(tail_window, TIMEFRAME_FREQ.get(timeframe, "1h")))
+            except Exception:
+                gap_count = 0
+        if status == "OK" and gap_count > 0:
+            status = "GAPS"
+
+        return {
+            "bars": len(cached),
+            "last_bar_time": last_bar_time.isoformat(),
+            "age_minutes": round(age_minutes, 1),
+            "gap_count_30d": gap_count,
+            "status": status,
+        }
 
     def symbol_info(self, symbol: str) -> dict:
         return SYMBOL_REGISTRY.get(symbol, {})

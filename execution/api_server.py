@@ -1155,6 +1155,9 @@ async def system_health_full(
     issues: list[str] = []
 
     # 1. CPU / RAM / Disk
+    mon_cfg = _get_config().get("monitoring", {})
+    ram_warn_pct = mon_cfg.get("ram_warn_pct", 85)
+    disk_warn_pct = mon_cfg.get("disk_warn_pct", 80)
     try:
         checks["system"] = {
             "cpu_pct": psutil.cpu_percent(interval=0.5),
@@ -1162,8 +1165,8 @@ async def system_health_full(
             "disk_pct": psutil.disk_usage("/").percent,
             "uptime_hours": round((_time.time() - psutil.boot_time()) / 3600, 1),
         }
-        if checks["system"]["ram_pct"] > 85: issues.append("High RAM usage")
-        if checks["system"]["disk_pct"] > 80: issues.append("High disk usage")
+        if checks["system"]["ram_pct"] > ram_warn_pct: issues.append("High RAM usage")
+        if checks["system"]["disk_pct"] > disk_warn_pct: issues.append("High disk usage")
     except Exception as e:
         checks["system"] = {"error": str(e)[:80]}
 
@@ -1372,13 +1375,15 @@ async def ai_optimize_weights(
     Requires 20+ closed trades in outcome_tracker for meaningful analysis.
     """
     _check_auth(x_api_key, iatis_session)
+    config = _get_config()
+    if not config.get("features", {}).get("ai_weight_suggestions", True):
+        raise HTTPException(status_code=403, detail="ai_weight_suggestions is disabled in config.yaml's features section.")
     try:
         from ai.dynamic_weights import analyze_and_suggest_weights, apply_weights_to_config
         from storage.engine_tracker import engine_stats
         from storage.outcome_tracker import performance_summary
         from storage.calibration import regime_performance_matrix
 
-        config = _get_config()
         current_weights = config.get("confluence", {}).get("weights", {})
 
         stats = engine_stats(min_votes=5)

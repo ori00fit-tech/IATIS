@@ -155,3 +155,41 @@ def test_run_loop_sends_startup_message(synthetic_config):
     # first call should be the startup message
     first_call_text = mock_raw.call_args_list[0][0][0]
     assert "started" in first_call_text.lower() or "Scheduler" in first_call_text
+
+
+# ---------------------------------------------------------------------------
+# live-mode + synthetic-source safety guard
+# ---------------------------------------------------------------------------
+
+def test_main_refuses_live_mode_on_synthetic_source(monkeypatch):
+    """The unattended scheduler entry point must refuse to start if
+    system.mode=live and no real data source is available (no API key,
+    no --source override) — never silently trade on fabricated bars."""
+    import scheduler as sched_module
+
+    unsafe_config = load_config()
+    unsafe_config["system"]["mode"] = "live"
+    unsafe_config["data"]["source"] = "synthetic"
+
+    monkeypatch.setattr(sched_module, "load_config", lambda: unsafe_config)
+    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
+    monkeypatch.setattr("sys.argv", ["scheduler.py", "--once"])
+
+    with pytest.raises(SystemExit, match="synthetic"):
+        sched_module.main()
+
+
+def test_main_allows_live_mode_with_real_source(monkeypatch):
+    """Sanity check: the guard doesn't block legitimate live runs."""
+    import scheduler as sched_module
+
+    safe_config = load_config()
+    safe_config["system"]["mode"] = "live"
+    safe_config["data"]["source"] = "twelve_data"
+
+    monkeypatch.setattr(sched_module, "load_config", lambda: safe_config)
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "test-key")
+    monkeypatch.setattr("sys.argv", ["scheduler.py", "--once"])
+    monkeypatch.setattr(sched_module, "run_once", lambda *a, **kw: [])
+
+    sched_module.main()  # should not raise

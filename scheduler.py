@@ -46,7 +46,9 @@ from execution.telegram_bot import send_raw, send_signal
 from storage.outcome_tracker import auto_close_outcomes
 from execution.trade_executor import TradeExecutor
 from main import run_pipeline
-from risk.correlation_engine import check_correlation, portfolio_exposure_summary
+from risk.correlation_engine import (
+    check_correlation, portfolio_exposure_summary, MAX_PER_GROUP, CorrelationCheckResult,
+)
 from utils.helpers import load_config
 from utils.logger import get_logger
 
@@ -105,6 +107,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         )
 
         execute_signals: list[str] = []  # track for correlation filter
+        max_per_group = config.get("portfolio", {}).get("max_per_group", MAX_PER_GROUP)
+        correlation_filter_enabled = config.get("features", {}).get("correlation_filter", True)
 
         for sym in active_symbols:
             sym_config = dict(config)
@@ -119,7 +123,11 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             sym_config["data"]["twelve_data_symbol"] = sym
 
             # A1: Correlation Filter — skip if correlated symbol already EXECUTE
-            corr_check = check_correlation(internal, execute_signals)
+            corr_check = (
+                check_correlation(internal, execute_signals, max_per_group=max_per_group)
+                if correlation_filter_enabled
+                else CorrelationCheckResult(allowed=True, symbol=internal, message="Correlation filter disabled by config")
+            )
             if not corr_check.allowed:
                 logger.info(
                     f"[CORRELATION] {internal} blocked: {corr_check.message}"
@@ -329,6 +337,16 @@ def main() -> None:
         if not api_key:
             sys.exit("ERROR: TWELVE_DATA_API_KEY not set in .env")
         config["data"]["twelve_data_api_key"] = api_key
+
+    # Hard gate: the unattended scheduler must never run live on fabricated
+    # bars. Reached only if source is still "synthetic" after the auto-switch
+    # above — i.e. no TWELVE_DATA_API_KEY and no --source override.
+    if config.get("system", {}).get("mode") == "live" and config["data"]["source"] == "synthetic":
+        sys.exit(
+            "ERROR: system.mode=live but data.source=synthetic (no real data source "
+            "available). Set TWELVE_DATA_API_KEY in .env, pass --source ctrader/twelve_data, "
+            "or set system.mode to something other than 'live' in config.yaml."
+        )
 
     if args.once:
         reports = run_once(config, args.symbols)

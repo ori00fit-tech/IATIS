@@ -27,7 +27,7 @@ from confluence.score_calculator import calculate_score, validate_confluence_con
 from confluence.voting_system import tally_votes
 from core.data_loader import load_data, load_multi_timeframe_with_failover
 from core.data_validator import DataValidationError, validate_ohlcv
-from core.market_quality import assess_market_quality, MQS_THRESHOLD_FAIR
+from core.market_quality import assess_market_quality, MQS_THRESHOLD_FAIR, MQS_THRESHOLD_GOOD
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
 from engines.divergence_engine import DivergenceEngine
@@ -95,6 +95,7 @@ def run_pipeline(config: dict) -> dict:
 
     # 1. Load data
     source = config.get("data", {}).get("source", "synthetic")
+
     timeframes = config["data"]["timeframes"]
 
     if source == "twelve_data":
@@ -150,11 +151,15 @@ def run_pipeline(config: dict) -> dict:
         return failure_report
 
     # 3. Market Quality Score — gate before running 9 engines
+    mq_cfg = config.get("market_quality", {})
     mqs_result = assess_market_quality(
         df=df_base,
         symbol=config["data"].get("symbol", ""),
+        threshold_good=mq_cfg.get("threshold_good", MQS_THRESHOLD_GOOD),
+        threshold_fair=mq_cfg.get("threshold_fair", MQS_THRESHOLD_FAIR),
     )
-    if not mqs_result.should_trade:
+    features_cfg = config.get("features", {})
+    if features_cfg.get("market_quality_gate", True) and not mqs_result.should_trade:
         mqs_report = {
             "final_verdict": "NO_TRADE",
             "symbol": config["data"].get("symbol", ""),

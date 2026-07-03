@@ -128,6 +128,7 @@ class PriceActionEngine(BaseEngine):
         last_lower = float(lower.iloc[-1])
         last_mid   = float(mid.iloc[-1])
 
+        bb_pct: float | None = None
         if not any(pd.isna(x) for x in [last_upper, last_lower, last_mid]):
             bb_pct = (last_close - last_lower) / (last_upper - last_lower + 1e-10)
             if bb_pct > 0.8:
@@ -169,6 +170,17 @@ class PriceActionEngine(BaseEngine):
             bear_score += 20.0
             reasons.append(f"Bearish short-term momentum ({mom_r:.1f}× ATR)")
 
+        # ── 5. Range breakout (15 points max) ─────────────────────────
+        # Restores the detect_breakout() contract: the engine must flag
+        # breakouts in both `raw` and `reasons` (see tests/test_behavior.py).
+        is_breakout, breakout_direction = detect_breakout(df)
+        if is_breakout and breakout_direction == "upside":
+            bull_score += 15.0
+            reasons.append("Breakout detected: upside (20-bar range high broken)")
+        elif is_breakout and breakout_direction == "downside":
+            bear_score += 15.0
+            reasons.append("Breakout detected: downside (20-bar range low broken)")
+
         # ── Final bias ────────────────────────────────────────────────
         if bull_score > bear_score and bull_score >= 30:
             bias = Bias.BULLISH
@@ -184,9 +196,10 @@ class PriceActionEngine(BaseEngine):
         raw = {
             "timeframe_used": tf,
             "rsi": round(rsi_val, 1),
-            "bb_pct": round(bb_pct, 3) if 'bb_pct' in dir() else None,
+            "bb_pct": round(bb_pct, 3) if bb_pct is not None else None,
             "pattern": pattern,
             "momentum_atr": round(mom_r, 2),
+            "breakout": breakout_direction if is_breakout else "none",
         }
 
         return EngineOutput(

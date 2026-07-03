@@ -131,6 +131,7 @@ regime:
   atr_period: 14
   lookback: 100
 risk:
+  starting_balance: 10000.0   # base equity for realized equity curve / drawdown calc
   max_drawdown_reduce: 0.1
   max_drawdown_stop: 0.15
   max_exposure: 0.05

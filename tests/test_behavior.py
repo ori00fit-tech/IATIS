@@ -123,7 +123,10 @@ def test_price_action_reports_no_breakout_on_flat_range():
 
 
 def test_price_action_engine_flags_breakout_in_output():
-    df = upside_breakout_bars()
+    # The engine requires >= 30 bars (RSI-14 + Bollinger-20 warmup guard).
+    # detect_breakout() itself only looks at the last `lookback` bars, so a
+    # longer flat range preserves the fixture's intent unchanged.
+    df = upside_breakout_bars(lookback=35)
     mtf = build_multi_timeframe_view(df, ["H1"])
     output = PriceActionEngine().safe_analyze(mtf)
     assert output.raw["breakout"] == "upside"

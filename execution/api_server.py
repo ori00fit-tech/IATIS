@@ -1412,6 +1412,115 @@ async def ai_optimize_weights(
 
 
 # ---------------------------------------------------------------------------
+# AI explanation layer (ai/ai_analyzer.py) — dashboard/report use only.
+# Never called from /analyze or the scheduler; explanations are generated
+# on demand for a decision that has already been made by confluence+risk.
+# ---------------------------------------------------------------------------
+
+@app.get("/ai/explain/{decision_id}")
+async def ai_explain_trade(
+    decision_id: int,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Natural-language explanation of a past decision, for the dashboard.
+
+    Looks up the stored report by id (storage/decision_db.py) and asks
+    AIAnalyzer to explain it — cached per decision_id, since the inputs
+    for a past decision never change.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        import json as _json
+        from ai.ai_analyzer import AIAnalyzer
+        from storage.decision_db import _conn as db_conn
+
+        with db_conn() as con:
+            row = con.execute(
+                "SELECT raw_json FROM decisions WHERE id=?", (decision_id,)
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Decision not found.")
+
+        report = _json.loads(row["raw_json"])
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.explain_trade(report, cache_key=str(decision_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"AI explain-trade error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/ai/news-analysis")
+async def ai_news_analysis(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """AI read on today's economic calendar, for dashboard display only —
+    does not affect the news blackout gate (fundamentals/news_risk.py)."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+        from fundamentals.news_calendar import get_calendar_today
+
+        config = _get_config()
+        symbols = [
+            s["internal"] for s in config.get("data", {}).get("twelve_data_symbols", [])
+            if s.get("enabled")
+        ]
+        try:
+            events = get_calendar_today()
+        except Exception as exc:
+            logger.debug(f"Calendar fetch failed for AI news analysis: {exc}")
+            events = []
+
+        analyzer = AIAnalyzer(config)
+        return analyzer.analyze_news(events, symbols)
+    except Exception as exc:
+        logger.error(f"AI news analysis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/ai/macro-analysis")
+async def ai_macro_analysis(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """AI read on macro/cross-asset context, for dashboard display only."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.analyze_macro()
+    except Exception as exc:
+        logger.error(f"AI macro analysis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/ai/daily-report")
+async def ai_daily_report(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """AI-phrased daily summary from already-computed stats — AIAnalyzer
+    only writes the prose, the numbers come from decision_db/outcome_tracker."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+        from storage.decision_db import summary as decision_summary
+        from storage.outcome_tracker import performance_summary
+
+        stats = {**decision_summary(), **performance_summary()}
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.generate_daily_report(stats)
+    except Exception as exc:
+        logger.error(f"AI daily report error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+# ---------------------------------------------------------------------------
 # Command Center SPA — built frontend, mounted only if the build exists.
 # `cd dashboard/frontend && npm install && npm run build` produces dist/.
 # ---------------------------------------------------------------------------

@@ -171,6 +171,23 @@ risk:
   risk_per_trade_max: 0.01
   risk_per_trade_min: 0.0025
   sl_atr_multiplier: 2.5
+
+# AI explanation/reporting layer (ai/ai_analyzer.py). Explanation-only —
+# never feeds final_verdict; the confluence + risk engines decide.
+# Opt-in: disabled by default so no external AI API is ever called
+# unless deliberately turned on. API key comes from the environment
+# (PERPLEXITY_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), never from
+# this file.
+ai:
+  enabled: false
+  provider: perplexity   # perplexity | openai | anthropic
+  model: sonar-pro
+  temperature: 0.1
+  max_tokens: 1200
+  timeout: 20
+  cache:
+    news_ttl_min: 20
+    macro_ttl_min: 60
 system:
   mode: live
   name: IATIS

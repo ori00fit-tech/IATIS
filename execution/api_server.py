@@ -1452,6 +1452,44 @@ async def ai_explain_trade(
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+@app.post("/ai/explain-trade")
+async def ai_explain_trade_inline(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Explain a decision report the caller already has in hand.
+
+    The dashboard's /decisions feed comes from the JSONL log
+    (storage/decision_log.py) and has no integer row id to look up in
+    decision_db.py's SQLite table, so GET /ai/explain/{decision_id}
+    doesn't fit it — this endpoint takes the report body directly
+    instead (the same shape returned by main.py's run_pipeline() /
+    the `report` field of a /decisions entry). Cached by a hash of
+    symbol+summary, since a past decision's inputs never change.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        import hashlib
+        from ai.ai_analyzer import AIAnalyzer
+
+        report = await request.json()
+        if not isinstance(report, dict) or not report.get("symbol"):
+            raise HTTPException(status_code=400, detail="Body must be a decision report with a symbol.")
+
+        cache_key = hashlib.sha1(
+            f"{report.get('symbol')}:{report.get('summary')}".encode("utf-8")
+        ).hexdigest()[:16]
+
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.explain_trade(report, cache_key=cache_key)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"AI explain-trade (inline) error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
 @app.get("/ai/news-analysis")
 async def ai_news_analysis(
     x_api_key: str | None = Header(default=None),

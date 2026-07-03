@@ -1,4 +1,4 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 
 export interface PipelineReport {
   symbol: string
@@ -51,3 +51,25 @@ export interface OutcomesResponse {
 
 export const getDecisions = (limit = 20) => apiGet<DecisionsResponse>('/decisions', { limit })
 export const getOutcomes = (limit = 20) => apiGet<OutcomesResponse>('/outcomes', { limit })
+
+// AI explanation layer (ai/ai_analyzer.py) — read-only, explanation only.
+// The decision itself was already made by confluence+risk; this never
+// changes final_verdict, it only asks a provider to phrase it in plain
+// English. See execution/api_server.py's POST /ai/explain-trade.
+export interface TradeExplanation {
+  status: 'ok' | 'disabled' | 'error'
+  summary: string
+  pros: string[]
+  cons: string[]
+  risk_level: string
+  confidence: number
+  recommendation: string
+  market_sentiment: string
+  news_risk: string
+  explanation: string
+  warnings: string[]
+  provider: string
+  error: string
+}
+
+export const explainTrade = (report: PipelineReport) => apiPost<TradeExplanation>('/ai/explain-trade', report)

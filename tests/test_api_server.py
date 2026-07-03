@@ -97,6 +97,28 @@ def test_decisions(client, tmp_path, monkeypatch):
     assert "decisions" in r.json()
 
 
+def test_ai_explain_trade_disabled_by_default(client):
+    # ai.enabled defaults to false in config.yaml — must degrade cleanly,
+    # never 500, and never require a real provider/API key in tests.
+    r = client.post(
+        "/ai/explain-trade",
+        json={"symbol": "EURUSD", "summary": "EXECUTE BULLISH", "final_verdict": "EXECUTE"},
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+
+
+def test_ai_explain_trade_rejects_body_without_symbol(client):
+    r = client.post("/ai/explain-trade", json={"foo": "bar"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_ai_explain_trade_requires_auth(client):
+    r = client.post("/ai/explain-trade", json={"symbol": "EURUSD"})
+    assert r.status_code == 401
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

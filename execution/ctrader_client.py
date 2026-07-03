@@ -214,6 +214,13 @@ class CTraderClient:
     AUTH_TIMEOUT = 15.0        # app/account auth round-trips
     BOOTSTRAP_TIMEOUT = 20.0   # trader info / symbols list / symbol details
 
+    # Auto-reconnect budgets: an unplanned disconnect (network blip, broker
+    # restart) must not silently end live trading until the process is
+    # manually restarted. Bounded exponential backoff, capped attempts.
+    RECONNECT_BASE_DELAY = 2.0
+    RECONNECT_MAX_DELAY = 60.0
+    RECONNECT_MAX_ATTEMPTS = 10
+
     def __init__(
         self,
         client_id: str | None = None,
@@ -233,6 +240,13 @@ class CTraderClient:
         self._client: Any = None
         self._state = ConnectionState.DISCONNECTED
         self._reactor_running = False
+
+        # Reconnect bookkeeping. `_intentional_disconnect` distinguishes a
+        # caller-requested disconnect() (no auto-reconnect) from a dropped
+        # connection (auto-reconnect with backoff). See _on_disconnect().
+        self._intentional_disconnect = False
+        self._reconnecting = False
+        self._reconnect_attempt = 0
 
         # Guards shared state touched by both the reactor thread and callers.
         self._lock = threading.RLock()
@@ -372,6 +386,7 @@ class CTraderClient:
         logger.info(f"✅ Account authorized: {self.account_id}")
         self._send_trader_req(client)
         self._send_symbols_list_req(client)
+        self._send_reconcile_req(client)
 
     def _send_trader_req(self, client: Any) -> None:
         try:
@@ -398,6 +413,38 @@ class CTraderClient:
             d.addErrback(lambda f: self._on_error("symbols_list", f))
         except Exception as exc:
             logger.error(f"❌ Failed to send symbols list req: {exc}")
+
+    def _send_reconcile_req(self, client: Any) -> None:
+        """Fetch currently open positions/orders from the broker.
+
+        Sent on every (re)connect so the in-memory `_positions` map reflects
+        broker-side reality — including positions opened before this
+        process started, or opened by another client — instead of being
+        rebuilt purely from execution events observed since connect().
+
+        Best-effort: if ProtoOAReconcileReq isn't available in the
+        installed ctrader-open-api version, this logs and no-ops rather
+        than blocking the READY transition or crashing the client.
+        """
+        try:
+            from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+                ProtoOAReconcileReq,
+            )
+
+            req = ProtoOAReconcileReq()
+            req.ctidTraderAccountId = self.account_id
+            logger.debug("📤 Sending: ProtoOAReconcileReq")
+            d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
+            d.addErrback(lambda f: self._on_error("reconcile", f))
+        except ImportError:
+            logger.warning(
+                "⚠️ ProtoOAReconcileReq not available in this ctrader-open-api "
+                "version — position state will only reflect events seen since "
+                "this connection, not pre-existing broker-side positions. "
+                "Verify against current Spotware Open API docs."
+            )
+        except Exception as exc:
+            logger.error(f"❌ Failed to send reconcile req: {exc}")
 
     def _send_symbol_details_req(self, client: Any, symbol_ids: list[int]) -> None:
         """Fetch full trading specs (lotSize/digits/min/step) for symbols.
@@ -453,6 +500,8 @@ class CTraderClient:
                 self._on_symbols_list_res(client, message)
             elif msg_type == "ProtoOASymbolByIdRes":
                 self._on_symbol_details_res(message)
+            elif msg_type == "ProtoOAReconcileRes":
+                self._on_reconcile_res(message)
             elif msg_type == "ProtoOAExecutionEvent":
                 self._on_execution_event(message)
             elif msg_type == "ProtoOASpotEvent":
@@ -569,6 +618,46 @@ class CTraderClient:
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOASymbolByIdRes: {exc}")
 
+    def _on_reconcile_res(self, message: Any) -> None:
+        """Handle ProtoOAReconcileRes: rebuild `_positions` from broker truth.
+
+        Sent in response to _send_reconcile_req(), which fires on every
+        (re)connect. This is the only source of position state that
+        reflects positions opened before this process attached — the
+        execution-event stream only sees changes from here forward.
+        """
+        try:
+            positions = getattr(message, "position", None)
+            if not positions:
+                logger.info("🧾 Reconcile: no open positions reported by broker")
+                return
+            with self._lock:
+                self._positions.clear()
+                for position in positions:
+                    trade_data = getattr(position, "tradeData", None)
+                    sym_id = int(getattr(trade_data, "symbolId", 0)) if trade_data else 0
+                    ct_name = self._symbol_id_to_name.get(sym_id, "")
+                    # Symbols list may not have arrived yet if the server
+                    # answers ReconcileReq before SymbolsListReq — fall back
+                    # to a synthetic key rather than collapsing every
+                    # unresolved position onto the same "" entry.
+                    iatis_symbol = CTRADER_TO_IATIS.get(ct_name, ct_name) or f"SYMBOL_{sym_id}"
+                    side = getattr(trade_data, "tradeSide", None) if trade_data else None
+                    self._positions[iatis_symbol] = OpenPosition(
+                        position_id=str(getattr(position, "positionId", "")),
+                        symbol=iatis_symbol,
+                        direction="BUY" if side == 1 else "SELL",
+                        volume=int(getattr(trade_data, "volume", 0)) if trade_data else 0,
+                        entry_price=float(getattr(position, "price", 0.0)),
+                        current_price=float(getattr(position, "price", 0.0)),
+                        unrealized_pnl=0.0,
+                        stop_loss=float(getattr(position, "stopLoss", 0.0)),
+                        take_profit=float(getattr(position, "takeProfit", 0.0)),
+                    )
+            logger.info(f"🧾 Reconcile: {len(self._positions)} open position(s) loaded from broker")
+        except Exception as exc:
+            logger.error(f"❌ Error processing ProtoOAReconcileRes: {exc}")
+
     def _on_execution_event(self, message: Any) -> None:
         """Handle ProtoOAExecutionEvent and maintain the open-position map.
 
@@ -632,6 +721,65 @@ class CTraderClient:
     def _on_disconnect(self, client: Any, reason: Any) -> None:
         self._set_state(ConnectionState.DISCONNECTED)
         logger.warning(f"⚠️ Disconnected: {reason}")
+        if not self._intentional_disconnect:
+            self._schedule_reconnect()
+
+    def _schedule_reconnect(self) -> None:
+        """Retry connect() with bounded exponential backoff.
+
+        Runs in its own daemon thread so it never blocks the reactor
+        thread that called _on_disconnect(). Only one reconnect loop runs
+        at a time; a manual disconnect() call cancels future attempts.
+        """
+        with self._lock:
+            if self._reconnecting:
+                return
+            self._reconnecting = True
+
+        def _attempt() -> None:
+            try:
+                while self._reconnect_attempt < self.RECONNECT_MAX_ATTEMPTS:
+                    if self._intentional_disconnect:
+                        logger.info("Reconnect cancelled — disconnect() was called.")
+                        return
+                    self._reconnect_attempt += 1
+                    delay = min(
+                        self.RECONNECT_BASE_DELAY * (2 ** (self._reconnect_attempt - 1)),
+                        self.RECONNECT_MAX_DELAY,
+                    )
+                    logger.warning(
+                        f"🔁 Reconnect attempt {self._reconnect_attempt}/"
+                        f"{self.RECONNECT_MAX_ATTEMPTS} in {delay:.0f}s..."
+                    )
+                    time.sleep(delay)
+                    if self._intentional_disconnect:
+                        return
+
+                    # Drop stale per-connection state before retrying so a
+                    # partial old bootstrap can't be mistaken for the new one.
+                    with self._lock:
+                        self._account_info = None
+                        self._symbol_name_to_id = {}
+                        self._symbol_id_to_name = {}
+                        self._symbol_details = {}
+
+                    if self.connect(timeout=30.0):
+                        logger.info(
+                            f"✅ Reconnected after {self._reconnect_attempt} attempt(s)."
+                        )
+                        self._reconnect_attempt = 0
+                        return
+
+                logger.error(
+                    f"❌ Giving up after {self.RECONNECT_MAX_ATTEMPTS} reconnect "
+                    f"attempts. Manual intervention required — connect() must be "
+                    f"called again explicitly."
+                )
+            finally:
+                with self._lock:
+                    self._reconnecting = False
+
+        threading.Thread(target=_attempt, daemon=True, name="ctrader-reconnect").start()
 
     def _on_error(self, context: str, failure: Any) -> None:
         error_msg = (
@@ -645,6 +793,9 @@ class CTraderClient:
 
     def connect(self, timeout: float = 30.0) -> bool:
         """Establish an authenticated, READY connection to the cTrader API."""
+        # A caller-initiated (re)connect always re-arms auto-reconnect for
+        # any future unplanned drop of *this* connection.
+        self._intentional_disconnect = False
         try:
             from ctrader_open_api import Client, TcpProtocol
             from twisted.internet import reactor
@@ -1182,7 +1333,12 @@ class CTraderClient:
             return False
 
     def disconnect(self) -> None:
-        """Cleanly stop the client service (the shared reactor keeps running)."""
+        """Cleanly stop the client service (the shared reactor keeps running).
+
+        Marks the disconnect as intentional so _on_disconnect() does not
+        spin up an auto-reconnect loop for a shutdown the caller asked for.
+        """
+        self._intentional_disconnect = True
         if self._client:
             try:
                 from twisted.internet import reactor

@@ -75,7 +75,16 @@ DECISION → Telegram + SQLite + JSONL + Outcome Tracker
 
 ---
 
-## Engines (9 active)
+## Engines (9 implemented — 4 currently live)
+
+> `config.yaml`'s `engines.enabled` block currently turns on `smc`,
+> `price_action` (EXEMPT — plain structure reads, no edge claim), plus
+> `nnfx` and `wyckoff` (hypothesis status `RESEARCH`, i.e.
+> paper-trading-only per `research/edge_gate.py`, not yet `PASSED`). The
+> other five (ICT, Quant, Divergence, Market Structure, Sentiment) are
+> implemented but disabled pending their own hypothesis validation. The
+> table below describes all 9 as designed; check `config.yaml` for what's
+> actually running right now.
 
 | Engine | Method | Status | Weight | Notes |
 |---|---|---|---|---|
@@ -339,7 +348,7 @@ IATIS/
 ## Security (14/14 vulnerabilities fixed)
 
 - Session Rotation: cookie holds `session_id`, never raw API key
-- `HttpOnly + Secure + SameSite=Strict` cookies
+- `HttpOnly + Secure + SameSite=Lax` cookies (Lax, not Strict — Strict blocks the cross-origin redirect Cloudflare's tunnel performs on login; see comment in `execution/api_server.py`)
 - `hmac.compare_digest` for key comparison
 - `html.escape()` on all dashboard values
 - Symbol validation regex: `^[A-Z]{2,6}(/[A-Z]{2,6})?$`

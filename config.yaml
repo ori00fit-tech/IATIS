@@ -181,7 +181,7 @@ risk:
 ai:
   enabled: false
   provider: perplexity   # perplexity | openai | anthropic
-  model: sonar-pro
+  model: sonar
   temperature: 0.1
   max_tokens: 1200
   timeout: 20

@@ -35,6 +35,7 @@ load_dotenv()
 try:
     from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError as exc:
     raise ImportError("Run: pip install fastapi uvicorn") from exc
@@ -1302,6 +1303,57 @@ async def symbol_health_endpoint(
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+_DH_CONFIG_TO_DM = {"M15": "15m", "H1": "1h", "H4": "4h", "D1": "1d"}
+_DH_STATUS_RANK = {"OK": 0, "GAPS": 1, "STALE": 2, "MISSING": 3}  # higher = worse
+
+
+@app.get("/data-health")
+async def data_health(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Data Center — per-symbol/timeframe OHLCV cache completeness.
+
+    Read-only inspection of core/data_manager.py's local CSV cache. Never
+    triggers a provider fetch — reports what's actually cached on disk.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from core.data_manager import DataManager
+
+        config = _get_config()
+        symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+        active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
+        config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
+
+        dm = DataManager()
+        results = []
+        summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
+
+        for symbol in active_symbols:
+            tf_status: dict[str, Any] = {}
+            worst = "OK"
+            for tf in config_timeframes:
+                dm_tf = _DH_CONFIG_TO_DM.get(tf)
+                if not dm_tf:
+                    continue
+                status = dm.cache_status(symbol, dm_tf)
+                tf_status[tf] = status
+                if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
+                    worst = status["status"]
+            results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
+            summary[worst.lower()] += 1
+
+        return {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "symbols": results,
+            "summary": summary,
+        }
+    except Exception as exc:
+        logger.error(f"Data health error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
 @app.post("/ai/optimize-weights")
 async def ai_optimize_weights(
     x_api_key: str | None = Header(default=None),
@@ -1349,4 +1401,16 @@ async def ai_optimize_weights(
     except Exception as exc:
         logger.error(f"AI weight optimization failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
+
+
+# ---------------------------------------------------------------------------
+# Command Center SPA — built frontend, mounted only if the build exists.
+# `cd dashboard/frontend && npm install && npm run build` produces dist/.
+# ---------------------------------------------------------------------------
+_DASHBOARD_DIST = Path("dashboard/frontend/dist")
+if _DASHBOARD_DIST.is_dir():
+    app.mount("/app", StaticFiles(directory=_DASHBOARD_DIST, html=True), name="dashboard_spa")
+    logger.info("Command Center SPA mounted at /app")
+else:
+    logger.info("dashboard/frontend/dist not found — /app not mounted (run npm run build)")
 

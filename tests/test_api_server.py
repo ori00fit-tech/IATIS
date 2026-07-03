@@ -109,3 +109,12 @@ def test_dashboard(client):
     r = client.get("/dashboard", headers=HDR)
     assert r.status_code == 200
     assert "IATIS" in r.text
+
+
+def test_data_health(client):
+    r = client.get("/data-health", headers=HDR)
+    assert r.status_code == 200
+    data = r.json()
+    assert "symbols" in data and "summary" in data
+    for entry in data["symbols"]:
+        assert entry["overall_status"] in ("OK", "STALE", "GAPS", "MISSING")

@@ -1,0 +1,6 @@
+Summarize the following text in 2-3 sentences for an institutional trading
+dashboard. Use only information present in the text — do not add outside
+context or speculation. Return plain text only, no JSON, no markdown.
+
+Text:
+{text}

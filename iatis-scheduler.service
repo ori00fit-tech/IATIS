@@ -5,6 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# TODO(ops): run as a dedicated non-root user instead of root. This was not
+# switched automatically because it requires VPS-side setup first:
+#   useradd -r -s /usr/sbin/nologin iatis
+#   chown -R iatis:iatis /root/IATIS
+# then set User=iatis / Group=iatis here (share the same user as
+# iatis-api.service so both can write storage/). Until that's done, the
+# hardening directives below still meaningfully reduce blast radius even
+# under root.
 User=root
 WorkingDirectory=/root/IATIS
 Environment=PATH=/root/IATIS/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
@@ -13,6 +21,16 @@ Restart=always
 RestartSec=30
 StandardOutput=journal
 StandardError=journal
+
+# Sandboxing — this process places live broker orders; a bug should not
+# get free rein over the filesystem.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/root/IATIS/storage
+MemoryMax=1G
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target

@@ -119,7 +119,13 @@ validate_ohlcv(df)
 build_multi_timeframe_view(df, ["H1","H4","D1"])
 ```
 
-### 2. **engines/** — 9 Strategy Engines
+### 2. **engines/** — 9 Strategy Engines (4 currently enabled in config.yaml)
+
+> As of this writing, `config.yaml`'s `engines.enabled` block has only
+> `smc`, `price_action`, `nnfx`, and `wyckoff` set to `true`. The other
+> five below are implemented and edge-gated but disabled — enabling them
+> requires their hypothesis in `research/results/registry.json` to reach
+> at least `RESEARCH` status (see `research/edge_gate.py`).
 
 Each engine returns `EngineOutput(bias, score, reasons, raw)` where:
 - `bias`: BULLISH | BEARISH | NEUTRAL
@@ -376,7 +382,7 @@ python scheduler.py --interval 120 --symbols EUR/USD GBP/USD ... BTC/USD
 ## Security (14/14 vulnerabilities fixed)
 
 ✅ Session rotation (cookie holds `session_id`, never raw API key)
-✅ HttpOnly + Secure + SameSite=Strict cookies
+✅ HttpOnly + Secure + SameSite=Lax cookies (Lax, not Strict — Strict blocks the cross-origin redirect Cloudflare's tunnel performs on login)
 ✅ hmac.compare_digest for key comparison
 ✅ html.escape() on all dashboard values
 ✅ Symbol validation regex: `^[A-Z]{2,6}(/[A-Z]{2,6})?$`

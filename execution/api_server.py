@@ -6,12 +6,15 @@ FastAPI HTTP server — Phase 2. Security-hardened.
 Security measures applied (see IATIS_Security_Audit.md):
 - P0: Auth fail-closed (API_SERVER_KEY required)
 - P0: Dashboard requires auth
-- P0: All HTML output escaped via html.escape()
+- P0: All dynamic dashboard values HTML-escaped client-side (the `H()`
+      helper in the dashboard's own <script>, since all data reaches the
+      page via JSON fetch + DOM injection — there is no server-side
+      string-interpolated HTML to escape here)
 - P1: Symbol input validation (strict regex)
 - P1: Constant-time key comparison (hmac.compare_digest)
 - P1: Generic error messages (details logged only)
 - P2: Swagger disabled in production (ENV=production)
-- P3: SQLite/cache file permissions set at init
+- P3: SQLite/cache/session file permissions set at init
 - P3: Config cache thread-safe (threading.Lock)
 """
 
@@ -19,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import html
 import os
 import re
 import threading
@@ -75,7 +77,7 @@ async def lifespan(application: FastAPI):
     """Startup/shutdown lifecycle handler."""
     # Startup
     from pathlib import Path
-    for path in ["storage/decisions.db", "storage/engine_tracker.db"]:
+    for path in ["storage/decisions.db", "storage/engine_tracker.db", "storage/sessions.json"]:
         p = Path(path)
         if p.exists():
             try:
@@ -131,6 +133,12 @@ def _save_sessions(sessions: dict) -> None:
         import json as _sj
         _SESSION_FILE.parent.mkdir(exist_ok=True)
         _SESSION_FILE.write_text(_sj.dumps(sessions))
+        # Session IDs are bearer-equivalent credentials (30-day TTL) — lock
+        # this down the same way storage/*.db is locked down at startup.
+        try:
+            os.chmod(_SESSION_FILE, 0o600)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -185,11 +193,6 @@ def _check_auth(x_api_key: str | None, cookie_key: str | None = None) -> None:
             return
 
     raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
-
-
-def _h(value: Any) -> str:
-    """HTML-escape any value for safe dashboard rendering (issue #1)."""
-    return html.escape(str(value) if value is not None else "")
 
 
 def _set_file_permissions(path) -> None:

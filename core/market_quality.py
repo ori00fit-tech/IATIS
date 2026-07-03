@@ -171,6 +171,8 @@ def assess_market_quality(
     symbol: str = "",
     now: datetime | None = None,
     timeframe: str = "H1",
+    threshold_good: float = MQS_THRESHOLD_GOOD,
+    threshold_fair: float = MQS_THRESHOLD_FAIR,
 ) -> MarketQualityResult:
     """
     Calculate Market Quality Score for current market conditions.
@@ -179,6 +181,9 @@ def assess_market_quality(
         df: H1 OHLCV DataFrame
         symbol: for logging
         now: current UTC time (default: datetime.now(UTC))
+        threshold_good: score at/above which grade is GOOD (config: market_quality.threshold_good)
+        threshold_fair: score at/above which grade is FAIR, else POOR/no-trade
+            (config: market_quality.threshold_fair)
 
     Returns:
         MarketQualityResult with score and trading recommendation
@@ -226,16 +231,16 @@ def assess_market_quality(
     raw_score = session_pts + atr_pts + trend_pts + base_pts - penalty
     score = max(0.0, min(100.0, raw_score))
 
-    if score >= MQS_THRESHOLD_GOOD:
+    if score >= threshold_good:
         grade = "GOOD"
         should_trade = True
-    elif score >= MQS_THRESHOLD_FAIR:
+    elif score >= threshold_fair:
         grade = "FAIR"
         should_trade = True  # trade but reduce size
     else:
         grade = "POOR"
         should_trade = False
-        reasons.append(f"MQS={score:.0f} < {MQS_THRESHOLD_FAIR} → NO_TRADE")
+        reasons.append(f"MQS={score:.0f} < {threshold_fair} → NO_TRADE")
 
     logger.info(
         f"MQS {symbol}: {score:.0f}/100 ({grade}) "

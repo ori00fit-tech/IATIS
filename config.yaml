@@ -14,7 +14,13 @@ confluence:
     wyckoff: 0.0707
 data:
   bars_to_load: 500
-  source: synthetic
+  # Valid values: twelve_data | ctrader | injected (backtests only).
+  # synthetic is disallowed under system.mode=live — scheduler.py's main()
+  # refuses to start rather than trade on fabricated bars (see the guard
+  # right after the TWELVE_DATA_API_KEY check there). Tests/backtests may
+  # still pass source=synthetic directly to run_pipeline()/run_once() —
+  # that's an intentional, separate hermetic-test path, not this guard.
+  source: twelve_data
   symbol: EURUSD
   timeframes:
   - H1
@@ -122,11 +128,37 @@ execution:
   max_open_trades: 5
   min_score_to_execute: 60.0
   oanda_enabled: false
+# On/off switches for real, already-built gates — toggle behavior without
+# editing code. This is NOT the feature store (utils/feature_def.py, a
+# separate indicator/versioning registry) — different concept, same word.
+# Every flag here maps to one real conditional; see the file:line noted.
+features:
+  market_quality_gate: true      # main.py — MQS gate can block/allow trades
+  correlation_filter: true       # scheduler.py — portfolio correlation cap
+  ai_weight_suggestions: true    # execution/api_server.py — POST /ai/optimize-weights
 fundamentals:
   blackout_look_ahead_min: 60
   file: storage/system.log
   level: INFO
   news_filter_enabled: true
+# Market Quality Score gate (core/market_quality.py) — session/volatility/
+# day-of-week scoring that decides whether conditions are good enough to
+# run the engines at all. Already active in every live run; these are its
+# two thresholds, previously hardcoded module constants.
+market_quality:
+  threshold_good: 60    # score >= this => grade GOOD, full size
+  threshold_fair: 40    # score >= this => grade FAIR, trade but reduced size; below => NO_TRADE
+# Read-only warning thresholds for GET /health/full (execution/api_server.py).
+# Purely informational — crossing these does not stop trading, it only
+# flips the dashboard's Mission Control status to "degraded".
+monitoring:
+  ram_warn_pct: 85
+  disk_warn_pct: 80
+# Portfolio-level correlation cap (risk/correlation_engine.py), already
+# enforced in every scheduler.py run — max_per_group was a hardcoded
+# module constant before this.
+portfolio:
+  max_per_group: 2   # max concurrent EXECUTE signals from the same correlation group per run
 regime:
   atr_period: 14
   lookback: 100

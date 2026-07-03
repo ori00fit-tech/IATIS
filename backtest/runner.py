@@ -271,7 +271,10 @@ def run_all(config: RunnerConfig) -> dict[str, SymbolRunResult]:
             results[symbol] = run_symbol(symbol, df, config)
             m = results[symbol].metrics
             logger.info(
-                f"{symbol}: trades={m.total_trades} WR={m.win_rate:.1%} "
+                # NOTE: backtest.metrics.PerformanceMetrics.win_rate is in
+                # PERCENT (0–100), unlike backtesting.backtest_engine which
+                # uses a fraction — do not format with ':%'.
+                f"{symbol}: trades={m.total_trades} WR={m.win_rate:.1f}% "
                 f"PF={m.profit_factor:.2f} maxDD={m.max_drawdown:.1f}%"
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:

@@ -411,6 +411,10 @@ def run_pipeline(config: dict) -> dict:
             "upcoming_events_count": 0,
             "next_high_impact": None,
         },
+        # Latest close — populated on EVERY report (EXECUTE and NO_TRADE)
+        # so the scheduler's auto-close can evaluate open outcomes even
+        # when this run produced no trade.
+        "current_price": float(df_base["close"].iloc[-1]),
         # Trade levels — populated only when confluence_pass (risk inputs exist).
         # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.
         "entry_price": float(entry) if confluence_pass else None,

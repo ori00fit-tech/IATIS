@@ -43,6 +43,11 @@ logger = get_logger(__name__)
 
 DB_PATH = Path(__file__).resolve().parent / "outcomes.db"
 
+# Default per-trade risk budget in USD, matching config.yaml defaults:
+# risk.risk_per_trade_max (0.01) × risk.starting_balance (10 000).
+# Callers with different sizing should pass ``risk_usd`` explicitly.
+DEFAULT_RISK_USD: float = 100.0
+
 
 @contextmanager
 def _conn(path: Path = DB_PATH):
@@ -147,6 +152,7 @@ def close_signal(
     exit_time: str | None = None,
     notes: str = "",
     path: Path = DB_PATH,
+    risk_usd: float = DEFAULT_RISK_USD,
 ) -> bool:
     """Record the outcome of a completed trade.
 
@@ -156,6 +162,9 @@ def close_signal(
         outcome: "win", "loss", or "breakeven"
         exit_time: ISO UTC string (default: now)
         notes: any manual observations
+        risk_usd: USD risked per trade; pnl_usd is recorded as
+            R-multiple × risk_usd. Default matches config
+            (risk_per_trade_max × starting_balance = 0.01 × 10 000).
     """
     _init_db(path)
 
@@ -186,13 +195,31 @@ def close_signal(
         price_diff = (exit_price - entry) if is_buy else (entry - exit_price)
         pnl_pips = round(price_diff / pip_size, 1)
 
-        # Approximate USD P&L (1 lot basis)
-        if symbol in ("XAUUSD",):
-            pnl_usd = round(price_diff * 100, 2)
-        elif symbol in ("BTCUSD", "ETHUSD"):
-            pnl_usd = round(price_diff, 2)
+        # Risk-normalized USD P&L (R-multiple × per-trade risk budget).
+        #
+        # The risk layer (risk/live_portfolio_state.py) assumes every
+        # trade risks a FIXED fraction of the account
+        # (risk.risk_per_trade_max × risk.starting_balance). The old
+        # "1 standard lot" approximation was inconsistent with that
+        # assumption and inflated the equity curve by orders of
+        # magnitude (e.g. crypto price_diff counted 1:1 in USD),
+        # corrupting balance/drawdown inputs to the risk gate.
+        #
+        # pnl_usd = R × risk_usd, where R = price_diff / |entry − SL|.
+        # A full SL hit ≈ −risk_usd; a 2R take-profit ≈ +2 × risk_usd.
+        # If no stop-loss was stored we cannot size the trade — record
+        # NULL rather than invent a lot size.
+        sl = row["stop_loss"]
+        sl_distance = abs(entry - sl) if sl else 0.0
+        if sl_distance > 0:
+            r_multiple = price_diff / sl_distance
+            pnl_usd = round(r_multiple * risk_usd, 2)
         else:
-            pnl_usd = round(pnl_pips * 10, 2)  # ~$10/pip standard lot
+            pnl_usd = None
+            logger.warning(
+                f"{signal_id}: no stop_loss stored — pnl_usd left NULL "
+                f"(cannot compute R-multiple)"
+            )
 
         con.execute("""
         UPDATE outcomes
@@ -293,7 +320,9 @@ def recent_signals(limit: int = 10, path: Path = DB_PATH) -> list[dict]:
 
 # ─── Auto-Close ────────────────────────────────────────────────────────────
 
-def auto_close_outcomes(current_prices: dict[str, float], path: Path = DB_PATH) -> int:
+def auto_close_outcomes(
+    current_prices: dict[str, float], path: Path = DB_PATH
+) -> list[dict]:
     """Check open signals against current prices and auto-close if TP/SL hit.
 
     Called automatically at the end of each scheduler run.
@@ -303,11 +332,13 @@ def auto_close_outcomes(current_prices: dict[str, float], path: Path = DB_PATH) 
         path: DB path
 
     Returns:
-        Number of signals closed
+        One record per closed signal:
+        ``{"signal_id", "symbol", "direction", "outcome", "exit_price"}``.
+        Empty list when nothing closed (``len()`` gives the old count).
     """
     _init_db(path)
     open_signals = get_open_signals(path)
-    closed = 0
+    closed: list[dict] = []
 
     for sig in open_signals:
         symbol = sig.get("symbol", "")
@@ -324,14 +355,18 @@ def auto_close_outcomes(current_prices: dict[str, float], path: Path = DB_PATH) 
         if not all([entry, sl, tp, sig_id]):
             continue
 
-        # Check TP/SL hit
+        # Check TP/SL hit.
+        # log_signal() stores direction as the vote's winning bias
+        # (BULLISH/BEARISH); broker paths may store BUY/SELL. Accept
+        # both — previously only BUY/SELL matched, so signals logged by
+        # the pipeline could NEVER auto-close.
         hit = None
-        if direction == "BUY":
+        if direction in ("BUY", "BULLISH"):
             if price >= tp:
                 hit = ("win", tp)
             elif price <= sl:
                 hit = ("loss", sl)
-        elif direction == "SELL":
+        elif direction in ("SELL", "BEARISH"):
             if price <= tp:
                 hit = ("win", tp)
             elif price >= sl:
@@ -347,7 +382,13 @@ def auto_close_outcomes(current_prices: dict[str, float], path: Path = DB_PATH) 
                 path=path,
             )
             if success:
-                closed += 1
+                closed.append({
+                    "signal_id": sig_id,
+                    "symbol": symbol,
+                    "direction": direction,
+                    "outcome": outcome,
+                    "exit_price": exit_px,
+                })
                 logger.info(
                     f"Auto-closed {sig_id} ({symbol} {direction}): "
                     f"{outcome} @ {exit_px:.5f} (price={price:.5f})"

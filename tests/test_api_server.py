@@ -21,9 +21,14 @@ HDR = {"X-API-Key": "test-key-123"}
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     import execution.api_server as m
     m._ENV = "development"
+    # Force the expected key: _check_auth reads API_SERVER_KEY at request
+    # time, and os.environ.setdefault above is a no-op when the host
+    # (e.g. the VPS) already exports a real production key — which made
+    # every authenticated test fail with 401 in that environment.
+    monkeypatch.setenv("API_SERVER_KEY", "test-key-123")
     with TestClient(app) as c:
         yield c
 

@@ -201,19 +201,6 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         if warning:
             send_raw(warning)
 
-        # Auto-close open outcomes when SL/TP hit
-        try:
-            closed = auto_close_outcomes()
-            if closed:
-                for c in closed:
-                    icon = "✅" if c["outcome"] == "win" else "❌"
-                    send_raw(
-                        f"{icon} <b>Auto-closed:</b> {c['symbol']} "
-                        f"→ {c['outcome'].upper()} at {c['exit_price']}"
-                    )
-        except Exception as exc:
-            logger.warning(f"Auto-close check failed (non-fatal): {exc}")
-
         # Log run summary
         execute_count = sum(1 for r in reports if r.get("final_verdict") == "EXECUTE")
         logger.info(
@@ -221,23 +208,29 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             f"{execute_count} EXECUTE signals ==="
         )
 
-        # Auto-close open outcomes based on current prices
+        # Auto-close open outcomes based on current prices.
+        # ``current_price`` is populated on EVERY report (EXECUTE and
+        # NO_TRADE) by main.py, so open signals can close on any run.
+        # NOTE: do not re-import auto_close_outcomes inside this function —
+        # a local import shadows the module-level name for the WHOLE
+        # function scope and previously caused an UnboundLocalError.
         try:
-            from storage.outcome_tracker import auto_close_outcomes
-            current_prices = {}
+            current_prices: dict[str, float] = {}
             for r in reports:
                 sym = r.get("symbol") or r.get("data", {}).get("symbol")
-                price = r.get("entry_price") or r.get("current_price")
-                if not price:
-                    # Try from risk section
-                    risk = r.get("risk", {})
-                    price = risk.get("entry_price")
+                price = r.get("current_price") or r.get("entry_price")
                 if sym and price:
-                    current_prices[sym] = float(price)
+                    current_prices[str(sym)] = float(price)
             if current_prices:
                 closed = auto_close_outcomes(current_prices)
+                for c in closed:
+                    icon = "✅" if c["outcome"] == "win" else "❌"
+                    send_raw(
+                        f"{icon} <b>Auto-closed:</b> {c['symbol']} "
+                        f"→ {c['outcome'].upper()} at {c['exit_price']}"
+                    )
                 if closed:
-                    logger.info(f"Auto-closed {closed} outcome(s) this run")
+                    logger.info(f"Auto-closed {len(closed)} outcome(s) this run")
         except Exception as exc:
             logger.warning(f"Auto-close outcomes failed (non-fatal): {exc}")
 

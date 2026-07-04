@@ -9,17 +9,16 @@ to D1 directly. This module calls a small Worker (deployed separately;
 see cloudflare/README.md) that forwards parameterized SQL to its D1
 binding and returns the rows as JSON.
 
-This is an OPT-IN alternate backend for storage/*.py. The default
-remains local SQLite — nothing changes unless IATIS_STORAGE_BACKEND=d1
-is set. Every storage module's `_conn()` checks `is_d1_enabled()` and,
-if true, uses `d1_connection()` from here instead of `sqlite3.connect()`.
+D1 is the only storage backend for storage/*.py — there is no local
+SQLite fallback (removed to take disk I/O and file locking off the
+VPS entirely; see cloudflare/README.md for the history). Every storage
+module's `_conn()` uses `d1_connection()` from here.
 
 Design goal: `D1Connection`/`D1Cursor`/`D1Row` mimic sqlite3's own
 connection/cursor/row interface closely enough (`.execute(sql, params)`,
 `.fetchone()`, `.fetchall()`, `.lastrowid`, row access by both
 `row["col"]` and `row[0]`) that the SQL query strings throughout
-storage/*.py never need to change — only the four `_conn()` functions
-do.
+storage/*.py read the same as they did against local SQLite.
 
 Known limitation: each `execute()` call is its own independent HTTPS
 request to the Worker, hence its own independent atomic D1 statement —
@@ -47,21 +46,14 @@ _DEFAULT_TIMEOUT = 15.0
 
 
 class D1Error(Exception):
-    """Raised for a failed D1 proxy call. Callers that currently catch
-    sqlite3.Error around a _conn() block should also catch this — see
-    storage/decision_db.py and storage/experience_db.py for examples."""
-
-
-def is_d1_enabled() -> bool:
-    return os.environ.get("IATIS_STORAGE_BACKEND", "sqlite").strip().lower() == "d1"
+    """Raised for a failed D1 proxy call."""
 
 
 def _worker_url() -> str:
     url = os.environ.get("D1_WORKER_URL", "").rstrip("/")
     if not url:
         raise D1Error(
-            "IATIS_STORAGE_BACKEND=d1 but D1_WORKER_URL is not set. "
-            "See cloudflare/README.md for setup."
+            "D1_WORKER_URL is not set. See cloudflare/README.md for setup."
         )
     return url
 
@@ -89,8 +81,7 @@ def _auth_headers() -> dict[str, str]:
     token = os.environ.get("D1_PROXY_TOKEN", "")
     if not token:
         raise D1Error(
-            "IATIS_STORAGE_BACKEND=d1 but D1_PROXY_TOKEN is not set. "
-            "See cloudflare/README.md for setup."
+            "D1_PROXY_TOKEN is not set. See cloudflare/README.md for setup."
         )
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 

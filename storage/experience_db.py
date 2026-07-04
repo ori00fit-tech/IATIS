@@ -18,7 +18,7 @@ This enables queries like:
   "Which engine predicts reversals best in XAUUSD?"
 
 Design:
-  - SQLite with WAL mode (concurrent reads)
+  - Cloudflare D1 (see storage/d1_client.py)
   - JSON columns for variable-length data (engines, reasons)
   - Indexed on symbol, regime, session, verdict for fast queries
   - experience_id links decisions to outcomes
@@ -27,11 +27,8 @@ Design:
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from storage import d1_client
@@ -39,8 +36,6 @@ from storage.d1_client import D1Error
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-DB_PATH = Path(__file__).resolve().parent / "experience.db"
 
 _CREATE_EXPERIENCES = """
 CREATE TABLE IF NOT EXISTS experiences (
@@ -126,33 +121,14 @@ _CREATE_INDEXES = [
 
 
 @contextmanager
-def _conn(path: Path = DB_PATH):
-    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
-    local SQLite file at `path`. See storage/d1_client.py."""
-    if d1_client.is_d1_enabled():
-        with d1_client.d1_connection() as con:
-            yield con
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    try:
-        os.chmod(str(path), 0o600)
-    except OSError:
-        pass
-    try:
+def _conn():
+    """Yields a D1 connection. See storage/d1_client.py."""
+    with d1_client.d1_connection() as con:
         yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
 
 
-def _init_db(path: Path = DB_PATH) -> None:
-    with _conn(path) as con:
+def _init_db() -> None:
+    with _conn() as con:
         con.execute(_CREATE_EXPERIENCES)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
@@ -174,13 +150,13 @@ def _detect_session(hour_utc: int) -> str:
 
 # ─── Record Experience ──────────────────────────────────────────────
 
-def record_experience(report: dict, path: Path = DB_PATH) -> str:
+def record_experience(report: dict) -> str:
     """Record a complete pipeline decision as an experience.
 
     Called after EVERY run_pipeline() — both EXECUTE and NO_TRADE.
     Returns the experience_id.
     """
-    _init_db(path)
+    _init_db()
 
     now = datetime.now(timezone.utc)
     symbol = report.get("symbol", "UNKNOWN")
@@ -216,7 +192,7 @@ def record_experience(report: dict, path: Path = DB_PATH) -> str:
         fail_reasons = [report.get("summary", "")]
 
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             con.execute("""
                 INSERT OR IGNORE INTO experiences (
                     experience_id, ts, symbol, session, day_of_week, hour_utc,
@@ -278,7 +254,7 @@ def record_experience(report: dict, path: Path = DB_PATH) -> str:
                 json.dumps(engines_data),
             ))
         logger.debug(f"Experience recorded: {experience_id} → {verdict}")
-    except (sqlite3.Error, D1Error) as exc:
+    except D1Error as exc:
         logger.warning(f"Experience DB write failed (non-fatal): {exc}")
 
     return experience_id
@@ -295,12 +271,11 @@ def record_outcome(
     pnl_r: float = 0,
     duration_bars: int = 0,
     exit_reason: str = "",
-    path: Path = DB_PATH,
 ) -> bool:
     """Update the most recent EXECUTE experience for this symbol with outcome."""
-    _init_db(path)
+    _init_db()
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             row = con.execute("""
                 SELECT experience_id FROM experiences
                 WHERE symbol = ? AND verdict = 'EXECUTE' AND outcome IS NULL
@@ -325,7 +300,7 @@ def record_outcome(
             ))
             logger.info(f"Experience outcome recorded: {row['experience_id']} → {outcome}")
             return True
-    except (sqlite3.Error, D1Error) as exc:
+    except D1Error as exc:
         logger.warning(f"Experience outcome update failed: {exc}")
         return False
 
@@ -339,10 +314,9 @@ def query_experiences(
     verdict: str | None = None,
     min_score: float | None = None,
     limit: int = 100,
-    path: Path = DB_PATH,
 ) -> list[dict]:
     """Query experiences with filters."""
-    _init_db(path)
+    _init_db()
     conditions = []
     params = []
 
@@ -365,7 +339,7 @@ def query_experiences(
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params.append(limit)
 
-    with _conn(path) as con:
+    with _conn() as con:
         rows = con.execute(f"""
             SELECT * FROM experiences {where}
             ORDER BY ts DESC LIMIT ?
@@ -374,10 +348,7 @@ def query_experiences(
     return [dict(r) for r in rows]
 
 
-def pattern_analysis(
-    filters: dict[str, Any],
-    path: Path = DB_PATH,
-) -> dict:
+def pattern_analysis(filters: dict[str, Any]) -> dict:
     """Analyze win rate for a specific pattern combination.
 
     Example:
@@ -389,7 +360,7 @@ def pattern_analysis(
 
     Returns: {"trades": 42, "wins": 23, "wr": 54.8, "avg_pnl_r": 0.8}
     """
-    _init_db(path)
+    _init_db()
     conditions = ["verdict = 'EXECUTE'", "outcome IS NOT NULL"]
     params = []
 
@@ -402,7 +373,7 @@ def pattern_analysis(
             params.append(value)
         elif key == "engine_agrees":
             # Check if specific engine voted in same direction
-            conditions.append(f"engines_json LIKE ?")
+            conditions.append("engines_json LIKE ?")
             params.append(f'%"engine": "{value}"%')
         elif key in ("symbol", "regime", "session", "direction"):
             conditions.append(f"{key} = ?")
@@ -410,7 +381,7 @@ def pattern_analysis(
 
     where = f"WHERE {' AND '.join(conditions)}"
 
-    with _conn(path) as con:
+    with _conn() as con:
         rows = con.execute(f"""
             SELECT outcome, pnl_r, pnl_usd, pnl_pips
             FROM experiences {where}
@@ -433,10 +404,10 @@ def pattern_analysis(
     }
 
 
-def experience_summary(path: Path = DB_PATH) -> dict:
+def experience_summary() -> dict:
     """High-level summary of all experiences."""
-    _init_db(path)
-    with _conn(path) as con:
+    _init_db()
+    with _conn() as con:
         total = con.execute("SELECT COUNT(*) as n FROM experiences").fetchone()["n"]
         executes = con.execute(
             "SELECT COUNT(*) as n FROM experiences WHERE verdict='EXECUTE'"
@@ -492,24 +463,20 @@ def experience_summary(path: Path = DB_PATH) -> dict:
     }
 
 
-def find_similar(
-    current_report: dict,
-    top_n: int = 10,
-    path: Path = DB_PATH,
-) -> list[dict]:
+def find_similar(current_report: dict, top_n: int = 10) -> list[dict]:
     """Find historically similar decisions (Market Memory - Level 9).
 
     Matches on: symbol + regime + similar score range + same direction.
     Returns past experiences with outcomes for pattern comparison.
     """
-    _init_db(path)
+    _init_db()
 
     symbol = current_report.get("symbol", "")
     regime = current_report.get("regime", {}).get("state", "")
     score = current_report.get("confluence", {}).get("score", 0)
     direction = current_report.get("confluence", {}).get("vote", {}).get("winning_bias", "")
 
-    with _conn(path) as con:
+    with _conn() as con:
         rows = con.execute("""
             SELECT experience_id, ts, symbol, regime, confluence_score,
                    direction, verdict, outcome, pnl_r, pnl_usd,

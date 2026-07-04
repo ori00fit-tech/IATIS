@@ -3,7 +3,7 @@ risk/portfolio_exposure.py
 ------------------------------
 Tracks currently-open risk across the portfolio so risk_engine.py can
 enforce the max_exposure cap. Phase 1: in-memory only. Phase 2+: should
-persist to storage/performance.db so exposure survives a restart.
+persist to storage (Cloudflare D1) so exposure survives a restart.
 """
 
 from __future__ import annotations

@@ -1,9 +1,10 @@
 # IATIS on Cloudflare D1
 
-Optional storage backend: IATIS's decision/outcome/engine-performance/
-experience databases, normally local SQLite files, can instead live in
-a Cloudflare D1 database — one organized, centrally-managed store
-instead of four local `.db` files on the VPS's disk.
+Cloudflare D1 is IATIS's only storage backend: the decision, outcome,
+engine-performance, and experience data live in one organized,
+centrally-managed D1 database instead of local `.db` files on the
+VPS's disk — no local SQLite fallback, no disk I/O or file locking on
+the VPS at all for storage/*.py.
 
 D1 is only reachable from *inside* a Cloudflare Worker (via a binding),
 not directly from an external Python process. So this isn't "point the
@@ -57,26 +58,29 @@ below are for you (or whoever has account access) to run.
 
 6. **On the VPS**, add to `.env` (same value for `D1_PROXY_TOKEN` as step 4):
    ```bash
-   IATIS_STORAGE_BACKEND=d1
    D1_WORKER_URL=https://iatis-d1-proxy.<you>.workers.dev
    D1_PROXY_TOKEN=<the same secret you set in step 4>
    ```
+   Both are required — `storage/*.py` has no local fallback, so the app
+   won't start without them.
 
 That's it — `storage/decision_db.py`, `outcome_tracker.py`,
-`engine_tracker.py`, and `experience_db.py` all check
-`IATIS_STORAGE_BACKEND` at connection time and switch to D1
-automatically. Leaving it unset (or `sqlite`, the default) keeps
-everything exactly as it was — local SQLite files, no Cloudflare
-account needed. This is also why the test suite is unaffected: tests
-never set `IATIS_STORAGE_BACKEND`, so they always exercise the local
-SQLite path.
+`engine_tracker.py`, `experience_db.py`, `symbol_health.py`, and
+`calibration.py` all go through `storage/d1_client.py`, which talks to
+the Worker over HTTPS.
+
+The test suite never touches your real Cloudflare account: `tests/conftest.py`'s
+`fake_d1` fixture fakes the Worker with an in-memory SQLite connection
+per test (real SQL semantics, fake transport) — see its docstring for
+how that works.
 
 ## What you get, and what you don't
 
-- **Do get:** one centrally-managed database instead of four local
-  files that only exist on one VPS's disk; D1's own backups/durability;
-  the ability to point a second process (or a Cloudflare Worker/Pages
-  dashboard) at the same data without SSHing into the VPS.
+- **Do get:** one centrally-managed database instead of local files
+  that only exist on one VPS's disk; D1's own backups/durability; the
+  ability to point a second process (or a Cloudflare Worker/Pages
+  dashboard) at the same data without SSHing into the VPS; zero SQLite
+  disk I/O or file locking on the VPS.
 - **Don't get:** cross-statement transactions for free. Each
   `POST /d1/exec` call is its own atomic D1 statement, but a sequence
   of several `/d1/exec` calls within one Python `with _conn() as con:`

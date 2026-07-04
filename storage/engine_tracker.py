@@ -24,20 +24,14 @@ Phase 6: real P&L attribution once broker integration exists
 
 from __future__ import annotations
 
-import json
-import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-TRACKER_DB = Path(__file__).resolve().parent / "engine_tracker.db"
 
 _CREATE_ENGINE_PERFORMANCE = """
 CREATE TABLE IF NOT EXISTS engine_performance (
@@ -61,46 +55,26 @@ _CREATE_INDEXES = [
 
 
 @contextmanager
-def _conn(path: Path = TRACKER_DB):
-    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
-    local SQLite file at `path`. See storage/d1_client.py."""
-    if d1_client.is_d1_enabled():
-        with d1_client.d1_connection() as con:
-            yield con
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    try:
+def _conn():
+    """Yields a D1 connection. See storage/d1_client.py."""
+    with d1_client.d1_connection() as con:
         yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
 
 
-def init_tracker(path: Path = TRACKER_DB) -> None:
-    with _conn(path) as con:
+def init_tracker() -> None:
+    with _conn() as con:
         con.execute(_CREATE_ENGINE_PERFORMANCE)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
-    if not d1_client.is_d1_enabled():
-        try:
-            os.chmod(str(path), 0o600)
-        except Exception:
-            pass
 
 
-def record_engine_votes(report: dict, path: Path = TRACKER_DB) -> None:
+def record_engine_votes(report: dict) -> None:
     """Record each engine's vote from a pipeline report.
 
     Called automatically after each pipeline run alongside log_decision_db().
     Never raises — tracking failure must not affect the pipeline.
     """
-    init_tracker(path)
+    init_tracker()
     ts = datetime.now(timezone.utc).isoformat()
     symbol = report.get("symbol", "")
     verdict = report.get("final_verdict", "UNKNOWN")
@@ -115,7 +89,7 @@ def record_engine_votes(report: dict, path: Path = TRACKER_DB) -> None:
     engine_outputs = report.get("engine_outputs", [])
 
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             for e in engine_outputs:
                 engine = e.get("engine", "?")
                 bias = e.get("bias", "NEUTRAL")
@@ -144,7 +118,6 @@ def record_engine_votes(report: dict, path: Path = TRACKER_DB) -> None:
 def engine_stats(
     min_votes: int = 10,
     symbol: str | None = None,
-    path: Path = TRACKER_DB,
 ) -> list[dict[str, Any]]:
     """Return per-engine statistics.
 
@@ -157,8 +130,8 @@ def engine_stats(
         agreement_rate (how often it agreed with majority on EXECUTE),
         avg_score_when_voting
     """
-    init_tracker(path)
-    with _conn(path) as con:
+    init_tracker()
+    with _conn() as con:
         sym_filter = "AND symbol = ?" if symbol else ""
         params = (symbol,) if symbol else ()
 
@@ -182,10 +155,10 @@ def engine_stats(
     return [dict(r) for r in rows]
 
 
-def neutral_rate_by_engine(path: Path = TRACKER_DB) -> list[dict]:
+def neutral_rate_by_engine() -> list[dict]:
     """Which engines abstain most often? High neutral rate = less useful."""
-    init_tracker(path)
-    with _conn(path) as con:
+    init_tracker()
+    with _conn() as con:
         rows = con.execute("""
             SELECT engine,
                    COUNT(*) as total,
@@ -197,10 +170,7 @@ def neutral_rate_by_engine(path: Path = TRACKER_DB) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def suggested_weights(
-    current_weights: dict[str, float],
-    path: Path = TRACKER_DB,
-) -> dict[str, float]:
+def suggested_weights(current_weights: dict[str, float]) -> dict[str, float]:
     """Suggest adjusted weights based on engine performance data.
 
     Simple heuristic: engines with higher agreement rates and lower
@@ -209,7 +179,7 @@ def suggested_weights(
 
     Returns new weight dict (not applied automatically — review before using).
     """
-    stats = engine_stats(min_votes=20, path=path)
+    stats = engine_stats(min_votes=20)
     if not stats:
         return current_weights  # not enough data
 

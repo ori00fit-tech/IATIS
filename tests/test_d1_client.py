@@ -1,13 +1,16 @@
 """
 tests/test_d1_client.py
 --------------------------
-Tests for storage/d1_client.py — the optional D1-backed alternate
-storage backend. All HTTP calls are mocked (no real Cloudflare account
-needed), same convention as tests/test_twelve_data.py.
+Tests for storage/d1_client.py — the Cloudflare D1 storage backend.
+All HTTP calls are mocked (no real Cloudflare account needed), same
+convention as tests/test_twelve_data.py.
 
-These tests never touch the default sqlite path — is_d1_enabled() is
-only true when IATIS_STORAGE_BACKEND=d1 is explicitly set, which the
-rest of the suite never does.
+tests/conftest.py's `fake_d1` autouse fixture already gives the whole
+suite a working, isolated D1_WORKER_URL/D1_PROXY_TOKEN and an in-memory
+SQLite-backed fake Worker. The tests below that need to assert on the
+exact HTTP request/response shape override that fake with their own
+`patch("storage.d1_client.requests.post", ...)` for the duration of the
+test — see fake_d1's docstring in conftest.py.
 """
 from __future__ import annotations
 
@@ -16,26 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from storage import d1_client
-from storage.d1_client import D1Connection, D1Error, D1Row, is_d1_enabled
-
-
-# ---------------------------------------------------------------------------
-# is_d1_enabled()
-# ---------------------------------------------------------------------------
-
-def test_d1_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("IATIS_STORAGE_BACKEND", raising=False)
-    assert is_d1_enabled() is False
-
-
-def test_d1_enabled_when_set(monkeypatch):
-    monkeypatch.setenv("IATIS_STORAGE_BACKEND", "d1")
-    assert is_d1_enabled() is True
-
-
-def test_d1_enabled_is_case_insensitive(monkeypatch):
-    monkeypatch.setenv("IATIS_STORAGE_BACKEND", "D1")
-    assert is_d1_enabled() is True
+from storage.d1_client import D1Connection, D1Error, D1Row
 
 
 # ---------------------------------------------------------------------------
@@ -222,17 +206,16 @@ def test_d1_batch_surfaces_real_error_on_actual_http_500(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Storage modules pick up the D1 backend when enabled (still mocked HTTP)
+# Storage modules go through D1 correctly (still mocked HTTP)
 # ---------------------------------------------------------------------------
 
 def test_decision_db_uses_d1_when_enabled(monkeypatch):
-    """decision_db.log_decision_db() under D1: insert the decision row via
+    """decision_db.log_decision_db(): insert the decision row via
     a single /d1/exec (real per-statement last_row_id), then batch the
     engine_votes inserts using that concrete id — NOT last_insert_rowid()
     inside the batch, which doesn't reliably carry over between D1 batch
     statements (a real bug caught live in production; see the comment in
     decision_db.py)."""
-    monkeypatch.setenv("IATIS_STORAGE_BACKEND", "d1")
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
 
@@ -278,13 +261,11 @@ def test_decision_db_uses_d1_when_enabled(monkeypatch):
 
 def test_symbol_health_uses_d1_when_enabled(monkeypatch):
     """symbol_health.get_symbol_health() used to always open the local
-    outcomes.db file directly via sqlite3, bypassing is_d1_enabled()
-    entirely. Under D1 that file never exists on the VPS, so the query
-    silently fell back to "no data yet" and the auto-pause safety gate
-    reported every symbol HEALTHY forever, even a symbol on a real losing
-    streak. It must now route through the same D1 connection as
-    outcome_tracker.py."""
-    monkeypatch.setenv("IATIS_STORAGE_BACKEND", "d1")
+    outcomes.db file directly via sqlite3, bypassing D1 entirely. Under
+    D1 that file never exists on the VPS, so the query silently fell
+    back to "no data yet" and the auto-pause safety gate reported every
+    symbol HEALTHY forever, even a symbol on a real losing streak. It
+    must now route through the same D1 connection as outcome_tracker.py."""
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
 

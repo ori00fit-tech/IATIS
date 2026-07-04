@@ -19,26 +19,21 @@ With live trading, uses decision_db outcomes.
 from __future__ import annotations
 
 import json
-import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-DB_PATH = Path(__file__).resolve().parent / "decisions.db"
-
 
 @contextmanager
-def _conn(path: Path = DB_PATH):
-    con = sqlite3.connect(str(path))
-    con.row_factory = sqlite3.Row
-    try:
+def _conn():
+    """Yields a D1 connection. See storage/d1_client.py."""
+    with d1_client.d1_connection() as con:
         yield con
-    finally:
-        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -57,17 +52,14 @@ SCORE_BUCKETS = [
 ]
 
 
-def calibration_from_db(path: Path = DB_PATH) -> list[dict[str, Any]]:
+def calibration_from_db() -> list[dict[str, Any]]:
     """Compute calibration buckets from live decision_db outcomes.
 
     Requires 'outcome' column (win/loss) to be populated.
     Only available after live/paper trading with actual results.
     """
-    if not path.exists():
-        return []
-
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             rows = con.execute("""
                 SELECT cf_score, outcome
                 FROM decisions
@@ -150,18 +142,15 @@ def calibration_from_backtest(
 # Regime Performance Matrix
 # ---------------------------------------------------------------------------
 
-def regime_performance_matrix(path: Path = DB_PATH) -> list[dict[str, Any]]:
+def regime_performance_matrix() -> list[dict[str, Any]]:
     """Compute WR, PF, and expectancy per regime.
 
     This is the Phase 4.3 'most important dashboard panel':
     Shows whether TRENDING regime actually produces better results
     than RANGING/VOLATILE — validating the regime-aware weight logic.
     """
-    if not path.exists():
-        return []
-
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             rows = con.execute("""
                 SELECT
                     regime,
@@ -260,7 +249,6 @@ def suggested_dynamic_weights(
     min_weight: float = 0.10,
     max_weight: float = 0.35,
     decay_factor: float = 0.7,
-    path: Path = DB_PATH,
 ) -> dict[str, Any]:
     """Conservative dynamic weight adjustment per Phase 4 recommendations.
 
@@ -275,7 +263,7 @@ def suggested_dynamic_weights(
     """
     from storage.engine_tracker import engine_stats
 
-    stats = engine_stats(min_votes=min_votes, path=path)
+    stats = engine_stats(min_votes=min_votes)
     if not stats:
         return {
             "status": "insufficient_data",

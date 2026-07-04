@@ -1,10 +1,9 @@
 """
-import os
 storage/decision_db.py
 -----------------------
-SQLite-backed decision store — replaces the flat JSONL log for queries.
+Cloudflare D1-backed decision store — replaces the flat JSONL log for queries.
 
-Why SQLite:
+Why a queryable DB:
     The JSONL log (decision_log.py) is kept for append-only streaming
     compatibility. This module adds a queryable layer on top so we can
     ask real questions:
@@ -17,18 +16,16 @@ Schema:
     decisions table — one row per pipeline run
     engine_votes table — one row per engine per run (normalized)
 
-Both tables are auto-created on first use. The DB path is
-storage/decisions.db (gitignored).
+Both tables are auto-created on first use. See storage/d1_client.py for
+why every read/write here goes over HTTPS to the D1 proxy Worker
+instead of a local file.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from storage import d1_client
@@ -36,8 +33,6 @@ from storage.d1_client import D1Error
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-DB_PATH = Path(__file__).resolve().parent / "decisions.db"
 
 
 # ---------------------------------------------------------------------------
@@ -85,53 +80,32 @@ _CREATE_INDEXES = [
 # ---------------------------------------------------------------------------
 
 @contextmanager
-def _conn(path: Path = DB_PATH):
-    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
-    local SQLite file at `path` — same .execute()/.fetchone()/.fetchall()
-    shape either way. See storage/d1_client.py."""
-    if d1_client.is_d1_enabled():
-        with d1_client.d1_connection() as con:
-            yield con
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    try:
+def _conn():
+    """Yields a D1 connection — same .execute()/.fetchone()/.fetchall()
+    shape as sqlite3 used to have. See storage/d1_client.py."""
+    with d1_client.d1_connection() as con:
         yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
 
 
-def init_db(path: Path = DB_PATH) -> None:
-    """Create tables if they don't exist yet. Sets restrictive permissions
-    (local SQLite only — D1 has no local file to chmod)."""
-    with _conn(path) as con:
+def init_db() -> None:
+    """Create tables if they don't exist yet."""
+    with _conn() as con:
         con.execute(_CREATE_DECISIONS)
         con.execute(_CREATE_ENGINE_VOTES)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
-    if not d1_client.is_d1_enabled():
-        try:
-            os.chmod(str(path), 0o600)
-        except Exception:
-            pass
-    logger.debug(f"DB initialized (backend={'d1' if d1_client.is_d1_enabled() else 'sqlite'}): {path}")
+    logger.debug("DB initialized (backend=d1)")
 
 
 # ---------------------------------------------------------------------------
 # Write
 # ---------------------------------------------------------------------------
 
-def log_decision_db(report: dict, path: Path = DB_PATH) -> None:
+def log_decision_db(report: dict) -> None:
     """Insert one pipeline report into the DB. Never raises — failures are
     logged so the pipeline continues regardless of DB availability.
     """
-    init_db(path)
+    init_db()
 
     ts = datetime.now(timezone.utc).isoformat()
     symbol = report.get("symbol", "")
@@ -161,61 +135,43 @@ def log_decision_db(report: dict, path: Path = DB_PATH) -> None:
     engine_outputs = report.get("engine_outputs", [])
 
     try:
-        if d1_client.is_d1_enabled():
-            # Originally this tried to keep the decision row and its N
-            # engine_votes rows in one atomic /d1/batch call, using
-            # SQLite's last_insert_rowid() so engine_votes could refer to
-            # a decision_id it didn't have yet in Python. That hit a real
-            # D1 limitation in production: last_insert_rowid() does not
-            # reliably carry over between statements inside a single
-            # batch() call, so engine_votes.decision_id came back as 0/
-            # NULL and every insert failed its FOREIGN KEY constraint
-            # (confirmed live: "D1_ERROR: FOREIGN KEY constraint failed").
-            #
-            # Fixed by using two round-trips instead: insert the decision
-            # row alone first (its real id comes back directly in that
-            # exec response's meta.last_row_id — reliable per-statement,
-            # unlike last_insert_rowid() across a batch), then batch all
-            # engine_votes inserts together using that concrete id. This
-            # keeps the N votes atomic as a group but no longer atomic
-            # with the decision row itself — see cloudflare/README.md's
-            # "Known limitation" section, updated to match.
-            init_db(path)
-            with d1_client.d1_connection() as con:
-                cur = con.execute(
-                    """INSERT INTO decisions
-                       (ts, symbol, verdict, regime, volatility, trend_str,
-                        cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    decision_values,
+        # Originally this tried to keep the decision row and its N
+        # engine_votes rows in one atomic /d1/batch call, using SQLite's
+        # last_insert_rowid() so engine_votes could refer to a decision_id
+        # it didn't have yet in Python. That hit a real D1 limitation in
+        # production: last_insert_rowid() does not reliably carry over
+        # between statements inside a single batch() call, so
+        # engine_votes.decision_id came back as 0/NULL and every insert
+        # failed its FOREIGN KEY constraint (confirmed live:
+        # "D1_ERROR: FOREIGN KEY constraint failed").
+        #
+        # Fixed by using two round-trips instead: insert the decision row
+        # alone first (its real id comes back directly in that exec
+        # response's meta.last_row_id — reliable per-statement, unlike
+        # last_insert_rowid() across a batch), then batch all engine_votes
+        # inserts together using that concrete id. This keeps the N votes
+        # atomic as a group but no longer atomic with the decision row
+        # itself — see cloudflare/README.md's "Known limitation" section.
+        with d1_client.d1_connection() as con:
+            cur = con.execute(
+                """INSERT INTO decisions
+                   (ts, symbol, verdict, regime, volatility, trend_str,
+                    cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                decision_values,
+            )
+            decision_id = cur.lastrowid
+        if engine_outputs and decision_id:
+            d1_client.d1_batch([
+                (
+                    "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?, ?, ?, ?)",
+                    (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
                 )
-                decision_id = cur.lastrowid
-            if engine_outputs and decision_id:
-                d1_client.d1_batch([
-                    (
-                        "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?, ?, ?, ?)",
-                        (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
-                    )
-                    for e in engine_outputs
-                ])
-        else:
-            with _conn(path) as con:
-                cur = con.execute(
-                    """INSERT INTO decisions
-                       (ts, symbol, verdict, regime, volatility, trend_str,
-                        cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    decision_values,
-                )
-                decision_id = cur.lastrowid
-                for e in engine_outputs:
-                    con.execute(
-                        "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?,?,?,?)",
-                        (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
-                    )
+                for e in engine_outputs
+            ])
 
         logger.info(f"DB: logged {verdict} for {symbol}")
-    except (sqlite3.Error, D1Error) as exc:
+    except D1Error as exc:
         logger.warning(f"DB write failed (non-fatal): {exc}")
 
 
@@ -223,10 +179,10 @@ def log_decision_db(report: dict, path: Path = DB_PATH) -> None:
 # Read / Analytics
 # ---------------------------------------------------------------------------
 
-def summary(path: Path = DB_PATH) -> dict[str, Any]:
+def summary() -> dict[str, Any]:
     """Quick aggregate stats from the DB."""
-    init_db(path)
-    with _conn(path) as con:
+    init_db()
+    with _conn() as con:
         total = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
         execute = con.execute("SELECT COUNT(*) FROM decisions WHERE verdict='EXECUTE'").fetchone()[0]
         no_trade = con.execute("SELECT COUNT(*) FROM decisions WHERE verdict='NO_TRADE'").fetchone()[0]
@@ -276,11 +232,10 @@ def summary(path: Path = DB_PATH) -> dict[str, Any]:
     }
 
 
-def recent(limit: int = 20, verdict_filter: str | None = None,
-           path: Path = DB_PATH) -> list[dict]:
+def recent(limit: int = 20, verdict_filter: str | None = None) -> list[dict]:
     """Return recent decisions, newest first."""
-    init_db(path)
-    with _conn(path) as con:
+    init_db()
+    with _conn() as con:
         if verdict_filter:
             rows = con.execute(
                 "SELECT * FROM decisions WHERE verdict=? ORDER BY id DESC LIMIT ?",
@@ -293,10 +248,10 @@ def recent(limit: int = 20, verdict_filter: str | None = None,
     return [dict(r) for r in rows]
 
 
-def regime_performance(path: Path = DB_PATH) -> list[dict]:
+def regime_performance() -> list[dict]:
     """EXECUTE rate broken down by regime — useful for tuning regime filters."""
-    init_db(path)
-    with _conn(path) as con:
+    init_db()
+    with _conn() as con:
         rows = con.execute("""
             SELECT
                 regime,

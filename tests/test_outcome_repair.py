@@ -10,8 +10,6 @@ Regression tests for the 2026-07-03 outcome-tracking fixes:
 """
 from __future__ import annotations
 
-import tempfile
-import uuid
 from pathlib import Path
 
 import pytest
@@ -24,10 +22,6 @@ from storage.outcome_tracker import (
     log_signal,
     recent_signals,
 )
-
-
-def _tmp_db() -> Path:
-    return Path(tempfile.mkdtemp()) / f"outcomes_{uuid.uuid4().hex}.db"
 
 
 def _report(symbol: str = "EURUSD", direction: str = "BULLISH",
@@ -48,25 +42,23 @@ def _report(symbol: str = "EURUSD", direction: str = "BULLISH",
 # ── Fix 1: auto_close contract ──────────────────────────────────────────
 
 def test_auto_close_returns_structured_records():
-    db = _tmp_db()
-    log_signal(_report("EURUSD", entry=1.0850, sl=1.0800, tp=1.0950), path=db)
+    log_signal(_report("EURUSD", entry=1.0850, sl=1.0800, tp=1.0950))
     # Price at TP → should close as win
-    closed = auto_close_outcomes({"EURUSD": 1.0960}, path=db)
+    closed = auto_close_outcomes({"EURUSD": 1.0960})
     assert isinstance(closed, list)
     assert len(closed) == 1
     rec = closed[0]
     assert rec["symbol"] == "EURUSD"
     assert rec["outcome"] == "win"
     assert rec["exit_price"] == pytest.approx(1.0950)
-    assert get_open_signals(path=db) == []
+    assert get_open_signals() == []
 
 
 def test_auto_close_empty_when_no_hit():
-    db = _tmp_db()
-    log_signal(_report("EURUSD", entry=1.0850, sl=1.0800, tp=1.0950), path=db)
-    closed = auto_close_outcomes({"EURUSD": 1.0870}, path=db)  # between SL/TP
+    log_signal(_report("EURUSD", entry=1.0850, sl=1.0800, tp=1.0950))
+    closed = auto_close_outcomes({"EURUSD": 1.0870})  # between SL/TP
     assert closed == []
-    assert len(get_open_signals(path=db)) == 1
+    assert len(get_open_signals()) == 1
 
 
 def test_scheduler_has_no_shadowing_local_import():
@@ -94,51 +86,46 @@ def test_scheduler_has_no_shadowing_local_import():
 # ── Fix 2: risk-normalized pnl_usd ──────────────────────────────────────
 
 def test_full_sl_loss_costs_exactly_risk_budget():
-    db = _tmp_db()
     sid = log_signal(_report("EURUSD", direction="BULLISH",
-                             entry=1.0850, sl=1.0800), path=db)
-    close_signal(sid, exit_price=1.0800, outcome="loss", path=db)
-    row = recent_signals(limit=1, path=db)[0]
+                             entry=1.0850, sl=1.0800))
+    close_signal(sid, exit_price=1.0800, outcome="loss")
+    row = recent_signals(limit=1)[0]
     assert row["pnl_usd"] == pytest.approx(-DEFAULT_RISK_USD)
 
 
 def test_two_r_win_pays_twice_risk_budget():
-    db = _tmp_db()
     # SL distance 50 pips, exit +100 pips → R = 2.0
     sid = log_signal(_report("EURUSD", direction="BULLISH",
-                             entry=1.0850, sl=1.0800), path=db)
-    close_signal(sid, exit_price=1.0950, outcome="win", path=db)
-    row = recent_signals(limit=1, path=db)[0]
+                             entry=1.0850, sl=1.0800))
+    close_signal(sid, exit_price=1.0950, outcome="win")
+    row = recent_signals(limit=1)[0]
     assert row["pnl_usd"] == pytest.approx(2 * DEFAULT_RISK_USD)
 
 
 def test_crypto_pnl_is_risk_normalized_not_price_diff():
     """The old code recorded price_diff 1:1 in USD for crypto —
     a 3 000-point BTC move must NOT record ±3 000 USD."""
-    db = _tmp_db()
     sid = log_signal(_report("BTCUSD", direction="BULLISH",
-                             entry=60_000.0, sl=58_500.0), path=db)
-    close_signal(sid, exit_price=63_000.0, outcome="win", path=db)  # R = 2.0
-    row = recent_signals(limit=1, path=db)[0]
+                             entry=60_000.0, sl=58_500.0))
+    close_signal(sid, exit_price=63_000.0, outcome="win")  # R = 2.0
+    row = recent_signals(limit=1)[0]
     assert row["pnl_usd"] == pytest.approx(2 * DEFAULT_RISK_USD)
     assert abs(row["pnl_usd"]) < 1_000  # sanity: never the raw price diff
 
 
 def test_missing_sl_records_null_pnl_usd_not_fantasy_lot():
-    db = _tmp_db()
     rep = _report("EURUSD")
     rep["stop_loss"] = None
-    sid = log_signal(rep, path=db)
-    close_signal(sid, exit_price=1.0950, outcome="win", path=db)
-    row = recent_signals(limit=1, path=db)[0]
+    sid = log_signal(rep)
+    close_signal(sid, exit_price=1.0950, outcome="win")
+    row = recent_signals(limit=1)[0]
     assert row["pnl_usd"] is None
 
 
 def test_custom_risk_usd_scales_pnl():
-    db = _tmp_db()
-    sid = log_signal(_report("EURUSD", entry=1.0850, sl=1.0800), path=db)
-    close_signal(sid, exit_price=1.0900, outcome="win", path=db, risk_usd=250.0)
-    row = recent_signals(limit=1, path=db)[0]
+    sid = log_signal(_report("EURUSD", entry=1.0850, sl=1.0800))
+    close_signal(sid, exit_price=1.0900, outcome="win", risk_usd=250.0)
+    row = recent_signals(limit=1)[0]
     assert row["pnl_usd"] == pytest.approx(250.0)  # exactly 1R
 
 

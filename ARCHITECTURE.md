@@ -2,29 +2,29 @@
 
 ## System Overview
 
-IATIS (Institutional Adaptive Trading Intelligence System) is a **Market Intelligence Platform** that evaluates market conditions across 7 gates before executing trades. The architecture is layered and deterministic, with each component having clear responsibilities.
+IATIS (Institutional Adaptive Trading Intelligence System) is a **Market Intelligence Platform** that evaluates market conditions across a multi-gate pipeline before executing trades. The architecture is layered and deterministic, with each component having clear responsibilities. An optional AI explanation layer sits outside this pipeline entirely — it explains decisions after the fact, it never makes them.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    IATIS v0.4 — Complete Pipeline                   │
+│                    IATIS v0.4.5 — Decision Pipeline                  │
 └─────────────────────────────────────────────────────────────────────┘
 
         ┌──────────────────────────────────────────────────┐
-        │  LIVE DATA (Multi-Provider with Failover)        │
-        │  Twelve Data → Yahoo → Alpha Vantage → Finnhub   │
+        │  LIVE DATA (Multi-Provider with Failover)         │
+        │  Twelve Data → Yahoo → Alpha Vantage → Finnhub    │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
         │  DATA VALIDATION & TIMEFRAME SYNC                 │
         │  • No nulls, no lookahead bias                    │
-        │  • Multi-timeframe building (M1/M15/H1/H4/D1)     │
+        │  • Multi-timeframe building (H1/H4/D1)            │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
         │  MARKET QUALITY SCORE (Gate 1)                    │
-        │  • Session (35 pts) + ATR (30 pts) + Trend (10 pts)│
-        │  • Penalties for Friday close, Monday gap, Asian  │
-        │  Score < 40 → NO_TRADE (saves API credits)        │
+        │  • Session + ATR + Trend clarity scoring          │
+        │  • Thresholds in config.yaml market_quality:      │
+        │  • Feature-flagged: features.market_quality_gate  │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
@@ -34,57 +34,66 @@ IATIS (Institutional Adaptive Trading Intelligence System) is a **Market Intelli
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  9 PARALLEL STRATEGY ENGINES                      │
-        │  ✅ SMC (20.2%)  | Price Action (18.7%)           │
-        │  ✅ NNFX (22.7%) | ICT (6.6%)                     │
-        │  ✅ Quant (7.1%) | Wyckoff (7.1%)                 │
-        │  🟡 Divergence  | Market Structure | Sentiment    │
-        │  ❌ Macro (disabled)                              │
+        │  STRATEGY ENGINES (config-gated, 4 of 9 enabled)  │
+        │  ✅ SMC | Price Action | NNFX | Wyckoff           │
+        │  ⏸ ICT | Quant | Divergence | Market Structure    │
+        │     | Sentiment | Macro (all implemented, disabled)│
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
         │  CONFLUENCE ENGINE (Gate 2)                       │
-        │  • Majority vote + Weighted score                 │
-        │  • Threshold: min 2 agreeing, min score 58        │
+        │  • Majority vote + weighted score                 │
         │  • Contradiction check (standard + H013)          │
-        │  • Multi-TF confirmation (D1/H1 alignment)        │
+        │  • Multi-TF confirmation (D1/H1 alignment)         │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  RISK GATE (Gate 3)                               │
-        │  • Risk/Reward ratio (min 2.0)                    │
-        │  • Position sizing                                │
-        │  • Correlation exposure (max 2 per group)         │
-        │  • Drawdown thresholds                            │
+        │  CORRELATION FILTER (Gate 3)                      │
+        │  • Max N EXECUTE per correlation group per run    │
+        │  • Cap in config.yaml portfolio.max_per_group      │
+        │  • Feature-flagged: features.correlation_filter    │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  SYMBOL HEALTH INDEX (Gate 4)                     │
-        │  • Last 20 closed trades: Win Rate + Profit Factor│
-        │  • Auto-pauses if SHI < 45                        │
-        │  • Prevents cascade failures                      │
+        │  RISK GATE (Gate 4 — sovereign veto)              │
+        │  • Risk/Reward floor, position sizing              │
+        │  • REAL drawdown/open-risk/correlated-exposure     │
+        │    from risk/live_portfolio_state.py — not         │
+        │    hardcoded placeholders                          │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  NEWS INTELLIGENCE (Gate 5)                       │
-        │  • NFP, FOMC, CPI detection                       │
-        │  • 30-min blackout before high-impact events      │
-        │  • Auto-cache for offline operation               │
+        │  SYMBOL HEALTH INDEX (Gate 5)                     │
+        │  • Win rate + profit factor over recent trades     │
+        │  • Auto-pauses persistently underperforming symbols │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  META DECISION LAYER (Gate 6)                     │
-        │  • Confidence calibration                         │
-        │  • Stability analysis                             │
-        │  • Engine contribution tracking                   │
+        │  NEWS INTELLIGENCE (Gate 6)                       │
+        │  • NFP, FOMC, CPI detection                        │
+        │  • Blackout window before high-impact events       │
         └──────────────────────────────────────────────────┘
                               ↓
         ┌──────────────────────────────────────────────────┐
-        │  EXECUTION & PERSISTENCE (Gate 7)                 │
-        │  • Trade execution (dry_run | cTrader | OANDA)    │
-        │  • Outcome tracking (auto-close on SL/TP)         │
-        │  • Telegram alerts + Dashboard                    │
-        │  • SQLite + JSONL for audit trail                 │
+        │  META DECISION LAYER (Gate 7)                     │
+        │  • Confidence calibration                          │
+        │  • Can downgrade EXECUTE → NO_TRADE on low conf.    │
+        └──────────────────────────────────────────────────┘
+                              ↓
+        ┌──────────────────────────────────────────────────┐
+        │  EXECUTION & PERSISTENCE                          │
+        │  • Trade execution (dry_run | cTrader | OANDA)     │
+        │  • Outcome tracking (auto-close on SL/TP)          │
+        │  • Telegram alerts + Command Center dashboard      │
+        │  • SQLite + JSONL for audit trail                  │
+        └──────────────────────────────────────────────────┘
+                              ↓
+              (on demand, from the dashboard only)
+        ┌──────────────────────────────────────────────────┐
+        │  AI EXPLANATION LAYER (ai/ai_analyzer.py)         │
+        │  • Explains a decision already made above          │
+        │  • Never imported by main.py or scheduler.py       │
+        │  • Opt-in: config.yaml ai.enabled (default false)   │
         └──────────────────────────────────────────────────┘
 ```
 
@@ -100,15 +109,16 @@ IATIS (Institutional Adaptive Trading Intelligence System) is a **Market Intelli
 | `data_loader.py` | CSV/synthetic data loading, timeframe building | `load_data()` |
 | `data_manager.py` | Caching, retry logic | `DataManager` |
 | `data_validator.py` | OHLCV validation (no nulls, monotonic) | `validate_ohlcv()` |
-| `market_quality.py` | Market Quality Score (0-100) | `assess_market_quality()` |
+| `market_quality.py` | Market Quality Score (0-100), thresholds from `config.yaml market_quality:` | `assess_market_quality()` |
 | `timeframe_sync.py` | Multi-timeframe building and resampling | `build_multi_timeframe_view()` |
 | `asset_profiles.py` | Per-asset settings (pip size, session hours, spreads) | `get_profile()` |
 | `twelve_data_client.py` | Twelve Data API client with rate limiter + cache | `TwelveDataClient` |
 | `ccxt_provider.py` | Crypto data via CCXT | `get_ccxt_data()` |
+| `alt_data_loader.py` | Alternate/offline data loading path | — |
 
 **Flow:**
 ```
-load_multi_timeframe_with_failover() 
+load_multi_timeframe_with_failover()
   ↓ (try Twelve Data)
   ↓ (cached? yes → return)
   ↓ (empty? try Yahoo)
@@ -119,13 +129,13 @@ validate_ohlcv(df)
 build_multi_timeframe_view(df, ["H1","H4","D1"])
 ```
 
-### 2. **engines/** — 9 Strategy Engines (4 currently enabled in config.yaml)
+### 2. **engines/** — 9 Strategy Engines (4 currently enabled)
 
-> As of this writing, `config.yaml`'s `engines.enabled` block has only
-> `smc`, `price_action`, `nnfx`, and `wyckoff` set to `true`. The other
-> five below are implemented and edge-gated but disabled — enabling them
-> requires their hypothesis in `research/results/registry.json` to reach
-> at least `RESEARCH` status (see `research/edge_gate.py`).
+> `config.yaml`'s `engines.enabled` block has only `smc`, `price_action`,
+> `nnfx`, and `wyckoff` set to `true`. The other five are implemented and
+> edge-gated but disabled — enabling one requires its hypothesis in
+> `research/results/registry.json` to reach at least `RESEARCH` status
+> (see `research/edge_gate.py`).
 
 Each engine returns `EngineOutput(bias, score, reasons, raw)` where:
 - `bias`: BULLISH | BEARISH | NEUTRAL
@@ -133,18 +143,18 @@ Each engine returns `EngineOutput(bias, score, reasons, raw)` where:
 - `reasons`: List of human-readable logic strings
 - `raw`: Raw indicators used
 
-| Engine | Weight | Status | Method |
-|--------|--------|--------|--------|
-| SMC | 20.2% | ✅ ACTIVE | Swing point majority vote |
-| NNFX | 22.7% | ✅ ACTIVE | EMA200 + ADX |
-| Price Action | 18.7% | ✅ ACTIVE | Sigmoid MA + breakout |
-| Wyckoff | 7.1% | ✅ ACTIVE | Spring/Upthrust detection |
-| Quant | 7.1% | ✅ ACTIVE | RSI(14) + ROC(10) |
-| ICT | 6.6% | ✅ ACTIVE | Killzones + trend filter |
-| Divergence | 6.1% | 🟡 RESEARCH | RSI/MACD divergence (H010) |
-| Market Structure | 8.6% | 🟡 RESEARCH | BOS/CHoCH (H011) |
-| Sentiment | 3.0% | 🟡 RESEARCH | COT proxy (H012) |
-| Macro | 0.0% | ❌ DISABLED | Requires yfinance |
+| Engine | Weight | Enabled | Method |
+|--------|--------|---------|--------|
+| NNFX | 0.227 | ✅ | EMA200 + ADX |
+| SMC | 0.202 | ✅ | Swing point majority vote |
+| Price Action | 0.187 | ✅ | Sigmoid MA + breakout + candle patterns |
+| Wyckoff | 0.071 | ✅ | Spring/Upthrust detection |
+| Quant | 0.071 | ⏸ | RSI(14) + ROC(10) |
+| Market Structure | 0.086 | ⏸ | BOS/CHoCH (H011) |
+| ICT | 0.066 | ⏸ | Killzones + trend filter |
+| Divergence | 0.061 | ⏸ | RSI/MACD divergence (H010) |
+| Sentiment | 0.030 | ⏸ | COT proxy (H012) |
+| Macro | 0.000 | ⏸ | Requires yfinance |
 
 **All engines inherit from `BaseEngine`:**
 ```python
@@ -161,9 +171,9 @@ class BaseEngine:
 | `voting_system.py` | Tally votes: majority wins, breakdown recorded |
 | `score_calculator.py` | Weighted average of AGREEING engines only |
 | `contradiction_engine.py` | Detect conflicting signals (standard + H013 reversal veto) |
-| `mtf_confirmation.py` | D1 trend must align with H1 signal (±8/15 pts) |
+| `mtf_confirmation.py` | D1 trend must align with H1 signal |
 | `regime_weights.py` | Adjust engine weights based on market regime |
-| `reversal_veto.py` | H013: When 2+ reversal engines unanimously oppose trend |
+| `reversal_veto.py` | H013: when 2+ reversal engines unanimously oppose trend |
 | `meta_decision.py` | Confidence calibration + engine stability analysis |
 
 **Confluence Flow:**
@@ -179,78 +189,116 @@ class BaseEngine:
 
 ### 4. **risk/** — Risk Management (Sovereign Layer)
 
-| File | Purpose | Hard Stops |
-|------|---------|-----------|
-| `risk_engine.py` | Risk/Reward, position sizing, exposure caps | RR ≥ 2.0, DD < 15% |
-| `correlation_engine.py` | Portfolio correlation filter (max 2 per group) | Groups: USD, JPY, EUR, METALS, CRYPTO |
+| File | Purpose |
+|------|---------|
+| `risk_engine.py` | Hard-gate checks: RR floor, exposure cap, drawdown-stop/-reduce thresholds. Any single failure blocks the trade. |
+| `live_portfolio_state.py` | Derives **real** account balance, drawdown-from-peak, open risk, and correlated exposure from the outcomes history — feeds `risk_engine.py`'s `RiskInputs`. Fail-safe: a storage read error returns the configured starting balance with zero derived risk rather than crashing or silently zeroing balance. |
+| `correlation_engine.py` | Pre-filter used by `scheduler.py`: max N EXECUTE signals from the same correlation group per run (count-based, cheap early skip). |
+| `portfolio_exposure.py` | Earlier in-memory-only exposure tracker; largely superseded by `live_portfolio_state.py`'s persisted equity-curve approach. |
 
-**Risk Groups:**
+**Correlation Groups** (`risk/correlation_engine.py`):
 ```
-USD_MAJORS:   EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, NZDUSD
-JPY_CROSSES:  EURJPY, GBPJPY, AUDJPY
-EUR_CROSSES:  EURGBP, EURCHF, EURAUD
-METALS:       XAUUSD, XAGUSD, USOIL
-RISK_ASSETS:  BTCUSD, ETHUSD, US30, NAS100, SPX500
+USD_MAJORS:   EURUSD, GBPUSD, AUDUSD, NZDUSD, USDCHF, USDCAD
+JPY_CROSSES:  USDJPY, EURJPY, GBPJPY, AUDJPY
+EUR_CROSSES:  EURUSD, EURJPY, EURGBP, EURCHF
+METALS:       XAUUSD, XAGUSD
+RISK_ASSETS:  BTCUSD, ETHUSD, NAS100, SPX500, US30
 ```
-Max 2 EXECUTE signals per group per scheduler run.
+Max signals per group per run set by `config.yaml`'s `portfolio.max_per_group`.
 
 ### 5. **storage/** — Persistence & Analytics
 
 | File | Purpose |
 |------|---------|
-| `decision_db.py` | SQLite: all decisions (568+ records) |
-| `decision_log.py` | JSONL: detailed decision audit trail |
-| `engine_tracker.py` | Per-engine live performance (292 votes) |
-| `outcome_tracker.py` | Trade results: entry/exit/SL/TP/P&L |
+| `decision_db.py` | SQLite: all decisions, queryable for analytics |
+| `decision_log.py` | JSONL: append-only decision audit trail |
+| `engine_tracker.py` | Per-engine live vote performance |
+| `outcome_tracker.py` | Trade results: entry/exit/SL/TP/P&L, `risk_pct` per signal |
 | `symbol_health.py` | Symbol Health Index (SHI) auto-pause logic |
 | `calibration.py` | Confidence calibration + regime performance matrix |
-| `experience_db.py` | Market Memory: similar setups, historical WR |
+| `experience_db.py` | Market Memory: similar historical setups, historical win rate |
 
 ### 6. **execution/** — Delivery & Broker Integration
 
 | File | Purpose |
 |------|---------|
-| `api_server.py` | FastAPI server (17 endpoints, session auth) |
+| `api_server.py` | FastAPI server (~30 endpoints, session + API-key auth) |
 | `telegram_bot.py` | Telegram alerts (EXECUTE signals only) |
-| `trade_executor.py` | Execution bridge: dry_run / cTrader / OANDA |
-| `ctrader_client.py` | IC Markets cTrader integration (KYC pending) |
-| `oanda_client.py` | OANDA REST API (backup, not available in Morocco) |
+| `trade_executor.py` | Execution bridge: `dry_run` / cTrader / OANDA — `dry_run` defaults `true` |
+| `ctrader_client.py` | IC Markets cTrader integration: app/account auth verified against real server responses, live symbol-spec fetch (no guessed volumes), relative SL/TP from live spot, bounded exponential-backoff auto-reconnect, `ProtoOAReconcileReq` position reconciliation on every (re)connect |
+| `oanda_client.py` | OANDA REST API (backup broker path) |
 | `tradingview_webhook.py` | TradingView webhook stub |
 
-### 7. **backtesting/** — Validation & Testing
+### 7. **backtesting/** + **backtest/** — Simulation, Metrics & Reporting
 
-| File | Purpose |
-|------|---------|
-| `backtest_engine.py` | Walk-forward backtest (no lookahead, asset-class aware P&L) |
-| `metrics.py` | Sharpe ratio, max drawdown, profit factor |
+Two packages, composed rather than duplicated:
 
-**Walk-Forward Validation (18/18 symbols CONSISTENT ✅):**
-- W1 Test (2024) vs W2 Test (2025) vs W3 Test (2026)
-- Profit factor: min=1.50, avg=3.08
-- Pass rate: 100%
+| Package | Role |
+|---|---|
+| `backtesting/backtest_engine.py` | The one simulation engine — gap-aware exits, slippage, parameters aligned with the live pipeline |
+| `backtest/metrics.py` | The one metrics implementation — Sharpe, Sortino, Calmar, drawdown analysis, trade statistics |
+| `backtest/monte_carlo.py` | Monte Carlo robustness analysis (risk of ruin, return distribution) |
+| `backtest/report.py` | HTML report generation |
+| `backtest/runner.py` | Entry point composing the two via an explicit adapter — `python -m backtest.runner --symbols EURUSD GBPUSD --data-dir data` |
+| `backtest/walk_forward.py` | Out-of-sample walk-forward validation on top of the same engine — `python -m backtest.walk_forward --symbols EURUSD GBPUSD` |
+
+No hardcoded historical PF/WR figures are kept in this document — the simulation engine has changed since any specific run, so a stale table would misrepresent current behavior. Run the commands above for current numbers; results are written under `reports/` alongside the exact engine config used.
 
 ### 8. **research/** — Edge Gate & Hypothesis Tracking
 
 | File | Purpose |
 |------|---------|
-| `edge_gate.py` | Blocks any unproven engine at boot time |
-| `hypotheses/` | H001-H013: engine claims before any code |
+| `edge_gate.py` | Blocks any engine without a registered, at-least-`RESEARCH`-status hypothesis at boot time |
+| `hypotheses/` | H001-H016: engine claims written before code |
+| `experiments/` | Validation scripts for the sweep/BOS-FVG hypotheses |
 | `results/registry.json` | Single source of truth for hypothesis status |
 
-**Key Rule:** No engine enabled in `config.yaml` without a `PASSED` entry in `registry.json`.
+**Key Rule:** No engine enabled in `config.yaml` without at least a `RESEARCH` (paper-trading-only) entry in `registry.json` — `PASSED` is not required to enable an engine, only to trust it. See `ai/` below and README for the full H001-H016 table.
+
+### 9. **ai/** — Optional AI Explanation Layer
+
+Not part of the decision pipeline. Verified: no import of `ai.ai_analyzer` anywhere in `main.py`, `scheduler.py`, `confluence/`, or `risk/`. It only runs when a human clicks a button in the Command Center dashboard, after `final_verdict` is already set.
+
+| File | Purpose |
+|------|---------|
+| `ai_analyzer.py` | Orchestrator: selects a provider from `config.yaml`'s `ai:` section, applies caching, always returns `status: ok\|disabled\|error` |
+| `providers/base.py` | Common `AIProvider` interface + prompt-template loading + JSON extraction |
+| `providers/perplexity.py` | Default provider (OpenAI-compatible chat completions API) |
+| `providers/openai.py` | Alternate provider |
+| `providers/anthropic.py` | Alternate provider |
+| `prompts/*.txt` | Externalized templates — explicitly forbid fabricated data and price prediction, enforce JSON-only output |
+| `cache.py` | TTL cache: news ~20min, macro ~60min; trade explanations keyed by decision id instead |
+| `models.py` | `TradeExplanation` / `NewsAnalysis` / `MacroAnalysis` result dataclasses |
+| `dynamic_weights.py` | Separate, older feature — Claude-based engine-weight suggestions (`POST /ai/optimize-weights`), advisory-only and `dry_run` by default |
+
+API keys are read from the environment (`PERPLEXITY_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` for `dynamic_weights.py` too) — never stored in `config.yaml`, matching every other credential in this codebase.
+
+### 10. **dashboard/frontend/** — Command Center SPA
+
+React + TypeScript + Vite, served at `GET /app` once built (`npm install && npm run build`), talking to the same FastAPI backend as everything else.
+
+| Module | Shows |
+|---|---|
+| `mission-control/` | System health, symbol health, API budget, AI Briefing (news/macro/daily report) |
+| `live-signals/` | Recent decisions, open paper-trading signals, per-decision AI explanation |
+| `data-center/` | Per-symbol data cache health |
+| `engine-monitor/` | Per-engine vote stats, rule-based + AI (Claude) suggested weights |
+| `research-backtests/` | Hypothesis registry, backtest results, regime performance matrix, AI research summary |
+| `roadmap/` | Static project roadmap |
 
 ---
 
 ## Configuration
 
-**config.yaml:**
+`config.yaml` is a control plane, not a set of placeholders — every top-level section maps to a real, already-wired conditional (each documented inline in the YAML with the file:line it controls):
+
 ```yaml
 data:
-  source: twelve_data | synthetic | csv | injected
+  source: twelve_data   # twelve_data | ctrader | injected (synthetic blocked under system.mode=live)
   symbol: EURUSD
   timeframes: [H1, H4, D1]
   bars_to_load: 500
-  twelve_data_symbols:  # 19 symbols + overrides per symbol
+  twelve_data_symbols:   # 20 configured, 7 currently enabled
     - internal: EURUSD
       symbol: EUR/USD
       min_score: 60
@@ -262,27 +310,46 @@ engines:
     smc: true
     price_action: true
     nnfx: true
-    ict: false        # RESEARCH — not proven yet
-    divergence: false # RESEARCH — H010
+    wyckoff: true
+    ict: false          # RESEARCH — not yet enabled
+    divergence: false   # RESEARCH — H010
 
 confluence:
   min_engines_agreeing: 2
   min_score_to_trade: 58
-  weights:
-    smc: 0.202
-    nnfx: 0.2273
-    price_action: 0.1869
-    # ... etc
+  weights: {smc: 0.202, nnfx: 0.2273, price_action: 0.1869, "...": "..."}
 
 risk:
   min_risk_reward: 2.0
-  max_exposure: 0.05     # 5% of account at once
-  max_drawdown_stop: 0.15 # > 15% → halt all trading
+  max_exposure: 0.05        # 5% of account at once
+  max_drawdown_stop: 0.15   # > 15% → halt all trading
   risk_per_trade_max: 0.01
+  starting_balance: 10000.0 # equity-curve baseline for risk/live_portfolio_state.py
+
+features:
+  market_quality_gate: true
+  correlation_filter: true
+  ai_weight_suggestions: true
+
+market_quality:
+  threshold_good: 60
+  threshold_fair: 40
+
+monitoring:
+  ram_warn_pct: 85
+  disk_warn_pct: 80
+
+portfolio:
+  max_per_group: 2
+
+ai:
+  enabled: false            # opt-in — no external AI call unless turned on
+  provider: perplexity
+  model: sonar
 
 fundamentals:
   news_filter_enabled: true
-  blackout_look_ahead_min: 60  # 1 hour before NFP/FOMC/CPI
+  blackout_look_ahead_min: 60
 ```
 
 ---
@@ -296,99 +363,81 @@ The system correctly identifies when **not** to trade. This is modeled as a feat
 No engine logic runs in production until:
 - A hypothesis is written in `research/hypotheses/`
 - An experiment in `research/experiments/` validates it against real data
-- A `PASSED` entry exists in `research/results/registry.json`
+- At least a `RESEARCH` entry exists in `research/results/registry.json` (paper-trading-only; `PASSED` is the higher bar for trusting the result)
 
 ### 3. **No Lookahead Bias**
 At bar N, the pipeline only sees bars 0..N. Entry is next-bar open.
 
 ### 4. **Asset-Aware Math**
-JPY pip ≠ EUR pip. Each asset has a profile with:
-- Pip size (0.0001 for most, 0.01 for JPY)
-- Session hours (UTC)
-- Spread proxy
-- Min pip move
+JPY pip ≠ EUR pip. Each asset has a profile with pip size, session hours, spread proxy, and min pip move.
 
-### 5. **Sovereign Risk Layer**
-Risk gate is separate from confluence voting. Any single risk rule failing blocks the trade.
+### 5. **Sovereign Risk Layer, Fed Real State**
+Risk gate is separate from confluence voting, and its hard stops now operate on `risk/live_portfolio_state.py`'s real drawdown/open-risk/correlated-exposure derivation — not hardcoded zeros.
 
 ### 6. **Multi-Provider Failover**
-Data source priority:
-1. Twelve Data (800 req/day free, M15+H1 native)
-2. Yahoo Finance (unlimited*, H1+ only)
-3. Alpha Vantage (25 req/day, FX + metals)
-4. Finnhub (60 req/min free, OANDA FX + crypto)
+Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub, in that order.
 
 ### 7. **Transparent Reasoning**
-Every decision includes:
-- Which engines voted which way
-- Why they voted
-- What gates passed/failed
-- What the next step would be
+Every decision includes which engines voted which way, why, which gates passed/failed, and — on demand — an AI-generated plain-English explanation that never overrides the decision itself.
 
 ---
 
 ## Live Deployment
 
 **Infrastructure:**
-- VPS: Linux (Ubuntu 20.04+)
-- Python 3.11+
-- FastAPI server (port 8000)
-- Cloudflare tunnel for HTTPS
-- SQLite database (local, no external DB needed)
+- VPS: Linux, Python 3.11+
+- FastAPI server (uvicorn, port 8000)
+- SQLite (local, no external DB)
+- Cloudflare tunnel for HTTPS (deployment-specific, not verified from this repo)
 
 **Systemd Services:**
 - `iatis-api.service` → FastAPI server
-- `iatis-scheduler.service` → Scheduler (every 2 hours)
+- `iatis-scheduler.service` → Scheduler
 
-**Scheduler Logic:**
-```bash
-# Runs every 2 hours, 19 symbols
-python scheduler.py --interval 120 --symbols EUR/USD GBP/USD ... BTC/USD
+Both units run sandboxed (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`, `ProtectHome`, `MemoryMax`, `TasksMax`) even though they still run as `User=root` — a TODO comment in each `.service` file documents the VPS-side steps (`useradd` + `chown`) needed before switching to a dedicated service account, since flipping that blind would break the live deploy.
 
-# Per symbol:
-1. Check correlation → skip if correlated symbol already EXECUTE
-2. Get symbol health → skip if PAUSED (SHI < 45)
-3. Run full pipeline (7 gates)
-4. If EXECUTE: try to execute trade (dry_run=true for now)
-5. Auto-close outcomes when SL/TP hit
+**Scheduler Logic (`scheduler.py`):**
+```
+Per symbol, per run:
+1. Correlation pre-filter → skip if a correlated symbol already EXECUTE this run
+2. Symbol health check → skip if PAUSED
+3. Run the full decision pipeline
+4. If EXECUTE: attempt trade execution (dry_run gated)
+5. Auto-close open outcomes when SL/TP hit
 6. Send Telegram alert (EXECUTE only)
 ```
+One symbol's exception doesn't kill the run for the rest — isolated per-symbol try/except with a 30-minute error-alert cooldown per symbol.
 
 ---
 
-## API Endpoints (17 total)
+## API Endpoints
 
-| Endpoint | Auth | Purpose |
-|----------|------|---------|
-| `GET /health` | Public | System status + API credits |
-| `GET /health/full` | ✅ | CPU/RAM/Disk/Scheduler/DB/Calendar status |
-| `POST /analyze/{symbol}` | ✅ | Run pipeline on demand |
-| `GET /decisions` | ✅ | Decision history (paginated) |
-| `GET /outcomes` | ✅ | Live trade outcome tracking |
-| `POST /outcomes/{id}/close` | ✅ | Record trade result (SL/TP) |
-| `GET /symbol-health` | ✅ | Symbol Health Index all symbols |
-| `GET /meta-analysis` | ✅ | Calibration + regime matrix |
-| `GET /engine-stats` | ✅ | Per-engine live performance |
-| `GET /stats` | ✅ | SQLite analytics query |
-| `GET /budget` | ✅ | API credit usage |
-| `GET /backtest-results` | ✅ | Saved backtest JSON files |
-| `GET /research` | ✅ | Hypothesis status |
-| `GET /login` | Public | Login page |
-| `POST /login` | Public | Authenticate → session cookie |
-| `GET /dashboard` | Cookie | SPA dashboard |
+`execution/api_server.py`, ~30 endpoints on one FastAPI app:
+
+| Group | Endpoints | Auth |
+|---|---|---|
+| Core pipeline | `GET /health`, `GET /health/full`, `POST /analyze/{symbol}` | Public / ✅ / ✅ |
+| Decisions & outcomes | `GET /decisions`, `GET /outcomes`, `POST /outcomes/{id}/close`, `GET /stats` | ✅ |
+| Symbol/engine/data health | `GET /symbol-health`, `GET /engine-stats`, `GET /data-health` | ✅ |
+| Research & backtests | `GET /research`, `GET /backtest-results`, `GET /meta-analysis` | ✅ |
+| Experience DB | `GET /experience/summary`, `GET /experience/query`, `GET /experience/pattern` | ✅ |
+| AI explanation layer | `POST /ai/explain-trade`, `GET /ai/explain/{decision_id}`, `GET /ai/news-analysis`, `GET /ai/macro-analysis`, `GET /ai/daily-report`, `POST /ai/research-summary`, `POST /ai/optimize-weights` | ✅ |
+| Budget | `GET /budget` | ✅ |
+| Auth & dashboard | `GET/POST /login`, `GET /logout`, `GET /dashboard` (legacy SSR), `GET /app` (Command Center SPA) | Public/Cookie |
 
 ---
 
-## Security (14/14 vulnerabilities fixed)
+## Security
 
-✅ Session rotation (cookie holds `session_id`, never raw API key)
-✅ HttpOnly + Secure + SameSite=Lax cookies (Lax, not Strict — Strict blocks the cross-origin redirect Cloudflare's tunnel performs on login)
-✅ hmac.compare_digest for key comparison
-✅ html.escape() on all dashboard values
-✅ Symbol validation regex: `^[A-Z]{2,6}(/[A-Z]{2,6})?$`
-✅ SQLite: chmod 0o600
-✅ Telegram flood: 30min cooldown
-✅ Swagger disabled in production
+- Session rotation: cookie holds `session_id`, never the raw API key
+- `HttpOnly + Secure + SameSite=Lax` cookies (Lax, not Strict — Strict blocks the cross-origin redirect Cloudflare's tunnel performs on login)
+- `hmac.compare_digest` for key comparison
+- Dashboard values escaped consistently client-side (data reaches the page via JSON fetch + DOM injection, not server-side string interpolation)
+- Symbol validation regex: `^[A-Z]{2,6}(/[A-Z]{2,6})?$`
+- SQLite DB files and the session store: `chmod 0o600`
+- Telegram flood protection: 30min cooldown per error key
+- Swagger/OpenAPI docs disabled unless `ENV=development`
+- systemd sandboxing directives (see Live Deployment above)
 
 ---
 
@@ -396,120 +445,133 @@ python scheduler.py --interval 120 --symbols EUR/USD GBP/USD ... BTC/USD
 
 ```
 IATIS/
-├── main.py                           # 7-gate pipeline entry (465 lines)
-├── scheduler.py                      # Automated runner (347 lines)
-├── config.yaml                       # Configuration (all tunables)
+├── main.py                           # Decision pipeline entry point
+├── scheduler.py                      # Automated multi-symbol runner
+├── config.yaml                       # Control plane — see Configuration above
 ├── requirements.txt                  # Dependencies (pinned)
 ├── README.md                         # Public documentation
 │
 ├── core/                             # Data infrastructure
-│   ├── data_providers.py            # Multi-provider failover
-│   ├── data_loader.py               # CSV/synthetic loading
-│   ├── data_manager.py              # Caching, retry
-│   ├── data_validator.py            # OHLCV validation
-│   ├── market_quality.py            # Market Quality Score (MQS)
-│   ├── timeframe_sync.py            # Multi-TF building
-│   ├── asset_profiles.py            # Per-asset settings
-│   ├── twelve_data_client.py        # Twelve Data API client
-│   └── ccxt_provider.py             # Crypto via CCXT
+│   ├── data_providers.py
+│   ├── data_loader.py
+│   ├── data_manager.py
+│   ├── data_validator.py
+│   ├── market_quality.py
+│   ├── timeframe_sync.py
+│   ├── asset_profiles.py
+│   ├── twelve_data_client.py
+│   ├── ccxt_provider.py
+│   └── alt_data_loader.py
 │
-├── engines/                          # 9 strategy engines
-│   ├── base_engine.py               # Base class (Bias, EngineOutput)
-│   ├── smc_engine.py                # Smart Money Concepts
-│   ├── price_action_engine.py       # MA + breakout
-│   ├── nnfx_engine.py               # EMA200 + ADX
-│   ├── ict_engine.py                # Killzones + trend
-│   ├── quant_engine.py              # RSI + ROC
-│   ├── wyckoff_engine.py            # Spring/Upthrust
-│   ├── divergence_engine.py         # RSI/MACD divergence (H010)
-│   ├── market_structure_engine.py   # BOS/CHoCH (H011)
-│   ├── sentiment_engine.py          # COT proxy (H012)
-│   └── macro_engine.py              # DXY + risk-on/off (disabled)
+├── engines/                          # 9 strategy engines (4 enabled)
+│   ├── base_engine.py
+│   ├── smc_engine.py
+│   ├── price_action_engine.py
+│   ├── nnfx_engine.py
+│   ├── ict_engine.py
+│   ├── quant_engine.py
+│   ├── wyckoff_engine.py
+│   ├── divergence_engine.py
+│   ├── market_structure_engine.py
+│   ├── sentiment_engine.py
+│   └── macro_engine.py
 │
 ├── confluence/                       # Voting & decision logic
-│   ├── voting_system.py             # Majority vote tally
-│   ├── score_calculator.py          # Weighted score (majority only)
-│   ├── contradiction_engine.py      # Standard + H013
-│   ├── mtf_confirmation.py          # D1/H1 alignment
-│   ├── regime_weights.py            # Regime-aware weights
-│   ├── reversal_veto.py             # H013 reversal consensus
-│   └── meta_decision.py             # Confidence calibration
+│   ├── voting_system.py
+│   ├── score_calculator.py
+│   ├── contradiction_engine.py
+│   ├── mtf_confirmation.py
+│   ├── regime_weights.py
+│   ├── reversal_veto.py
+│   └── meta_decision.py
 │
 ├── risk/                             # Risk management (sovereign layer)
-│   ├── risk_engine.py               # Risk/Reward, position sizing
-│   └── correlation_engine.py        # Portfolio correlation filter
+│   ├── risk_engine.py
+│   ├── live_portfolio_state.py       # Real drawdown/open-risk/correlated-exposure
+│   ├── correlation_engine.py
+│   └── portfolio_exposure.py         # Legacy in-memory tracker
 │
 ├── fundamentals/                     # News & calendar
-│   ├── news_calendar.py             # Event calendar (cached)
-│   └── news_risk.py                 # Blackout system
+│   ├── news_calendar.py
+│   └── news_risk.py
 │
 ├── regimes/                          # Market regime detection
-│   ├── regime_detector.py           # TRENDING | RANGING
-│   └── volatility_classifier.py     # ATR percentile scoring
+│   ├── regime_detector.py
+│   └── volatility_classifier.py
 │
 ├── storage/                          # Persistence & analytics
-│   ├── decision_db.py               # SQLite decisions
-│   ├── decision_log.py              # JSONL audit trail
-│   ├── engine_tracker.py            # Per-engine performance
-│   ├── outcome_tracker.py           # Trade results
-│   ├── symbol_health.py             # SHI auto-pause
-│   ├── calibration.py               # Confidence + regime matrix
-│   └── experience_db.py             # Market Memory (similar setups)
+│   ├── decision_db.py
+│   ├── decision_log.py
+│   ├── engine_tracker.py
+│   ├── outcome_tracker.py
+│   ├── symbol_health.py
+│   ├── calibration.py
+│   └── experience_db.py
 │
 ├── execution/                        # Delivery & brokers
-│   ├── api_server.py                # FastAPI (17 endpoints)
-│   ├── telegram_bot.py              # Telegram alerts
-│   ├── trade_executor.py            # Execution bridge
-│   ├── ctrader_client.py            # IC Markets cTrader
-│   ├── oanda_client.py              # OANDA (backup)
-│   └── tradingview_webhook.py       # TradingView stub
+│   ├── api_server.py                 # FastAPI, ~30 endpoints
+│   ├── telegram_bot.py
+│   ├── trade_executor.py
+│   ├── ctrader_client.py             # Reconnect + reconciliation
+│   ├── oanda_client.py
+│   └── tradingview_webhook.py
 │
-├── backtesting/                      # Validation
-│   ├── backtest_engine.py           # Walk-forward (no lookahead)
-│   └── metrics.py                   # Sharpe, DD, PF
+├── ai/                                # Optional AI explanation layer
+│   ├── ai_analyzer.py
+│   ├── providers/ (base, perplexity, openai, anthropic)
+│   ├── prompts/*.txt
+│   ├── cache.py
+│   ├── models.py
+│   └── dynamic_weights.py
+│
+├── backtesting/                      # The one simulation engine
+│   └── backtest_engine.py
+│
+├── backtest/                         # Metrics/Monte Carlo/reports + entry points
+│   ├── metrics.py
+│   ├── monte_carlo.py
+│   ├── report.py
+│   ├── runner.py
+│   └── walk_forward.py
 │
 ├── research/                         # Edge gate & hypotheses
-│   ├── edge_gate.py                 # Blocks unproven engines
-│   ├── hypotheses/                  # H001-H013 claims
-│   ├── experiments/                 # Validation scripts
-│   ├── results/
-│   │   └── registry.json            # Single source of truth
-│   └── notebooks/                   # Exploratory (optional)
+│   ├── edge_gate.py
+│   ├── hypotheses/                   # H001-H016
+│   ├── experiments/
+│   └── results/registry.json
 │
-├── utils/                            # Helpers
-│   ├── helpers.py                   # load_config(), etc.
-│   └── logger.py                    # Structured logging
+├── dashboard/frontend/               # Command Center SPA (React + TS + Vite)
+│   └── src/modules/ (mission-control, live-signals, data-center,
+│                      engine-monitor, research-backtests, roadmap)
 │
-├── tests/                            # 262 tests, 0 failures
-│   ├── test_engines/
-│   ├── test_confluence/
-│   ├── test_risk/
-│   ├── test_backtesting/
-│   └── ... etc
+├── utils/
+│   ├── helpers.py
+│   ├── logger.py
+│   └── feature_def.py
 │
-├── scripts/                          # Utilities
-│   ├── full_pipeline_backtest.py    # v0.4 complete pipeline test
-│   ├── walk_forward_validation.py   # Out-of-sample validation
-│   ├── download_all_symbols.py      # Download 20 symbols
-│   ├── cache_calendar.py            # Daily calendar cache
-│   └── ... etc
+├── tests/                            # 350 tests
 │
-├── data/                             # Historical datasets
-│   └── README.md                    # Data documentation
+├── scripts/                          # Data, backtests, ablation, integrity checks
+│   ├── full_pipeline_backtest.py
+│   ├── walk_forward_validation.py
+│   ├── engine_ablation.py            # Per-engine marginal contribution
+│   ├── verify_data_integrity.py      # Validates data against real market-hours calendars
+│   ├── repair_outcomes.py
+│   ├── download_all_symbols.py
+│   └── cache_calendar.py
 │
-├── docs/                             # Documentation
-│   ├── VISION_v2.md                 # Roadmap + deferred layers
-│   └── ... etc
+├── data/                              # Historical datasets
+├── docs/VISION_v2.md                  # Longer-form roadmap notes
 │
-├── storage/                          # Runtime data
-│   ├── decisions.sqlite             # SQLite DB (chmod 0o600)
-│   ├── decisions.jsonl              # JSONL audit trail
-│   ├── outcomes.jsonl               # Trade results
-│   └── news_history/                # Cached news calendars
+├── storage/                           # Runtime data (gitignored)
+│   ├── decisions.db / decisions.jsonl
+│   ├── outcomes.db
+│   ├── experience.db
+│   └── news_history/                  # Cached news calendars (committed seed data)
 │
-├── iatis-api.service                # Systemd service
-├── iatis-scheduler.service          # Systemd service
-└── .env                             # Secrets (never committed)
+├── iatis-api.service                  # systemd unit (sandboxed, see Security)
+├── iatis-scheduler.service            # systemd unit (sandboxed, see Security)
+└── .env                               # Secrets (never committed)
 ```
 
 ---
@@ -519,131 +581,67 @@ IATIS/
 ```
 main.py
 ├── core/ (data loading & validation)
-│   ├── data_providers.py (multi-provider)
-│   ├── timeframe_sync.py
-│   └── market_quality.py
-├── engines/ (9 engines)
-│   ├── base_engine.py
-│   └── [each engine imports base_engine]
-├── confluence/ (voting)
-│   ├── voting_system.py
-│   ├── score_calculator.py
-│   ├── contradiction_engine.py
-│   ├── mtf_confirmation.py
-│   ├── regime_weights.py
-│   ├── reversal_veto.py
-│   └── meta_decision.py
-├── risk/ (sovereign layer)
-│   ├── risk_engine.py
-│   └── correlation_engine.py
+├── engines/ (9 engines, only enabled ones instantiated — research/edge_gate.py gates this)
+├── confluence/ (voting, scoring, contradiction/MTF/reversal-veto)
+├── risk/
+│   ├── live_portfolio_state.py (real balance/drawdown/exposure)
+│   └── risk_engine.py (hard-gate checks against that state)
 ├── regimes/ (regime detection)
-├── fundamentals/ (news)
+├── fundamentals/ (news blackout)
 ├── storage/ (persistence)
-├── research/ (edge gate)
-└── execution/ (delivery)
-
-scheduler.py
-├── main.py (the pipeline)
-├── risk/correlation_engine.py (correlation filter)
-├── storage/symbol_health.py (SHI check)
-├── storage/outcome_tracker.py (auto-close)
+├── research/edge_gate.py (engine gating)
 └── execution/telegram_bot.py (alerts)
 
-api_server.py (FastAPI)
-├── main.py (on-demand analysis)
-├── storage/ (all endpoints)
-├── backtesting/ (results endpoints)
-└── execution/ctrader_client.py
+scheduler.py
+├── main.py (the pipeline, per symbol)
+├── risk/correlation_engine.py (pre-filter)
+├── storage/symbol_health.py (SHI check)
+├── storage/outcome_tracker.py (auto-close)
+├── execution/trade_executor.py (dry_run-gated execution)
+└── execution/telegram_bot.py (alerts)
+
+execution/api_server.py (FastAPI)
+├── main.py (on-demand /analyze)
+├── storage/ (most endpoints)
+├── backtesting/ + backtest/ (research endpoints)
+├── execution/ctrader_client.py
+└── ai/ai_analyzer.py, ai/dynamic_weights.py (AI endpoints only — not the pipeline above)
+
+dashboard/frontend/ (React SPA)
+└── talks to execution/api_server.py exclusively, no direct Python imports
 ```
+
+Note what's deliberately **not** in `main.py`'s tree: `ai/` is reachable only from `execution/api_server.py`'s AI-specific endpoints, confirmed by grep — there is no path from the decision pipeline into the AI layer.
 
 ---
 
 ## Phase Roadmap
 
-✅ **Phase 1** — Architecture wired correctly
-✅ **Phase 2** — Live data (Twelve Data) + Telegram + FastAPI
-✅ **Phase 3** — 9 engines + security fixes + regime-aware weights
-✅ **Phase 4** — Market Intelligence Platform (current)
-- H009 PASSED (6-engine confluence)
-- MQS, MTF, correlation, SHI, meta-decision
-- cTrader/IC Markets integration (KYC pending)
+### ✅ Done
+- Core decision pipeline: edge-gated engines, sovereign risk layer, correlation/news/symbol-health gates
+- Real portfolio risk state (`risk/live_portfolio_state.py`) — replaced hardcoded zeros
+- Config control plane (`features`/`monitoring`/`portfolio`/`market_quality` as real toggles, not placeholders)
+- Command Center dashboard (React SPA, 6 tabs)
+- AI explanation layer (Perplexity/OpenAI/Anthropic), wired into 4 dashboard tabs, structurally isolated from the decision path
+- cTrader auto-reconnect + position reconciliation
+- Engine ablation harness (vote-independence, leave-one-out), historical data integrity verifier
+- systemd sandboxing
 
-⏳ **Phase 5** — Live Trading
-- cTrader KYC approved → demo account
-- 200+ closed trades for calibration
-- Dynamic weight optimization
-
-⏳ **Phase 6** — Scale
-- Multi-user (JWT + PostgreSQL)
-- TradingView webhook
-- Volume Profile (needs M1 tick data)
+### ⏳ Next
+- Migrate `iatis-*.service` off `User=root` to a dedicated service account
+- Live/demo soak test of the cTrader reconnect path under real network conditions
+- Confidence calibration + regime performance matrix maturing as more closed trades accumulate
+- Multi-user auth if this stops being single-operator
 
 ---
 
-## Validation Results
-
-### Walk-Forward (Out-of-Sample) — 18/18 CONSISTENT ✅
-
-| Symbol | W1 (2024) | W2 (2025) | W3 (2026) |
-|--------|-----------|-----------|-----------|
-| EURUSD | 3.15 | 2.14 | 5.81 |
-| GBPUSD | 3.24 | 2.15 | 2.55 |
-| USDJPY | 2.83 | 2.44 | 3.36 |
-| AUDUSD | 6.39 | 1.50 | 5.05 |
-| BTCUSD | 3.03 | 2.89 | 2.54 |
-| USOIL | 2.28 | 2.30 | 1.82 |
-
-**Min PF = 1.50 | Avg PF = 3.08 | Pass rate = 100%**
-**Statistical significance: P(18/18 by chance) < 0.004%**
-
----
-
-## System Health Dashboard
+## Codebase
 
 ```
-GET /health/full
-
-{
-  "api_server": "running",
-  "scheduler": "running (2h interval)",
-  "database": "healthy (568 decisions, 292 engine votes)",
-  "telegram": "connected",
-  "api_credits": {
-    "twelve_data": "245 remaining today",
-    "alpha_vantage": "22 remaining",
-    "finnhub": "59/60 per minute"
-  },
-  "symbols_trading": 19,
-  "outcomes_tracking": 47,
-  "last_scheduler_run": "2 hours ago",
-  "cpu_usage": "12%",
-  "ram_usage": "420MB / 2GB",
-  "disk_usage": "45GB / 100GB"
-}
+156 Python files (excluding dashboard/frontend) | ~31,200 lines
+350 tests
+~30 API endpoints
+9 strategy engines (4 enabled) | 16 research hypotheses tracked (H001-H016)
 ```
 
----
-
-## Assessment
-
-```
-Research Platform:     9/10
-Architecture:          9/10
-Security:              9/10
-Operational Stability: 9/10
-Edge Validation:       8.5/10  (Walk-Forward 18/18 CONSISTENT)
-Broker Integration:    7/10    (cTrader KYC pending)
-Commercial Readiness:  8/10
-
-Codebase:
-  99 Python files
-  ~16,078 lines of code
-  262 tests (0 failures)
-  17 API endpoints
-  9 strategy engines
-  7 decision gates
-```
-
----
-
-**The system now functions as a Market Intelligence Platform rather than a simple signal generator. Every decision is contextual, explainable, and traceable.**
+This system is a research and paper-trading platform first. Live order placement exists but defaults to `dry_run: true` everywhere, and `research/edge_gate.py` keeps unproven engines out of the vote regardless of what any document claims.

@@ -31,18 +31,13 @@ Schema:
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 
 from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-DB_PATH = Path(__file__).resolve().parent / "outcomes.db"
 
 # Default per-trade risk budget in USD, matching config.yaml defaults:
 # risk.risk_per_trade_max (0.01) × risk.starting_balance (10 000).
@@ -51,28 +46,14 @@ DEFAULT_RISK_USD: float = 100.0
 
 
 @contextmanager
-def _conn(path: Path = DB_PATH):
-    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
-    local SQLite file at `path`. See storage/d1_client.py."""
-    if d1_client.is_d1_enabled():
-        with d1_client.d1_connection() as con:
-            yield con
-        return
-    con = sqlite3.connect(str(path))
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    try:
+def _conn():
+    """Yields a D1 connection. See storage/d1_client.py."""
+    with d1_client.d1_connection() as con:
         yield con
-        con.commit()
-    except Exception:
-        con.rollback()
-        raise
-    finally:
-        con.close()
 
 
-def _init_db(path: Path = DB_PATH) -> None:
-    with _conn(path) as con:
+def _init_db() -> None:
+    with _conn() as con:
         con.execute("""
         CREATE TABLE IF NOT EXISTS outcomes (
             signal_id   TEXT PRIMARY KEY,
@@ -97,19 +78,17 @@ def _init_db(path: Path = DB_PATH) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON outcomes(symbol)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_outcome ON outcomes(outcome)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_regime ON outcomes(regime)")
-    if not d1_client.is_d1_enabled():
-        os.chmod(str(path), 0o600)
 
 
 # ─── Write ─────────────────────────────────────────────────────────────────
 
-def log_signal(report: dict, path: Path = DB_PATH) -> str:
+def log_signal(report: dict) -> str:
     """Log an EXECUTE signal for outcome tracking.
 
     Called automatically when IATIS generates an EXECUTE verdict.
     Returns signal_id.
     """
-    _init_db(path)
+    _init_db()
 
     now = datetime.now(timezone.utc)
     symbol = report.get("symbol", "UNKNOWN")
@@ -126,7 +105,7 @@ def log_signal(report: dict, path: Path = DB_PATH) -> str:
     }
 
     try:
-        with _conn(path) as con:
+        with _conn() as con:
             con.execute("""
             INSERT OR IGNORE INTO outcomes
             (signal_id, symbol, direction, entry_price, stop_loss, take_profit,
@@ -159,7 +138,6 @@ def close_signal(
     outcome: str,           # "win" / "loss" / "breakeven"
     exit_time: str | None = None,
     notes: str = "",
-    path: Path = DB_PATH,
     risk_usd: float = DEFAULT_RISK_USD,
 ) -> bool:
     """Record the outcome of a completed trade.
@@ -174,13 +152,13 @@ def close_signal(
             R-multiple × risk_usd. Default matches config
             (risk_per_trade_max × starting_balance = 0.01 × 10 000).
     """
-    _init_db(path)
+    _init_db()
 
     if exit_time is None:
         exit_time = datetime.now(timezone.utc).isoformat()
 
     # Fetch signal to calculate P&L
-    with _conn(path) as con:
+    with _conn() as con:
         row = con.execute(
             "SELECT * FROM outcomes WHERE signal_id=?", (signal_id,)
         ).fetchone()
@@ -244,20 +222,20 @@ def close_signal(
 
 # ─── Read ──────────────────────────────────────────────────────────────────
 
-def get_open_signals(path: Path = DB_PATH) -> list[dict]:
+def get_open_signals() -> list[dict]:
     """Get all signals still awaiting outcome."""
-    _init_db(path)
-    with _conn(path) as con:
+    _init_db()
+    with _conn() as con:
         rows = con.execute(
             "SELECT * FROM outcomes WHERE outcome='open' ORDER BY entry_time DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def performance_summary(path: Path = DB_PATH) -> dict:
+def performance_summary() -> dict:
     """Overall performance statistics from closed signals."""
-    _init_db(path)
-    with _conn(path) as con:
+    _init_db()
+    with _conn() as con:
         total = con.execute(
             "SELECT COUNT(*) FROM outcomes WHERE outcome != 'open'"
         ).fetchone()[0]
@@ -316,10 +294,10 @@ def performance_summary(path: Path = DB_PATH) -> dict:
     }
 
 
-def recent_signals(limit: int = 10, path: Path = DB_PATH) -> list[dict]:
+def recent_signals(limit: int = 10) -> list[dict]:
     """Get most recent signals."""
-    _init_db(path)
-    with _conn(path) as con:
+    _init_db()
+    with _conn() as con:
         rows = con.execute(
             "SELECT * FROM outcomes ORDER BY entry_time DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -328,24 +306,21 @@ def recent_signals(limit: int = 10, path: Path = DB_PATH) -> list[dict]:
 
 # ─── Auto-Close ────────────────────────────────────────────────────────────
 
-def auto_close_outcomes(
-    current_prices: dict[str, float], path: Path = DB_PATH
-) -> list[dict]:
+def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
     """Check open signals against current prices and auto-close if TP/SL hit.
 
     Called automatically at the end of each scheduler run.
 
     Args:
         current_prices: {symbol: current_price} from latest pipeline data
-        path: DB path
 
     Returns:
         One record per closed signal:
         ``{"signal_id", "symbol", "direction", "outcome", "exit_price"}``.
         Empty list when nothing closed (``len()`` gives the old count).
     """
-    _init_db(path)
-    open_signals = get_open_signals(path)
+    _init_db()
+    open_signals = get_open_signals()
     closed: list[dict] = []
 
     for sig in open_signals:
@@ -387,7 +362,6 @@ def auto_close_outcomes(
                 exit_price=exit_px,
                 outcome=outcome,
                 notes=f"auto_close: price={price:.5f} hit {'TP' if outcome=='win' else 'SL'}",
-                path=path,
             )
             if success:
                 closed.append({

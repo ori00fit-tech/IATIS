@@ -9,9 +9,10 @@ valuable signal than the trades themselves (e.g. "we abstain on this
 setup type 80% of the time — is the contradiction rule too strict, or
 catching something real?").
 
-Phase 1: flat JSONL file (storage/decisions.jsonl), append-only.
-Phase 2+: consider migrating to storage/performance.db (sqlite) once
-query needs grow beyond "scan the file."
+Flat JSONL file (storage/decisions.jsonl), append-only — always local,
+never migrated to D1 (an append-only log gains nothing from a queryable
+store). storage/decision_db.py is the queryable layer built on top,
+backed by Cloudflare D1.
 """
 
 from __future__ import annotations

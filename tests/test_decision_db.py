@@ -1,14 +1,13 @@
 """
 tests/test_decision_db.py
 ---------------------------
-Tests for storage/decision_db.py — SQLite analytics layer.
-All tests use tmp_path to avoid touching the real DB.
+Tests for storage/decision_db.py — the D1-backed analytics layer.
+D1 is faked in-memory by tests/conftest.py's autouse fake_d1 fixture.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -58,118 +57,103 @@ SAMPLE_EXECUTE = {
 }
 
 
-@pytest.fixture
-def db(tmp_path):
-    return tmp_path / "test_decisions.db"
+def test_init_db_creates_tables(fake_d1):
+    init_db()
+    tables = {
+        r["name"] for r in
+        fake_d1.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    assert {"decisions", "engine_votes"} <= tables
 
 
-def test_init_db_creates_tables(db):
-    init_db(db)
-    assert db.exists()
-
-
-def test_log_and_retrieve(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    rows = recent(limit=10, path=db)
+def test_log_and_retrieve():
+    log_decision_db(SAMPLE_NO_TRADE)
+    rows = recent(limit=10)
     assert len(rows) == 1
     assert rows[0]["verdict"] == "NO_TRADE"
     assert rows[0]["symbol"] == "EURUSD"
 
 
-def test_multiple_inserts(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    rows = recent(limit=10, path=db)
+def test_multiple_inserts():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_EXECUTE)
+    rows = recent(limit=10)
     assert len(rows) == 3
 
 
-def test_recent_newest_first(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    rows = recent(limit=10, path=db)
+def test_recent_newest_first():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_EXECUTE)
+    rows = recent(limit=10)
     assert rows[0]["verdict"] == "EXECUTE"  # newest first
 
 
-def test_recent_filter_by_verdict(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    rows = recent(limit=10, verdict_filter="EXECUTE", path=db)
+def test_recent_filter_by_verdict():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_EXECUTE)
+    rows = recent(limit=10, verdict_filter="EXECUTE")
     assert len(rows) == 1
     assert rows[0]["verdict"] == "EXECUTE"
 
 
-def test_summary_counts(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    s = summary(path=db)
+def test_summary_counts():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_EXECUTE)
+    s = summary()
     assert s["total"] == 3
     assert s["execute"] == 1
     assert s["no_trade"] == 2
     assert s["execute_rate"] == pytest.approx(1/3, abs=0.01)
 
 
-def test_summary_top_reasons(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    s = summary(path=db)
+def test_summary_top_reasons():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_NO_TRADE)
+    s = summary()
     assert len(s["top_no_trade_reasons"]) >= 1
     assert "Confluence" in s["top_no_trade_reasons"][0]["reason"]
 
 
-def test_regime_performance(db):
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    perf = regime_performance(path=db)
+def test_regime_performance():
+    log_decision_db(SAMPLE_NO_TRADE)
+    log_decision_db(SAMPLE_EXECUTE)
+    perf = regime_performance()
     assert len(perf) >= 1
     trending = [r for r in perf if r["regime"] == "TRENDING"]
     assert len(trending) > 0
 
 
-def test_engine_votes_stored(db):
-    import sqlite3
-    log_decision_db(SAMPLE_NO_TRADE, path=db)
-    con = sqlite3.connect(str(db))
-    con.row_factory = sqlite3.Row
-    votes = con.execute("SELECT * FROM engine_votes").fetchall()
-    con.close()
+def test_engine_votes_stored(fake_d1):
+    log_decision_db(SAMPLE_NO_TRADE)
+    votes = fake_d1.execute("SELECT * FROM engine_votes").fetchall()
     assert len(votes) == 2  # SMC + PriceAction
     engines = {v["engine"] for v in votes}
     assert "SMC" in engines
     assert "PriceAction" in engines
 
 
-def test_log_never_raises_on_bad_report(db):
+def test_log_never_raises_on_bad_report():
     # malformed report — must not crash the pipeline
-    log_decision_db({}, path=db)
-    log_decision_db({"final_verdict": None}, path=db)
+    log_decision_db({})
+    log_decision_db({"final_verdict": None})
 
 
-def test_raw_json_stored(db):
-    import sqlite3
-    log_decision_db(SAMPLE_EXECUTE, path=db)
-    con = sqlite3.connect(str(db))
-    row = con.execute("SELECT raw_json FROM decisions LIMIT 1").fetchone()
-    con.close()
-    parsed = json.loads(row[0])
+def test_raw_json_stored(fake_d1):
+    log_decision_db(SAMPLE_EXECUTE)
+    row = fake_d1.execute("SELECT raw_json FROM decisions LIMIT 1").fetchone()
+    parsed = json.loads(row["raw_json"])
     assert parsed["final_verdict"] == "EXECUTE"
 
 
-def test_pipeline_logs_to_db(tmp_path, monkeypatch):
-    """Integration: run_pipeline() must write to SQLite DB."""
+def test_pipeline_logs_to_db(monkeypatch):
+    """Integration: run_pipeline() must write to the DB."""
     from utils.helpers import load_config
     import main as main_module
-    import storage.decision_db as db_module
 
-    db_path = tmp_path / "decisions.db"
-
-    monkeypatch.setattr(
-        main_module, "log_decision_db",
-        lambda report: db_module.log_decision_db(report, path=db_path)
-    )
     monkeypatch.setattr(main_module, "telegram_send", lambda r: None)
-    # suppress JSONL write to avoid side effects on real log
+    # suppress JSONL write to avoid side effects on the real log
     monkeypatch.setattr(main_module, "log_decision", lambda report: None)
 
     config = load_config()
@@ -178,7 +162,6 @@ def test_pipeline_logs_to_db(tmp_path, monkeypatch):
 
     main_module.run_pipeline(config)
 
-    assert db_path.exists(), "SQLite DB should be created after pipeline run"
-    rows = recent(path=db_path)
+    rows = recent()
     assert len(rows) == 1
     assert rows[0]["verdict"] in ("EXECUTE", "NO_TRADE")

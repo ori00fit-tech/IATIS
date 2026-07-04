@@ -1,6 +1,6 @@
 # IATIS — Institutional Adaptive Trading Intelligence System
 
-> **Version 0.4.5 · 364 tests · Market Intelligence Platform**
+> **Version 0.4.5 · 374 tests · Market Intelligence Platform**
 > Config-driven decision pipeline + Command Center dashboard + optional AI explanation layer
 
 ---
@@ -59,7 +59,7 @@ NEWS GATE (blackout before NFP/FOMC/CPI)
     ↓
 SYMBOL HEALTH CHECK (auto-pause underperformers)
     ↓
-DECISION → Telegram + SQLite + JSONL + Outcome Tracker
+DECISION → Telegram + Cloudflare D1 + JSONL + Outcome Tracker
     ↓
 (optional, on demand) AI EXPLANATION LAYER → Command Center dashboard
 ```
@@ -164,15 +164,15 @@ Every call returns `status: ok | disabled | error` — a missing key or provider
 
 ---
 
-## Storage Backend (optional: Cloudflare D1)
+## Storage Backend (Cloudflare D1)
 
-`storage/decision_db.py`, `outcome_tracker.py`, `engine_tracker.py`, and `experience_db.py` default to local SQLite files, same as always. Setting `IATIS_STORAGE_BACKEND=d1` (plus `D1_WORKER_URL` / `D1_PROXY_TOKEN` in `.env`) switches all four to Cloudflare D1 instead — one centrally-managed database instead of four local files, accessed through a small authenticated proxy Worker (`cloudflare/worker.js`), since D1 is only reachable from inside a Worker, not directly from this VPS-hosted Python process:
+`storage/decision_db.py`, `outcome_tracker.py`, `engine_tracker.py`, `experience_db.py`, `symbol_health.py`, and `calibration.py` all store data in Cloudflare D1 — one centrally-managed database instead of local files on the VPS's disk, accessed through a small authenticated proxy Worker (`cloudflare/worker.js`), since D1 is only reachable from inside a Worker, not directly from this VPS-hosted Python process:
 
 ```
 Python storage/*.py  --HTTPS-->  cloudflare/worker.js  --D1 binding-->  D1
 ```
 
-Full setup (creating the D1 database, deploying the Worker, setting secrets) is in `cloudflare/README.md` — it requires a Cloudflare account and can't be provisioned from this repo alone. The default (unset `IATIS_STORAGE_BACKEND`, local SQLite) needs no Cloudflare account at all and is what the test suite always exercises.
+There is no local SQLite fallback — `D1_WORKER_URL` and `D1_PROXY_TOKEN` in `.env` are required. Full setup (creating the D1 database, deploying the Worker, setting secrets) is in `cloudflare/README.md` — it requires a Cloudflare account and can't be provisioned from this repo alone. The test suite never touches a real Cloudflare account: `tests/conftest.py`'s `fake_d1` fixture fakes the Worker with an in-memory SQLite connection per test.
 
 ---
 
@@ -303,7 +303,7 @@ IATIS/
 │   ├── live_portfolio_state.py   # Real drawdown/open-risk/correlated-exposure from history
 │   └── correlation_engine.py     # Portfolio correlation filter
 │
-├── storage/                      # SQLite decisions/outcomes/experience DBs, JSONL audit trail
+├── storage/                      # Cloudflare D1 decisions/outcomes/experience DBs, JSONL audit trail
 │
 ├── execution/
 │   ├── api_server.py             # FastAPI — ~30 endpoints incl. AI + dashboard support
@@ -325,7 +325,7 @@ IATIS/
 ├── dashboard/frontend/           # Command Center SPA (React + TS + Vite)
 ├── scripts/                      # Data download, backtests, ablation, integrity checks
 ├── docs/
-└── tests/                        # 364 tests
+└── tests/                        # 374 tests
 ```
 
 ---
@@ -337,7 +337,7 @@ IATIS/
 - `hmac.compare_digest` for key comparison (timing-attack resistant)
 - Dashboard values escaped client-side consistently (all dynamic content reaches the page via JSON fetch + DOM injection, not server-side string interpolation)
 - Symbol validation regex: `^[A-Z]{2,6}(/[A-Z]{2,6})?$`
-- SQLite DB files and the session store: `chmod 0o600`
+- Session store: `chmod 0o600` (storage is Cloudflare D1, no local DB files to protect)
 - Telegram flood protection: 30min cooldown per error key
 - Swagger/OpenAPI docs disabled unless `ENV=development`
 - systemd units run sandboxed (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`, resource limits) even though they still run as `root` pending a dedicated service-user migration (see `iatis-*.service` comments)
@@ -368,7 +368,7 @@ IATIS/
 
 ```
 158 Python files (excluding dashboard/frontend) | ~31,700 lines
-364 tests
+374 tests
 ~30 API endpoints
 9 strategy engines (4 enabled) | 16 research hypotheses tracked
 ```

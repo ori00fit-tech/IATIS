@@ -78,7 +78,7 @@ async def lifespan(application: FastAPI):
     """Startup/shutdown lifecycle handler."""
     # Startup
     from pathlib import Path
-    for path in ["storage/decisions.db", "storage/engine_tracker.db", "storage/sessions.json"]:
+    for path in ["storage/sessions.json"]:
         p = Path(path)
         if p.exists():
             try:

@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -79,6 +80,21 @@ class SymbolHealth:
 
 @contextmanager
 def _conn():
+    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
+    local SQLite file at `DB_PATH` — same `outcomes` table either way.
+
+    Reuses outcome_tracker's own D1-aware connection so this module isn't
+    a second, independent path to the `outcomes` table: before this fix,
+    symbol_health always connected to the local outcomes.db file directly
+    via sqlite3, so under D1 that file never existed on the VPS and the
+    auto-pause safety gate silently fell back to "no data yet — assuming
+    healthy" for every symbol, forever."""
+    if d1_client.is_d1_enabled():
+        from storage.outcome_tracker import _conn as _outcome_conn, _init_db as _init_outcomes_db
+        _init_outcomes_db(DB_PATH)
+        with _outcome_conn(DB_PATH) as con:
+            yield con
+        return
     if not DB_PATH.exists():
         yield None
         return

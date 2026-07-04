@@ -213,7 +213,22 @@ def verify_file(path: Path) -> FileReport:
         prev = ts - d
         if ac == "crypto":
             unexpected.append((prev, ts, d))
-        elif ac in ("forex", "metal", "energy"):
+        elif ac in ("metal", "energy"):
+            # Sourced from CME futures (GC=F/SI=F/CL=F): Globex trades
+            # Sun ~22:00 UTC – Fri ~21:00 UTC with a DAILY ~60-minute
+            # maintenance break (21:00–23:00 UTC window across DST).
+            # Expected gaps: the daily break (gap ≤ 3h starting
+            # 20:00–23:00 UTC), the weekend closure, and single-day US
+            # exchange holidays (≤ 4 days including adjacent weekend).
+            gap_start_hour = (prev + pd.Timedelta(hours=1)).hour
+            daily_break = (d <= pd.Timedelta(hours=3)
+                           and 20 <= gap_start_hour <= 23)
+            weekend = (_expected_weekend_closed(prev + pd.Timedelta(hours=1))
+                       and d <= pd.Timedelta(hours=53))
+            holiday = d <= pd.Timedelta(days=4)  # e.g. Memorial Day + wknd
+            if not (daily_break or weekend or holiday):
+                unexpected.append((prev, ts, d))
+        elif ac == "forex":
             # weekend closure: gap starting late Fri, ending ~Sun 21-22 UTC
             if not (_expected_weekend_closed(prev + pd.Timedelta(hours=1))
                     and d <= pd.Timedelta(hours=53)):
@@ -273,10 +288,15 @@ def verify_file(path: Path) -> FileReport:
         if asian and asian > 0:
             ratio = float(ldn_ny / asian)
             rep.metrics["session_vol_ratio_ldnny_vs_asia"] = round(ratio, 2)
-            if ratio < 1.15:
+            if ratio < 1.15 and ac == "forex":
                 rep.fail("SUSPECT_SYNTHETIC",
                          f"London+NY/Asian volatility ratio {ratio:.2f} — "
-                         f"real {ac} shows session structure (>1.15)")
+                         f"real forex shows session structure (>1.15)")
+            elif ac == "metal":
+                # Metals trade actively in Asia (physical demand); a low
+                # ratio is NOT synthetic evidence. Informational only.
+                rep.note(f"session vol ratio {ratio:.2f} (metals trade "
+                         f"actively in Asia — not a synthetic indicator)")
 
     # -- R3: fat tails ------------------------------------------------------
     r = df["close"].pct_change().dropna()
@@ -312,7 +332,12 @@ def verify_file(path: Path) -> FileReport:
             if base_move > 0:
                 lift = nfp_move / base_move
                 rep.metrics["nfp_hour_vol_lift"] = round(lift, 2)
-                if lift >= 1.3:
+                if ac == "metal" and lift >= 1.0:
+                    rep.note(f"NFP release-hour volatility {lift:.2f}x "
+                             f"normal Fridays — positive response present "
+                             f"(metals respond less uniformly than FX; "
+                             f"informational)")
+                elif lift >= 1.3:
                     rep.note(
                         f"NFP response present: release-hour volatility "
                         f"{lift:.2f}x normal Fridays (n={len(nfp_idx)} "

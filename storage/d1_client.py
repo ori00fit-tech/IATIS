@@ -66,6 +66,25 @@ def _worker_url() -> str:
     return url
 
 
+def _parse_worker_response(resp: "requests.Response") -> dict[str, Any]:
+    """Parse the Worker's JSON body regardless of HTTP status.
+
+    worker.js returns a JSON body with `success`/`error` even on a 500
+    (its handlers catch D1 exceptions and report them as
+    `{success: false, error: String(exc)}`) — calling
+    resp.raise_for_status() before reading that body would discard the
+    real error message and replace it with a generic "500 Server Error",
+    which is exactly what happened here before this fix. Only fall back
+    to the generic HTTP error if the body isn't valid JSON at all (e.g.
+    a Cloudflare edge error page instead of a response from our Worker).
+    """
+    try:
+        return resp.json()
+    except ValueError:
+        resp.raise_for_status()
+        raise D1Error(f"D1 proxy returned a non-JSON response (HTTP {resp.status_code})")
+
+
 def _auth_headers() -> dict[str, str]:
     token = os.environ.get("D1_PROXY_TOKEN", "")
     if not token:
@@ -143,12 +162,11 @@ class D1Connection:
                 headers=self._headers,
                 timeout=_DEFAULT_TIMEOUT,
             )
-            resp.raise_for_status()
-            data = resp.json()
         except requests.RequestException as exc:
             raise D1Error(f"D1 proxy request failed: {exc}") from exc
+        data = _parse_worker_response(resp)
         if not data.get("success"):
-            raise D1Error(f"D1 exec failed: {data.get('error', 'unknown error')}")
+            raise D1Error(f"D1 exec failed (HTTP {resp.status_code}): {data.get('error', 'unknown error')}")
         meta = data.get("meta", {})
         return D1Cursor(data.get("results", []), meta.get("last_row_id"), meta.get("changes", 0))
 
@@ -177,12 +195,11 @@ def d1_batch(statements: list[tuple[str, tuple | list]]) -> list[D1Cursor]:
     payload = {"statements": [{"sql": sql, "params": list(params)} for sql, params in statements]}
     try:
         resp = requests.post(f"{url}/d1/batch", json=payload, headers=headers, timeout=_DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
     except requests.RequestException as exc:
         raise D1Error(f"D1 batch request failed: {exc}") from exc
+    data = _parse_worker_response(resp)
     if not data.get("success"):
-        raise D1Error(f"D1 batch failed: {data.get('error', 'unknown error')}")
+        raise D1Error(f"D1 batch failed (HTTP {resp.status_code}): {data.get('error', 'unknown error')}")
     return [
         D1Cursor(r.get("results", []), r.get("meta", {}).get("last_row_id"), r.get("meta", {}).get("changes", 0))
         for r in data.get("results", [])

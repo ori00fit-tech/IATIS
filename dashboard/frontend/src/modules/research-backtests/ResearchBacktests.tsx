@@ -1,10 +1,21 @@
+import { useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
+import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
-import { getResearch, getBacktestResults, getMetaAnalysis, type Hypothesis, type BacktestResult, type RegimeRow } from './api'
+import {
+  getResearch,
+  getBacktestResults,
+  getMetaAnalysis,
+  getAiResearchSummary,
+  type Hypothesis,
+  type BacktestResult,
+  type RegimeRow,
+  type AiResearchSummary,
+} from './api'
 
 const POLL_MS = 60_000
 
@@ -27,6 +38,23 @@ export function ResearchBacktests() {
   const meta = usePolling(getMetaAnalysis, POLL_MS, markUnauthenticated)
 
   const hs = research.data?.hypothesis_summary
+  const [ai, setAi] = useState<{ loading: boolean; error: string | null; data: AiResearchSummary | null }>({
+    loading: false,
+    error: null,
+    data: null,
+  })
+
+  const generateAiSummary = () => {
+    if (!research.data) return
+    setAi({ loading: true, error: null, data: null })
+    getAiResearchSummary({
+      hypothesis_summary: research.data.hypothesis_summary,
+      latest_backtest: research.data.latest_backtest,
+      regime_matrix: meta.data?.regime_matrix.data ?? [],
+    })
+      .then((data) => setAi({ loading: false, error: null, data }))
+      .catch((err) => setAi({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+  }
 
   const hypothesisColumns: Column<Hypothesis>[] = [
     { header: 'ID', render: (h) => <span className="font-bold text-accent">{h.id}</span> },
@@ -68,6 +96,29 @@ export function ResearchBacktests() {
         <KpiCard value={hs?.research ?? '—'} label="In Research" color="amber" />
         <KpiCard value={research.data?.latest_backtest?.avg_pf?.toFixed(2) ?? '—'} label="Avg PF (latest BT)" color="purple" />
       </div>
+
+      <Panel
+        title="AI Research Summary"
+        right={
+          <button
+            onClick={generateAiSummary}
+            disabled={ai.loading || !research.data}
+            className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+          >
+            {ai.loading ? 'Generating…' : ai.data ? 'Regenerate' : 'Generate'}
+          </button>
+        }
+      >
+        <div className="p-4">
+          {!ai.data && !ai.loading && !ai.error ? (
+            <Empty>On-demand only — phrases the hypothesis registry, latest backtest, and regime matrix below. Click Generate.</Empty>
+          ) : (
+            <AiStatusFrame loading={ai.loading} fetchError={ai.error} status={ai.data?.status} providerError={ai.data?.error}>
+              <p className="text-[0.9em]">{ai.data?.text}</p>
+            </AiStatusFrame>
+          )}
+        </div>
+      </Panel>
 
       <Panel title="Hypothesis Registry">
         {research.data && research.data.hypotheses.length > 0 ? (

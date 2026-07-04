@@ -206,3 +206,32 @@ def test_ai_analyzer_unknown_provider_is_unavailable(monkeypatch):
     monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True, provider="not_a_real_provider"))
     assert analyzer.available is False
+
+
+def test_ai_analyzer_generate_research_summary_disabled():
+    analyzer = AIAnalyzer(_config(enabled=False))
+    result = analyzer.generate_research_summary({"total": 13, "passed": 1})
+    assert result["status"] == "disabled"
+
+
+def test_ai_analyzer_generate_research_summary_ok(monkeypatch):
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(PerplexityProvider, "_chat", return_value="13 hypotheses, 1 passed."):
+        result = analyzer.generate_research_summary(
+            {"total": 13, "passed": 1, "failed": 3, "research": 9, "avg_wr": 60.5, "avg_pf": 2.72}
+        )
+    assert result["status"] == "ok"
+    assert "13 hypotheses" in result["text"]
+
+
+def test_ai_analyzer_generate_daily_report_still_works_after_refactor(monkeypatch):
+    # Regression guard: generate_daily_report and generate_research_summary
+    # now share _summarize_text() — make sure the refactor didn't change
+    # generate_daily_report's own behavior.
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(PerplexityProvider, "_chat", return_value="Quiet day, 3 EXECUTE signals."):
+        result = analyzer.generate_daily_report({"total": 10, "execute": 3, "no_trade": 7})
+    assert result["status"] == "ok"
+    assert "Quiet day" in result["text"]

@@ -23,11 +23,11 @@ Triggers (when to update weights):
 """
 from __future__ import annotations
 
-import json
+import os
 from typing import Any
 
-import requests
-
+from ai.providers.anthropic import AnthropicProvider
+from ai.providers.base import AIProviderError, extract_json
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -176,35 +176,24 @@ def analyze_and_suggest_weights(
         engine_stats, outcome_summary, current_weights, regime_data
     )
 
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {
+            "status": "not_configured",
+            "message": "ANTHROPIC_API_KEY not set in the environment.",
+            "suggested_weights": current_weights,
+        }
+
     logger.info("Calling Claude API for dynamic weight optimization...")
 
     try:
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 1000,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        # Extract text response
-        text = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text += block.get("text", "")
-
-        # Parse JSON from response
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-
-        result = json.loads(text)
+        # Reuses ai/providers/anthropic.py (the same client ai_analyzer.py
+        # uses) rather than a second hand-rolled request — the previous
+        # version of this call had no x-api-key/anthropic-version headers
+        # at all and would 401 unconditionally.
+        provider = AnthropicProvider(api_key=api_key, model="claude-sonnet-4-6", max_tokens=1000)
+        text = provider._chat(prompt)
+        result = extract_json(text)
 
         # Validate and clamp weights
         weights = result.get("suggested_weights", {})
@@ -232,11 +221,11 @@ def analyze_and_suggest_weights(
         )
         return result
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Claude returned invalid JSON: {e}")
+    except AIProviderError as exc:
+        logger.error(f"Dynamic weights AI failed: {exc}")
         return {
-            "status": "parse_error",
-            "message": str(e),
+            "status": "parse_error" if "JSON" in str(exc) else "error",
+            "message": str(exc),
             "suggested_weights": current_weights,
         }
     except Exception as exc:

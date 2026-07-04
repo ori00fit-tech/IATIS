@@ -272,16 +272,26 @@ class AIAnalyzer:
 
         return self._cache.get_or_compute("macro", ttl, _compute)
 
-    # ── Daily report ────────────────────────────────────────────────────
+    # ── Free-text summaries (daily report / research) ──────────────────
+
+    def _summarize_text(self, text_blob: str) -> dict:
+        """Shared plumbing for every "phrase these already-computed stats
+        in plain English" call — AIAnalyzer only writes the prose, the
+        numbers always come from storage/research modules upstream.
+        """
+        if not self.available:
+            return {"status": "disabled", "provider": self.provider_name, "text": ""}
+        try:
+            summary = self._provider.summarize(text_blob)
+            return {"status": "ok", "provider": self._provider.name, "text": summary}
+        except AIProviderError as exc:
+            logger.warning(f"AIAnalyzer summarize failed: {exc}")
+            return {"status": "error", "provider": self.provider_name, "error": str(exc), "text": ""}
 
     def generate_daily_report(self, stats: dict) -> dict:
         """Plain-text daily summary from already-computed stats (e.g.
         storage/decision_db.summary() + storage/outcome_tracker.performance_summary()).
-        AIAnalyzer only phrases it — the numbers are computed elsewhere.
         """
-        if not self.available:
-            return {"status": "disabled", "provider": self.provider_name, "text": ""}
-
         text_blob = (
             f"Decisions: total={stats.get('total')}, execute={stats.get('execute')}, "
             f"no_trade={stats.get('no_trade')}, execute_rate={stats.get('execute_rate')}. "
@@ -289,9 +299,20 @@ class AIAnalyzer:
             f"Outcomes: win_rate={stats.get('win_rate')}, "
             f"total_closed={stats.get('total_closed')}."
         )
-        try:
-            summary = self._provider.summarize(text_blob)
-            return {"status": "ok", "provider": self._provider.name, "text": summary}
-        except AIProviderError as exc:
-            logger.warning(f"AIAnalyzer.generate_daily_report failed: {exc}")
-            return {"status": "error", "provider": self.provider_name, "error": str(exc), "text": ""}
+        return self._summarize_text(text_blob)
+
+    def generate_research_summary(self, stats: dict) -> dict:
+        """Plain-text summary of the research/backtest state (hypothesis
+        registry + latest full-pipeline backtest + regime performance
+        matrix) — for the Research & Backtests dashboard tab. Never
+        implies an engine should be enabled; that stays edge_gate.py's
+        call, based on hypothesis status in registry.json.
+        """
+        text_blob = (
+            f"Hypotheses: total={stats.get('total')}, passed={stats.get('passed')}, "
+            f"failed={stats.get('failed')}, in_research={stats.get('research')}. "
+            f"Latest full-pipeline backtest: avg_win_rate={stats.get('avg_wr')}, "
+            f"avg_profit_factor={stats.get('avg_pf')}. "
+            f"Regime performance matrix: {stats.get('regime_matrix')}."
+        )
+        return self._summarize_text(text_blob)

@@ -1,4 +1,4 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 
 export interface EngineStat {
   engine: string
@@ -19,3 +19,20 @@ export interface EngineStatsResponse {
 }
 
 export const getEngineStats = () => apiGet<EngineStatsResponse>('/engine-stats')
+
+// AI weight optimizer (ai/dynamic_weights.py) — a distinct, older AI
+// feature from ai/ai_analyzer.py's explain/news/macro/research layer.
+// Always called dry_run — this dashboard only ever shows suggestions,
+// never writes config.yaml itself. Applying a weight change is a
+// deliberate config edit, done separately, not a dashboard button click.
+export interface AiWeightSuggestion {
+  status: 'success' | 'insufficient_data' | 'not_configured' | 'parse_error' | 'error'
+  message?: string
+  suggested_weights: Record<string, number>
+  reasoning?: Record<string, string>
+  confidence?: string
+  note?: string
+  trades_analyzed?: number
+}
+
+export const getAiWeightSuggestions = () => apiPost<AiWeightSuggestion>('/ai/optimize-weights?dry_run=true')

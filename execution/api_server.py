@@ -1537,6 +1537,45 @@ async def ai_macro_analysis(
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+@app.post("/ai/research-summary")
+async def ai_research_summary(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Plain-English summary of the research/backtest state, for the
+    Research & Backtests dashboard tab.
+
+    Takes the stats the frontend already has in memory (from /research
+    and /meta-analysis) in the request body, same pattern as
+    POST /ai/explain-trade — avoids a third copy of the registry.json /
+    backtest-file parsing logic already in those two endpoints.
+    Expected body: {hypothesis_summary, latest_backtest, regime_matrix}.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+
+        body = await request.json()
+        hs = body.get("hypothesis_summary") or {}
+        latest_bt = body.get("latest_backtest") or {}
+        stats = {
+            "total": hs.get("total"),
+            "passed": hs.get("passed"),
+            "failed": hs.get("failed"),
+            "research": hs.get("research"),
+            "avg_wr": latest_bt.get("avg_wr"),
+            "avg_pf": latest_bt.get("avg_pf"),
+            "regime_matrix": body.get("regime_matrix") or [],
+        }
+
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.generate_research_summary(stats)
+    except Exception as exc:
+        logger.error(f"AI research summary error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
 @app.get("/ai/daily-report")
 async def ai_daily_report(
     x_api_key: str | None = Header(default=None),

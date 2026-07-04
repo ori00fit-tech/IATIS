@@ -2,9 +2,84 @@ import { useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
-import { getEngineStats } from './api'
+import { getEngineStats, getAiWeightSuggestions, type AiWeightSuggestion } from './api'
 
 const POLL_MS = 45_000
+
+function AiWeightPanel() {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: AiWeightSuggestion | null }>({
+    loading: false,
+    error: null,
+    data: null,
+  })
+
+  const generate = () => {
+    setState({ loading: true, error: null, data: null })
+    getAiWeightSuggestions()
+      .then((data) => setState({ loading: false, error: null, data }))
+      .catch((err) => setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+  }
+
+  return (
+    <Panel
+      title="AI Weight Suggestions (Claude)"
+      right={
+        <button
+          onClick={generate}
+          disabled={state.loading}
+          className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+        >
+          {state.loading ? 'Analyzing…' : state.data ? 'Regenerate' : 'Generate'}
+        </button>
+      }
+    >
+      <div className="p-4">
+        {!state.data && !state.loading && !state.error && (
+          <Empty>
+            On-demand only, suggestions are read-only here — applying a weight change to config.yaml is a
+            deliberate separate step, not a dashboard click. Click Generate.
+          </Empty>
+        )}
+        {state.loading && <Empty>Asking Claude to analyze engine performance…</Empty>}
+        {state.error && <Empty>Request failed: {state.error}</Empty>}
+        {state.data?.status === 'not_configured' && <Empty>ANTHROPIC_API_KEY is not set in the environment.</Empty>}
+        {state.data?.status === 'insufficient_data' && <Empty>{state.data.message}</Empty>}
+        {(state.data?.status === 'error' || state.data?.status === 'parse_error') && (
+          <Empty>{state.data.message ?? 'AI weight optimization failed.'}</Empty>
+        )}
+        {state.data?.status === 'success' && (
+          <div className="flex flex-col gap-3 text-[0.88em]">
+            <div className="flex gap-4 text-muted">
+              <span>Confidence: {state.data.confidence ?? '—'}</span>
+              <span>Trades analyzed: {state.data.trades_analyzed ?? '—'}</span>
+            </div>
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-muted text-[0.85em]">
+                  <th className="pb-1">Engine</th>
+                  <th className="pb-1 text-right">Suggested</th>
+                  <th className="pb-1 pl-3">Reasoning</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(state.data.suggested_weights)
+                  .filter(([, w]) => w > 0)
+                  .map(([engine, w]) => (
+                    <tr key={engine} className="border-t border-border">
+                      <td className="py-1.5 font-bold text-accent">{engine}</td>
+                      <td className="py-1.5 text-right">{w.toFixed(3)}</td>
+                      <td className="py-1.5 pl-3 text-muted">{state.data?.reasoning?.[engine] ?? '—'}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+            {state.data.note && <p className="text-muted italic">{state.data.note}</p>}
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
 
 function Bar({ value, max, colorClass }: { value: number; max: number; colorClass: string }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
@@ -91,6 +166,8 @@ export function EngineMonitor() {
       )}
 
       <p className="text-[0.72em] text-muted px-1">{data.note}</p>
+
+      <AiWeightPanel />
     </div>
   )
 }

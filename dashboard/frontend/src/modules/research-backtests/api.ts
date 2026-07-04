@@ -1,4 +1,4 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 
 export interface Hypothesis {
   id: string
@@ -58,3 +58,20 @@ export interface MetaAnalysisResponse {
 export const getResearch = () => apiGet<ResearchResponse>('/research')
 export const getBacktestResults = () => apiGet<BacktestResultsResponse>('/backtest-results')
 export const getMetaAnalysis = () => apiGet<MetaAnalysisResponse>('/meta-analysis')
+
+// AI research summary (ai/ai_analyzer.py) — on-demand, phrases the stats
+// above in plain English. Sent as the request body so the backend
+// doesn't need a third copy of the registry.json / backtest-file
+// parsing logic already in /research and /meta-analysis.
+export interface AiResearchSummary {
+  status: 'ok' | 'disabled' | 'error'
+  text: string
+  provider: string
+  error?: string
+}
+
+export const getAiResearchSummary = (body: {
+  hypothesis_summary: ResearchResponse['hypothesis_summary']
+  latest_backtest: ResearchResponse['latest_backtest']
+  regime_matrix: RegimeRow[]
+}) => apiPost<AiResearchSummary>('/ai/research-summary', body)

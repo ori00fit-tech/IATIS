@@ -119,6 +119,21 @@ def test_ai_explain_trade_requires_auth(client):
     assert r.status_code == 401
 
 
+def test_ai_research_summary_disabled_by_default(client):
+    r = client.post(
+        "/ai/research-summary",
+        json={"hypothesis_summary": {"total": 13, "passed": 1, "failed": 3, "research": 9}},
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+
+
+def test_ai_research_summary_requires_auth(client):
+    r = client.post("/ai/research-summary", json={})
+    assert r.status_code == 401
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

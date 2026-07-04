@@ -1,15 +1,117 @@
+import { useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
+import { Badge } from '../../components/Badge'
 import { StatusRow } from '../../components/StatusDot'
+import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
-import { getHealth, getHealthFull, getBudget, getSymbolHealth, type SymbolHealthEntry } from './api'
+import {
+  getHealth,
+  getHealthFull,
+  getBudget,
+  getSymbolHealth,
+  getAiNewsAnalysis,
+  getAiMacroAnalysis,
+  getAiDailyReport,
+  type SymbolHealthEntry,
+  type AiNewsAnalysis,
+  type AiMacroAnalysis,
+  type AiDailyReport,
+} from './api'
 
 const POLL_MS = 15_000
 
 function pct(n: number | undefined | null) {
   return n === undefined || n === null ? '—' : `${n.toFixed(0)}%`
+}
+
+interface Briefing {
+  loading: boolean
+  error: string | null
+  news: AiNewsAnalysis | null
+  macro: AiMacroAnalysis | null
+  daily: AiDailyReport | null
+}
+
+function AiBriefingPanel() {
+  const [b, setB] = useState<Briefing>({ loading: false, error: null, news: null, macro: null, daily: null })
+  const generated = b.news !== null || b.macro !== null || b.daily !== null
+
+  const generate = () => {
+    setB({ loading: true, error: null, news: null, macro: null, daily: null })
+    Promise.all([getAiNewsAnalysis(), getAiMacroAnalysis(), getAiDailyReport()])
+      .then(([news, macro, daily]) => setB({ loading: false, error: null, news, macro, daily }))
+      .catch((err) => setB({ loading: false, error: err instanceof Error ? err.message : String(err), news: null, macro: null, daily: null }))
+  }
+
+  // All three share one ai.enabled flag — if one is disabled, they all are.
+  const allDisabled = b.news?.status === 'disabled' && b.macro?.status === 'disabled' && b.daily?.status === 'disabled'
+
+  return (
+    <Panel
+      title="AI Briefing"
+      right={
+        <button
+          onClick={generate}
+          disabled={b.loading}
+          className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+        >
+          {b.loading ? 'Generating…' : generated ? 'Regenerate' : 'Generate'}
+        </button>
+      }
+    >
+      <div className="p-4">
+        {!generated && !b.loading && !b.error && (
+          <Empty>On-demand only — fetches live news/macro context and phrases today's stats. Click Generate.</Empty>
+        )}
+        {b.loading && <Empty>Asking the AI provider…</Empty>}
+        {b.error && <Empty>Request failed: {b.error}</Empty>}
+        {generated && !b.loading && !b.error && allDisabled && (
+          <Empty>AI is disabled — set `ai.enabled: true` and an API key in config.yaml to turn this on.</Empty>
+        )}
+        {generated && !b.loading && !b.error && !allDisabled && (
+          <div className="grid grid-cols-3 gap-4 max-[900px]:grid-cols-1">
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-2">Daily Report</div>
+              <AiStatusFrame loading={false} fetchError={null} status={b.daily?.status} providerError={b.daily?.error}>
+                <p className="text-[0.88em]">{b.daily?.text}</p>
+              </AiStatusFrame>
+            </div>
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-2">Macro Context</div>
+              <AiStatusFrame loading={false} fetchError={null} status={b.macro?.status} providerError={b.macro?.error}>
+                <div className="flex flex-col gap-2 text-[0.88em]">
+                  <div className="flex gap-2 flex-wrap">
+                    <Badge tone={b.macro?.risk_on_off === 'RISK_ON' ? 'exec' : b.macro?.risk_on_off === 'RISK_OFF' ? 'no-trade' : 'neutral'}>
+                      {b.macro?.risk_on_off ?? 'NEUTRAL'}
+                    </Badge>
+                    <span className="text-muted">{`DXY: ${b.macro?.dxy_bias ?? 'Neutral'}`}</span>
+                  </div>
+                  <p>{b.macro?.summary}</p>
+                </div>
+              </AiStatusFrame>
+            </div>
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-2">News Read</div>
+              <AiStatusFrame loading={false} fetchError={null} status={b.news?.status} providerError={b.news?.error}>
+                <div className="flex flex-col gap-2 text-[0.88em]">
+                  <div className="flex gap-2 flex-wrap">
+                    <Badge tone={b.news?.impact === 'HIGH' ? 'poor' : b.news?.impact === 'MEDIUM' ? 'marginal' : 'good'}>
+                      {`Impact: ${b.news?.impact ?? 'LOW'}`}
+                    </Badge>
+                    <span className="text-muted">{b.news?.sentiment}</span>
+                  </div>
+                  <p>{b.news?.summary}</p>
+                </div>
+              </AiStatusFrame>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
 }
 
 export function MissionControl() {
@@ -100,6 +202,8 @@ export function MissionControl() {
           )}
         </Panel>
       </div>
+
+      <AiBriefingPanel />
     </div>
   )
 }

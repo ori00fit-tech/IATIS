@@ -4,6 +4,7 @@ import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
+import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
 import { getDecisions, getOutcomes, explainTrade, type DecisionEntry, type OpenSignal, type TradeExplanation } from './api'
 
@@ -39,13 +40,14 @@ function AIExplanationPanel({ decision, onClose }: { decision: DecisionEntry; on
   return (
     <Panel title={`AI Explanation — ${decision.symbol}`} right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
       <div className="p-4">
-        {state.loading && <Empty>Asking the AI provider…</Empty>}
-        {state.error && <Empty>Request failed: {state.error}</Empty>}
-        {state.data?.status === 'disabled' && (
-          <Empty>AI explanations are disabled (set `ai.enabled: true` and an API key to turn this on).</Empty>
-        )}
-        {state.data?.status === 'error' && <Empty>Provider error: {state.data.error}</Empty>}
-        {state.data?.status === 'ok' && (
+        <AiStatusFrame
+          loading={state.loading}
+          fetchError={state.error}
+          status={state.data?.status}
+          providerError={state.data?.error}
+          disabledHint="AI explanations are disabled (set `ai.enabled: true` and an API key to turn this on)."
+        >
+          {state.data?.status === 'ok' && (
           <div className="flex flex-col gap-3 text-[0.9em]">
             <p>{state.data.explanation || state.data.summary}</p>
             <div className="flex gap-3 flex-wrap">
@@ -77,7 +79,8 @@ function AIExplanationPanel({ decision, onClose }: { decision: DecisionEntry; on
             )}
             {state.data.recommendation && <p className="text-muted italic">{state.data.recommendation}</p>}
           </div>
-        )}
+          )}
+        </AiStatusFrame>
       </div>
     </Panel>
   )

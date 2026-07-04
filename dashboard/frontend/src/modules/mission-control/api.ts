@@ -52,3 +52,40 @@ export const getHealth = () => apiGet<Health>('/health')
 export const getHealthFull = () => apiGet<HealthFull>('/health/full')
 export const getBudget = () => apiGet<Budget>('/budget')
 export const getSymbolHealth = () => apiGet<SymbolHealthResponse>('/symbol-health')
+
+// AI briefing (ai/ai_analyzer.py) — explanation/reporting only, fetched
+// on demand (not polled: unlike the widgets above these hit an external
+// LLM provider, even though the backend caches each for 20-60min).
+export interface AiNewsAnalysis {
+  status: 'ok' | 'disabled' | 'error'
+  sentiment: string
+  impact: 'LOW' | 'MEDIUM' | 'HIGH'
+  affected_symbols: string[]
+  duration: string
+  confidence: number
+  summary: string
+  provider: string
+  error: string
+}
+
+export interface AiMacroAnalysis {
+  status: 'ok' | 'disabled' | 'error'
+  summary: string
+  risk_on_off: 'RISK_ON' | 'RISK_OFF' | 'NEUTRAL'
+  dxy_bias: string
+  key_drivers: string[]
+  confidence: number
+  provider: string
+  error: string
+}
+
+export interface AiDailyReport {
+  status: 'ok' | 'disabled' | 'error'
+  text: string
+  provider: string
+  error?: string
+}
+
+export const getAiNewsAnalysis = () => apiGet<AiNewsAnalysis>('/ai/news-analysis')
+export const getAiMacroAnalysis = () => apiGet<AiMacroAnalysis>('/ai/macro-analysis')
+export const getAiDailyReport = () => apiGet<AiDailyReport>('/ai/daily-report')

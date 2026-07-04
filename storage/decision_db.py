@@ -24,12 +24,15 @@ storage/decisions.db (gitignored).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from storage import d1_client
+from storage.d1_client import D1Error
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -83,6 +86,13 @@ _CREATE_INDEXES = [
 
 @contextmanager
 def _conn(path: Path = DB_PATH):
+    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
+    local SQLite file at `path` — same .execute()/.fetchone()/.fetchall()
+    shape either way. See storage/d1_client.py."""
+    if d1_client.is_d1_enabled():
+        with d1_client.d1_connection() as con:
+            yield con
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
@@ -98,18 +108,19 @@ def _conn(path: Path = DB_PATH):
 
 
 def init_db(path: Path = DB_PATH) -> None:
-    """Create tables if they don't exist yet. Sets restrictive permissions."""
+    """Create tables if they don't exist yet. Sets restrictive permissions
+    (local SQLite only — D1 has no local file to chmod)."""
     with _conn(path) as con:
         con.execute(_CREATE_DECISIONS)
         con.execute(_CREATE_ENGINE_VOTES)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
-    # Owner read/write only (issue #9)
-    try:
-        os.chmod(str(path), 0o600)
-    except Exception:
-        pass
-    logger.debug(f"DB initialized: {path}")
+    if not d1_client.is_d1_enabled():
+        try:
+            os.chmod(str(path), 0o600)
+        except Exception:
+            pass
+    logger.debug(f"DB initialized (backend={'d1' if d1_client.is_d1_enabled() else 'sqlite'}): {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -135,36 +146,64 @@ def log_decision_db(report: dict, path: Path = DB_PATH) -> None:
             fail_reasons = risk.get("reasons", [])
     primary_fail = fail_reasons[0] if fail_reasons else None
 
+    decision_values = (
+        ts, symbol, verdict,
+        regime_d.get("state"),
+        regime_d.get("volatility"),
+        regime_d.get("trend_strength"),
+        cf.get("score"),
+        cf.get("engines_participating"),
+        1 if risk and risk.get("passed") else 0 if risk else None,
+        primary_fail,
+        report.get("summary"),
+        json.dumps(report, default=str),
+    )
+    engine_outputs = report.get("engine_outputs", [])
+
     try:
-        with _conn(path) as con:
-            cur = con.execute(
+        if d1_client.is_d1_enabled():
+            # A decision row plus its N engine_votes rows must succeed or
+            # fail together — sequential /d1/exec calls over HTTP would
+            # not be atomic as a group the way a local SQLite commit is,
+            # so use the Worker's batch endpoint instead. See
+            # cloudflare/README.md.
+            init_db(path)
+            statements: list[tuple[str, tuple]] = [(
                 """INSERT INTO decisions
                    (ts, symbol, verdict, regime, volatility, trend_str,
                     cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    ts, symbol, verdict,
-                    regime_d.get("state"),
-                    regime_d.get("volatility"),
-                    regime_d.get("trend_strength"),
-                    cf.get("score"),
-                    cf.get("engines_participating"),
-                    1 if risk and risk.get("passed") else 0 if risk else None,
-                    primary_fail,
-                    report.get("summary"),
-                    json.dumps(report, default=str),
-                ),
-            )
-            decision_id = cur.lastrowid
-
-            for e in report.get("engine_outputs", []):
-                con.execute(
-                    "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?,?,?,?)",
-                    (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
+                decision_values,
+            )]
+            # decision_id isn't known until the batch runs, so engine_votes
+            # rows use SQLite's last_insert_rowid() rather than a
+            # Python-side value — safe because D1's batch() runs the
+            # statements in order within a single implicit transaction.
+            for e in engine_outputs:
+                statements.append((
+                    "INSERT INTO engine_votes (decision_id, engine, bias, score) "
+                    "VALUES (last_insert_rowid(), ?, ?, ?)",
+                    (e.get("engine"), e.get("bias"), e.get("score", 0)),
+                ))
+            d1_client.d1_batch(statements)
+        else:
+            with _conn(path) as con:
+                cur = con.execute(
+                    """INSERT INTO decisions
+                       (ts, symbol, verdict, regime, volatility, trend_str,
+                        cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    decision_values,
                 )
+                decision_id = cur.lastrowid
+                for e in engine_outputs:
+                    con.execute(
+                        "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?,?,?,?)",
+                        (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
+                    )
 
         logger.info(f"DB: logged {verdict} for {symbol}")
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, D1Error) as exc:
         logger.warning(f"DB write failed (non-fatal): {exc}")
 
 

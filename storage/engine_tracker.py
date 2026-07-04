@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -61,6 +62,12 @@ _CREATE_INDEXES = [
 
 @contextmanager
 def _conn(path: Path = TRACKER_DB):
+    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
+    local SQLite file at `path`. See storage/d1_client.py."""
+    if d1_client.is_d1_enabled():
+        with d1_client.d1_connection() as con:
+            yield con
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
@@ -80,10 +87,11 @@ def init_tracker(path: Path = TRACKER_DB) -> None:
         con.execute(_CREATE_ENGINE_PERFORMANCE)
         for idx in _CREATE_INDEXES:
             con.execute(idx)
-    try:
-        os.chmod(str(path), 0o600)
-    except Exception:
-        pass
+    if not d1_client.is_d1_enabled():
+        try:
+            os.chmod(str(path), 0o600)
+        except Exception:
+            pass
 
 
 def record_engine_votes(report: dict, path: Path = TRACKER_DB) -> None:

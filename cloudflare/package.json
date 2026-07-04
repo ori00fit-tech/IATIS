@@ -1,0 +1,13 @@
+{
+  "name": "iatis-d1-proxy",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "db:apply": "wrangler d1 execute iatis --remote --file=schema.sql",
+    "db:apply:local": "wrangler d1 execute iatis --local --file=schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

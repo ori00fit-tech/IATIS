@@ -210,13 +210,16 @@ Max signals per group per run set by `config.yaml`'s `portfolio.max_per_group`.
 
 | File | Purpose |
 |------|---------|
-| `decision_db.py` | SQLite: all decisions, queryable for analytics |
-| `decision_log.py` | JSONL: append-only decision audit trail |
+| `decision_db.py` | All decisions, queryable for analytics |
+| `decision_log.py` | JSONL: append-only decision audit trail (always local — not part of the D1 migration below) |
 | `engine_tracker.py` | Per-engine live vote performance |
-| `outcome_tracker.py` | Trade results: entry/exit/SL/TP/P&L, `risk_pct` per signal |
-| `symbol_health.py` | Symbol Health Index (SHI) auto-pause logic |
+| `outcome_tracker.py` | Trade results: entry/exit/SL/TP/P&L |
+| `symbol_health.py` | Symbol Health Index (SHI) auto-pause logic — reads `outcome_tracker`'s table directly, no table of its own |
 | `calibration.py` | Confidence calibration + regime performance matrix |
 | `experience_db.py` | Market Memory: similar historical setups, historical win rate |
+| `d1_client.py` | Optional alternate backend for the four DB-backed modules above — see **Optional: Cloudflare D1 Backend** below |
+
+`decision_db.py`, `outcome_tracker.py`, `engine_tracker.py`, and `experience_db.py` default to local SQLite (`storage/*.db`, gitignored, `chmod 0o600`). Each one's `_conn()` checks `d1_client.is_d1_enabled()` (`IATIS_STORAGE_BACKEND=d1`) and, if set, routes through `d1_client.D1Connection` instead — same `.execute()/.fetchone()/.fetchall()` shape, so none of their SQL query strings changed for the migration.
 
 ### 6. **execution/** — Delivery & Broker Integration
 
@@ -285,6 +288,25 @@ React + TypeScript + Vite, served at `GET /app` once built (`npm install && npm 
 | `engine-monitor/` | Per-engine vote stats, rule-based + AI (Claude) suggested weights |
 | `research-backtests/` | Hypothesis registry, backtest results, regime performance matrix, AI research summary |
 | `roadmap/` | Static project roadmap |
+
+### 11. **cloudflare/** — Optional D1 Storage Backend
+
+D1 databases are only reachable from inside a Cloudflare Worker via a binding — not directly from this VPS-hosted Python process. This folder holds the bridge, opt-in and off by default (`IATIS_STORAGE_BACKEND=sqlite`, the default, uses none of it):
+
+| File | Purpose |
+|---|---|
+| `worker.js` | Authenticated D1 proxy — `POST /d1/exec` (one parameterized statement) and `POST /d1/batch` (multiple statements, atomic via D1's own `env.DB.batch()`) |
+| `schema.sql` | Convenience one-time schema for `wrangler d1 execute` — combines the four modules' `CREATE TABLE` statements (`decisions`+`engine_votes`, `outcomes`, `engine_performance`, `experiences`) |
+| `wrangler.toml` | Worker config + D1 binding declaration |
+| `README.md` | Full setup: `wrangler d1 create`, applying the schema, setting the shared-secret, deploying |
+
+```
+Python storage/*.py  --HTTPS (Bearer token)-->  cloudflare/worker.js  --D1 binding-->  D1
+```
+
+`storage/d1_client.py` is the Python side: `D1Connection`/`D1Cursor`/`D1Row` mimic `sqlite3`'s connection/cursor/row interface (`.execute()`, `.fetchone()`/`.fetchall()`, `.lastrowid`, row access by both name and position) closely enough that `decision_db.py`, `outcome_tracker.py`, `engine_tracker.py`, and `experience_db.py` only had to change their `_conn()` functions, not their SQL. The one place cross-statement atomicity matters — `decision_db.log_decision_db()` writing one `decisions` row plus N `engine_votes` rows — uses `d1_batch()` (the Worker's `/d1/batch`); every other call site is a single statement, already atomic on its own.
+
+Not migrated: `storage/decision_log.py`'s JSONL audit trail stays local-file-only regardless of backend — it's an append-only log, not a queryable store, and moving it to D1 would gain nothing.
 
 ---
 
@@ -501,12 +523,19 @@ IATIS/
 │
 ├── storage/                          # Persistence & analytics
 │   ├── decision_db.py
-│   ├── decision_log.py
+│   ├── decision_log.py               # JSONL — always local, never D1
 │   ├── engine_tracker.py
 │   ├── outcome_tracker.py
 │   ├── symbol_health.py
 │   ├── calibration.py
-│   └── experience_db.py
+│   ├── experience_db.py
+│   └── d1_client.py                  # Optional D1 backend for the 4 DB modules above
+│
+├── cloudflare/                        # Optional D1 storage backend (opt-in)
+│   ├── worker.js                      # Authenticated D1 proxy (exec + batch)
+│   ├── schema.sql                     # One-time convenience schema
+│   ├── wrangler.toml
+│   └── README.md                      # Full setup — requires a Cloudflare account
 │
 ├── execution/                        # Delivery & brokers
 │   ├── api_server.py                 # FastAPI, ~30 endpoints
@@ -549,7 +578,7 @@ IATIS/
 │   ├── logger.py
 │   └── feature_def.py
 │
-├── tests/                            # 350 tests
+├── tests/                            # 364 tests
 │
 ├── scripts/                          # Data, backtests, ablation, integrity checks
 │   ├── full_pipeline_backtest.py
@@ -638,8 +667,8 @@ Note what's deliberately **not** in `main.py`'s tree: `ai/` is reachable only fr
 ## Codebase
 
 ```
-156 Python files (excluding dashboard/frontend) | ~31,200 lines
-350 tests
+158 Python files (excluding dashboard/frontend) | ~31,700 lines
+364 tests
 ~30 API endpoints
 9 strategy engines (4 enabled) | 16 research hypotheses tracked (H001-H016)
 ```

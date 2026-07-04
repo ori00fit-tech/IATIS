@@ -1,0 +1,13 @@
+name = "iatis-d1-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Fill in database_id after running:
+#   wrangler d1 create iatis
+[[d1_databases]]
+binding = "DB"
+database_name = "iatis"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# D1_PROXY_TOKEN is a secret, not a var — set it with:
+#   wrangler secret put D1_PROXY_TOKEN

@@ -34,6 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from storage import d1_client
+from storage.d1_client import D1Error
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -125,6 +127,12 @@ _CREATE_INDEXES = [
 
 @contextmanager
 def _conn(path: Path = DB_PATH):
+    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
+    local SQLite file at `path`. See storage/d1_client.py."""
+    if d1_client.is_d1_enabled():
+        with d1_client.d1_connection() as con:
+            yield con
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
@@ -270,7 +278,7 @@ def record_experience(report: dict, path: Path = DB_PATH) -> str:
                 json.dumps(engines_data),
             ))
         logger.debug(f"Experience recorded: {experience_id} → {verdict}")
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, D1Error) as exc:
         logger.warning(f"Experience DB write failed (non-fatal): {exc}")
 
     return experience_id
@@ -317,7 +325,7 @@ def record_outcome(
             ))
             logger.info(f"Experience outcome recorded: {row['experience_id']} → {outcome}")
             return True
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, D1Error) as exc:
         logger.warning(f"Experience outcome update failed: {exc}")
         return False
 

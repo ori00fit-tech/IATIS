@@ -24,5 +24,9 @@ storage/*.log
 # Research results (generated, not authored)
 research/results/*_result.json
 
+# Cloudflare Worker (cloudflare/) — local wrangler state and deps
+cloudflare/node_modules/
+cloudflare/.wrangler/
+
 # OS
 .DS_Store

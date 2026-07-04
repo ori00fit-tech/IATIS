@@ -37,6 +37,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from storage import d1_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +52,12 @@ DEFAULT_RISK_USD: float = 100.0
 
 @contextmanager
 def _conn(path: Path = DB_PATH):
+    """Yields a connection to either D1 (IATIS_STORAGE_BACKEND=d1) or the
+    local SQLite file at `path`. See storage/d1_client.py."""
+    if d1_client.is_d1_enabled():
+        with d1_client.d1_connection() as con:
+            yield con
+        return
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
@@ -90,7 +97,8 @@ def _init_db(path: Path = DB_PATH) -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON outcomes(symbol)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_outcome ON outcomes(outcome)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_regime ON outcomes(regime)")
-    os.chmod(str(path), 0o600)
+    if not d1_client.is_d1_enabled():
+        os.chmod(str(path), 0o600)
 
 
 # ─── Write ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # IATIS — Institutional Adaptive Trading Intelligence System
 
-> **Version 0.4.5 · 350 tests · Market Intelligence Platform**
+> **Version 0.4.5 · 364 tests · Market Intelligence Platform**
 > Config-driven decision pipeline + Command Center dashboard + optional AI explanation layer
 
 ---
@@ -164,6 +164,18 @@ Every call returns `status: ok | disabled | error` — a missing key or provider
 
 ---
 
+## Storage Backend (optional: Cloudflare D1)
+
+`storage/decision_db.py`, `outcome_tracker.py`, `engine_tracker.py`, and `experience_db.py` default to local SQLite files, same as always. Setting `IATIS_STORAGE_BACKEND=d1` (plus `D1_WORKER_URL` / `D1_PROXY_TOKEN` in `.env`) switches all four to Cloudflare D1 instead — one centrally-managed database instead of four local files, accessed through a small authenticated proxy Worker (`cloudflare/worker.js`), since D1 is only reachable from inside a Worker, not directly from this VPS-hosted Python process:
+
+```
+Python storage/*.py  --HTTPS-->  cloudflare/worker.js  --D1 binding-->  D1
+```
+
+Full setup (creating the D1 database, deploying the Worker, setting secrets) is in `cloudflare/README.md` — it requires a Cloudflare account and can't be provisioned from this repo alone. The default (unset `IATIS_STORAGE_BACKEND`, local SQLite) needs no Cloudflare account at all and is what the test suite always exercises.
+
+---
+
 ## Command Center Dashboard
 
 `dashboard/frontend/` is a React + TypeScript SPA, built with Vite, served at `GET /app` once built (`cd dashboard/frontend && npm install && npm run build`). It talks to the same FastAPI backend as everything else — no separate server.
@@ -313,7 +325,7 @@ IATIS/
 ├── dashboard/frontend/           # Command Center SPA (React + TS + Vite)
 ├── scripts/                      # Data download, backtests, ablation, integrity checks
 ├── docs/
-└── tests/                        # 350 tests
+└── tests/                        # 364 tests
 ```
 
 ---
@@ -355,8 +367,8 @@ IATIS/
 ## Codebase
 
 ```
-156 Python files (excluding dashboard/frontend) | ~31,200 lines
-350 tests
+158 Python files (excluding dashboard/frontend) | ~31,700 lines
+364 tests
 ~30 API endpoints
 9 strategy engines (4 enabled) | 16 research hypotheses tracked
 ```

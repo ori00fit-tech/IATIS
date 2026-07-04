@@ -162,30 +162,42 @@ def log_decision_db(report: dict, path: Path = DB_PATH) -> None:
 
     try:
         if d1_client.is_d1_enabled():
-            # A decision row plus its N engine_votes rows must succeed or
-            # fail together — sequential /d1/exec calls over HTTP would
-            # not be atomic as a group the way a local SQLite commit is,
-            # so use the Worker's batch endpoint instead. See
-            # cloudflare/README.md.
+            # Originally this tried to keep the decision row and its N
+            # engine_votes rows in one atomic /d1/batch call, using
+            # SQLite's last_insert_rowid() so engine_votes could refer to
+            # a decision_id it didn't have yet in Python. That hit a real
+            # D1 limitation in production: last_insert_rowid() does not
+            # reliably carry over between statements inside a single
+            # batch() call, so engine_votes.decision_id came back as 0/
+            # NULL and every insert failed its FOREIGN KEY constraint
+            # (confirmed live: "D1_ERROR: FOREIGN KEY constraint failed").
+            #
+            # Fixed by using two round-trips instead: insert the decision
+            # row alone first (its real id comes back directly in that
+            # exec response's meta.last_row_id — reliable per-statement,
+            # unlike last_insert_rowid() across a batch), then batch all
+            # engine_votes inserts together using that concrete id. This
+            # keeps the N votes atomic as a group but no longer atomic
+            # with the decision row itself — see cloudflare/README.md's
+            # "Known limitation" section, updated to match.
             init_db(path)
-            statements: list[tuple[str, tuple]] = [(
-                """INSERT INTO decisions
-                   (ts, symbol, verdict, regime, volatility, trend_str,
-                    cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                decision_values,
-            )]
-            # decision_id isn't known until the batch runs, so engine_votes
-            # rows use SQLite's last_insert_rowid() rather than a
-            # Python-side value — safe because D1's batch() runs the
-            # statements in order within a single implicit transaction.
-            for e in engine_outputs:
-                statements.append((
-                    "INSERT INTO engine_votes (decision_id, engine, bias, score) "
-                    "VALUES (last_insert_rowid(), ?, ?, ?)",
-                    (e.get("engine"), e.get("bias"), e.get("score", 0)),
-                ))
-            d1_client.d1_batch(statements)
+            with d1_client.d1_connection() as con:
+                cur = con.execute(
+                    """INSERT INTO decisions
+                       (ts, symbol, verdict, regime, volatility, trend_str,
+                        cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    decision_values,
+                )
+                decision_id = cur.lastrowid
+            if engine_outputs and decision_id:
+                d1_client.d1_batch([
+                    (
+                        "INSERT INTO engine_votes (decision_id, engine, bias, score) VALUES (?, ?, ?, ?)",
+                        (decision_id, e.get("engine"), e.get("bias"), e.get("score", 0)),
+                    )
+                    for e in engine_outputs
+                ])
         else:
             with _conn(path) as con:
                 cur = con.execute(

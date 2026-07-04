@@ -83,10 +83,28 @@ SQLite path.
   block is **not** atomic as a group over HTTP (unlike local SQLite's
   commit/rollback). The one call site where that matters most —
   `storage/decision_db.log_decision_db()` writing one `decisions` row
-  plus N `engine_votes` rows — uses `POST /d1/batch` instead, which
-  *is* atomic (`env.DB.batch()` on the Worker side). Everywhere else
-  either writes a single row (already atomic) or isn't safety-critical
-  if a very rare partial failure occurred mid-write.
+  plus N `engine_votes` rows — uses `POST /d1/batch` for the
+  `engine_votes` rows, which *is* atomic as a group
+  (`env.DB.batch()` on the Worker side). Everywhere else either writes
+  a single row (already atomic) or isn't safety-critical if a very
+  rare partial failure occurred mid-write.
+- **Known limitation:** `last_insert_rowid()` does **not** reliably
+  carry over between statements inside a single `env.DB.batch()` call
+  — confirmed live in production as `D1_ERROR: FOREIGN KEY constraint
+  failed` when `engine_votes.decision_id` referenced a decision row
+  inserted earlier in the same batch. Because of this,
+  `log_decision_db()` uses two round-trips instead of one atomic
+  batch: it inserts the `decisions` row alone first via a single
+  `POST /d1/exec` (whose response reliably reports that statement's
+  own `meta.last_row_id`), then batches all `engine_votes` inserts
+  together using that concrete `decision_id`. This keeps the N votes
+  atomic as a group but means the decision row and its votes are no
+  longer atomic with each other — a crash between the two round-trips
+  can leave a `decisions` row with no matching `engine_votes` (rare,
+  and not safety-critical: analytics queries already tolerate decisions
+  with zero votes). Don't reintroduce `last_insert_rowid()` across a
+  batch elsewhere in this codebase; use the same two-round-trip pattern
+  instead.
 - **Don't get:** lower latency than local SQLite — every write/read
   becomes an HTTPS round-trip to the Worker. Fine for this system's
   volume (decisions every few minutes, not per-tick), not something to

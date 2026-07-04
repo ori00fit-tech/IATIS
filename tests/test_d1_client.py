@@ -226,26 +226,34 @@ def test_d1_batch_surfaces_real_error_on_actual_http_500(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_decision_db_uses_d1_when_enabled(monkeypatch):
+    """decision_db.log_decision_db() under D1: insert the decision row via
+    a single /d1/exec (real per-statement last_row_id), then batch the
+    engine_votes inserts using that concrete id — NOT last_insert_rowid()
+    inside the batch, which doesn't reliably carry over between D1 batch
+    statements (a real bug caught live in production; see the comment in
+    decision_db.py)."""
     monkeypatch.setenv("IATIS_STORAGE_BACKEND", "d1")
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
 
     import storage.decision_db as decision_db
 
-    fake_resp = _mock_post({
+    # init_db's CREATE TABLE/INDEX calls + the decision INSERT all go
+    # through /d1/exec — give the INSERT a real last_row_id.
+    exec_resp = _mock_post({
         "success": True,
-        "results": [{"success": True}],  # unused; batch path is used instead
-        "meta": {},
+        "results": [],
+        "meta": {"last_row_id": 7, "changes": 1},
     })
     batch_resp = _mock_post({
         "success": True,
-        "results": [{"results": [], "meta": {"last_row_id": 1, "changes": 1}}] * 3,
+        "results": [{"results": [], "meta": {"last_row_id": 1, "changes": 1}}],
     })
 
     def fake_post(url, **kwargs):
         if url.endswith("/d1/batch"):
             return batch_resp
-        return fake_resp
+        return exec_resp
 
     report = {
         "symbol": "EURUSD",
@@ -259,7 +267,10 @@ def test_decision_db_uses_d1_when_enabled(monkeypatch):
     with patch("storage.d1_client.requests.post", side_effect=fake_post) as post:
         decision_db.log_decision_db(report)
 
-    # init_db (table creation) + the atomic batch insert
     assert post.called
     batch_calls = [c for c in post.call_args_list if c.args[0].endswith("/d1/batch")]
     assert len(batch_calls) == 1
+    # The engine_votes insert must reference the real decision_id (7)
+    # returned by the decision INSERT, not an unresolved last_insert_rowid().
+    batch_body = batch_calls[0].kwargs["json"]
+    assert batch_body["statements"][0]["params"][0] == 7

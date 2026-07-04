@@ -274,3 +274,38 @@ def test_decision_db_uses_d1_when_enabled(monkeypatch):
     # returned by the decision INSERT, not an unresolved last_insert_rowid().
     batch_body = batch_calls[0].kwargs["json"]
     assert batch_body["statements"][0]["params"][0] == 7
+
+
+def test_symbol_health_uses_d1_when_enabled(monkeypatch):
+    """symbol_health.get_symbol_health() used to always open the local
+    outcomes.db file directly via sqlite3, bypassing is_d1_enabled()
+    entirely. Under D1 that file never exists on the VPS, so the query
+    silently fell back to "no data yet" and the auto-pause safety gate
+    reported every symbol HEALTHY forever, even a symbol on a real losing
+    streak. It must now route through the same D1 connection as
+    outcome_tracker.py."""
+    monkeypatch.setenv("IATIS_STORAGE_BACKEND", "d1")
+    monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
+    monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
+
+    import storage.symbol_health as symbol_health
+
+    rows = [
+        {"outcome": "loss", "pnl_pips": -20.0, "pnl_usd": -200.0, "regime": "TRENDING"}
+        for _ in range(20)
+    ]
+    select_resp = _mock_post({"success": True, "results": rows, "meta": {"last_row_id": None, "changes": 0}})
+    create_resp = _mock_post({"success": True, "results": [], "meta": {"last_row_id": None, "changes": 0}})
+
+    def fake_post(url, **kwargs):
+        sql = kwargs.get("json", {}).get("sql", "")
+        if sql.strip().upper().startswith("SELECT"):
+            return select_resp
+        return create_resp
+
+    with patch("storage.d1_client.requests.post", side_effect=fake_post) as post:
+        health = symbol_health.get_symbol_health("EURUSD")
+
+    assert post.called
+    assert health.trades_count == 20
+    assert health.status == "PAUSED"

@@ -212,6 +212,12 @@ def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
             "symbol": config["data"].get("symbol", ""),
             "summary": f"NO_TRADE: Market Quality Score={mqs_result.score:.0f}/100 ({mqs_result.grade}) — {'; '.join(mqs_result.reasons)}",
             "market_quality": mqs_result.to_dict(),
+            # current_price must be on EVERY report — the scheduler's
+            # auto-close evaluates open outcomes from it, and MQS-blocked
+            # runs (weekends, dead sessions) would otherwise leave open
+            # trades unpriced for that whole tick.
+            "current_price": float(df_base["close"].iloc[-1]),
+            "bar_time": str(df_base.index[-1]),
         }
     return mqs_result, None
 

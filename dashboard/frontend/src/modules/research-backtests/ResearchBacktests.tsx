@@ -10,10 +10,12 @@ import {
   getResearch,
   getBacktestResults,
   getMetaAnalysis,
+  getManifests,
   getAiResearchSummary,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
+  type EvidenceManifest,
   type AiResearchSummary,
 } from './api'
 
@@ -31,11 +33,48 @@ function statusTone(status: string) {
   return 'neutral' as const
 }
 
+function ManifestCard({ m }: { m: EvidenceManifest }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-b border-border last:border-b-0">
+      <button onClick={() => setOpen(!open)} className="w-full text-left px-4 py-3 hover:bg-surface/50">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="font-bold text-accent text-[0.85em]">{m.kind}</span>
+          <span
+            className={`text-[0.68em] font-bold uppercase tracking-[1px] px-1.5 py-0.5 rounded border ${
+              m.reproducible ? 'text-green border-green/40' : 'text-red border-red/40'
+            }`}
+            title={m.reproducible ? 'Bound to a clean git commit — independently re-runnable' : 'Generated from a dirty/unknown git state — not verifiable'}
+          >
+            {m.reproducible ? 'reproducible' : 'not reproducible'}
+          </span>
+          {m.decision_timeframe && <span className="text-[0.7em] text-accent2 font-bold">{m.decision_timeframe}</span>}
+          <span className="text-muted text-[0.7em] ml-auto">
+            {m.generated_at?.slice(0, 10)} · commit {m.git_commit || '?'} · {m.datasets_count} datasets
+          </span>
+        </div>
+      </button>
+      {open && (
+        <div className="px-4 pb-3 text-[0.78em]">
+          {m.engines_enabled && <p className="text-muted mb-1">engines: {m.engines_enabled.join(', ')}</p>}
+          {m.note && <p className="text-muted mb-2">{m.note}</p>}
+          {m.results && (
+            <pre className="bg-surface border border-border rounded p-2 overflow-x-auto text-[0.85em] max-h-64 overflow-y-auto">
+              {JSON.stringify(m.results, null, 1)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ResearchBacktests() {
   const { markUnauthenticated } = useAuth()
   const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
   const backtests = usePolling(getBacktestResults, POLL_MS, markUnauthenticated)
   const meta = usePolling(getMetaAnalysis, POLL_MS, markUnauthenticated)
+  const manifests = usePolling(getManifests, POLL_MS, markUnauthenticated)
 
   const hs = research.data?.hypothesis_summary
   const [ai, setAi] = useState<{ loading: boolean; error: string | null; data: AiResearchSummary | null }>({
@@ -118,6 +157,25 @@ export function ResearchBacktests() {
             </AiStatusFrame>
           )}
         </div>
+      </Panel>
+
+      <Panel
+        title="Evidence Manifests"
+        right={manifests.data ? `${manifests.data.count} runs · git-tracked, SHA256-fingerprinted` : undefined}
+      >
+        {manifests.data && manifests.data.manifests.length > 0 ? (
+          <div>
+            {manifests.data.manifests.map((m) => (
+              <ManifestCard key={m.file} m={m} />
+            ))}
+          </div>
+        ) : (
+          <Empty>
+            {manifests.loading
+              ? 'Loading...'
+              : 'No evidence manifests yet — research runs write them to research/results/'}
+          </Empty>
+        )}
       </Panel>
 
       <Panel title="Hypothesis Registry">

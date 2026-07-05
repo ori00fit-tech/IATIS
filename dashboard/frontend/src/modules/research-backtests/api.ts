@@ -75,3 +75,27 @@ export const getAiResearchSummary = (body: {
   latest_backtest: ResearchResponse['latest_backtest']
   regime_matrix: RegimeRow[]
 }) => apiPost<AiResearchSummary>('/ai/research-summary', body)
+
+// Git-tracked evidence manifests (research/manifest.py, audit item H2):
+// each binds a research run to a git commit, config hash, and dataset
+// SHA256 fingerprints — the system's auditable evidence trail.
+export interface EvidenceManifest {
+  file: string
+  kind: string
+  generated_at: string
+  reproducible: boolean
+  git_commit: string
+  git_dirty: boolean
+  decision_timeframe: string | null
+  engines_enabled: string[] | null
+  note: string | null
+  datasets_count: number
+  results: Record<string, unknown> | null
+}
+
+export interface ManifestsResponse {
+  count: number
+  manifests: EvidenceManifest[]
+}
+
+export const getManifests = () => apiGet<ManifestsResponse>('/research/manifests')

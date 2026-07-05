@@ -160,3 +160,31 @@ def test_logout_invalidates_session(client):
 
     client.get("/logout", follow_redirects=False)
     assert client.get("/stats").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Evidence manifests endpoint + decision-TF surface (Command Center round)
+# ---------------------------------------------------------------------------
+
+def test_health_exposes_decision_timeframe(client):
+    from utils.helpers import load_config
+
+    body = client.get("/health").json()
+    assert body["decision_timeframe"] == load_config()["data"]["timeframes"][0]
+
+
+def test_research_manifests_requires_auth(client):
+    assert client.get("/research/manifests").status_code == 401
+
+
+def test_research_manifests_contract(client):
+    r = client.get("/research/manifests", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"count", "manifests"}.issubset(body.keys())
+    assert body["count"] == len(body["manifests"])
+    # The repo ships real manifests (d1/h4 backtests) — each entry must
+    # carry the fields the dashboard renders.
+    for m in body["manifests"]:
+        assert {"file", "kind", "generated_at", "reproducible",
+                "git_commit", "datasets_count"}.issubset(m.keys())

@@ -133,9 +133,12 @@ def main():
 
     from core.data_loader import load_from_csv
     import pandas as pd
+    from research.manifest import build_manifest, dataset_fingerprint, write_manifest
+    from utils.helpers import load_config
 
     data_dir = Path("data")
     all_results = {}
+    fingerprints = []
 
     for symbol in args.symbols:
         # Find CSV file
@@ -153,6 +156,7 @@ def main():
         print(f"\n{symbol} ({csv_file.name})")
         df = load_from_csv(str(csv_file))
         print(f"  Total bars: {len(df)} | {df.index[0].date()} → {df.index[-1].date()}")
+        fingerprints.append({"symbol": symbol, **dataset_fingerprint(csv_file, df)})
 
         symbol_results = {"windows": [], "test_pf_values": []}
 
@@ -223,6 +227,28 @@ def main():
     out_path = Path("storage") / "walk_forward_results.json"
     out_path.write_text(json.dumps(output, indent=2, default=str))
     print(f"\nResults saved: {out_path}")
+
+    # Reproducibility manifest (audit item H2): bind this run to the exact
+    # commit, config, and dataset fingerprints, in a git-tracked file —
+    # summary numbers without this are NOT ENOUGH EVIDENCE.
+    manifest = build_manifest(
+        kind="walk_forward",
+        config=load_config(),
+        params={
+            "step_bars": args.step,
+            "symbols": args.symbols,
+            "windows": [list(w) for w in WINDOWS],
+            "min_bars_train": MIN_BARS_TRAIN,
+            "min_bars_test": MIN_BARS_TEST,
+            "min_trades_test": MIN_TRADES_TEST,
+        },
+        datasets=fingerprints,
+        results=output["results"],
+    )
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    manifest_path = write_manifest(manifest, f"walk_forward_{stamp}")
+    print(f"Reproducibility manifest: {manifest_path}"
+          + ("" if manifest["reproducible"] else "  [NOT reproducible: dirty/unknown git state]"))
     print()
     print("Interpretation:")
     print("  CONSISTENT ✅ = PF > 1.5 on test, min PF > 1.2 → strong out-of-sample evidence")

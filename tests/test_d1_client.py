@@ -9,7 +9,7 @@ tests/conftest.py's `fake_d1` autouse fixture already gives the whole
 suite a working, isolated D1_WORKER_URL/D1_PROXY_TOKEN and an in-memory
 SQLite-backed fake Worker. The tests below that need to assert on the
 exact HTTP request/response shape override that fake with their own
-`patch("storage.d1_client.requests.post", ...)` for the duration of the
+`patch("storage.d1_client._post", ...)` for the duration of the
 test — see fake_d1's docstring in conftest.py.
 """
 from __future__ import annotations
@@ -86,7 +86,7 @@ def test_d1_connection_execute_select_returns_rows(monkeypatch):
         "results": [{"symbol": "EURUSD", "verdict": "EXECUTE"}],
         "meta": {"last_row_id": None, "changes": 0},
     })
-    with patch("storage.d1_client.requests.post", return_value=fake_resp) as post:
+    with patch("storage.d1_client._post", return_value=fake_resp) as post:
         con = D1Connection()
         cur = con.execute("SELECT symbol, verdict FROM decisions WHERE id=?", (1,))
         rows = cur.fetchall()
@@ -106,7 +106,7 @@ def test_d1_connection_execute_insert_returns_lastrowid(monkeypatch):
         "results": [],
         "meta": {"last_row_id": 42, "changes": 1},
     })
-    with patch("storage.d1_client.requests.post", return_value=fake_resp):
+    with patch("storage.d1_client._post", return_value=fake_resp):
         con = D1Connection()
         cur = con.execute("INSERT INTO decisions (symbol) VALUES (?)", ("EURUSD",))
 
@@ -118,7 +118,7 @@ def test_d1_connection_raises_on_proxy_error_response(monkeypatch):
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
     fake_resp = _mock_post({"success": False, "error": "no such table: decisions"})
-    with patch("storage.d1_client.requests.post", return_value=fake_resp):
+    with patch("storage.d1_client._post", return_value=fake_resp):
         con = D1Connection()
         with pytest.raises(D1Error, match="no such table"):
             con.execute("SELECT * FROM decisions")
@@ -138,7 +138,7 @@ def test_d1_connection_surfaces_real_error_on_actual_http_500(monkeypatch):
         {"success": False, "error": "D1_ERROR: FOREIGN KEY constraint failed"},
         status_ok=False,
     )
-    with patch("storage.d1_client.requests.post", return_value=fake_resp):
+    with patch("storage.d1_client._post", return_value=fake_resp):
         con = D1Connection()
         with pytest.raises(D1Error, match="FOREIGN KEY constraint failed"):
             con.execute("INSERT INTO engine_votes (decision_id) VALUES (999999)")
@@ -148,7 +148,7 @@ def test_d1_connection_raises_on_network_error(monkeypatch):
     import requests as _requests
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
-    with patch("storage.d1_client.requests.post", side_effect=_requests.RequestException("timeout")):
+    with patch("storage.d1_client._post", side_effect=_requests.RequestException("timeout")):
         con = D1Connection()
         with pytest.raises(D1Error):
             con.execute("SELECT 1")
@@ -168,7 +168,7 @@ def test_d1_batch_sends_all_statements_and_parses_results(monkeypatch):
             {"results": [], "meta": {"last_row_id": 6, "changes": 1}},
         ],
     })
-    with patch("storage.d1_client.requests.post", return_value=fake_resp) as post:
+    with patch("storage.d1_client._post", return_value=fake_resp) as post:
         cursors = d1_client.d1_batch([
             ("INSERT INTO decisions (symbol) VALUES (?)", ("EURUSD",)),
             ("INSERT INTO engine_votes (decision_id, engine) VALUES (last_insert_rowid(), ?)", ("SMC",)),
@@ -186,7 +186,7 @@ def test_d1_batch_raises_on_failure(monkeypatch):
     monkeypatch.setenv("D1_WORKER_URL", "https://example.workers.dev")
     monkeypatch.setenv("D1_PROXY_TOKEN", "secret")
     fake_resp = _mock_post({"success": False, "error": "batch failed"})
-    with patch("storage.d1_client.requests.post", return_value=fake_resp):
+    with patch("storage.d1_client._post", return_value=fake_resp):
         with pytest.raises(D1Error, match="batch failed"):
             d1_client.d1_batch([("INSERT INTO decisions (symbol) VALUES (?)", ("EURUSD",))])
 
@@ -200,7 +200,7 @@ def test_d1_batch_surfaces_real_error_on_actual_http_500(monkeypatch):
         {"success": False, "error": "D1_ERROR: table engine_votes has no column named foo"},
         status_ok=False,
     )
-    with patch("storage.d1_client.requests.post", return_value=fake_resp):
+    with patch("storage.d1_client._post", return_value=fake_resp):
         with pytest.raises(D1Error, match="no column named foo"):
             d1_client.d1_batch([("INSERT INTO engine_votes (foo) VALUES (?)", (1,))])
 
@@ -247,7 +247,7 @@ def test_decision_db_uses_d1_when_enabled(monkeypatch):
         "summary": "test",
         "engine_outputs": [{"engine": "SMC", "bias": "BULLISH", "score": 65}],
     }
-    with patch("storage.d1_client.requests.post", side_effect=fake_post) as post:
+    with patch("storage.d1_client._post", side_effect=fake_post) as post:
         decision_db.log_decision_db(report)
 
     assert post.called
@@ -284,9 +284,49 @@ def test_symbol_health_uses_d1_when_enabled(monkeypatch):
             return select_resp
         return create_resp
 
-    with patch("storage.d1_client.requests.post", side_effect=fake_post) as post:
+    with patch("storage.d1_client._post", side_effect=fake_post) as post:
         health = symbol_health.get_symbol_health("EURUSD")
 
     assert post.called
     assert health.trades_count == 20
     assert health.status == "PAUSED"
+
+
+# ---------------------------------------------------------------------------
+# H1: persistent per-thread Session + transport retry policy
+# ---------------------------------------------------------------------------
+
+def test_session_is_reused_within_a_thread():
+    from storage.d1_client import _session
+
+    assert _session() is _session()
+
+
+def test_each_thread_gets_its_own_session():
+    import threading
+    from storage.d1_client import _session
+
+    main_session = _session()
+    other: list = []
+    t = threading.Thread(target=lambda: other.append(_session()))
+    t.start()
+    t.join()
+
+    assert other[0] is not main_session
+
+
+def test_retry_policy_is_narrow_and_post_aware():
+    """Retries must cover connect errors and 429/502/503 only. 500 is the
+    Worker's real-SQL-error envelope and 504 may mean the write already
+    committed — retrying either would mask errors or duplicate rows."""
+    from storage.d1_client import _session
+
+    adapter = _session().get_adapter("https://example.workers.dev")
+    retry = adapter.max_retries
+
+    assert retry.total == 3
+    assert retry.read == 0
+    assert "POST" in retry.allowed_methods
+    assert set(retry.status_forcelist) == {429, 502, 503}
+    assert 500 not in retry.status_forcelist
+    assert 504 not in retry.status_forcelist

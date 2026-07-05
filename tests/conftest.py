@@ -111,7 +111,7 @@ def fake_d1(monkeypatch: pytest.MonkeyPatch):
 
     Autouse so the whole suite gets this for free. Tests asserting on
     the exact HTTP request/response shape (tests/test_d1_client.py)
-    override it with their own `patch("storage.d1_client.requests.post")`
+    override it with their own `patch("storage.d1_client._post")`
     for the duration of the test, which composes fine on top of this.
     """
     monkeypatch.setenv("D1_WORKER_URL", "https://fake-d1-test.workers.dev")
@@ -168,6 +168,6 @@ def fake_d1(monkeypatch: pytest.MonkeyPatch):
             )
         return resp
 
-    monkeypatch.setattr("storage.d1_client.requests.post", fake_post)
+    monkeypatch.setattr("storage.d1_client._post", fake_post)
     yield con
     con.close()

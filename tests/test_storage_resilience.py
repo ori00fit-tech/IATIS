@@ -28,7 +28,7 @@ def _d1_down(url, json=None, headers=None, timeout=None, **kwargs):
 def test_pipeline_survives_d1_outage(monkeypatch):
     """run_pipeline() must complete and return a report while every D1
     call fails, and the Telegram path must still be reachable."""
-    monkeypatch.setattr("storage.d1_client.requests.post", _d1_down)
+    monkeypatch.setattr("storage.d1_client._post", _d1_down)
     monkeypatch.setattr(main_module, "_STORE_RETRY_DELAY_S", 0.0)
     # Suppress the local JSONL write (side effect on the real log file),
     # same pattern as tests/test_decision_db.py.

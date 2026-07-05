@@ -33,16 +33,65 @@ rows that must succeed or fail together.
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _DEFAULT_TIMEOUT = 15.0
+
+# Transport-level retry policy. Deliberately narrow:
+#   - connect errors: always safe to retry — the request never left.
+#   - HTTP 429/502/503: the edge/Worker was unavailable, the statement
+#     (almost certainly) never reached D1.
+#   - NOT 500: that's worker.js's envelope for a real D1/SQL error —
+#     deterministic, retrying only adds latency.
+#   - NOT 504 and NOT read timeouts: the Worker may have already
+#     committed the write; blind re-POST would duplicate rows.
+# urllib3 excludes POST from retries by default, so allowed_methods
+# must name it explicitly.
+_RETRY = Retry(
+    total=3,
+    connect=3,
+    read=0,
+    status=2,
+    status_forcelist=(429, 502, 503),
+    allowed_methods=frozenset({"POST"}),
+    backoff_factor=0.5,
+    raise_on_status=False,
+)
+
+_thread_local = threading.local()
+
+
+def _session() -> requests.Session:
+    """Per-thread persistent Session (requests.Session is not documented
+    as thread-safe; execution/api_server.py calls storage from a thread
+    pool). Reusing the connection avoids a fresh TCP+TLS handshake per
+    query — measured at ~600ms median per uncached call to the Worker."""
+    ses = getattr(_thread_local, "session", None)
+    if ses is None:
+        ses = requests.Session()
+        adapter = HTTPAdapter(max_retries=_RETRY)
+        ses.mount("https://", adapter)
+        ses.mount("http://", adapter)
+        _thread_local.session = ses
+    return ses
+
+
+def _post(url: str, json: dict | None = None, headers: dict | None = None,
+          timeout: float = _DEFAULT_TIMEOUT) -> "requests.Response":
+    """Single HTTP seam for this module. Tests monkeypatch THIS function
+    (`patch("storage.d1_client._post", ...)`) instead of requests.post,
+    so the session/retry plumbing stays out of every fixture."""
+    return _session().post(url, json=json, headers=headers, timeout=timeout)
 
 
 class D1Error(Exception):
@@ -147,7 +196,7 @@ class D1Connection:
 
     def execute(self, sql: str, params: tuple | list = ()) -> D1Cursor:
         try:
-            resp = requests.post(
+            resp = _post(
                 f"{self._url}/d1/exec",
                 json={"sql": sql, "params": list(params)},
                 headers=self._headers,
@@ -185,7 +234,7 @@ def d1_batch(statements: list[tuple[str, tuple | list]]) -> list[D1Cursor]:
     headers = _auth_headers()
     payload = {"statements": [{"sql": sql, "params": list(params)} for sql, params in statements]}
     try:
-        resp = requests.post(f"{url}/d1/batch", json=payload, headers=headers, timeout=_DEFAULT_TIMEOUT)
+        resp = _post(f"{url}/d1/batch", json=payload, headers=headers, timeout=_DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
         raise D1Error(f"D1 batch request failed: {exc}") from exc
     data = _parse_worker_response(resp)

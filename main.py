@@ -56,6 +56,37 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# One retry after a short pause covers transient network blips to the D1
+# Worker; anything longer is an outage and must not hold up the decision.
+_STORE_RETRY_DELAY_S = 2.0
+
+
+def _safe_store(what: str, fn, *args) -> bool:
+    """Run a persistence call so that its failure can never abort the
+    pipeline run. The decision and its Telegram delivery are the product;
+    storage (D1 behind a Cloudflare Worker, or the local JSONL) failing is
+    an ops incident to log loudly, not a reason to lose the signal.
+
+    Returns True if the write eventually succeeded.
+    """
+    import time as _time
+
+    for attempt in (1, 2):
+        try:
+            fn(*args)
+            return True
+        except Exception as exc:
+            if attempt == 1:
+                logger.warning(f"{what} failed (attempt 1/2, retrying): {exc}")
+                _time.sleep(_STORE_RETRY_DELAY_S)
+            else:
+                logger.error(
+                    f"{what} failed after retry — decision NOT persisted "
+                    f"there, pipeline continues: {exc}"
+                )
+    return False
+
+
 _ALL_ENGINES = {
     "smc": SMCEngine,
     "ict": ICTEngine,
@@ -147,7 +178,7 @@ def run_pipeline(config: dict) -> dict:
     except DataValidationError as exc:
         logger.error(f"Data validation failed: {exc}")
         failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
-        log_decision(failure_report)
+        _safe_store("decision_log (validation failure)", log_decision, failure_report)
         return failure_report
 
     # 3. Market Quality Score — gate before running 9 engines
@@ -166,8 +197,8 @@ def run_pipeline(config: dict) -> dict:
             "summary": f"NO_TRADE: Market Quality Score={mqs_result.score:.0f}/100 ({mqs_result.grade}) — {'; '.join(mqs_result.reasons)}",
             "market_quality": mqs_result.to_dict(),
         }
-        log_decision(mqs_report)
-        log_decision_db(mqs_report)
+        _safe_store("decision_log (MQS gate)", log_decision, mqs_report)
+        _safe_store("decision_db (MQS gate)", log_decision_db, mqs_report)
         return mqs_report
 
     # 4. Regime detection
@@ -426,9 +457,9 @@ def run_pipeline(config: dict) -> dict:
     }
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
-    log_decision(report)
-    log_decision_db(report)
-    record_engine_votes(report)
+    _safe_store("decision_log", log_decision, report)
+    _safe_store("decision_db", log_decision_db, report)
+    _safe_store("engine_tracker", record_engine_votes, report)
 
     # Experience Database — record EVERY decision (EXECUTE + NO_TRADE)
     # This is the foundation for MROS: learning from every decision

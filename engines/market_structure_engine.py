@@ -130,21 +130,39 @@ def _classify_structure(highs: list, lows: list) -> dict:
 
 
 class MarketStructureEngine(BaseEngine):
-    name = "MarketStructure"
     """Advanced market structure analysis: BOS, CHoCH, MSS.
 
-    Uses H4 for macro structure and H1 for current structure.
-    Both timeframes must agree for a strong signal.
+    Dual-timeframe: the decision timeframe for current structure and the
+    next-higher available timeframe for macro context. Both must agree
+    for a strong signal.
 
     Research status: RESEARCH (H011)
     """
+
+    # Ordered coarsest→finest; used to pick a macro frame one step above
+    # the decision timeframe.
+    _TF_ORDER = ["D1", "H4", "H1", "M15"]
+
     name = "MarketStructure"
 
-    def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        df_h1 = mtf_data.get("H1", next(iter(mtf_data.values())))
-        df_h4 = mtf_data.get("H4", df_h1)
+    def _macro_frame(self, mtf_data: dict[str, pd.DataFrame], decision_tf: str):
+        """The next timeframe coarser than the decision TF, else the
+        decision frame itself (single-TF fallback)."""
+        if decision_tf in self._TF_ORDER:
+            for tf in self._TF_ORDER[: self._TF_ORDER.index(decision_tf)]:
+                if tf in mtf_data:
+                    return mtf_data[tf]
+        return None
 
-        if len(df_h1) < 30:
+    def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
+        # Current structure on the decision TF (was hardcoded H1); macro
+        # context one timeframe higher (was hardcoded H4).
+        _tf, df_cur = self.decision_frame(mtf_data)
+        df_macro = self._macro_frame(mtf_data, _tf)
+        if df_macro is None:
+            df_macro = df_cur
+
+        if len(df_cur) < 30:
             return EngineOutput(
                 engine_name="MarketStructure",
                 bias=Bias.NEUTRAL,
@@ -152,9 +170,9 @@ class MarketStructureEngine(BaseEngine):
                 reasons=["Insufficient data"],
             )
 
-        # Analyze H1 and H4 structure
-        h1_highs, h1_lows = _swing_points(df_h1.tail(100), window=3)
-        h4_highs, h4_lows = _swing_points(df_h4.tail(60), window=2)
+        # Analyze current (decision-TF) and macro (higher-TF) structure
+        h1_highs, h1_lows = _swing_points(df_cur.tail(100), window=3)
+        h4_highs, h4_lows = _swing_points(df_macro.tail(60), window=2)
 
         h1_struct = _classify_structure(h1_highs, h1_lows)
         h4_struct = _classify_structure(h4_highs, h4_lows)

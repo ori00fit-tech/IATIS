@@ -128,7 +128,6 @@ def _retail_sentiment_proxy(
 
 
 class SentimentEngine(BaseEngine):
-    name = "Sentiment"
     """Market sentiment analysis using COT data and retail positioning proxy.
 
     Primary: COT Large Speculator net position trend (when available)
@@ -137,10 +136,11 @@ class SentimentEngine(BaseEngine):
     Research status: RESEARCH (H012)
     Lower weight until COT integration complete.
     """
+
     name = "Sentiment"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        _, df = self.decision_frame(mtf_data)
+        tf, df = self.decision_frame(mtf_data)
         symbol = self._symbol if hasattr(self, "_symbol") else "UNKNOWN"
 
         if len(df) < 50:
@@ -225,7 +225,7 @@ class SentimentEngine(BaseEngine):
             score=round(score, 1),
             reasons=reasons,
             raw={
-                "timeframe_used": "H1",
+                "timeframe_used": tf,
                 "cot_available": cot_available,
                 "retail_pct_from_low": retail["pct_from_low"],
                 "retail_contrarian": retail["contrarian_signal"],

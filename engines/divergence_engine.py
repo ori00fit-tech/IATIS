@@ -138,17 +138,18 @@ def _detect_divergence(
 
 
 class DivergenceEngine(BaseEngine):
-    name = "Divergence"
-    """Detects RSI and MACD divergence on H1 timeframe.
+    """Detects RSI and MACD divergence on the decision timeframe.
 
-    Research status: RESEARCH
-    Hypothesis H010: divergence on H1 + trend confirmation
-    improves win rate over random entry (to be tested).
+    Research status: RESEARCH (H010) — divergence + trend confirmation
+    improves win rate over random entry (to be validated forward).
     """
+
     name = "Divergence"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        df = mtf_data.get("H1", mtf_data.get("M15", next(iter(mtf_data.values()))))
+        # Vote on the configured decision timeframe like every other engine
+        # (was hardcoded to H1 — inconsistent once the system moved to H4).
+        tf, df = self.decision_frame(mtf_data)
 
         if len(df) < 60:
             return EngineOutput(
@@ -220,7 +221,7 @@ class DivergenceEngine(BaseEngine):
             score=round(score, 1),
             reasons=reasons,
             raw={
-                "timeframe_used": "H1",
+                "timeframe_used": tf,
                 "rsi": round(current_rsi, 1),
                 "rsi_divergence": rsi_div["type"],
                 "macd_divergence": macd_div["type"],

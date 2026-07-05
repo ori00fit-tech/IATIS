@@ -12,14 +12,21 @@ import {
   getHealthFull,
   getBudget,
   getSymbolHealth,
+  getOutcomes,
   getAiNewsAnalysis,
   getAiMacroAnalysis,
   getAiDailyReport,
   type SymbolHealthEntry,
+  type OutcomesSummary,
   type AiNewsAnalysis,
   type AiMacroAnalysis,
   type AiDailyReport,
 } from './api'
+
+// Audit Phase 5: any edge claim needs a live forward track record before
+// it means anything. This is the sample-size milestone the tracker walks
+// toward — n>=100 closed paper trades.
+const EVIDENCE_TARGET = 100
 
 const POLL_MS = 15_000
 
@@ -114,12 +121,45 @@ function AiBriefingPanel() {
   )
 }
 
+function PaperTradingPanel({ outcomes }: { outcomes: OutcomesSummary | null }) {
+  const s = outcomes?.summary
+  const closed = s?.total_closed ?? 0
+  const progress = Math.min(100, Math.round((closed / EVIDENCE_TARGET) * 100))
+  return (
+    <Panel
+      title="Paper Trading Evidence"
+      right={`target: ${EVIDENCE_TARGET} closed trades`}
+    >
+      {s ? (
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex items-baseline gap-4 flex-wrap">
+            <span className="text-[1.6em] font-extrabold text-accent">{closed}<span className="text-muted text-[0.55em] font-normal"> / {EVIDENCE_TARGET} closed</span></span>
+            <span className="text-[0.85em]">WR <b className={s.win_rate >= 50 ? 'text-green' : 'text-amber'}>{closed ? `${s.win_rate.toFixed(1)}%` : '—'}</b></span>
+            <span className="text-[0.85em]">W/L <b>{s.wins}/{s.losses}</b></span>
+            <span className="text-[0.85em]">open <b className="text-accent2">{s.open_signals}</b></span>
+          </div>
+          <div className="h-2 rounded bg-surface border border-border overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-accent to-accent2" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="text-muted text-[0.75em]">
+            Live forward outcomes are the only proof of edge — backtests here are in-sample.
+            Statistics below n≈30 are noise; treat everything before the target as data collection.
+          </p>
+        </div>
+      ) : (
+        <Empty>No outcome data yet</Empty>
+      )}
+    </Panel>
+  )
+}
+
 export function MissionControl() {
   const { markUnauthenticated } = useAuth()
   const health = usePolling(getHealth, POLL_MS, markUnauthenticated)
   const healthFull = usePolling(getHealthFull, POLL_MS, markUnauthenticated)
   const budget = usePolling(getBudget, POLL_MS, markUnauthenticated)
   const symbolHealth = usePolling(getSymbolHealth, POLL_MS, markUnauthenticated)
+  const outcomes = usePolling(getOutcomes, POLL_MS, markUnauthenticated)
 
   const hf = healthFull.data
   const creditsColor = (budget.data?.remaining_today ?? 0) > 400 ? 'green' : (budget.data?.remaining_today ?? 0) > 100 ? 'amber' : 'red'
@@ -163,6 +203,12 @@ export function MissionControl() {
           label="Symbols Healthy"
           color="blue"
         />
+        <KpiCard value={health.data?.decision_timeframe ?? '—'} label="Decision TF" color="purple" />
+        <KpiCard
+          value={outcomes.data ? `${outcomes.data.summary.total_closed}/${EVIDENCE_TARGET}` : '—'}
+          label="Evidence Trades"
+          color={outcomes.data && outcomes.data.summary.total_closed >= EVIDENCE_TARGET ? 'green' : 'amber'}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4 max-[768px]:grid-cols-1">
@@ -202,6 +248,8 @@ export function MissionControl() {
           )}
         </Panel>
       </div>
+
+      <PaperTradingPanel outcomes={outcomes.data} />
 
       <AiBriefingPanel />
     </div>

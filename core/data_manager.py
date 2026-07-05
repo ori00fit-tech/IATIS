@@ -268,7 +268,15 @@ class DataManager:
 
     def _load_env(self):
         for p in [Path(".env"), Path("/root/IATIS/.env")]:
-            if p.exists():
+            # pathlib only swallows ENOENT-style errors — on hosts where
+            # /root exists but is unreadable (GitHub Actions runners run as
+            # 'runner'), p.exists() raises PermissionError instead of
+            # returning False and took the whole CI job down with it.
+            try:
+                readable = p.exists()
+            except OSError:
+                continue
+            if readable:
                 for line in p.read_text().splitlines():
                     if "=" in line and not line.startswith("#"):
                         k, _, v = line.partition("=")

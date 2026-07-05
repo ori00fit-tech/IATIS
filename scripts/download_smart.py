@@ -33,13 +33,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # ── Load .env ──────────────────────────────────────────────────────────────
 def _load_env():
     for p in [Path(".env"), Path("/root/IATIS/.env")]:
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    os.environ.setdefault(k.strip(), v.strip())
-            return
+        # p.exists() raises PermissionError (not False) when /root is
+        # unreadable — same pitfall fixed in core/data_manager._load_env.
+        try:
+            if not p.exists():
+                continue
+        except OSError:
+            continue
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip())
+        return
 _load_env()
 
 # ── Symbol map ─────────────────────────────────────────────────────────────

@@ -239,6 +239,10 @@ async def health() -> dict[str, Any]:
         "version": config.get("system", {}).get("version", "unknown"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "twelve_data_credits_remaining": credits,
+        # First entry of data.timeframes — the TF engine votes are computed
+        # on (H4-primary since 2026-07). Surfaced so the dashboard shows
+        # which system is actually running.
+        "decision_timeframe": (config.get("data", {}).get("timeframes") or ["H1"])[0],
     }
 
 
@@ -962,6 +966,46 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
                 continue
 
     return {"count": len(results), "results": results}
+
+
+@app.get("/research/manifests")
+async def research_manifests(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Git-tracked evidence manifests (research/manifest.py, audit item H2).
+
+    Each manifest binds one research run to the exact git commit, a config
+    hash, and per-dataset SHA256 fingerprints. The dashboard renders these
+    as the system's auditable evidence trail — including the honest
+    `reproducible: false` flag for runs from a dirty working tree.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+    from pathlib import Path
+
+    manifests: list[dict[str, Any]] = []
+    for f in sorted(Path("research/results").glob("*_manifest.json"), reverse=True):
+        try:
+            m = _json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        params = m.get("params") or {}
+        git = m.get("git") or {}
+        manifests.append({
+            "file": f.name,
+            "kind": m.get("kind"),
+            "generated_at": m.get("generated_at"),
+            "reproducible": m.get("reproducible"),
+            "git_commit": (git.get("commit") or "")[:8],
+            "git_dirty": git.get("dirty"),
+            "decision_timeframe": params.get("decision_timeframe"),
+            "engines_enabled": params.get("engines_enabled"),
+            "note": params.get("note"),
+            "datasets_count": len(m.get("datasets") or []),
+            "results": m.get("results"),
+        })
+    return {"count": len(manifests), "manifests": manifests}
 
 
 @app.get("/research")

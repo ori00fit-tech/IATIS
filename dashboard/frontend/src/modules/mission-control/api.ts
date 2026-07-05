@@ -5,6 +5,21 @@ export interface Health {
   version: string
   timestamp: string
   twelve_data_credits_remaining: number | null
+  decision_timeframe: string | null
+}
+
+// Paper-trading evidence tracker (audit Phase 5): live outcomes are the
+// only path to a defensible edge claim — this makes the counter visible.
+export interface OutcomesSummary {
+  summary: {
+    total_closed: number
+    wins: number
+    losses: number
+    win_rate: number
+    total_pips: number
+    open_signals: number
+  }
+  open_signals: unknown[]
 }
 
 export interface HealthFull {
@@ -52,6 +67,7 @@ export const getHealth = () => apiGet<Health>('/health')
 export const getHealthFull = () => apiGet<HealthFull>('/health/full')
 export const getBudget = () => apiGet<Budget>('/budget')
 export const getSymbolHealth = () => apiGet<SymbolHealthResponse>('/symbol-health')
+export const getOutcomes = () => apiGet<OutcomesSummary>('/outcomes')
 
 // AI briefing (ai/ai_analyzer.py) — explanation/reporting only, fetched
 // on demand (not polled: unlike the widgets above these hit an external

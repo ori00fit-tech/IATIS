@@ -30,3 +30,8 @@ cloudflare/.wrangler/
 
 # OS
 .DS_Store
+
+# Coverage artifacts (pytest-cov)
+.coverage
+.coverage.*
+htmlcov/

@@ -162,3 +162,17 @@ def test_dedup_fails_open_when_db_unreachable(monkeypatch):
     monkeypatch.setattr("storage.d1_client._post", _down)
     # fail-open: a duplicate alert beats a silently dropped signal
     assert execute_alert_exists_for_bar("EURUSD", "2026-07-04 00:00:00+00:00") is False
+
+
+def test_h4_primary_config_propagates_and_keeps_mtf_gate_active():
+    """H4-primary (the production setup): engines vote on H4, and the
+    MTF confirmation gate stays ACTIVE — H4 signals are checked against
+    the D1 trend (unlike D1-primary, where it self-disables)."""
+    config = load_config()
+    config["data"]["timeframes"] = ["H4", "D1", "H1"]
+    engines = build_active_engines(config)
+    assert all(e.decision_tf == "H4" for e in engines)
+
+    mtf = {"H4": _bars(300, "4h"), "D1": _bars(300, "1D", trend=0.001)}
+    res = check_mtf_confirmation(h1_bias="BULLISH", mtf_data=mtf, signal_tf="H4")
+    assert "skipped" not in res.reason.lower()

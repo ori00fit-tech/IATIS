@@ -311,7 +311,11 @@ def run_backtest(
     enabled = engine_config.get("engines", {}).get("enabled", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
-            engines_list.append(cls())
+            engine = cls()
+            # Same decision timeframe the production pipeline uses
+            # (main.build_active_engines) — gate/vote parity.
+            engine.decision_tf = timeframes[0] if timeframes else "H1"
+            engines_list.append(engine)
 
     atr_series = compute_atr(df, period=14)
     balance = config.initial_balance
@@ -419,7 +423,8 @@ def run_backtest(
             # evaluated at the data's timestamp or the whole gate is noise.
             if config.use_mqs_gate:
                 mqs = assess_market_quality(
-                    df=window, symbol=config.symbol, now=bar_time
+                    df=window, symbol=config.symbol, now=bar_time,
+                    timeframe=timeframes[0] if timeframes else "H1",
                 )
                 if not mqs.should_trade:
                     result.no_trade_count += 1
@@ -446,7 +451,8 @@ def run_backtest(
             adjusted_score = score.final_score
             if config.use_mtf_confirmation:
                 mtf_res = check_mtf_confirmation(
-                    h1_bias=vote.winning_bias.value, mtf_data=mtf
+                    h1_bias=vote.winning_bias.value, mtf_data=mtf,
+                    signal_tf=timeframes[0] if timeframes else "H1",
                 )
                 adjusted_score = round(
                     max(0.0, min(100.0, adjusted_score + mtf_res.score_adjustment)), 2

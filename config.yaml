@@ -22,10 +22,15 @@ data:
   # that's an intentional, separate hermetic-test path, not this guard.
   source: twelve_data
   symbol: EURUSD
+  # Decision timeframe = first entry. D1-primary setup: engine votes,
+  # regime, MQS and risk math all run on daily bars; H4/H1 stay fetched
+  # as auxiliary context (structure/timing) for engines that use them.
+  # The MTF-confirmation gate self-disables when the decision TF is D1
+  # (nothing higher is fetched), and Telegram alerts dedup per D1 bar.
   timeframes:
-  - H1
-  - H4
   - D1
+  - H4
+  - H1
   twelve_data_symbols:
   - enabled: true
     internal: EURUSD

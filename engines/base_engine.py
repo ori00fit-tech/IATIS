@@ -48,6 +48,24 @@ class BaseEngine(ABC):
 
     name: str = "base"
 
+    # The timeframe an engine's *vote* is computed on. Historically this
+    # was hardcoded to "H1" inside each engine; it is now set by whoever
+    # builds the engines (main.build_active_engines / the backtest) from
+    # config.yaml's data.timeframes[0], so the system can decide on D1
+    # while keeping H4/H1 in mtf_data as auxiliary context.
+    decision_tf: str = "H1"
+
+    def decision_frame(self, mtf_data: dict[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
+        """Return (label, df) for the configured decision timeframe,
+        falling back to H1 and then to the first available frame —
+        exactly the old per-engine behavior when decision_tf is H1."""
+        if self.decision_tf in mtf_data:
+            return self.decision_tf, mtf_data[self.decision_tf]
+        if "H1" in mtf_data:
+            return "H1", mtf_data["H1"]
+        tf = next(iter(mtf_data))
+        return tf, mtf_data[tf]
+
     @abstractmethod
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
         """Analyze multi-timeframe OHLCV data and return an opinion.

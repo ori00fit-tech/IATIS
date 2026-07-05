@@ -62,9 +62,21 @@ def test_validator_rejects_bad_data():
 
 
 def test_multi_timeframe_view_builds(synthetic_df, config):
-    views = build_multi_timeframe_view(synthetic_df, config["data"]["timeframes"])
-    for tf in config["data"]["timeframes"]:
-        assert tf in views
+    # Contract (since the D1-primary switch): the base timeframe is always
+    # present, and only timeframes COARSER than the base are derived from
+    # it — finer ones are skipped, never fabricated by upsampling.
+    from core.timeframe_sync import _TF_MINUTES
+
+    timeframes = config["data"]["timeframes"]
+    views = build_multi_timeframe_view(synthetic_df, timeframes)
+
+    base = timeframes[0]
+    base_minutes = _TF_MINUTES.get(base, 60)
+    expected = [base] + [
+        tf for tf in timeframes[1:] if _TF_MINUTES.get(tf, 60) >= base_minutes
+    ]
+    assert list(views.keys()) == expected
+    for tf in expected:
         assert len(views[tf]) > 0
 
 

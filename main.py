@@ -47,7 +47,7 @@ from research.edge_gate import check_edge_gate
 from risk.live_portfolio_state import compute_portfolio_state
 from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
-from storage.decision_db import log_decision_db
+from storage.decision_db import log_decision_db, execute_alert_exists_for_bar
 from storage.engine_tracker import record_engine_votes
 from storage.outcome_tracker import log_signal as log_outcome_signal
 from storage.experience_db import record_experience, find_similar
@@ -103,6 +103,14 @@ _ALL_ENGINES = {
 }
 
 
+def decision_timeframe(config: dict) -> str:
+    """The timeframe engine votes are computed on: data.timeframes[0]
+    (D1 in the D1-primary setup; H4/H1 stay in mtf_data as auxiliary
+    context for engines that want structure/timing detail)."""
+    tfs = config.get("data", {}).get("timeframes") or ["H1"]
+    return tfs[0]
+
+
 def build_active_engines(config: dict) -> list:
     enabled = config.get("engines", {}).get("enabled", {})
 
@@ -111,10 +119,13 @@ def build_active_engines(config: dict) -> list:
     # an unproven idea. See research/edge_gate.py.
     check_edge_gate(enabled)
 
+    dtf = decision_timeframe(config)
     engines = []
     for key, cls in _ALL_ENGINES.items():
         if enabled.get(key, False):
-            engines.append(cls())
+            engine = cls()
+            engine.decision_tf = dtf
+            engines.append(engine)
     return engines
 
 
@@ -190,6 +201,7 @@ def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
     mqs_result = assess_market_quality(
         df=df_base,
         symbol=config["data"].get("symbol", ""),
+        timeframe=decision_timeframe(config),
         threshold_good=mq_cfg.get("threshold_good", MQS_THRESHOLD_GOOD),
         threshold_fair=mq_cfg.get("threshold_fair", MQS_THRESHOLD_FAIR),
     )
@@ -236,10 +248,13 @@ def _evaluate_confluence(
     score_result = calculate_score(outputs, active_weights)
     contradiction_result = check_contradictions(outputs)
 
-    # A2: Multi-TF Confirmation — D1 trend must align with H1 signal
+    # A2: Multi-TF Confirmation — D1 trend must align with the signal.
+    # When the decision timeframe IS D1, this is skipped inside (comparing
+    # D1 with itself would just self-confirm every vote by +8 points).
     mtf_result = check_mtf_confirmation(
         h1_bias=vote_result.winning_bias.value,
         mtf_data=mtf_data,
+        signal_tf=decision_timeframe(config),
     )
     adjusted_score = round(
         max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
@@ -494,6 +509,11 @@ def _build_report(
         # so the scheduler's auto-close can evaluate open outcomes even
         # when this run produced no trade.
         "current_price": float(df_base["close"].iloc[-1]),
+        # Timestamp of the decision bar (last closed candle of the decision
+        # timeframe). Used to deduplicate alerts: with a D1 decision TF and
+        # a 2-hourly scheduler, the same daily bar is re-evaluated ~12
+        # times — the signal should only be sent once per bar.
+        "bar_time": str(df_base.index[-1]),
         # Trade levels — populated only when confluence passed (risk inputs exist).
         # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.
         "entry_price": float(entry) if conf.passed else None,
@@ -575,6 +595,14 @@ def run_pipeline(config: dict) -> dict:
     )
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
+
+    # Alert dedup must be evaluated BEFORE this decision is persisted —
+    # afterwards the query would always find the row we just wrote.
+    already_alerted = (
+        final_verdict == "EXECUTE"
+        and execute_alert_exists_for_bar(report.get("symbol", ""), report.get("bar_time", ""))
+    )
+
     _safe_store("decision_log", log_decision, report)
     _safe_store("decision_db", log_decision_db, report)
     _safe_store("engine_tracker", record_engine_votes, report)
@@ -610,7 +638,12 @@ def run_pipeline(config: dict) -> dict:
     # Telegram: EXECUTE signals only — no NO_TRADE spam
     # 9 symbols × 12 runs/day = 108 msgs/day if all sent → filter to EXECUTE only
     if config.get("telegram", {}).get("enabled", True):
-        if final_verdict == "EXECUTE":
+        if final_verdict == "EXECUTE" and already_alerted:
+            logger.info(
+                f"Telegram dedup: EXECUTE for {report.get('symbol')} on bar "
+                f"{report.get('bar_time')} already alerted this bar — skipping resend"
+            )
+        elif final_verdict == "EXECUTE":
             telegram_send(report)
         else:
             logger.debug(

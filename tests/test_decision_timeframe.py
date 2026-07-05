@@ -176,3 +176,28 @@ def test_h4_primary_config_propagates_and_keeps_mtf_gate_active():
     mtf = {"H4": _bars(300, "4h"), "D1": _bars(300, "1D", trend=0.001)}
     res = check_mtf_confirmation(h1_bias="BULLISH", mtf_data=mtf, signal_tf="H4")
     assert "skipped" not in res.reason.lower()
+
+
+def test_mqs_blocked_report_still_carries_current_price(monkeypatch):
+    """The scheduler's auto-close prices open outcomes from EVERY report's
+    current_price — an MQS-blocked run (weekend/dead session) must not
+    leave open trades unpriced for that tick. This was a real gap: the
+    early-exit report had no current_price (CI flake on Sunday nights
+    exposed it)."""
+    from types import SimpleNamespace
+    import main as main_module
+
+    df = _bars(300, "4h")
+    blocked = SimpleNamespace(
+        score=30.0, grade="POOR", should_trade=False,
+        reasons=["forced block for test"],
+        to_dict=lambda: {"mqs_score": 30.0, "grade": "POOR", "should_trade": False},
+    )
+    monkeypatch.setattr(main_module, "assess_market_quality", lambda **kw: blocked)
+
+    config = load_config()
+    _, report = main_module._market_quality_gate(config, df)
+
+    assert report is not None and report["final_verdict"] == "NO_TRADE"
+    assert report["current_price"] == float(df["close"].iloc[-1])
+    assert report["bar_time"] == str(df.index[-1])

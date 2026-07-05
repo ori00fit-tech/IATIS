@@ -201,3 +201,32 @@ def test_mqs_blocked_report_still_carries_current_price(monkeypatch):
     assert report is not None and report["final_verdict"] == "NO_TRADE"
     assert report["current_price"] == float(df["close"].iloc[-1])
     assert report["bar_time"] == str(df.index[-1])
+
+
+def test_all_dormant_engines_vote_on_decision_tf():
+    """Regression: every single-frame engine must honor decision_tf, not
+    a hardcoded H1. Divergence and MarketStructure were missed in the H4
+    switch — they voted on H1 while the rest voted on H4."""
+    from engines.divergence_engine import DivergenceEngine
+    from engines.quant_engine import QuantEngine
+
+    mtf = {"H4": _bars(300, "4h"), "D1": _bars(300, "1D"), "H1": _bars(300, "1h")}
+    for cls in (DivergenceEngine, QuantEngine):
+        e = cls()
+        e.decision_tf = "H4"
+        out = e.safe_analyze(mtf)
+        assert out.raw.get("timeframe_used") == "H4", f"{cls.__name__} ignored decision_tf"
+
+
+def test_market_structure_uses_decision_tf_and_higher_macro():
+    from engines.market_structure_engine import MarketStructureEngine
+
+    e = MarketStructureEngine()
+    e.decision_tf = "H4"
+    mtf = {"H4": _bars(300, "4h"), "D1": _bars(300, "1D"), "H1": _bars(300, "1h")}
+    # macro frame for an H4 decision must be D1 (the one step coarser present)
+    assert e._macro_frame(mtf, "H4") is mtf["D1"]
+    # falls back to None when nothing coarser is available
+    assert e._macro_frame({"H4": mtf["H4"]}, "H4") is None
+    # must not raise on the H4-primary basket
+    assert e.safe_analyze(mtf).engine_name == "MarketStructure"

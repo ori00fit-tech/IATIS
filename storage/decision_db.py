@@ -265,3 +265,35 @@ def regime_performance() -> list[dict]:
             ORDER BY regime
         """).fetchall()
     return [dict(r) for r in rows]
+
+
+def execute_alert_exists_for_bar(symbol: str, bar_time: str) -> bool:
+    """True if an EXECUTE decision for this symbol and decision-bar
+    timestamp is already logged.
+
+    Alert deduplication for slow decision timeframes: with a D1 decision
+    TF and a 2-hourly scheduler, the same closed daily bar is re-evaluated
+    ~12 times — the Telegram signal must go out once per bar, not twelve
+    times. Fail-open by design: if D1 is unreachable, sending a duplicate
+    alert is a better failure mode than silently dropping a signal.
+    """
+    if not bar_time:
+        return False
+    try:
+        init_db()
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT raw_json FROM decisions "
+                "WHERE symbol=? AND verdict='EXECUTE' ORDER BY id DESC LIMIT 12",
+                (symbol,),
+            ).fetchall()
+        for r in rows:
+            try:
+                if json.loads(r["raw_json"] or "{}").get("bar_time") == bar_time:
+                    return True
+            except (ValueError, TypeError):
+                continue
+        return False
+    except Exception as exc:
+        logger.warning(f"Alert dedup check failed (fail-open, will send): {exc}")
+        return False

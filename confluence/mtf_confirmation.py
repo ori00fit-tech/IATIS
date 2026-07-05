@@ -47,16 +47,31 @@ class MTFResult:
 def check_mtf_confirmation(
     h1_bias: str,          # winning bias from confluence vote
     mtf_data: dict[str, pd.DataFrame],
+    signal_tf: str = "H1",  # timeframe the vote was computed on
 ) -> MTFResult:
-    """Compare H1 signal direction against D1 trend.
+    """Compare the signal direction against the D1 trend.
 
     Args:
         h1_bias: "BULLISH" or "BEARISH" (from confluence vote)
         mtf_data: dict with "D1" key containing daily OHLCV
+        signal_tf: decision timeframe of the vote; when it is D1 itself
+            the check is skipped — comparing D1's trend against a
+            D1-derived signal would rubber-stamp every vote with +8 pts.
 
     Returns:
         MTFResult with score_adjustment to apply
     """
+    if signal_tf == "D1":
+        return MTFResult(
+            d1_bias="NEUTRAL",
+            d1_adx=0.0,
+            d1_ema20=0.0,
+            d1_ema50=0.0,
+            score_adjustment=0.0,
+            reason="Decision timeframe is D1 — MTF check skipped (no higher TF fetched)",
+            confirming=False,
+        )
+
     df_d1 = mtf_data.get("D1")
 
     if df_d1 is None or len(df_d1) < 50:

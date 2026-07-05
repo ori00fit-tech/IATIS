@@ -22,10 +22,15 @@ data:
   # that's an intentional, separate hermetic-test path, not this guard.
   source: twelve_data
   symbol: EURUSD
+  # Decision timeframe = first entry. H4-primary setup: engine votes,
+  # regime, MQS and risk math run on 4-hour bars; D1 confirms the trend
+  # via the MTF gate (H4 signal vs D1 EMA20/50+ADX) and H1 stays fetched
+  # as auxiliary timing context. Telegram alerts dedup per decision bar,
+  # so a 2-hourly scheduler still sends at most one alert per H4 candle.
   timeframes:
-  - H1
   - H4
   - D1
+  - H1
   twelve_data_symbols:
   - enabled: true
     internal: EURUSD

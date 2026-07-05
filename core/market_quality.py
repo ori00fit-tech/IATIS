@@ -198,12 +198,19 @@ def assess_market_quality(
     # Detect asset class for session scoring
     is_crypto = any(c in symbol.upper() for c in ["BTC","ETH","XRP","LTC","SOL"])
     is_short_tf = timeframe in ("M1","M5","M15","5m","15m","30m") if timeframe else False
+    # Daily (or slower) decision timeframe: a D1 position lives through
+    # every session, so intraday-session scoring is meaningless — score it
+    # neutrally instead of punishing whatever hour the scheduler happens
+    # to run at.
+    is_daily_tf = timeframe in ("D1", "1day", "W1", "1week") if timeframe else False
 
     # 1. Session score (35 pts max)
     # Crypto trades 24/7 — session matters less
     # Short TF (M15) — session penalty reduced
     active = _active_sessions(hour_utc)
-    if is_crypto:
+    if is_daily_tf:
+        session_pts, session_reason = 25.0, "Daily decision timeframe (session neutral)"
+    elif is_crypto:
         session_pts, session_reason = 25.0, "Crypto 24/7 (session neutral)"
     else:
         session_pts, session_reason = _session_score(active)

@@ -1,0 +1,417 @@
+{
+  "kind": "h4_backtest",
+  "generated_at": "2026-07-05T10:10:00.685870+00:00",
+  "git": {
+    "commit": "777e3680a14da1d73f899a6686b8bb3fcb8a5b7e",
+    "dirty": false
+  },
+  "reproducible": true,
+  "config": {
+    "sha256": "c5f8b013621296ee645044bab924b30c704c6a8cfd7d2c8e16af9a3cb32b623d",
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 500,
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "USDJPY",
+            "symbol": "USD/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCHF",
+            "symbol": "USD/CHF"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "EURJPY",
+            "symbol": "EUR/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "GBPJPY",
+            "symbol": "GBP/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDJPY",
+            "symbol": "AUD/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "symbol": "EUR/GBP"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "symbol": "EUR/CHF"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "USOIL",
+            "symbol": "WTI/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "US30",
+            "symbol": "DJI"
+          },
+          {
+            "enabled": false,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX"
+          },
+          {
+            "enabled": false,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "engine": "backtesting/backtest_engine.run_backtest",
+    "step_bars": 1,
+    "commission_pips": 0.5,
+    "slippage_pips": 0.5,
+    "engines_enabled": [
+      "smc",
+      "price_action",
+      "nnfx",
+      "wyckoff"
+    ],
+    "decision_timeframe": "H4",
+    "mtf_gate": "ACTIVE (H4 signal vs D1 EMA20/50+ADX)",
+    "note": "Evidence run for the H4-primary switch. IN-SAMPLE relative to system development; forward paper trading remains required (audit Phase 5). d1_same_period is the D1-primary variant on the identical ~3y window for a like-for-like comparison."
+  },
+  "datasets": [
+    {
+      "symbol": "EURUSD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/EURUSD_H4.csv",
+      "sha256": "5ee5474106f2c5794542526f2a99fa4e30e604f95929bf5338297394f4caa691",
+      "size_bytes": 302997,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    },
+    {
+      "symbol": "GBPUSD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/GBPUSD_H4.csv",
+      "sha256": "51b4720073d1ff6f9594f3add5da6e34c0f6f458c6285ffd4fb6bbdc609f7a99",
+      "size_bytes": 299586,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    },
+    {
+      "symbol": "USDCAD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/USDCAD_H4.csv",
+      "sha256": "aee24e58e6bcfea87fc74ed18b2dbf53048275a2f99c8943aceaec2b5952e216",
+      "size_bytes": 298703,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    },
+    {
+      "symbol": "XAUUSD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/XAUUSD_H4.csv",
+      "sha256": "adf456154087e62a8fa18cde663c03d565a3ee4ed3acdbb79d59f0a26db66d89",
+      "size_bytes": 354556,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    },
+    {
+      "symbol": "BTCUSD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/BTCUSD_H4.csv",
+      "sha256": "e9c896e787cd6758d12e8d69db40ae8fd9bee4177eb63742febc1c3e45292d79",
+      "size_bytes": 332133,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    },
+    {
+      "symbol": "ETHUSD",
+      "file": "/tmp/claude-0/-home-user-IATIS/3f90ca86-9e95-5d90-a529-2d1e3d631146/scratchpad/ETHUSD_H4.csv",
+      "sha256": "039599ef2b970a72d7a034e63fd014c0157f26a31dc2d7cf5600730c95e94a91",
+      "size_bytes": 316578,
+      "bars": 5000,
+      "source": "Twelve Data 4h, outputsize=5000, fetched 2026-07-05"
+    }
+  ],
+  "results": {
+    "h4": {
+      "EURUSD": {
+        "bars": 5000,
+        "period": "2023-07-13 -> 2026-07-05",
+        "trades": 141,
+        "win_rate": 34.8,
+        "profit_factor": 1.032,
+        "max_dd_pct": 15.6,
+        "total_return_pct": 3.0,
+        "gate_rejections": {
+          "mqs": 38,
+          "score": 566,
+          "votes": 36,
+          "contradiction": 169,
+          "reversal_veto": 0
+        },
+        "runtime_s": 20.6
+      },
+      "GBPUSD": {
+        "bars": 5000,
+        "period": "2023-07-14 -> 2026-07-05",
+        "trades": 160,
+        "win_rate": 35.6,
+        "profit_factor": 1.05,
+        "max_dd_pct": 12.5,
+        "total_return_pct": 5.5,
+        "gate_rejections": {
+          "mqs": 44,
+          "score": 888,
+          "votes": 56,
+          "contradiction": 188,
+          "reversal_veto": 0
+        },
+        "runtime_s": 29.3
+      },
+      "USDCAD": {
+        "bars": 5000,
+        "period": "2023-07-13 -> 2026-07-05",
+        "trades": 131,
+        "win_rate": 35.9,
+        "profit_factor": 1.046,
+        "max_dd_pct": 21.0,
+        "total_return_pct": 3.8,
+        "gate_rejections": {
+          "mqs": 23,
+          "score": 512,
+          "votes": 30,
+          "contradiction": 130,
+          "reversal_veto": 0
+        },
+        "runtime_s": 17.9
+      },
+      "XAUUSD": {
+        "bars": 5000,
+        "period": "2023-08-24 -> 2026-07-05",
+        "trades": 207,
+        "win_rate": 44.0,
+        "profit_factor": 1.464,
+        "max_dd_pct": 11.0,
+        "total_return_pct": 80.3,
+        "gate_rejections": {
+          "mqs": 31,
+          "score": 487,
+          "votes": 52,
+          "contradiction": 124,
+          "reversal_veto": 0
+        },
+        "runtime_s": 19.8
+      },
+      "BTCUSD": {
+        "bars": 5000,
+        "period": "2024-03-24 -> 2026-07-05",
+        "trades": 138,
+        "win_rate": 39.9,
+        "profit_factor": 1.321,
+        "max_dd_pct": 13.3,
+        "total_return_pct": 28.8,
+        "gate_rejections": {
+          "mqs": 6,
+          "score": 684,
+          "votes": 36,
+          "contradiction": 167,
+          "reversal_veto": 0
+        },
+        "runtime_s": 21.4
+      },
+      "ETHUSD": {
+        "bars": 5000,
+        "period": "2024-03-24 -> 2026-07-05",
+        "trades": 125,
+        "win_rate": 45.6,
+        "profit_factor": 1.59,
+        "max_dd_pct": 6.4,
+        "total_return_pct": 50.8,
+        "gate_rejections": {
+          "mqs": 11,
+          "score": 716,
+          "votes": 32,
+          "contradiction": 136,
+          "reversal_veto": 0
+        },
+        "runtime_s": 21.6
+      }
+    },
+    "d1_same_period": {
+      "EURUSD": {
+        "bars": 853,
+        "trades": 9,
+        "win_rate": 44.4,
+        "profit_factor": 1.337,
+        "max_dd_pct": 2.9,
+        "total_return_pct": 1.6
+      },
+      "GBPUSD": {
+        "bars": 862,
+        "trades": 7,
+        "win_rate": 57.1,
+        "profit_factor": 1.903,
+        "max_dd_pct": 2.9,
+        "total_return_pct": 2.7
+      },
+      "USDCAD": {
+        "bars": 902,
+        "trades": 15,
+        "win_rate": 40.0,
+        "profit_factor": 1.512,
+        "max_dd_pct": 3.8,
+        "total_return_pct": 4.1
+      },
+      "XAUUSD": {
+        "bars": 878,
+        "trades": 28,
+        "win_rate": 50.0,
+        "profit_factor": 1.219,
+        "max_dd_pct": 16.6,
+        "total_return_pct": 7.2
+      },
+      "BTCUSD": {
+        "bars": 834,
+        "trades": 27,
+        "win_rate": 44.4,
+        "profit_factor": 1.426,
+        "max_dd_pct": 6.2,
+        "total_return_pct": 6.8
+      },
+      "ETHUSD": {
+        "bars": 834,
+        "trades": 21,
+        "win_rate": 52.4,
+        "profit_factor": 1.974,
+        "max_dd_pct": 4.0,
+        "total_return_pct": 10.3
+      }
+    }
+  }
+}

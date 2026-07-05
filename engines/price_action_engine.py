@@ -87,8 +87,7 @@ class PriceActionEngine(BaseEngine):
     name = "PriceAction"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        tf = "H1" if "H1" in mtf_data else next(iter(mtf_data))
-        df = mtf_data[tf]
+        tf, df = self.decision_frame(mtf_data)
 
         if len(df) < 30:
             return EngineOutput(

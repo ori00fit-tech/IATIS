@@ -136,8 +136,7 @@ class SMCEngine(BaseEngine):
 
         return EngineOutput(engine_name=self.name, bias=bias, score=score, reasons=reasons, raw=raw)
 
-    @staticmethod
-    def _pick_timeframe(mtf_data: dict[str, pd.DataFrame]) -> str:
+    def _pick_timeframe(self, mtf_data: dict[str, pd.DataFrame]) -> str:
         """Pick the highest timeframe that has enough bars for reliable
         swing-point detection (minimum 100 bars after the rolling window
         consumes its lookback period).
@@ -150,6 +149,11 @@ class SMCEngine(BaseEngine):
         """
         MIN_BARS = 100
         preference = ["H4", "D1", "H1", "M15"]
+        if self.decision_tf == "D1":
+            # Decision-on-D1 mode: D1 is fetched natively (500 bars, not a
+            # thin resample), and SMC's own "HTF bias first" principle puts
+            # it ahead of H4. The MIN_BARS guard below still applies.
+            preference = ["D1", "H4", "H1", "M15"]
         # first pass: prefer higher TFs that have enough bars
         for tf in preference:
             if tf in mtf_data and len(mtf_data[tf]) >= MIN_BARS:

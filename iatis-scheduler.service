@@ -27,7 +27,13 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+# read-only (not true): the code and venv live under /root/IATIS, and
+# ProtectHome=true hides /root entirely from the service namespace — the
+# ExecStart binary itself becomes unreachable and systemd dies with
+# status=203/EXEC before Python starts (observed on the VPS, 2026-07-05).
+# read-only still blocks writes anywhere in /root except the
+# ReadWritePaths=/root/IATIS/storage carve-out below.
+ProtectHome=read-only
 ReadWritePaths=/root/IATIS/storage
 MemoryMax=1G
 TasksMax=256

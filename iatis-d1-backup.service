@@ -1,0 +1,17 @@
+[Unit]
+Description=IATIS nightly D1 database backup (audit item H5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Same TODO as the other units: switch to a dedicated non-root user once
+# the iatis user exists on the VPS (see iatis-scheduler.service).
+User=root
+WorkingDirectory=/root/IATIS
+# CLOUDFLARE_API_TOKEN comes from the environment file, NOT this unit,
+# so the token never lands in the journal or in git.
+EnvironmentFile=/root/IATIS/.env
+ExecStart=/usr/bin/env bash /root/IATIS/scripts/backup_d1.sh
+NoNewPrivileges=true
+PrivateTmp=true

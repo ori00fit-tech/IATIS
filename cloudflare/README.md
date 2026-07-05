@@ -113,3 +113,37 @@ how that works.
   becomes an HTTPS round-trip to the Worker. Fine for this system's
   volume (decisions every few minutes, not per-tick), not something to
   put in a hot loop.
+
+## Backups & restore (audit item H5)
+
+D1 has built-in durability and Cloudflare-side Time Travel, but **your
+own restorable dump is the only backup you control**. The repo ships:
+
+- `scripts/backup_d1.sh` — `wrangler d1 export` of the full database to
+  `backups/d1/iatis-YYYY-MM-DD.sql.gz`, sanity-checked (must contain
+  `CREATE TABLE`), pruned after `BACKUP_KEEP_DAYS` (default 14), and
+  optionally mirrored off-site via `BACKUP_RCLONE_REMOTE` (R2/S3/B2).
+- `iatis-d1-backup.service` + `iatis-d1-backup.timer` — nightly run at
+  03:15 UTC. Install on the VPS with:
+
+  ```bash
+  cp iatis-d1-backup.{service,timer} /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable --now iatis-d1-backup.timer
+  systemctl list-timers iatis-d1-backup.timer   # verify next run
+  ```
+
+The wrangler auth token comes from `/root/IATIS/.env`
+(`CLOUDFLARE_API_TOKEN`, needs the D1:Edit permission) — never hardcode
+it in units or scripts.
+
+**Rehearse the restore** (a backup that has never been restored is a
+hope, not a backup):
+
+```bash
+wrangler d1 create iatis-restore-test
+gunzip -k backups/d1/iatis-YYYY-MM-DD.sql.gz
+wrangler d1 execute iatis-restore-test --remote --file=backups/d1/iatis-YYYY-MM-DD.sql
+wrangler d1 execute iatis-restore-test --remote \
+  --command "SELECT COUNT(*) FROM decisions"   # compare with production
+```

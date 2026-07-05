@@ -1,0 +1,10 @@
+[Unit]
+Description=Run iatis-d1-backup.service nightly at 03:15 UTC
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

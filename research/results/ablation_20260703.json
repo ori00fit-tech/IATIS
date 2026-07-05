@@ -1,0 +1,4176 @@
+{
+  "study": "engine_ablation",
+  "data_integrity": "historical CSV \u2014 walk-forward, production gate parity",
+  "symbols": {
+    "EURUSD": {
+      "csv": "data/EURUSD_H1_2y.csv",
+      "bars": 12309,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1511,
+            "vote_rate_pct": 60.1,
+            "counter_trend_pct": 43.3
+          },
+          "price_action": {
+            "samples": 1511,
+            "vote_rate_pct": 74.4,
+            "counter_trend_pct": 41.3
+          },
+          "ict": {
+            "samples": 1511,
+            "vote_rate_pct": 37.9,
+            "counter_trend_pct": 75.5
+          },
+          "nnfx": {
+            "samples": 1511,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 26.2
+          },
+          "quant": {
+            "samples": 1511,
+            "vote_rate_pct": 65.2,
+            "counter_trend_pct": 47.3
+          },
+          "wyckoff": {
+            "samples": 1511,
+            "vote_rate_pct": 30.5,
+            "counter_trend_pct": 92.4
+          },
+          "divergence": {
+            "samples": 1511,
+            "vote_rate_pct": 48.0,
+            "counter_trend_pct": 56.8
+          },
+          "market_structure": {
+            "samples": 1511,
+            "vote_rate_pct": 58.2,
+            "counter_trend_pct": 40.1
+          },
+          "sentiment": {
+            "samples": 1511,
+            "vote_rate_pct": 39.4,
+            "counter_trend_pct": 91.1
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 664,
+            "agree_pct": 47.7
+          },
+          "smc|ict": {
+            "n": 347,
+            "agree_pct": 45.2
+          },
+          "smc|nnfx": {
+            "n": 908,
+            "agree_pct": 75.8
+          },
+          "smc|quant": {
+            "n": 588,
+            "agree_pct": 47.6
+          },
+          "smc|wyckoff": {
+            "n": 258,
+            "agree_pct": 27.5
+          },
+          "smc|divergence": {
+            "n": 455,
+            "agree_pct": 49.2
+          },
+          "smc|market_structure": {
+            "n": 527,
+            "agree_pct": 48.0
+          },
+          "smc|sentiment": {
+            "n": 363,
+            "agree_pct": 12.1
+          },
+          "price_action|ict": {
+            "n": 434,
+            "agree_pct": 21.4
+          },
+          "price_action|nnfx": {
+            "n": 1124,
+            "agree_pct": 64.4
+          },
+          "price_action|quant": {
+            "n": 752,
+            "agree_pct": 76.1
+          },
+          "price_action|wyckoff": {
+            "n": 352,
+            "agree_pct": 18.5
+          },
+          "price_action|divergence": {
+            "n": 531,
+            "agree_pct": 48.0
+          },
+          "price_action|market_structure": {
+            "n": 656,
+            "agree_pct": 58.7
+          },
+          "price_action|sentiment": {
+            "n": 446,
+            "agree_pct": 18.2
+          },
+          "ict|nnfx": {
+            "n": 572,
+            "agree_pct": 28.7
+          },
+          "ict|quant": {
+            "n": 365,
+            "agree_pct": 43.3
+          },
+          "ict|wyckoff": {
+            "n": 149,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 252,
+            "agree_pct": 55.6
+          },
+          "ict|market_structure": {
+            "n": 323,
+            "agree_pct": 42.4
+          },
+          "ict|sentiment": {
+            "n": 151,
+            "agree_pct": 98.0
+          },
+          "nnfx|quant": {
+            "n": 985,
+            "agree_pct": 54.3
+          },
+          "nnfx|wyckoff": {
+            "n": 461,
+            "agree_pct": 1.7
+          },
+          "nnfx|divergence": {
+            "n": 725,
+            "agree_pct": 46.6
+          },
+          "nnfx|market_structure": {
+            "n": 880,
+            "agree_pct": 60.3
+          },
+          "nnfx|sentiment": {
+            "n": 595,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 291,
+            "agree_pct": 36.4
+          },
+          "quant|divergence": {
+            "n": 458,
+            "agree_pct": 48.0
+          },
+          "quant|market_structure": {
+            "n": 581,
+            "agree_pct": 56.1
+          },
+          "quant|sentiment": {
+            "n": 364,
+            "agree_pct": 37.9
+          },
+          "wyckoff|divergence": {
+            "n": 218,
+            "agree_pct": 56.9
+          },
+          "wyckoff|market_structure": {
+            "n": 252,
+            "agree_pct": 33.7
+          },
+          "wyckoff|sentiment": {
+            "n": 312,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 412,
+            "agree_pct": 47.1
+          },
+          "divergence|sentiment": {
+            "n": 302,
+            "agree_pct": 54.0
+          },
+          "market_structure|sentiment": {
+            "n": 355,
+            "agree_pct": 34.9
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 166,
+          "win_rate": 0.3614457831325301,
+          "profit_factor": 1.057,
+          "max_drawdown_pct": 19.5,
+          "expectancy_usd": 4.02,
+          "gate_rejections": {
+            "mqs": 50,
+            "score": 1372,
+            "votes": 10,
+            "contradiction": 155,
+            "reversal_veto": 118
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 176,
+          "win_rate": 0.3522727272727273,
+          "profit_factor": 1.023,
+          "max_drawdown_pct": 21.08,
+          "expectancy_usd": 1.6,
+          "gate_rejections": {
+            "mqs": 49,
+            "score": 1394,
+            "votes": 13,
+            "contradiction": 167,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.034,
+          "delta_wr_pp": -0.9,
+          "delta_trades": 10
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 177,
+          "win_rate": 0.3559322033898305,
+          "profit_factor": 1.039,
+          "max_drawdown_pct": 21.43,
+          "expectancy_usd": 2.8,
+          "gate_rejections": {
+            "mqs": 48,
+            "score": 1331,
+            "votes": 12,
+            "contradiction": 164,
+            "reversal_veto": 118
+          },
+          "delta_pf": -0.018,
+          "delta_wr_pp": -0.6,
+          "delta_trades": 11
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 166,
+          "win_rate": 0.3614457831325301,
+          "profit_factor": 1.057,
+          "max_drawdown_pct": 19.5,
+          "expectancy_usd": 4.02,
+          "gate_rejections": {
+            "mqs": 50,
+            "score": 1372,
+            "votes": 10,
+            "contradiction": 155,
+            "reversal_veto": 118
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 188,
+          "win_rate": 0.30851063829787234,
+          "profit_factor": 0.841,
+          "max_drawdown_pct": 34.9,
+          "expectancy_usd": -10.73,
+          "gate_rejections": {
+            "mqs": 51,
+            "score": 1370,
+            "votes": 20,
+            "contradiction": 102,
+            "reversal_veto": 114
+          },
+          "delta_pf": -0.216,
+          "delta_wr_pp": -5.3,
+          "delta_trades": 22
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 106,
+          "win_rate": 0.330188679245283,
+          "profit_factor": 0.933,
+          "max_drawdown_pct": 20.17,
+          "expectancy_usd": -4.85,
+          "gate_rejections": {
+            "mqs": 61,
+            "score": 1946,
+            "votes": 39,
+            "contradiction": 71,
+            "reversal_veto": 106
+          },
+          "delta_pf": -0.124,
+          "delta_wr_pp": -3.1,
+          "delta_trades": -60
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 155,
+          "win_rate": 0.3419354838709677,
+          "profit_factor": 0.972,
+          "max_drawdown_pct": 18.09,
+          "expectancy_usd": -1.97,
+          "gate_rejections": {
+            "mqs": 49,
+            "score": 1422,
+            "votes": 50,
+            "contradiction": 99,
+            "reversal_veto": 124
+          },
+          "delta_pf": -0.085,
+          "delta_wr_pp": -2.0,
+          "delta_trades": -11
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 179,
+          "win_rate": 0.3575418994413408,
+          "profit_factor": 1.04,
+          "max_drawdown_pct": 18.23,
+          "expectancy_usd": 2.72,
+          "gate_rejections": {
+            "mqs": 46,
+            "score": 1209,
+            "votes": 10,
+            "contradiction": 188,
+            "reversal_veto": 115
+          },
+          "delta_pf": -0.017,
+          "delta_wr_pp": -0.4,
+          "delta_trades": 13
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 211,
+          "win_rate": 0.36492890995260663,
+          "profit_factor": 1.078,
+          "max_drawdown_pct": 12.21,
+          "expectancy_usd": 5.34,
+          "gate_rejections": {
+            "mqs": 44,
+            "score": 1117,
+            "votes": 8,
+            "contradiction": 166,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.021,
+          "delta_wr_pp": 0.3,
+          "delta_trades": 45
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 183,
+          "win_rate": 0.34972677595628415,
+          "profit_factor": 1.009,
+          "max_drawdown_pct": 22.09,
+          "expectancy_usd": 0.63,
+          "gate_rejections": {
+            "mqs": 44,
+            "score": 1160,
+            "votes": 17,
+            "contradiction": 147,
+            "reversal_veto": 112
+          },
+          "delta_pf": -0.048,
+          "delta_wr_pp": -1.2,
+          "delta_trades": 17
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 206,
+          "win_rate": 0.36893203883495146,
+          "profit_factor": 1.095,
+          "max_drawdown_pct": 11.19,
+          "expectancy_usd": 6.59,
+          "gate_rejections": {
+            "mqs": 44,
+            "score": 1140,
+            "votes": 9,
+            "contradiction": 164,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.038,
+          "delta_wr_pp": 0.7,
+          "delta_trades": 40
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 213,
+          "win_rate": 0.352112676056338,
+          "profit_factor": 1.014,
+          "max_drawdown_pct": 13.25,
+          "expectancy_usd": 0.96,
+          "gate_rejections": {
+            "mqs": 43,
+            "score": 1105,
+            "votes": 8,
+            "contradiction": 152,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.043,
+          "delta_wr_pp": -0.9,
+          "delta_trades": 47
+        }
+      ]
+    },
+    "GBPUSD": {
+      "csv": "data/GBPUSD_H1_2y.csv",
+      "bars": 12310,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1512,
+            "vote_rate_pct": 77.2,
+            "counter_trend_pct": 43.2
+          },
+          "price_action": {
+            "samples": 1512,
+            "vote_rate_pct": 74.2,
+            "counter_trend_pct": 43.4
+          },
+          "ict": {
+            "samples": 1512,
+            "vote_rate_pct": 35.1,
+            "counter_trend_pct": 70.8
+          },
+          "nnfx": {
+            "samples": 1512,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 26.8
+          },
+          "quant": {
+            "samples": 1512,
+            "vote_rate_pct": 65.8,
+            "counter_trend_pct": 47.4
+          },
+          "wyckoff": {
+            "samples": 1512,
+            "vote_rate_pct": 28.0,
+            "counter_trend_pct": 90.3
+          },
+          "divergence": {
+            "samples": 1512,
+            "vote_rate_pct": 57.0,
+            "counter_trend_pct": 48.4
+          },
+          "market_structure": {
+            "samples": 1512,
+            "vote_rate_pct": 75.3,
+            "counter_trend_pct": 38.2
+          },
+          "sentiment": {
+            "samples": 1512,
+            "vote_rate_pct": 39.9,
+            "counter_trend_pct": 88.9
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 873,
+            "agree_pct": 49.0
+          },
+          "smc|ict": {
+            "n": 410,
+            "agree_pct": 43.4
+          },
+          "smc|nnfx": {
+            "n": 1167,
+            "agree_pct": 72.6
+          },
+          "smc|quant": {
+            "n": 760,
+            "agree_pct": 48.0
+          },
+          "smc|wyckoff": {
+            "n": 328,
+            "agree_pct": 34.8
+          },
+          "smc|divergence": {
+            "n": 665,
+            "agree_pct": 52.5
+          },
+          "smc|market_structure": {
+            "n": 897,
+            "agree_pct": 50.8
+          },
+          "smc|sentiment": {
+            "n": 494,
+            "agree_pct": 21.3
+          },
+          "price_action|ict": {
+            "n": 401,
+            "agree_pct": 20.2
+          },
+          "price_action|nnfx": {
+            "n": 1122,
+            "agree_pct": 64.1
+          },
+          "price_action|quant": {
+            "n": 746,
+            "agree_pct": 76.5
+          },
+          "price_action|wyckoff": {
+            "n": 325,
+            "agree_pct": 17.8
+          },
+          "price_action|divergence": {
+            "n": 655,
+            "agree_pct": 50.8
+          },
+          "price_action|market_structure": {
+            "n": 842,
+            "agree_pct": 57.4
+          },
+          "price_action|sentiment": {
+            "n": 462,
+            "agree_pct": 21.6
+          },
+          "ict|nnfx": {
+            "n": 530,
+            "agree_pct": 26.8
+          },
+          "ict|quant": {
+            "n": 357,
+            "agree_pct": 38.9
+          },
+          "ict|wyckoff": {
+            "n": 125,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 281,
+            "agree_pct": 49.8
+          },
+          "ict|market_structure": {
+            "n": 388,
+            "agree_pct": 45.6
+          },
+          "ict|sentiment": {
+            "n": 141,
+            "agree_pct": 95.0
+          },
+          "nnfx|quant": {
+            "n": 995,
+            "agree_pct": 56.8
+          },
+          "nnfx|wyckoff": {
+            "n": 424,
+            "agree_pct": 1.4
+          },
+          "nnfx|divergence": {
+            "n": 862,
+            "agree_pct": 51.5
+          },
+          "nnfx|market_structure": {
+            "n": 1139,
+            "agree_pct": 60.3
+          },
+          "nnfx|sentiment": {
+            "n": 604,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 255,
+            "agree_pct": 37.3
+          },
+          "quant|divergence": {
+            "n": 569,
+            "agree_pct": 48.5
+          },
+          "quant|market_structure": {
+            "n": 751,
+            "agree_pct": 54.9
+          },
+          "quant|sentiment": {
+            "n": 371,
+            "agree_pct": 42.6
+          },
+          "wyckoff|divergence": {
+            "n": 254,
+            "agree_pct": 48.8
+          },
+          "wyckoff|market_structure": {
+            "n": 316,
+            "agree_pct": 32.9
+          },
+          "wyckoff|sentiment": {
+            "n": 275,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 640,
+            "agree_pct": 46.7
+          },
+          "divergence|sentiment": {
+            "n": 369,
+            "agree_pct": 47.7
+          },
+          "market_structure|sentiment": {
+            "n": 458,
+            "agree_pct": 34.5
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 150,
+          "win_rate": 0.32,
+          "profit_factor": 0.898,
+          "max_drawdown_pct": 22.22,
+          "expectancy_usd": -7.35,
+          "gate_rejections": {
+            "mqs": 47,
+            "score": 1525,
+            "votes": 3,
+            "contradiction": 241,
+            "reversal_veto": 135
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 162,
+          "win_rate": 0.35185185185185186,
+          "profit_factor": 1.025,
+          "max_drawdown_pct": 18.53,
+          "expectancy_usd": 1.88,
+          "gate_rejections": {
+            "mqs": 41,
+            "score": 1495,
+            "votes": 7,
+            "contradiction": 222,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.127,
+          "delta_wr_pp": 3.2,
+          "delta_trades": 12
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 162,
+          "win_rate": 0.3271604938271605,
+          "profit_factor": 0.934,
+          "max_drawdown_pct": 23.01,
+          "expectancy_usd": -4.86,
+          "gate_rejections": {
+            "mqs": 46,
+            "score": 1456,
+            "votes": 4,
+            "contradiction": 247,
+            "reversal_veto": 131
+          },
+          "delta_pf": 0.036,
+          "delta_wr_pp": 0.7,
+          "delta_trades": 12
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 150,
+          "win_rate": 0.32,
+          "profit_factor": 0.898,
+          "max_drawdown_pct": 22.22,
+          "expectancy_usd": -7.35,
+          "gate_rejections": {
+            "mqs": 47,
+            "score": 1525,
+            "votes": 3,
+            "contradiction": 241,
+            "reversal_veto": 135
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 180,
+          "win_rate": 0.3111111111111111,
+          "profit_factor": 0.871,
+          "max_drawdown_pct": 21.02,
+          "expectancy_usd": -9.03,
+          "gate_rejections": {
+            "mqs": 46,
+            "score": 1408,
+            "votes": 12,
+            "contradiction": 128,
+            "reversal_veto": 125
+          },
+          "delta_pf": -0.027,
+          "delta_wr_pp": -0.9,
+          "delta_trades": 30
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 97,
+          "win_rate": 0.30927835051546393,
+          "profit_factor": 0.865,
+          "max_drawdown_pct": 19.89,
+          "expectancy_usd": -9.94,
+          "gate_rejections": {
+            "mqs": 60,
+            "score": 1942,
+            "votes": 19,
+            "contradiction": 119,
+            "reversal_veto": 111
+          },
+          "delta_pf": -0.033,
+          "delta_wr_pp": -1.1,
+          "delta_trades": -53
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 150,
+          "win_rate": 0.30666666666666664,
+          "profit_factor": 0.86,
+          "max_drawdown_pct": 32.37,
+          "expectancy_usd": -10.59,
+          "gate_rejections": {
+            "mqs": 49,
+            "score": 1535,
+            "votes": 22,
+            "contradiction": 152,
+            "reversal_veto": 132
+          },
+          "delta_pf": -0.038,
+          "delta_wr_pp": -1.3,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 165,
+          "win_rate": 0.3393939393939394,
+          "profit_factor": 0.975,
+          "max_drawdown_pct": 21.02,
+          "expectancy_usd": -1.8,
+          "gate_rejections": {
+            "mqs": 45,
+            "score": 1268,
+            "votes": 10,
+            "contradiction": 263,
+            "reversal_veto": 127
+          },
+          "delta_pf": 0.077,
+          "delta_wr_pp": 1.9,
+          "delta_trades": 15
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 185,
+          "win_rate": 0.33513513513513515,
+          "profit_factor": 0.954,
+          "max_drawdown_pct": 23.2,
+          "expectancy_usd": -3.43,
+          "gate_rejections": {
+            "mqs": 41,
+            "score": 1327,
+            "votes": 5,
+            "contradiction": 263,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.056,
+          "delta_wr_pp": 1.5,
+          "delta_trades": 35
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 187,
+          "win_rate": 0.3315508021390374,
+          "profit_factor": 0.946,
+          "max_drawdown_pct": 22.2,
+          "expectancy_usd": -3.82,
+          "gate_rejections": {
+            "mqs": 45,
+            "score": 1174,
+            "votes": 9,
+            "contradiction": 226,
+            "reversal_veto": 119
+          },
+          "delta_pf": 0.048,
+          "delta_wr_pp": 1.2,
+          "delta_trades": 37
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 191,
+          "win_rate": 0.34554973821989526,
+          "profit_factor": 0.993,
+          "max_drawdown_pct": 16.99,
+          "expectancy_usd": -0.49,
+          "gate_rejections": {
+            "mqs": 41,
+            "score": 1345,
+            "votes": 5,
+            "contradiction": 259,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.095,
+          "delta_wr_pp": 2.6,
+          "delta_trades": 41
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 187,
+          "win_rate": 0.33689839572192515,
+          "profit_factor": 0.956,
+          "max_drawdown_pct": 22.84,
+          "expectancy_usd": -3.29,
+          "gate_rejections": {
+            "mqs": 38,
+            "score": 1316,
+            "votes": 5,
+            "contradiction": 243,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.058,
+          "delta_wr_pp": 1.7,
+          "delta_trades": 37
+        }
+      ]
+    },
+    "USDJPY": {
+      "csv": "data/USDJPY_H1_2y.csv",
+      "bars": 12223,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1501,
+            "vote_rate_pct": 77.0,
+            "counter_trend_pct": 45.1
+          },
+          "price_action": {
+            "samples": 1501,
+            "vote_rate_pct": 75.9,
+            "counter_trend_pct": 42.0
+          },
+          "ict": {
+            "samples": 1501,
+            "vote_rate_pct": 27.5,
+            "counter_trend_pct": 69.5
+          },
+          "nnfx": {
+            "samples": 1501,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 25.0
+          },
+          "quant": {
+            "samples": 1501,
+            "vote_rate_pct": 62.0,
+            "counter_trend_pct": 46.7
+          },
+          "wyckoff": {
+            "samples": 1501,
+            "vote_rate_pct": 35.7,
+            "counter_trend_pct": 90.1
+          },
+          "divergence": {
+            "samples": 1501,
+            "vote_rate_pct": 60.2,
+            "counter_trend_pct": 53.5
+          },
+          "market_structure": {
+            "samples": 1501,
+            "vote_rate_pct": 76.5,
+            "counter_trend_pct": 35.0
+          },
+          "sentiment": {
+            "samples": 1501,
+            "vote_rate_pct": 43.2,
+            "counter_trend_pct": 89.4
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 864,
+            "agree_pct": 50.9
+          },
+          "smc|ict": {
+            "n": 314,
+            "agree_pct": 43.9
+          },
+          "smc|nnfx": {
+            "n": 1156,
+            "agree_pct": 74.0
+          },
+          "smc|quant": {
+            "n": 728,
+            "agree_pct": 48.9
+          },
+          "smc|wyckoff": {
+            "n": 404,
+            "agree_pct": 30.9
+          },
+          "smc|divergence": {
+            "n": 716,
+            "agree_pct": 52.4
+          },
+          "smc|market_structure": {
+            "n": 874,
+            "agree_pct": 49.1
+          },
+          "smc|sentiment": {
+            "n": 523,
+            "agree_pct": 16.6
+          },
+          "price_action|ict": {
+            "n": 327,
+            "agree_pct": 19.6
+          },
+          "price_action|nnfx": {
+            "n": 1139,
+            "agree_pct": 65.6
+          },
+          "price_action|quant": {
+            "n": 707,
+            "agree_pct": 78.1
+          },
+          "price_action|wyckoff": {
+            "n": 417,
+            "agree_pct": 22.1
+          },
+          "price_action|divergence": {
+            "n": 695,
+            "agree_pct": 52.2
+          },
+          "price_action|market_structure": {
+            "n": 870,
+            "agree_pct": 62.1
+          },
+          "price_action|sentiment": {
+            "n": 485,
+            "agree_pct": 19.2
+          },
+          "ict|nnfx": {
+            "n": 413,
+            "agree_pct": 24.7
+          },
+          "ict|quant": {
+            "n": 272,
+            "agree_pct": 36.0
+          },
+          "ict|wyckoff": {
+            "n": 131,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 244,
+            "agree_pct": 50.4
+          },
+          "ict|market_structure": {
+            "n": 295,
+            "agree_pct": 45.1
+          },
+          "ict|sentiment": {
+            "n": 131,
+            "agree_pct": 99.2
+          },
+          "nnfx|quant": {
+            "n": 931,
+            "agree_pct": 55.5
+          },
+          "nnfx|wyckoff": {
+            "n": 536,
+            "agree_pct": 0.6
+          },
+          "nnfx|divergence": {
+            "n": 904,
+            "agree_pct": 45.6
+          },
+          "nnfx|market_structure": {
+            "n": 1149,
+            "agree_pct": 61.9
+          },
+          "nnfx|sentiment": {
+            "n": 649,
+            "agree_pct": 0.2
+          },
+          "quant|wyckoff": {
+            "n": 327,
+            "agree_pct": 36.1
+          },
+          "quant|divergence": {
+            "n": 558,
+            "agree_pct": 50.9
+          },
+          "quant|market_structure": {
+            "n": 710,
+            "agree_pct": 58.0
+          },
+          "quant|sentiment": {
+            "n": 380,
+            "agree_pct": 36.6
+          },
+          "wyckoff|divergence": {
+            "n": 336,
+            "agree_pct": 55.7
+          },
+          "wyckoff|market_structure": {
+            "n": 427,
+            "agree_pct": 31.9
+          },
+          "wyckoff|sentiment": {
+            "n": 375,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 692,
+            "agree_pct": 48.4
+          },
+          "divergence|sentiment": {
+            "n": 410,
+            "agree_pct": 54.9
+          },
+          "market_structure|sentiment": {
+            "n": 522,
+            "agree_pct": 29.3
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 158,
+          "win_rate": 0.36075949367088606,
+          "profit_factor": 1.079,
+          "max_drawdown_pct": 11.78,
+          "expectancy_usd": 5.42,
+          "gate_rejections": {
+            "mqs": 70,
+            "score": 1258,
+            "votes": 2,
+            "contradiction": 177,
+            "reversal_veto": 169
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 172,
+          "win_rate": 0.3372093023255814,
+          "profit_factor": 0.97,
+          "max_drawdown_pct": 14.79,
+          "expectancy_usd": -2.01,
+          "gate_rejections": {
+            "mqs": 75,
+            "score": 1290,
+            "votes": 1,
+            "contradiction": 198,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.109,
+          "delta_wr_pp": -2.4,
+          "delta_trades": 14
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 160,
+          "win_rate": 0.3625,
+          "profit_factor": 1.089,
+          "max_drawdown_pct": 11.78,
+          "expectancy_usd": 6.01,
+          "gate_rejections": {
+            "mqs": 73,
+            "score": 1231,
+            "votes": 3,
+            "contradiction": 187,
+            "reversal_veto": 172
+          },
+          "delta_pf": 0.01,
+          "delta_wr_pp": 0.2,
+          "delta_trades": 2
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 158,
+          "win_rate": 0.36075949367088606,
+          "profit_factor": 1.079,
+          "max_drawdown_pct": 11.78,
+          "expectancy_usd": 5.42,
+          "gate_rejections": {
+            "mqs": 70,
+            "score": 1258,
+            "votes": 2,
+            "contradiction": 177,
+            "reversal_veto": 169
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 162,
+          "win_rate": 0.3395061728395062,
+          "profit_factor": 0.983,
+          "max_drawdown_pct": 16.52,
+          "expectancy_usd": -1.14,
+          "gate_rejections": {
+            "mqs": 63,
+            "score": 1207,
+            "votes": 13,
+            "contradiction": 132,
+            "reversal_veto": 162
+          },
+          "delta_pf": -0.096,
+          "delta_wr_pp": -2.1,
+          "delta_trades": 4
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 117,
+          "win_rate": 0.2905982905982906,
+          "profit_factor": 0.785,
+          "max_drawdown_pct": 20.8,
+          "expectancy_usd": -14.71,
+          "gate_rejections": {
+            "mqs": 86,
+            "score": 1711,
+            "votes": 21,
+            "contradiction": 100,
+            "reversal_veto": 124
+          },
+          "delta_pf": -0.294,
+          "delta_wr_pp": -7.0,
+          "delta_trades": -41
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 148,
+          "win_rate": 0.32432432432432434,
+          "profit_factor": 0.907,
+          "max_drawdown_pct": 16.41,
+          "expectancy_usd": -6.03,
+          "gate_rejections": {
+            "mqs": 78,
+            "score": 1309,
+            "votes": 11,
+            "contradiction": 132,
+            "reversal_veto": 160
+          },
+          "delta_pf": -0.172,
+          "delta_wr_pp": -3.6,
+          "delta_trades": -10
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 167,
+          "win_rate": 0.3592814371257485,
+          "profit_factor": 1.068,
+          "max_drawdown_pct": 11.61,
+          "expectancy_usd": 4.59,
+          "gate_rejections": {
+            "mqs": 67,
+            "score": 1153,
+            "votes": 3,
+            "contradiction": 220,
+            "reversal_veto": 163
+          },
+          "delta_pf": -0.011,
+          "delta_wr_pp": -0.1,
+          "delta_trades": 9
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 195,
+          "win_rate": 0.36923076923076925,
+          "profit_factor": 1.112,
+          "max_drawdown_pct": 12.61,
+          "expectancy_usd": 8.27,
+          "gate_rejections": {
+            "mqs": 51,
+            "score": 988,
+            "votes": 3,
+            "contradiction": 198,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.033,
+          "delta_wr_pp": 0.8,
+          "delta_trades": 37
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 183,
+          "win_rate": 0.39344262295081966,
+          "profit_factor": 1.232,
+          "max_drawdown_pct": 8.02,
+          "expectancy_usd": 16.88,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1068,
+            "votes": 14,
+            "contradiction": 160,
+            "reversal_veto": 152
+          },
+          "delta_pf": 0.153,
+          "delta_wr_pp": 3.3,
+          "delta_trades": 25
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 191,
+          "win_rate": 0.34554973821989526,
+          "profit_factor": 1.007,
+          "max_drawdown_pct": 12.53,
+          "expectancy_usd": 0.49,
+          "gate_rejections": {
+            "mqs": 54,
+            "score": 1025,
+            "votes": 4,
+            "contradiction": 204,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.072,
+          "delta_wr_pp": -1.5,
+          "delta_trades": 33
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 196,
+          "win_rate": 0.3673469387755102,
+          "profit_factor": 1.101,
+          "max_drawdown_pct": 12.56,
+          "expectancy_usd": 7.57,
+          "gate_rejections": {
+            "mqs": 53,
+            "score": 944,
+            "votes": 3,
+            "contradiction": 184,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.022,
+          "delta_wr_pp": 0.7,
+          "delta_trades": 38
+        }
+      ]
+    },
+    "AUDUSD": {
+      "csv": "data/AUDUSD_H1_2y.csv",
+      "bars": 12373,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1519,
+            "vote_rate_pct": 72.5,
+            "counter_trend_pct": 45.4
+          },
+          "price_action": {
+            "samples": 1519,
+            "vote_rate_pct": 77.2,
+            "counter_trend_pct": 41.6
+          },
+          "ict": {
+            "samples": 1519,
+            "vote_rate_pct": 27.1,
+            "counter_trend_pct": 61.0
+          },
+          "nnfx": {
+            "samples": 1519,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 24.0
+          },
+          "quant": {
+            "samples": 1519,
+            "vote_rate_pct": 61.9,
+            "counter_trend_pct": 47.5
+          },
+          "wyckoff": {
+            "samples": 1519,
+            "vote_rate_pct": 32.2,
+            "counter_trend_pct": 84.5
+          },
+          "divergence": {
+            "samples": 1519,
+            "vote_rate_pct": 54.6,
+            "counter_trend_pct": 53.0
+          },
+          "market_structure": {
+            "samples": 1519,
+            "vote_rate_pct": 71.0,
+            "counter_trend_pct": 39.9
+          },
+          "sentiment": {
+            "samples": 1519,
+            "vote_rate_pct": 43.5,
+            "counter_trend_pct": 88.4
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 850,
+            "agree_pct": 48.1
+          },
+          "smc|ict": {
+            "n": 285,
+            "agree_pct": 57.9
+          },
+          "smc|nnfx": {
+            "n": 1102,
+            "agree_pct": 67.2
+          },
+          "smc|quant": {
+            "n": 682,
+            "agree_pct": 45.7
+          },
+          "smc|wyckoff": {
+            "n": 341,
+            "agree_pct": 37.8
+          },
+          "smc|divergence": {
+            "n": 610,
+            "agree_pct": 52.3
+          },
+          "smc|market_structure": {
+            "n": 785,
+            "agree_pct": 47.9
+          },
+          "smc|sentiment": {
+            "n": 476,
+            "agree_pct": 23.7
+          },
+          "price_action|ict": {
+            "n": 332,
+            "agree_pct": 16.3
+          },
+          "price_action|nnfx": {
+            "n": 1172,
+            "agree_pct": 65.9
+          },
+          "price_action|quant": {
+            "n": 738,
+            "agree_pct": 82.0
+          },
+          "price_action|wyckoff": {
+            "n": 385,
+            "agree_pct": 16.6
+          },
+          "price_action|divergence": {
+            "n": 635,
+            "agree_pct": 52.0
+          },
+          "price_action|market_structure": {
+            "n": 836,
+            "agree_pct": 60.8
+          },
+          "price_action|sentiment": {
+            "n": 521,
+            "agree_pct": 18.8
+          },
+          "ict|nnfx": {
+            "n": 411,
+            "agree_pct": 30.4
+          },
+          "ict|quant": {
+            "n": 253,
+            "agree_pct": 29.6
+          },
+          "ict|wyckoff": {
+            "n": 119,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 201,
+            "agree_pct": 50.7
+          },
+          "ict|market_structure": {
+            "n": 265,
+            "agree_pct": 46.0
+          },
+          "ict|sentiment": {
+            "n": 120,
+            "agree_pct": 97.5
+          },
+          "nnfx|quant": {
+            "n": 940,
+            "agree_pct": 56.8
+          },
+          "nnfx|wyckoff": {
+            "n": 489,
+            "agree_pct": 0.8
+          },
+          "nnfx|divergence": {
+            "n": 830,
+            "agree_pct": 49.5
+          },
+          "nnfx|market_structure": {
+            "n": 1079,
+            "agree_pct": 60.2
+          },
+          "nnfx|sentiment": {
+            "n": 661,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 292,
+            "agree_pct": 31.5
+          },
+          "quant|divergence": {
+            "n": 497,
+            "agree_pct": 48.5
+          },
+          "quant|market_structure": {
+            "n": 673,
+            "agree_pct": 61.7
+          },
+          "quant|sentiment": {
+            "n": 383,
+            "agree_pct": 33.9
+          },
+          "wyckoff|divergence": {
+            "n": 255,
+            "agree_pct": 49.8
+          },
+          "wyckoff|market_structure": {
+            "n": 340,
+            "agree_pct": 35.0
+          },
+          "wyckoff|sentiment": {
+            "n": 317,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 586,
+            "agree_pct": 47.3
+          },
+          "divergence|sentiment": {
+            "n": 378,
+            "agree_pct": 54.0
+          },
+          "market_structure|sentiment": {
+            "n": 471,
+            "agree_pct": 36.9
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 156,
+          "win_rate": 0.3717948717948718,
+          "profit_factor": 1.068,
+          "max_drawdown_pct": 17.83,
+          "expectancy_usd": 5.12,
+          "gate_rejections": {
+            "mqs": 72,
+            "score": 1372,
+            "votes": 7,
+            "contradiction": 213,
+            "reversal_veto": 121
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 164,
+          "win_rate": 0.4024390243902439,
+          "profit_factor": 1.213,
+          "max_drawdown_pct": 15.75,
+          "expectancy_usd": 16.62,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1337,
+            "votes": 12,
+            "contradiction": 216,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.145,
+          "delta_wr_pp": 3.1,
+          "delta_trades": 8
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 164,
+          "win_rate": 0.3597560975609756,
+          "profit_factor": 1.018,
+          "max_drawdown_pct": 20.83,
+          "expectancy_usd": 1.33,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1270,
+            "votes": 10,
+            "contradiction": 219,
+            "reversal_veto": 121
+          },
+          "delta_pf": -0.05,
+          "delta_wr_pp": -1.2,
+          "delta_trades": 8
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 156,
+          "win_rate": 0.3717948717948718,
+          "profit_factor": 1.068,
+          "max_drawdown_pct": 17.83,
+          "expectancy_usd": 5.12,
+          "gate_rejections": {
+            "mqs": 72,
+            "score": 1372,
+            "votes": 7,
+            "contradiction": 213,
+            "reversal_veto": 121
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 180,
+          "win_rate": 0.35555555555555557,
+          "profit_factor": 1.002,
+          "max_drawdown_pct": 23.38,
+          "expectancy_usd": 0.17,
+          "gate_rejections": {
+            "mqs": 64,
+            "score": 1260,
+            "votes": 15,
+            "contradiction": 118,
+            "reversal_veto": 119
+          },
+          "delta_pf": -0.066,
+          "delta_wr_pp": -1.6,
+          "delta_trades": 24
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 118,
+          "win_rate": 0.3474576271186441,
+          "profit_factor": 0.979,
+          "max_drawdown_pct": 16.53,
+          "expectancy_usd": -1.52,
+          "gate_rejections": {
+            "mqs": 89,
+            "score": 1786,
+            "votes": 15,
+            "contradiction": 98,
+            "reversal_veto": 95
+          },
+          "delta_pf": -0.089,
+          "delta_wr_pp": -2.4,
+          "delta_trades": -38
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 153,
+          "win_rate": 0.37254901960784315,
+          "profit_factor": 1.075,
+          "max_drawdown_pct": 20.74,
+          "expectancy_usd": 5.63,
+          "gate_rejections": {
+            "mqs": 74,
+            "score": 1429,
+            "votes": 28,
+            "contradiction": 144,
+            "reversal_veto": 122
+          },
+          "delta_pf": 0.007,
+          "delta_wr_pp": 0.1,
+          "delta_trades": -3
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 177,
+          "win_rate": 0.3615819209039548,
+          "profit_factor": 1.02,
+          "max_drawdown_pct": 20.98,
+          "expectancy_usd": 1.55,
+          "gate_rejections": {
+            "mqs": 69,
+            "score": 1202,
+            "votes": 11,
+            "contradiction": 244,
+            "reversal_veto": 121
+          },
+          "delta_pf": -0.048,
+          "delta_wr_pp": -1.0,
+          "delta_trades": 21
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 199,
+          "win_rate": 0.3316582914572864,
+          "profit_factor": 0.909,
+          "max_drawdown_pct": 30.69,
+          "expectancy_usd": -6.31,
+          "gate_rejections": {
+            "mqs": 65,
+            "score": 1206,
+            "votes": 8,
+            "contradiction": 269,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.159,
+          "delta_wr_pp": -4.0,
+          "delta_trades": 43
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 203,
+          "win_rate": 0.35467980295566504,
+          "profit_factor": 1.01,
+          "max_drawdown_pct": 27.57,
+          "expectancy_usd": 0.78,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 1016,
+            "votes": 13,
+            "contradiction": 172,
+            "reversal_veto": 99
+          },
+          "delta_pf": -0.058,
+          "delta_wr_pp": -1.7,
+          "delta_trades": 47
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 197,
+          "win_rate": 0.3350253807106599,
+          "profit_factor": 0.929,
+          "max_drawdown_pct": 31.9,
+          "expectancy_usd": -5.25,
+          "gate_rejections": {
+            "mqs": 67,
+            "score": 1230,
+            "votes": 7,
+            "contradiction": 261,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.139,
+          "delta_wr_pp": -3.7,
+          "delta_trades": 41
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 204,
+          "win_rate": 0.3333333333333333,
+          "profit_factor": 0.918,
+          "max_drawdown_pct": 30.16,
+          "expectancy_usd": -5.76,
+          "gate_rejections": {
+            "mqs": 63,
+            "score": 1137,
+            "votes": 7,
+            "contradiction": 250,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.15,
+          "delta_wr_pp": -3.8,
+          "delta_trades": 48
+        }
+      ]
+    },
+    "USDCAD": {
+      "csv": "data/USDCAD_H1_2y.csv",
+      "bars": 12381,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1520,
+            "vote_rate_pct": 76.0,
+            "counter_trend_pct": 36.6
+          },
+          "price_action": {
+            "samples": 1520,
+            "vote_rate_pct": 70.1,
+            "counter_trend_pct": 42.3
+          },
+          "ict": {
+            "samples": 1520,
+            "vote_rate_pct": 48.5,
+            "counter_trend_pct": 81.0
+          },
+          "nnfx": {
+            "samples": 1520,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 22.6
+          },
+          "quant": {
+            "samples": 1520,
+            "vote_rate_pct": 69.3,
+            "counter_trend_pct": 48.0
+          },
+          "wyckoff": {
+            "samples": 1520,
+            "vote_rate_pct": 43.2,
+            "counter_trend_pct": 89.9
+          },
+          "divergence": {
+            "samples": 1520,
+            "vote_rate_pct": 57.9,
+            "counter_trend_pct": 52.6
+          },
+          "market_structure": {
+            "samples": 1520,
+            "vote_rate_pct": 66.1,
+            "counter_trend_pct": 36.1
+          },
+          "sentiment": {
+            "samples": 1520,
+            "vote_rate_pct": 44.5,
+            "counter_trend_pct": 91.1
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 829,
+            "agree_pct": 52.8
+          },
+          "smc|ict": {
+            "n": 544,
+            "agree_pct": 38.6
+          },
+          "smc|nnfx": {
+            "n": 1155,
+            "agree_pct": 80.0
+          },
+          "smc|quant": {
+            "n": 818,
+            "agree_pct": 48.3
+          },
+          "smc|wyckoff": {
+            "n": 504,
+            "agree_pct": 22.2
+          },
+          "smc|divergence": {
+            "n": 669,
+            "agree_pct": 50.2
+          },
+          "smc|market_structure": {
+            "n": 766,
+            "agree_pct": 55.9
+          },
+          "smc|sentiment": {
+            "n": 552,
+            "agree_pct": 12.7
+          },
+          "price_action|ict": {
+            "n": 509,
+            "agree_pct": 24.6
+          },
+          "price_action|nnfx": {
+            "n": 1065,
+            "agree_pct": 63.9
+          },
+          "price_action|quant": {
+            "n": 788,
+            "agree_pct": 71.8
+          },
+          "price_action|wyckoff": {
+            "n": 485,
+            "agree_pct": 24.7
+          },
+          "price_action|divergence": {
+            "n": 648,
+            "agree_pct": 52.9
+          },
+          "price_action|market_structure": {
+            "n": 681,
+            "agree_pct": 60.2
+          },
+          "price_action|sentiment": {
+            "n": 491,
+            "agree_pct": 23.6
+          },
+          "ict|nnfx": {
+            "n": 737,
+            "agree_pct": 20.6
+          },
+          "ict|quant": {
+            "n": 533,
+            "agree_pct": 38.1
+          },
+          "ict|wyckoff": {
+            "n": 307,
+            "agree_pct": 99.7
+          },
+          "ict|divergence": {
+            "n": 411,
+            "agree_pct": 54.7
+          },
+          "ict|market_structure": {
+            "n": 472,
+            "agree_pct": 37.3
+          },
+          "ict|sentiment": {
+            "n": 259,
+            "agree_pct": 98.8
+          },
+          "nnfx|quant": {
+            "n": 1053,
+            "agree_pct": 53.8
+          },
+          "nnfx|wyckoff": {
+            "n": 656,
+            "agree_pct": 0.8
+          },
+          "nnfx|divergence": {
+            "n": 880,
+            "agree_pct": 49.0
+          },
+          "nnfx|market_structure": {
+            "n": 1005,
+            "agree_pct": 61.3
+          },
+          "nnfx|sentiment": {
+            "n": 677,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 447,
+            "agree_pct": 40.9
+          },
+          "quant|divergence": {
+            "n": 608,
+            "agree_pct": 47.9
+          },
+          "quant|market_structure": {
+            "n": 693,
+            "agree_pct": 59.7
+          },
+          "quant|sentiment": {
+            "n": 475,
+            "agree_pct": 41.9
+          },
+          "wyckoff|divergence": {
+            "n": 387,
+            "agree_pct": 54.3
+          },
+          "wyckoff|market_structure": {
+            "n": 446,
+            "agree_pct": 29.8
+          },
+          "wyckoff|sentiment": {
+            "n": 472,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 577,
+            "agree_pct": 47.3
+          },
+          "divergence|sentiment": {
+            "n": 403,
+            "agree_pct": 50.9
+          },
+          "market_structure|sentiment": {
+            "n": 447,
+            "agree_pct": 28.4
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 105,
+          "win_rate": 0.3619047619047619,
+          "profit_factor": 1.085,
+          "max_drawdown_pct": 11.86,
+          "expectancy_usd": 5.57,
+          "gate_rejections": {
+            "mqs": 71,
+            "score": 1311,
+            "votes": 3,
+            "contradiction": 106,
+            "reversal_veto": 196
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 111,
+          "win_rate": 0.35135135135135137,
+          "profit_factor": 1.038,
+          "max_drawdown_pct": 14.54,
+          "expectancy_usd": 2.55,
+          "gate_rejections": {
+            "mqs": 66,
+            "score": 1407,
+            "votes": 5,
+            "contradiction": 124,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.047,
+          "delta_wr_pp": -1.1,
+          "delta_trades": 6
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 108,
+          "win_rate": 0.3888888888888889,
+          "profit_factor": 1.222,
+          "max_drawdown_pct": 11.07,
+          "expectancy_usd": 14.54,
+          "gate_rejections": {
+            "mqs": 70,
+            "score": 1282,
+            "votes": 6,
+            "contradiction": 113,
+            "reversal_veto": 198
+          },
+          "delta_pf": 0.137,
+          "delta_wr_pp": 2.7,
+          "delta_trades": 3
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 105,
+          "win_rate": 0.3619047619047619,
+          "profit_factor": 1.085,
+          "max_drawdown_pct": 11.86,
+          "expectancy_usd": 5.57,
+          "gate_rejections": {
+            "mqs": 71,
+            "score": 1311,
+            "votes": 3,
+            "contradiction": 106,
+            "reversal_veto": 196
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 118,
+          "win_rate": 0.3220338983050847,
+          "profit_factor": 0.91,
+          "max_drawdown_pct": 17.13,
+          "expectancy_usd": -5.87,
+          "gate_rejections": {
+            "mqs": 63,
+            "score": 1294,
+            "votes": 10,
+            "contradiction": 71,
+            "reversal_veto": 201
+          },
+          "delta_pf": -0.175,
+          "delta_wr_pp": -4.0,
+          "delta_trades": 13
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 79,
+          "win_rate": 0.3037974683544304,
+          "profit_factor": 0.64,
+          "max_drawdown_pct": 25.26,
+          "expectancy_usd": -30.41,
+          "gate_rejections": {
+            "mqs": 82,
+            "score": 1930,
+            "votes": 22,
+            "contradiction": 77,
+            "reversal_veto": 173
+          },
+          "delta_pf": -0.445,
+          "delta_wr_pp": -5.8,
+          "delta_trades": -26
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 109,
+          "win_rate": 0.3119266055045872,
+          "profit_factor": 0.873,
+          "max_drawdown_pct": 20.76,
+          "expectancy_usd": -8.38,
+          "gate_rejections": {
+            "mqs": 73,
+            "score": 1488,
+            "votes": 9,
+            "contradiction": 81,
+            "reversal_veto": 208
+          },
+          "delta_pf": -0.212,
+          "delta_wr_pp": -5.0,
+          "delta_trades": 4
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 116,
+          "win_rate": 0.33620689655172414,
+          "profit_factor": 0.974,
+          "max_drawdown_pct": 14.12,
+          "expectancy_usd": -1.71,
+          "gate_rejections": {
+            "mqs": 66,
+            "score": 1146,
+            "votes": 3,
+            "contradiction": 140,
+            "reversal_veto": 198
+          },
+          "delta_pf": -0.111,
+          "delta_wr_pp": -2.6,
+          "delta_trades": 11
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 144,
+          "win_rate": 0.375,
+          "profit_factor": 1.141,
+          "max_drawdown_pct": 16.23,
+          "expectancy_usd": 9.94,
+          "gate_rejections": {
+            "mqs": 40,
+            "score": 912,
+            "votes": 2,
+            "contradiction": 145,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.056,
+          "delta_wr_pp": 1.3,
+          "delta_trades": 39
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 119,
+          "win_rate": 0.36134453781512604,
+          "profit_factor": 1.09,
+          "max_drawdown_pct": 11.65,
+          "expectancy_usd": 5.77,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1083,
+            "votes": 7,
+            "contradiction": 102,
+            "reversal_veto": 174
+          },
+          "delta_pf": 0.005,
+          "delta_wr_pp": -0.1,
+          "delta_trades": 14
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 145,
+          "win_rate": 0.3793103448275862,
+          "profit_factor": 1.161,
+          "max_drawdown_pct": 14.65,
+          "expectancy_usd": 11.22,
+          "gate_rejections": {
+            "mqs": 44,
+            "score": 909,
+            "votes": 2,
+            "contradiction": 148,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.076,
+          "delta_wr_pp": 1.7,
+          "delta_trades": 40
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 151,
+          "win_rate": 0.36423841059602646,
+          "profit_factor": 1.095,
+          "max_drawdown_pct": 18.76,
+          "expectancy_usd": 6.64,
+          "gate_rejections": {
+            "mqs": 40,
+            "score": 855,
+            "votes": 2,
+            "contradiction": 126,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.01,
+          "delta_wr_pp": 0.2,
+          "delta_trades": 46
+        }
+      ]
+    },
+    "XAUUSD": {
+      "csv": "data/XAUUSD_H1_2y.csv",
+      "bars": 11427,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1401,
+            "vote_rate_pct": 80.0,
+            "counter_trend_pct": 43.4
+          },
+          "price_action": {
+            "samples": 1401,
+            "vote_rate_pct": 71.4,
+            "counter_trend_pct": 39.1
+          },
+          "ict": {
+            "samples": 1401,
+            "vote_rate_pct": 12.1,
+            "counter_trend_pct": 45.0
+          },
+          "nnfx": {
+            "samples": 1401,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 23.2
+          },
+          "quant": {
+            "samples": 1401,
+            "vote_rate_pct": 62.0,
+            "counter_trend_pct": 45.9
+          },
+          "wyckoff": {
+            "samples": 1401,
+            "vote_rate_pct": 32.8,
+            "counter_trend_pct": 87.6
+          },
+          "divergence": {
+            "samples": 1401,
+            "vote_rate_pct": 56.9,
+            "counter_trend_pct": 54.1
+          },
+          "market_structure": {
+            "samples": 1401,
+            "vote_rate_pct": 76.6,
+            "counter_trend_pct": 35.4
+          },
+          "sentiment": {
+            "samples": 1401,
+            "vote_rate_pct": 42.4,
+            "counter_trend_pct": 91.6
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 803,
+            "agree_pct": 50.1
+          },
+          "smc|ict": {
+            "n": 140,
+            "agree_pct": 47.1
+          },
+          "smc|nnfx": {
+            "n": 1121,
+            "agree_pct": 73.8
+          },
+          "smc|quant": {
+            "n": 703,
+            "agree_pct": 49.9
+          },
+          "smc|wyckoff": {
+            "n": 362,
+            "agree_pct": 25.7
+          },
+          "smc|divergence": {
+            "n": 633,
+            "agree_pct": 50.1
+          },
+          "smc|market_structure": {
+            "n": 849,
+            "agree_pct": 50.2
+          },
+          "smc|sentiment": {
+            "n": 467,
+            "agree_pct": 16.9
+          },
+          "price_action|ict": {
+            "n": 127,
+            "agree_pct": 15.0
+          },
+          "price_action|nnfx": {
+            "n": 1000,
+            "agree_pct": 65.4
+          },
+          "price_action|quant": {
+            "n": 594,
+            "agree_pct": 88.6
+          },
+          "price_action|wyckoff": {
+            "n": 320,
+            "agree_pct": 17.5
+          },
+          "price_action|divergence": {
+            "n": 572,
+            "agree_pct": 51.7
+          },
+          "price_action|market_structure": {
+            "n": 758,
+            "agree_pct": 61.2
+          },
+          "price_action|sentiment": {
+            "n": 430,
+            "agree_pct": 19.5
+          },
+          "ict|nnfx": {
+            "n": 170,
+            "agree_pct": 32.9
+          },
+          "ict|quant": {
+            "n": 103,
+            "agree_pct": 37.9
+          },
+          "ict|wyckoff": {
+            "n": 40,
+            "agree_pct": 97.5
+          },
+          "ict|divergence": {
+            "n": 83,
+            "agree_pct": 51.8
+          },
+          "ict|market_structure": {
+            "n": 115,
+            "agree_pct": 52.2
+          },
+          "ict|sentiment": {
+            "n": 27,
+            "agree_pct": 96.3
+          },
+          "nnfx|quant": {
+            "n": 869,
+            "agree_pct": 58.8
+          },
+          "nnfx|wyckoff": {
+            "n": 460,
+            "agree_pct": 0.4
+          },
+          "nnfx|divergence": {
+            "n": 797,
+            "agree_pct": 46.5
+          },
+          "nnfx|market_structure": {
+            "n": 1073,
+            "agree_pct": 61.6
+          },
+          "nnfx|sentiment": {
+            "n": 594,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 281,
+            "agree_pct": 28.5
+          },
+          "quant|divergence": {
+            "n": 524,
+            "agree_pct": 48.5
+          },
+          "quant|market_structure": {
+            "n": 649,
+            "agree_pct": 58.9
+          },
+          "quant|sentiment": {
+            "n": 330,
+            "agree_pct": 30.3
+          },
+          "wyckoff|divergence": {
+            "n": 241,
+            "agree_pct": 51.9
+          },
+          "wyckoff|market_structure": {
+            "n": 357,
+            "agree_pct": 32.2
+          },
+          "wyckoff|sentiment": {
+            "n": 310,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 608,
+            "agree_pct": 47.5
+          },
+          "divergence|sentiment": {
+            "n": 338,
+            "agree_pct": 55.6
+          },
+          "market_structure|sentiment": {
+            "n": 478,
+            "agree_pct": 32.0
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 114,
+          "win_rate": 0.38596491228070173,
+          "profit_factor": 1.168,
+          "max_drawdown_pct": 11.73,
+          "expectancy_usd": 11.58,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 891,
+            "votes": 1,
+            "contradiction": 188,
+            "reversal_veto": 89
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 131,
+          "win_rate": 0.3969465648854962,
+          "profit_factor": 1.243,
+          "max_drawdown_pct": 10.9,
+          "expectancy_usd": 16.6,
+          "gate_rejections": {
+            "mqs": 53,
+            "score": 859,
+            "votes": 0,
+            "contradiction": 201,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.075,
+          "delta_wr_pp": 1.1,
+          "delta_trades": 17
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 125,
+          "win_rate": 0.384,
+          "profit_factor": 1.178,
+          "max_drawdown_pct": 11.73,
+          "expectancy_usd": 12.11,
+          "gate_rejections": {
+            "mqs": 59,
+            "score": 945,
+            "votes": 4,
+            "contradiction": 204,
+            "reversal_veto": 93
+          },
+          "delta_pf": 0.01,
+          "delta_wr_pp": -0.2,
+          "delta_trades": 11
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 114,
+          "win_rate": 0.38596491228070173,
+          "profit_factor": 1.168,
+          "max_drawdown_pct": 11.73,
+          "expectancy_usd": 11.58,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 891,
+            "votes": 1,
+            "contradiction": 188,
+            "reversal_veto": 89
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 149,
+          "win_rate": 0.3959731543624161,
+          "profit_factor": 1.213,
+          "max_drawdown_pct": 16.08,
+          "expectancy_usd": 13.88,
+          "gate_rejections": {
+            "mqs": 53,
+            "score": 980,
+            "votes": 10,
+            "contradiction": 137,
+            "reversal_veto": 103
+          },
+          "delta_pf": 0.045,
+          "delta_wr_pp": 1.0,
+          "delta_trades": 35
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 99,
+          "win_rate": 0.41414141414141414,
+          "profit_factor": 1.376,
+          "max_drawdown_pct": 7.75,
+          "expectancy_usd": 25.48,
+          "gate_rejections": {
+            "mqs": 57,
+            "score": 1219,
+            "votes": 13,
+            "contradiction": 98,
+            "reversal_veto": 78
+          },
+          "delta_pf": 0.208,
+          "delta_wr_pp": 2.8,
+          "delta_trades": -15
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 112,
+          "win_rate": 0.4017857142857143,
+          "profit_factor": 1.288,
+          "max_drawdown_pct": 10.87,
+          "expectancy_usd": 19.76,
+          "gate_rejections": {
+            "mqs": 51,
+            "score": 916,
+            "votes": 3,
+            "contradiction": 123,
+            "reversal_veto": 92
+          },
+          "delta_pf": 0.12,
+          "delta_wr_pp": 1.6,
+          "delta_trades": -2
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 117,
+          "win_rate": 0.39316239316239315,
+          "profit_factor": 1.226,
+          "max_drawdown_pct": 11.73,
+          "expectancy_usd": 15.65,
+          "gate_rejections": {
+            "mqs": 49,
+            "score": 781,
+            "votes": 1,
+            "contradiction": 190,
+            "reversal_veto": 86
+          },
+          "delta_pf": 0.058,
+          "delta_wr_pp": 0.7,
+          "delta_trades": 3
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 149,
+          "win_rate": 0.3959731543624161,
+          "profit_factor": 1.227,
+          "max_drawdown_pct": 14.13,
+          "expectancy_usd": 16.72,
+          "gate_rejections": {
+            "mqs": 47,
+            "score": 617,
+            "votes": 1,
+            "contradiction": 205,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.059,
+          "delta_wr_pp": 1.0,
+          "delta_trades": 35
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 137,
+          "win_rate": 0.4306569343065693,
+          "profit_factor": 1.437,
+          "max_drawdown_pct": 9.02,
+          "expectancy_usd": 29.81,
+          "gate_rejections": {
+            "mqs": 46,
+            "score": 763,
+            "votes": 9,
+            "contradiction": 146,
+            "reversal_veto": 87
+          },
+          "delta_pf": 0.269,
+          "delta_wr_pp": 4.5,
+          "delta_trades": 23
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 138,
+          "win_rate": 0.39855072463768115,
+          "profit_factor": 1.247,
+          "max_drawdown_pct": 11.34,
+          "expectancy_usd": 17.7,
+          "gate_rejections": {
+            "mqs": 40,
+            "score": 603,
+            "votes": 0,
+            "contradiction": 184,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.079,
+          "delta_wr_pp": 1.3,
+          "delta_trades": 24
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 156,
+          "win_rate": 0.4166666666666667,
+          "profit_factor": 1.348,
+          "max_drawdown_pct": 11.26,
+          "expectancy_usd": 25.31,
+          "gate_rejections": {
+            "mqs": 41,
+            "score": 585,
+            "votes": 0,
+            "contradiction": 195,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.18,
+          "delta_wr_pp": 3.1,
+          "delta_trades": 42
+        }
+      ]
+    },
+    "XAGUSD": {
+      "csv": "data/XAGUSD_H1_2y.csv",
+      "bars": 11425,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1401,
+            "vote_rate_pct": 79.1,
+            "counter_trend_pct": 42.3
+          },
+          "price_action": {
+            "samples": 1401,
+            "vote_rate_pct": 72.5,
+            "counter_trend_pct": 41.8
+          },
+          "ict": {
+            "samples": 1401,
+            "vote_rate_pct": 7.7,
+            "counter_trend_pct": 39.8
+          },
+          "nnfx": {
+            "samples": 1401,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 26.6
+          },
+          "quant": {
+            "samples": 1401,
+            "vote_rate_pct": 66.7,
+            "counter_trend_pct": 45.7
+          },
+          "wyckoff": {
+            "samples": 1401,
+            "vote_rate_pct": 35.0,
+            "counter_trend_pct": 87.5
+          },
+          "divergence": {
+            "samples": 1401,
+            "vote_rate_pct": 54.7,
+            "counter_trend_pct": 56.4
+          },
+          "market_structure": {
+            "samples": 1401,
+            "vote_rate_pct": 74.4,
+            "counter_trend_pct": 36.0
+          },
+          "sentiment": {
+            "samples": 1401,
+            "vote_rate_pct": 41.1,
+            "counter_trend_pct": 88.3
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 797,
+            "agree_pct": 51.2
+          },
+          "smc|ict": {
+            "n": 91,
+            "agree_pct": 53.8
+          },
+          "smc|nnfx": {
+            "n": 1108,
+            "agree_pct": 76.5
+          },
+          "smc|quant": {
+            "n": 737,
+            "agree_pct": 49.3
+          },
+          "smc|wyckoff": {
+            "n": 383,
+            "agree_pct": 27.2
+          },
+          "smc|divergence": {
+            "n": 606,
+            "agree_pct": 47.5
+          },
+          "smc|market_structure": {
+            "n": 828,
+            "agree_pct": 47.6
+          },
+          "smc|sentiment": {
+            "n": 463,
+            "agree_pct": 14.9
+          },
+          "price_action|ict": {
+            "n": 88,
+            "agree_pct": 12.5
+          },
+          "price_action|nnfx": {
+            "n": 1016,
+            "agree_pct": 64.5
+          },
+          "price_action|quant": {
+            "n": 657,
+            "agree_pct": 90.4
+          },
+          "price_action|wyckoff": {
+            "n": 359,
+            "agree_pct": 22.8
+          },
+          "price_action|divergence": {
+            "n": 564,
+            "agree_pct": 52.8
+          },
+          "price_action|market_structure": {
+            "n": 756,
+            "agree_pct": 60.2
+          },
+          "price_action|sentiment": {
+            "n": 413,
+            "agree_pct": 17.7
+          },
+          "ict|nnfx": {
+            "n": 108,
+            "agree_pct": 41.7
+          },
+          "ict|quant": {
+            "n": 71,
+            "agree_pct": 26.8
+          },
+          "ict|wyckoff": {
+            "n": 15,
+            "agree_pct": 93.3
+          },
+          "ict|divergence": {
+            "n": 57,
+            "agree_pct": 56.1
+          },
+          "ict|market_structure": {
+            "n": 75,
+            "agree_pct": 49.3
+          },
+          "ict|sentiment": {
+            "n": 16,
+            "agree_pct": 87.5
+          },
+          "nnfx|quant": {
+            "n": 934,
+            "agree_pct": 59.0
+          },
+          "nnfx|wyckoff": {
+            "n": 490,
+            "agree_pct": 0.4
+          },
+          "nnfx|divergence": {
+            "n": 767,
+            "agree_pct": 46.8
+          },
+          "nnfx|market_structure": {
+            "n": 1043,
+            "agree_pct": 59.5
+          },
+          "nnfx|sentiment": {
+            "n": 576,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 303,
+            "agree_pct": 34.3
+          },
+          "quant|divergence": {
+            "n": 522,
+            "agree_pct": 52.3
+          },
+          "quant|market_structure": {
+            "n": 698,
+            "agree_pct": 59.9
+          },
+          "quant|sentiment": {
+            "n": 349,
+            "agree_pct": 30.4
+          },
+          "wyckoff|divergence": {
+            "n": 249,
+            "agree_pct": 55.4
+          },
+          "wyckoff|market_structure": {
+            "n": 368,
+            "agree_pct": 32.1
+          },
+          "wyckoff|sentiment": {
+            "n": 350,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 567,
+            "agree_pct": 45.1
+          },
+          "divergence|sentiment": {
+            "n": 312,
+            "agree_pct": 54.5
+          },
+          "market_structure|sentiment": {
+            "n": 450,
+            "agree_pct": 31.6
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 140,
+          "win_rate": 0.35714285714285715,
+          "profit_factor": 1.088,
+          "max_drawdown_pct": 10.11,
+          "expectancy_usd": 5.77,
+          "gate_rejections": {
+            "mqs": 84,
+            "score": 1194,
+            "votes": 2,
+            "contradiction": 215,
+            "reversal_veto": 152
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 149,
+          "win_rate": 0.35570469798657717,
+          "profit_factor": 1.077,
+          "max_drawdown_pct": 12.31,
+          "expectancy_usd": 4.88,
+          "gate_rejections": {
+            "mqs": 79,
+            "score": 1182,
+            "votes": 3,
+            "contradiction": 215,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.011,
+          "delta_wr_pp": -0.1,
+          "delta_trades": 9
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 140,
+          "win_rate": 0.35714285714285715,
+          "profit_factor": 1.088,
+          "max_drawdown_pct": 10.68,
+          "expectancy_usd": 5.79,
+          "gate_rejections": {
+            "mqs": 84,
+            "score": 1183,
+            "votes": 1,
+            "contradiction": 209,
+            "reversal_veto": 152
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 140,
+          "win_rate": 0.35714285714285715,
+          "profit_factor": 1.088,
+          "max_drawdown_pct": 10.11,
+          "expectancy_usd": 5.77,
+          "gate_rejections": {
+            "mqs": 84,
+            "score": 1194,
+            "votes": 2,
+            "contradiction": 215,
+            "reversal_veto": 152
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 174,
+          "win_rate": 0.3275862068965517,
+          "profit_factor": 0.928,
+          "max_drawdown_pct": 21.13,
+          "expectancy_usd": -4.4,
+          "gate_rejections": {
+            "mqs": 73,
+            "score": 1057,
+            "votes": 2,
+            "contradiction": 118,
+            "reversal_veto": 138
+          },
+          "delta_pf": -0.16,
+          "delta_wr_pp": -3.0,
+          "delta_trades": 34
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 112,
+          "win_rate": 0.39285714285714285,
+          "profit_factor": 1.26,
+          "max_drawdown_pct": 7.09,
+          "expectancy_usd": 17.82,
+          "gate_rejections": {
+            "mqs": 84,
+            "score": 1517,
+            "votes": 25,
+            "contradiction": 140,
+            "reversal_veto": 135
+          },
+          "delta_pf": 0.172,
+          "delta_wr_pp": 3.6,
+          "delta_trades": -28
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 133,
+          "win_rate": 0.3609022556390977,
+          "profit_factor": 1.097,
+          "max_drawdown_pct": 10.12,
+          "expectancy_usd": 6.59,
+          "gate_rejections": {
+            "mqs": 78,
+            "score": 1189,
+            "votes": 14,
+            "contradiction": 148,
+            "reversal_veto": 144
+          },
+          "delta_pf": 0.009,
+          "delta_wr_pp": 0.4,
+          "delta_trades": -7
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 156,
+          "win_rate": 0.3141025641025641,
+          "profit_factor": 0.891,
+          "max_drawdown_pct": 20.93,
+          "expectancy_usd": -6.98,
+          "gate_rejections": {
+            "mqs": 75,
+            "score": 1102,
+            "votes": 6,
+            "contradiction": 213,
+            "reversal_veto": 157
+          },
+          "delta_pf": -0.197,
+          "delta_wr_pp": -4.3,
+          "delta_trades": 16
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 183,
+          "win_rate": 0.3825136612021858,
+          "profit_factor": 1.218,
+          "max_drawdown_pct": 15.66,
+          "expectancy_usd": 14.31,
+          "gate_rejections": {
+            "mqs": 71,
+            "score": 883,
+            "votes": 3,
+            "contradiction": 216,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.13,
+          "delta_wr_pp": 2.5,
+          "delta_trades": 43
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 130,
+          "win_rate": 0.3923076923076923,
+          "profit_factor": 1.273,
+          "max_drawdown_pct": 7.48,
+          "expectancy_usd": 17.47,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 785,
+            "votes": 5,
+            "contradiction": 139,
+            "reversal_veto": 122
+          },
+          "delta_pf": 0.185,
+          "delta_wr_pp": 3.5,
+          "delta_trades": -10
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 182,
+          "win_rate": 0.36813186813186816,
+          "profit_factor": 1.137,
+          "max_drawdown_pct": 16.52,
+          "expectancy_usd": 9.07,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 839,
+            "votes": 3,
+            "contradiction": 217,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.049,
+          "delta_wr_pp": 1.1,
+          "delta_trades": 42
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 187,
+          "win_rate": 0.3850267379679144,
+          "profit_factor": 1.229,
+          "max_drawdown_pct": 14.82,
+          "expectancy_usd": 15.16,
+          "gate_rejections": {
+            "mqs": 71,
+            "score": 839,
+            "votes": 2,
+            "contradiction": 214,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.141,
+          "delta_wr_pp": 2.8,
+          "delta_trades": 47
+        }
+      ]
+    },
+    "USOIL": {
+      "csv": "data/USOIL_H1_2y.csv",
+      "bars": 11224,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 1376,
+            "vote_rate_pct": 80.1,
+            "counter_trend_pct": 42.8
+          },
+          "price_action": {
+            "samples": 1376,
+            "vote_rate_pct": 75.3,
+            "counter_trend_pct": 42.0
+          },
+          "ict": {
+            "samples": 1376,
+            "vote_rate_pct": 8.4,
+            "counter_trend_pct": 37.4
+          },
+          "nnfx": {
+            "samples": 1376,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 22.5
+          },
+          "quant": {
+            "samples": 1376,
+            "vote_rate_pct": 64.6,
+            "counter_trend_pct": 47.4
+          },
+          "wyckoff": {
+            "samples": 1376,
+            "vote_rate_pct": 31.7,
+            "counter_trend_pct": 90.6
+          },
+          "divergence": {
+            "samples": 1376,
+            "vote_rate_pct": 60.3,
+            "counter_trend_pct": 52.0
+          },
+          "market_structure": {
+            "samples": 1376,
+            "vote_rate_pct": 70.9,
+            "counter_trend_pct": 36.0
+          },
+          "sentiment": {
+            "samples": 1376,
+            "vote_rate_pct": 40.6,
+            "counter_trend_pct": 90.2
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 821,
+            "agree_pct": 49.0
+          },
+          "smc|ict": {
+            "n": 93,
+            "agree_pct": 64.5
+          },
+          "smc|nnfx": {
+            "n": 1102,
+            "agree_pct": 71.0
+          },
+          "smc|quant": {
+            "n": 699,
+            "agree_pct": 47.2
+          },
+          "smc|wyckoff": {
+            "n": 324,
+            "agree_pct": 34.9
+          },
+          "smc|divergence": {
+            "n": 661,
+            "agree_pct": 48.6
+          },
+          "smc|market_structure": {
+            "n": 785,
+            "agree_pct": 46.9
+          },
+          "smc|sentiment": {
+            "n": 458,
+            "agree_pct": 18.6
+          },
+          "price_action|ict": {
+            "n": 103,
+            "agree_pct": 8.7
+          },
+          "price_action|nnfx": {
+            "n": 1036,
+            "agree_pct": 66.4
+          },
+          "price_action|quant": {
+            "n": 631,
+            "agree_pct": 86.4
+          },
+          "price_action|wyckoff": {
+            "n": 344,
+            "agree_pct": 16.3
+          },
+          "price_action|divergence": {
+            "n": 635,
+            "agree_pct": 49.8
+          },
+          "price_action|market_structure": {
+            "n": 740,
+            "agree_pct": 58.6
+          },
+          "price_action|sentiment": {
+            "n": 421,
+            "agree_pct": 18.1
+          },
+          "ict|nnfx": {
+            "n": 115,
+            "agree_pct": 49.6
+          },
+          "ict|quant": {
+            "n": 72,
+            "agree_pct": 9.7
+          },
+          "ict|wyckoff": {
+            "n": 16,
+            "agree_pct": 87.5
+          },
+          "ict|divergence": {
+            "n": 70,
+            "agree_pct": 51.4
+          },
+          "ict|market_structure": {
+            "n": 74,
+            "agree_pct": 48.6
+          },
+          "ict|sentiment": {
+            "n": 16,
+            "agree_pct": 75.0
+          },
+          "nnfx|quant": {
+            "n": 889,
+            "agree_pct": 54.7
+          },
+          "nnfx|wyckoff": {
+            "n": 436,
+            "agree_pct": 0.5
+          },
+          "nnfx|divergence": {
+            "n": 830,
+            "agree_pct": 48.6
+          },
+          "nnfx|market_structure": {
+            "n": 976,
+            "agree_pct": 60.0
+          },
+          "nnfx|sentiment": {
+            "n": 559,
+            "agree_pct": 0.0
+          },
+          "quant|wyckoff": {
+            "n": 272,
+            "agree_pct": 33.8
+          },
+          "quant|divergence": {
+            "n": 553,
+            "agree_pct": 47.6
+          },
+          "quant|market_structure": {
+            "n": 639,
+            "agree_pct": 57.3
+          },
+          "quant|sentiment": {
+            "n": 334,
+            "agree_pct": 30.5
+          },
+          "wyckoff|divergence": {
+            "n": 266,
+            "agree_pct": 57.9
+          },
+          "wyckoff|market_structure": {
+            "n": 310,
+            "agree_pct": 31.3
+          },
+          "wyckoff|sentiment": {
+            "n": 282,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 573,
+            "agree_pct": 46.4
+          },
+          "divergence|sentiment": {
+            "n": 341,
+            "agree_pct": 56.9
+          },
+          "market_structure|sentiment": {
+            "n": 403,
+            "agree_pct": 31.0
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 167,
+          "win_rate": 0.30538922155688625,
+          "profit_factor": 0.87,
+          "max_drawdown_pct": 17.36,
+          "expectancy_usd": -8.42,
+          "gate_rejections": {
+            "mqs": 59,
+            "score": 1081,
+            "votes": 1,
+            "contradiction": 231,
+            "reversal_veto": 150
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 179,
+          "win_rate": 0.3016759776536313,
+          "profit_factor": 0.852,
+          "max_drawdown_pct": 20.69,
+          "expectancy_usd": -9.51,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 1129,
+            "votes": 3,
+            "contradiction": 243,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.018,
+          "delta_wr_pp": -0.4,
+          "delta_trades": 12
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 168,
+          "win_rate": 0.30357142857142855,
+          "profit_factor": 0.864,
+          "max_drawdown_pct": 18.19,
+          "expectancy_usd": -8.72,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 1066,
+            "votes": 1,
+            "contradiction": 237,
+            "reversal_veto": 151
+          },
+          "delta_pf": -0.006,
+          "delta_wr_pp": -0.2,
+          "delta_trades": 1
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 167,
+          "win_rate": 0.30538922155688625,
+          "profit_factor": 0.87,
+          "max_drawdown_pct": 17.36,
+          "expectancy_usd": -8.42,
+          "gate_rejections": {
+            "mqs": 59,
+            "score": 1081,
+            "votes": 1,
+            "contradiction": 231,
+            "reversal_veto": 150
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 192,
+          "win_rate": 0.3177083333333333,
+          "profit_factor": 0.937,
+          "max_drawdown_pct": 24.72,
+          "expectancy_usd": -4.13,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 950,
+            "votes": 11,
+            "contradiction": 129,
+            "reversal_veto": 136
+          },
+          "delta_pf": 0.067,
+          "delta_wr_pp": 1.2,
+          "delta_trades": 25
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 126,
+          "win_rate": 0.4126984126984127,
+          "profit_factor": 1.352,
+          "max_drawdown_pct": 11.32,
+          "expectancy_usd": 24.04,
+          "gate_rejections": {
+            "mqs": 82,
+            "score": 1564,
+            "votes": 32,
+            "contradiction": 154,
+            "reversal_veto": 126
+          },
+          "delta_pf": 0.482,
+          "delta_wr_pp": 10.7,
+          "delta_trades": -41
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 172,
+          "win_rate": 0.32558139534883723,
+          "profit_factor": 0.954,
+          "max_drawdown_pct": 16.33,
+          "expectancy_usd": -3.05,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 1116,
+            "votes": 8,
+            "contradiction": 189,
+            "reversal_veto": 151
+          },
+          "delta_pf": 0.084,
+          "delta_wr_pp": 2.0,
+          "delta_trades": 5
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 171,
+          "win_rate": 0.30994152046783624,
+          "profit_factor": 0.884,
+          "max_drawdown_pct": 18.9,
+          "expectancy_usd": -7.5,
+          "gate_rejections": {
+            "mqs": 60,
+            "score": 998,
+            "votes": 8,
+            "contradiction": 221,
+            "reversal_veto": 149
+          },
+          "delta_pf": 0.014,
+          "delta_wr_pp": 0.5,
+          "delta_trades": 4
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 210,
+          "win_rate": 0.29523809523809524,
+          "profit_factor": 0.828,
+          "max_drawdown_pct": 32.92,
+          "expectancy_usd": -10.55,
+          "gate_rejections": {
+            "mqs": 54,
+            "score": 950,
+            "votes": 2,
+            "contradiction": 282,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.042,
+          "delta_wr_pp": -1.0,
+          "delta_trades": 43
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 190,
+          "win_rate": 0.2789473684210526,
+          "profit_factor": 0.78,
+          "max_drawdown_pct": 29.24,
+          "expectancy_usd": -14.3,
+          "gate_rejections": {
+            "mqs": 58,
+            "score": 848,
+            "votes": 9,
+            "contradiction": 206,
+            "reversal_veto": 144
+          },
+          "delta_pf": -0.09,
+          "delta_wr_pp": -2.6,
+          "delta_trades": 23
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 205,
+          "win_rate": 0.2975609756097561,
+          "profit_factor": 0.839,
+          "max_drawdown_pct": 31.55,
+          "expectancy_usd": -9.88,
+          "gate_rejections": {
+            "mqs": 55,
+            "score": 978,
+            "votes": 2,
+            "contradiction": 268,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.031,
+          "delta_wr_pp": -0.8,
+          "delta_trades": 38
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 229,
+          "win_rate": 0.3056768558951965,
+          "profit_factor": 0.868,
+          "max_drawdown_pct": 32.41,
+          "expectancy_usd": -7.91,
+          "gate_rejections": {
+            "mqs": 51,
+            "score": 903,
+            "votes": 1,
+            "contradiction": 268,
+            "reversal_veto": 0
+          },
+          "delta_pf": -0.002,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 62
+        }
+      ]
+    },
+    "BTCUSD": {
+      "csv": "data/BTCUSD_H1_2y.csv",
+      "bars": 17352,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 2142,
+            "vote_rate_pct": 81.3,
+            "counter_trend_pct": 44.1
+          },
+          "price_action": {
+            "samples": 2142,
+            "vote_rate_pct": 74.6,
+            "counter_trend_pct": 44.5
+          },
+          "ict": {
+            "samples": 2142,
+            "vote_rate_pct": 8.6,
+            "counter_trend_pct": 35.1
+          },
+          "nnfx": {
+            "samples": 2142,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 26.0
+          },
+          "quant": {
+            "samples": 2142,
+            "vote_rate_pct": 67.4,
+            "counter_trend_pct": 48.0
+          },
+          "wyckoff": {
+            "samples": 2142,
+            "vote_rate_pct": 26.0,
+            "counter_trend_pct": 90.8
+          },
+          "divergence": {
+            "samples": 2142,
+            "vote_rate_pct": 60.0,
+            "counter_trend_pct": 52.1
+          },
+          "market_structure": {
+            "samples": 2142,
+            "vote_rate_pct": 76.8,
+            "counter_trend_pct": 35.5
+          },
+          "sentiment": {
+            "samples": 2142,
+            "vote_rate_pct": 35.6,
+            "counter_trend_pct": 91.3
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 1299,
+            "agree_pct": 49.3
+          },
+          "smc|ict": {
+            "n": 140,
+            "agree_pct": 59.3
+          },
+          "smc|nnfx": {
+            "n": 1742,
+            "agree_pct": 73.3
+          },
+          "smc|quant": {
+            "n": 1180,
+            "agree_pct": 48.0
+          },
+          "smc|wyckoff": {
+            "n": 453,
+            "agree_pct": 32.0
+          },
+          "smc|divergence": {
+            "n": 1048,
+            "agree_pct": 52.2
+          },
+          "smc|market_structure": {
+            "n": 1345,
+            "agree_pct": 49.5
+          },
+          "smc|sentiment": {
+            "n": 635,
+            "agree_pct": 17.3
+          },
+          "price_action|ict": {
+            "n": 148,
+            "agree_pct": 13.5
+          },
+          "price_action|nnfx": {
+            "n": 1598,
+            "agree_pct": 62.4
+          },
+          "price_action|quant": {
+            "n": 1027,
+            "agree_pct": 88.3
+          },
+          "price_action|wyckoff": {
+            "n": 428,
+            "agree_pct": 20.1
+          },
+          "price_action|divergence": {
+            "n": 969,
+            "agree_pct": 49.5
+          },
+          "price_action|market_structure": {
+            "n": 1223,
+            "agree_pct": 56.7
+          },
+          "price_action|sentiment": {
+            "n": 582,
+            "agree_pct": 24.1
+          },
+          "ict|nnfx": {
+            "n": 185,
+            "agree_pct": 51.9
+          },
+          "ict|quant": {
+            "n": 121,
+            "agree_pct": 24.0
+          },
+          "ict|wyckoff": {
+            "n": 10,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 115,
+            "agree_pct": 44.3
+          },
+          "ict|market_structure": {
+            "n": 136,
+            "agree_pct": 58.8
+          },
+          "ict|sentiment": {
+            "n": 14,
+            "agree_pct": 92.9
+          },
+          "nnfx|quant": {
+            "n": 1443,
+            "agree_pct": 54.5
+          },
+          "nnfx|wyckoff": {
+            "n": 557,
+            "agree_pct": 1.4
+          },
+          "nnfx|divergence": {
+            "n": 1285,
+            "agree_pct": 49.7
+          },
+          "nnfx|market_structure": {
+            "n": 1645,
+            "agree_pct": 61.7
+          },
+          "nnfx|sentiment": {
+            "n": 763,
+            "agree_pct": 0.1
+          },
+          "quant|wyckoff": {
+            "n": 351,
+            "agree_pct": 32.5
+          },
+          "quant|divergence": {
+            "n": 876,
+            "agree_pct": 49.0
+          },
+          "quant|market_structure": {
+            "n": 1095,
+            "agree_pct": 56.2
+          },
+          "quant|sentiment": {
+            "n": 463,
+            "agree_pct": 34.1
+          },
+          "wyckoff|divergence": {
+            "n": 332,
+            "agree_pct": 59.0
+          },
+          "wyckoff|market_structure": {
+            "n": 428,
+            "agree_pct": 31.5
+          },
+          "wyckoff|sentiment": {
+            "n": 355,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 991,
+            "agree_pct": 46.2
+          },
+          "divergence|sentiment": {
+            "n": 455,
+            "agree_pct": 53.0
+          },
+          "market_structure|sentiment": {
+            "n": 600,
+            "agree_pct": 31.5
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 240,
+          "win_rate": 0.35833333333333334,
+          "profit_factor": 1.093,
+          "max_drawdown_pct": 14.64,
+          "expectancy_usd": 6.3,
+          "gate_rejections": {
+            "mqs": 98,
+            "score": 1811,
+            "votes": 3,
+            "contradiction": 366,
+            "reversal_veto": 194
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 262,
+          "win_rate": 0.36259541984732824,
+          "profit_factor": 1.099,
+          "max_drawdown_pct": 13.0,
+          "expectancy_usd": 7.06,
+          "gate_rejections": {
+            "mqs": 98,
+            "score": 1881,
+            "votes": 5,
+            "contradiction": 385,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.006,
+          "delta_wr_pp": 0.4,
+          "delta_trades": 22
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 247,
+          "win_rate": 0.3643724696356275,
+          "profit_factor": 1.124,
+          "max_drawdown_pct": 13.82,
+          "expectancy_usd": 8.46,
+          "gate_rejections": {
+            "mqs": 100,
+            "score": 1788,
+            "votes": 3,
+            "contradiction": 369,
+            "reversal_veto": 193
+          },
+          "delta_pf": 0.031,
+          "delta_wr_pp": 0.6,
+          "delta_trades": 7
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 240,
+          "win_rate": 0.35833333333333334,
+          "profit_factor": 1.093,
+          "max_drawdown_pct": 14.64,
+          "expectancy_usd": 6.3,
+          "gate_rejections": {
+            "mqs": 98,
+            "score": 1811,
+            "votes": 3,
+            "contradiction": 366,
+            "reversal_veto": 194
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 281,
+          "win_rate": 0.3807829181494662,
+          "profit_factor": 1.221,
+          "max_drawdown_pct": 12.77,
+          "expectancy_usd": 15.93,
+          "gate_rejections": {
+            "mqs": 81,
+            "score": 1634,
+            "votes": 4,
+            "contradiction": 220,
+            "reversal_veto": 187
+          },
+          "delta_pf": 0.128,
+          "delta_wr_pp": 2.2,
+          "delta_trades": 41
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 199,
+          "win_rate": 0.36683417085427134,
+          "profit_factor": 1.136,
+          "max_drawdown_pct": 16.81,
+          "expectancy_usd": 8.81,
+          "gate_rejections": {
+            "mqs": 114,
+            "score": 2390,
+            "votes": 17,
+            "contradiction": 257,
+            "reversal_veto": 160
+          },
+          "delta_pf": 0.043,
+          "delta_wr_pp": 0.9,
+          "delta_trades": -41
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 251,
+          "win_rate": 0.3745019920318725,
+          "profit_factor": 1.16,
+          "max_drawdown_pct": 14.03,
+          "expectancy_usd": 11.9,
+          "gate_rejections": {
+            "mqs": 88,
+            "score": 1833,
+            "votes": 12,
+            "contradiction": 260,
+            "reversal_veto": 179
+          },
+          "delta_pf": 0.067,
+          "delta_wr_pp": 1.6,
+          "delta_trades": 11
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 259,
+          "win_rate": 0.3590733590733591,
+          "profit_factor": 1.093,
+          "max_drawdown_pct": 12.96,
+          "expectancy_usd": 6.39,
+          "gate_rejections": {
+            "mqs": 91,
+            "score": 1699,
+            "votes": 9,
+            "contradiction": 390,
+            "reversal_veto": 191
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.1,
+          "delta_trades": 19
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 293,
+          "win_rate": 0.3720136518771331,
+          "profit_factor": 1.171,
+          "max_drawdown_pct": 11.09,
+          "expectancy_usd": 12.59,
+          "gate_rejections": {
+            "mqs": 83,
+            "score": 1540,
+            "votes": 3,
+            "contradiction": 365,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.078,
+          "delta_wr_pp": 1.4,
+          "delta_trades": 53
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 280,
+          "win_rate": 0.37142857142857144,
+          "profit_factor": 1.156,
+          "max_drawdown_pct": 17.52,
+          "expectancy_usd": 11.34,
+          "gate_rejections": {
+            "mqs": 70,
+            "score": 1419,
+            "votes": 5,
+            "contradiction": 311,
+            "reversal_veto": 189
+          },
+          "delta_pf": 0.063,
+          "delta_wr_pp": 1.3,
+          "delta_trades": 40
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 282,
+          "win_rate": 0.36524822695035464,
+          "profit_factor": 1.145,
+          "max_drawdown_pct": 11.82,
+          "expectancy_usd": 10.44,
+          "gate_rejections": {
+            "mqs": 84,
+            "score": 1635,
+            "votes": 3,
+            "contradiction": 380,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.052,
+          "delta_wr_pp": 0.7,
+          "delta_trades": 42
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 303,
+          "win_rate": 0.3696369636963696,
+          "profit_factor": 1.16,
+          "max_drawdown_pct": 12.75,
+          "expectancy_usd": 11.69,
+          "gate_rejections": {
+            "mqs": 83,
+            "score": 1514,
+            "votes": 2,
+            "contradiction": 362,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.067,
+          "delta_wr_pp": 1.1,
+          "delta_trades": 63
+        }
+      ]
+    },
+    "ETHUSD": {
+      "csv": "data/ETHUSD_H1_2y.csv",
+      "bars": 17352,
+      "independence": {
+        "per_engine": {
+          "smc": {
+            "samples": 2142,
+            "vote_rate_pct": 77.4,
+            "counter_trend_pct": 44.9
+          },
+          "price_action": {
+            "samples": 2142,
+            "vote_rate_pct": 75.1,
+            "counter_trend_pct": 44.4
+          },
+          "ict": {
+            "samples": 2142,
+            "vote_rate_pct": 6.8,
+            "counter_trend_pct": 34.2
+          },
+          "nnfx": {
+            "samples": 2142,
+            "vote_rate_pct": 100.0,
+            "counter_trend_pct": 27.0
+          },
+          "quant": {
+            "samples": 2142,
+            "vote_rate_pct": 69.0,
+            "counter_trend_pct": 49.8
+          },
+          "wyckoff": {
+            "samples": 2142,
+            "vote_rate_pct": 25.2,
+            "counter_trend_pct": 90.2
+          },
+          "divergence": {
+            "samples": 2142,
+            "vote_rate_pct": 57.7,
+            "counter_trend_pct": 53.0
+          },
+          "market_structure": {
+            "samples": 2142,
+            "vote_rate_pct": 75.4,
+            "counter_trend_pct": 37.1
+          },
+          "sentiment": {
+            "samples": 2142,
+            "vote_rate_pct": 33.0,
+            "counter_trend_pct": 91.2
+          }
+        },
+        "pairwise_agreement": {
+          "smc|price_action": {
+            "n": 1232,
+            "agree_pct": 49.0
+          },
+          "smc|ict": {
+            "n": 106,
+            "agree_pct": 62.3
+          },
+          "smc|nnfx": {
+            "n": 1658,
+            "agree_pct": 72.6
+          },
+          "smc|quant": {
+            "n": 1156,
+            "agree_pct": 47.8
+          },
+          "smc|wyckoff": {
+            "n": 437,
+            "agree_pct": 31.1
+          },
+          "smc|divergence": {
+            "n": 967,
+            "agree_pct": 51.0
+          },
+          "smc|market_structure": {
+            "n": 1252,
+            "agree_pct": 49.4
+          },
+          "smc|sentiment": {
+            "n": 617,
+            "agree_pct": 23.0
+          },
+          "price_action|ict": {
+            "n": 119,
+            "agree_pct": 11.8
+          },
+          "price_action|nnfx": {
+            "n": 1609,
+            "agree_pct": 61.9
+          },
+          "price_action|quant": {
+            "n": 1060,
+            "agree_pct": 86.8
+          },
+          "price_action|wyckoff": {
+            "n": 414,
+            "agree_pct": 20.0
+          },
+          "price_action|divergence": {
+            "n": 939,
+            "agree_pct": 48.5
+          },
+          "price_action|market_structure": {
+            "n": 1211,
+            "agree_pct": 59.8
+          },
+          "price_action|sentiment": {
+            "n": 525,
+            "agree_pct": 17.7
+          },
+          "ict|nnfx": {
+            "n": 146,
+            "agree_pct": 58.2
+          },
+          "ict|quant": {
+            "n": 102,
+            "agree_pct": 21.6
+          },
+          "ict|wyckoff": {
+            "n": 14,
+            "agree_pct": 100.0
+          },
+          "ict|divergence": {
+            "n": 77,
+            "agree_pct": 68.8
+          },
+          "ict|market_structure": {
+            "n": 105,
+            "agree_pct": 64.8
+          },
+          "ict|sentiment": {
+            "n": 7,
+            "agree_pct": null
+          },
+          "nnfx|quant": {
+            "n": 1479,
+            "agree_pct": 52.9
+          },
+          "nnfx|wyckoff": {
+            "n": 539,
+            "agree_pct": 3.5
+          },
+          "nnfx|divergence": {
+            "n": 1237,
+            "agree_pct": 50.8
+          },
+          "nnfx|market_structure": {
+            "n": 1616,
+            "agree_pct": 60.0
+          },
+          "nnfx|sentiment": {
+            "n": 706,
+            "agree_pct": 0.3
+          },
+          "quant|wyckoff": {
+            "n": 354,
+            "agree_pct": 31.6
+          },
+          "quant|divergence": {
+            "n": 867,
+            "agree_pct": 49.4
+          },
+          "quant|market_structure": {
+            "n": 1086,
+            "agree_pct": 56.4
+          },
+          "quant|sentiment": {
+            "n": 435,
+            "agree_pct": 31.3
+          },
+          "wyckoff|divergence": {
+            "n": 278,
+            "agree_pct": 55.4
+          },
+          "wyckoff|market_structure": {
+            "n": 399,
+            "agree_pct": 31.1
+          },
+          "wyckoff|sentiment": {
+            "n": 341,
+            "agree_pct": 100.0
+          },
+          "divergence|market_structure": {
+            "n": 916,
+            "agree_pct": 44.2
+          },
+          "divergence|sentiment": {
+            "n": 408,
+            "agree_pct": 53.2
+          },
+          "market_structure|sentiment": {
+            "n": 530,
+            "agree_pct": 27.4
+          }
+        }
+      },
+      "ablation": [
+        {
+          "variant": "BASELINE (divergence+ict+macro+market_structure+nnfx+price_action+quant+sentiment+smc+wyckoff)",
+          "trades": 273,
+          "win_rate": 0.32967032967032966,
+          "profit_factor": 0.969,
+          "max_drawdown_pct": 22.9,
+          "expectancy_usd": -1.97,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1685,
+            "votes": 3,
+            "contradiction": 379,
+            "reversal_veto": 153
+          },
+          "delta_pf": null,
+          "delta_wr_pp": null,
+          "delta_trades": null
+        },
+        {
+          "variant": "LOO: \u2212divergence",
+          "trades": 301,
+          "win_rate": 0.34219269102990035,
+          "profit_factor": 1.024,
+          "max_drawdown_pct": 27.26,
+          "expectancy_usd": 1.64,
+          "gate_rejections": {
+            "mqs": 65,
+            "score": 1720,
+            "votes": 7,
+            "contradiction": 397,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.055,
+          "delta_wr_pp": 1.3,
+          "delta_trades": 28
+        },
+        {
+          "variant": "LOO: \u2212ict",
+          "trades": 277,
+          "win_rate": 0.33212996389891697,
+          "profit_factor": 0.979,
+          "max_drawdown_pct": 23.7,
+          "expectancy_usd": -1.28,
+          "gate_rejections": {
+            "mqs": 65,
+            "score": 1671,
+            "votes": 3,
+            "contradiction": 385,
+            "reversal_veto": 153
+          },
+          "delta_pf": 0.01,
+          "delta_wr_pp": 0.2,
+          "delta_trades": 4
+        },
+        {
+          "variant": "LOO: \u2212macro",
+          "trades": 273,
+          "win_rate": 0.32967032967032966,
+          "profit_factor": 0.969,
+          "max_drawdown_pct": 22.9,
+          "expectancy_usd": -1.97,
+          "gate_rejections": {
+            "mqs": 68,
+            "score": 1685,
+            "votes": 3,
+            "contradiction": 379,
+            "reversal_veto": 153
+          },
+          "delta_pf": 0.0,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 0
+        },
+        {
+          "variant": "LOO: \u2212market_structure",
+          "trades": 304,
+          "win_rate": 0.33223684210526316,
+          "profit_factor": 0.971,
+          "max_drawdown_pct": 21.27,
+          "expectancy_usd": -1.87,
+          "gate_rejections": {
+            "mqs": 59,
+            "score": 1578,
+            "votes": 11,
+            "contradiction": 237,
+            "reversal_veto": 153
+          },
+          "delta_pf": 0.002,
+          "delta_wr_pp": 0.3,
+          "delta_trades": 31
+        },
+        {
+          "variant": "LOO: \u2212nnfx",
+          "trades": 212,
+          "win_rate": 0.32547169811320753,
+          "profit_factor": 0.947,
+          "max_drawdown_pct": 16.95,
+          "expectancy_usd": -3.33,
+          "gate_rejections": {
+            "mqs": 94,
+            "score": 2294,
+            "votes": 35,
+            "contradiction": 255,
+            "reversal_veto": 131
+          },
+          "delta_pf": -0.022,
+          "delta_wr_pp": -0.4,
+          "delta_trades": -61
+        },
+        {
+          "variant": "LOO: \u2212price_action",
+          "trades": 251,
+          "win_rate": 0.3346613545816733,
+          "profit_factor": 0.992,
+          "max_drawdown_pct": 18.13,
+          "expectancy_usd": -0.51,
+          "gate_rejections": {
+            "mqs": 76,
+            "score": 1737,
+            "votes": 19,
+            "contradiction": 255,
+            "reversal_veto": 141
+          },
+          "delta_pf": 0.023,
+          "delta_wr_pp": 0.5,
+          "delta_trades": -22
+        },
+        {
+          "variant": "LOO: \u2212quant",
+          "trades": 279,
+          "win_rate": 0.32974910394265233,
+          "profit_factor": 0.967,
+          "max_drawdown_pct": 25.64,
+          "expectancy_usd": -1.99,
+          "gate_rejections": {
+            "mqs": 65,
+            "score": 1579,
+            "votes": 8,
+            "contradiction": 355,
+            "reversal_veto": 152
+          },
+          "delta_pf": -0.002,
+          "delta_wr_pp": 0.0,
+          "delta_trades": 6
+        },
+        {
+          "variant": "LOO: \u2212sentiment",
+          "trades": 328,
+          "win_rate": 0.3384146341463415,
+          "profit_factor": 1.007,
+          "max_drawdown_pct": 22.88,
+          "expectancy_usd": 0.44,
+          "gate_rejections": {
+            "mqs": 57,
+            "score": 1372,
+            "votes": 3,
+            "contradiction": 406,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.038,
+          "delta_wr_pp": 0.9,
+          "delta_trades": 55
+        },
+        {
+          "variant": "LOO: \u2212smc",
+          "trades": 327,
+          "win_rate": 0.3333333333333333,
+          "profit_factor": 0.978,
+          "max_drawdown_pct": 21.26,
+          "expectancy_usd": -1.39,
+          "gate_rejections": {
+            "mqs": 49,
+            "score": 1395,
+            "votes": 7,
+            "contradiction": 345,
+            "reversal_veto": 146
+          },
+          "delta_pf": 0.009,
+          "delta_wr_pp": 0.4,
+          "delta_trades": 54
+        },
+        {
+          "variant": "LOO: \u2212wyckoff",
+          "trades": 319,
+          "win_rate": 0.34169278996865204,
+          "profit_factor": 1.023,
+          "max_drawdown_pct": 21.98,
+          "expectancy_usd": 1.49,
+          "gate_rejections": {
+            "mqs": 55,
+            "score": 1388,
+            "votes": 4,
+            "contradiction": 399,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.054,
+          "delta_wr_pp": 1.2,
+          "delta_trades": 46
+        },
+        {
+          "variant": "ABLATE: H013 reversal veto OFF",
+          "trades": 340,
+          "win_rate": 0.35294117647058826,
+          "profit_factor": 1.076,
+          "max_drawdown_pct": 21.94,
+          "expectancy_usd": 5.27,
+          "gate_rejections": {
+            "mqs": 55,
+            "score": 1337,
+            "votes": 3,
+            "contradiction": 398,
+            "reversal_veto": 0
+          },
+          "delta_pf": 0.107,
+          "delta_wr_pp": 2.3,
+          "delta_trades": 67
+        }
+      ]
+    }
+  }
+}

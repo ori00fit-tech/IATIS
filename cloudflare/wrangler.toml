@@ -7,7 +7,7 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "iatis"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "8152f493-69ac-40c0-a158-dfd8c381cc4e"
 
 # D1_PROXY_TOKEN is a secret, not a var — set it with:
 #   wrangler secret put D1_PROXY_TOKEN

@@ -185,7 +185,7 @@ risk:
 # (PERPLEXITY_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), never from
 # this file.
 ai:
-  enabled: false
+  enabled: true
   provider: perplexity   # perplexity | openai | anthropic
   model: sonar
   temperature: 0.1

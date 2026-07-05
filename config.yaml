@@ -138,9 +138,15 @@ features:
   ai_weight_suggestions: true    # execution/api_server.py — POST /ai/optimize-weights
 fundamentals:
   blackout_look_ahead_min: 60
-  file: storage/system.log
-  level: INFO
   news_filter_enabled: true
+# Root logger (utils/logger.py). `level` can be overridden per-environment
+# via IATIS_LOG_LEVEL. `file` empty = stderr only (the systemd units already
+# capture stderr into journald); set a path to ALSO write a rotating file
+# (10 MB x 5 backups). These keys used to live, unread, under fundamentals:
+# — file logging silently never existed (production audit, Phase 9).
+logging:
+  level: INFO
+  file: ""
 # Market Quality Score gate (core/market_quality.py) — session/volatility/
 # day-of-week scoring that decides whether conditions are good enough to
 # run the engines at all. Already active in every live run; these are its

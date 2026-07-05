@@ -17,6 +17,8 @@ in Phase 1.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Any
 
 from confluence.contradiction_engine import check_contradictions
 from confluence.reversal_veto import check_reversal_veto
@@ -116,33 +118,39 @@ def build_active_engines(config: dict) -> list:
     return engines
 
 
-def run_pipeline(config: dict) -> dict:
-    logger.info("=== IATIS pipeline starting ===")
+# ---------------------------------------------------------------------------
+# Pipeline stages (audit item H6). run_pipeline() was a single function at
+# cyclomatic complexity 71; each stage below is the same code operating on
+# the same inputs, extracted so gates can be reasoned about and tested
+# individually. run_pipeline() at the bottom is the orchestrator.
+# ---------------------------------------------------------------------------
 
-    # Fail loudly at boot if confluence config is internally inconsistent
-    # (e.g. requiring more agreeing engines than are enabled), rather than
-    # silently guaranteeing NO_TRADE forever. See confluence/score_calculator.py.
-    validate_confluence_config(config)
+# Symbols that require Yahoo Finance (404 on Twelve Data Free).
+# Failover handles this automatically, but we need the correct YF symbol.
+_YF_ONLY = {
+    "USOIL": "WTI/USD",   # CL=F on Yahoo
+    "US30":  "DJI",       # ^DJI on Yahoo
+    "NAS100": "NDX",      # ^IXIC on Yahoo
+    "SPX500": "SPX",      # ^GSPC on Yahoo
+    "XAGUSD": "XAG/USD",  # SI=F on Yahoo
+}
 
-    # 1. Load data
-    source = config.get("data", {}).get("source", "synthetic")
 
-    timeframes = config["data"]["timeframes"]
+def _symbol_config(config: dict) -> dict:
+    """Per-symbol overrides (min_score, rr, regime_filter) from
+    data.twelve_data_symbols for the currently configured symbol."""
+    symbol = config["data"].get("symbol", "")
+    return next(
+        (s for s in config.get("data", {}).get("twelve_data_symbols", [])
+         if s.get("internal") == symbol),
+        {},
+    )
 
-    if source == "twelve_data":
-        # Data loading is handled by load_multi_timeframe_with_failover()
-        # which reads TWELVE_DATA_API_KEY from env internally.
-        pass
-    # Symbols that require Yahoo Finance (404 on Twelve Data Free)
-    # Failover handles this automatically, but we need correct YF symbol
-    _YF_ONLY = {
-        "USOIL": "WTI/USD",   # CL=F on Yahoo
-        "US30":  "DJI",       # ^DJI on Yahoo
-        "NAS100": "NDX",      # ^IXIC on Yahoo
-        "SPX500": "SPX",      # ^GSPC on Yahoo
-        "XAGUSD": "XAG/USD",  # SI=F on Yahoo
-    }
 
+def _load_market_data(config: dict, timeframes: list[str]):
+    """Stage 1: fetch (or inject) OHLCV and build the multi-timeframe view.
+
+    Returns (df_base, mtf_data)."""
     internal_sym = config["data"].get("symbol", "EURUSD")
     td_symbol = (
         config["data"].get("twelve_data_symbol")
@@ -155,22 +163,359 @@ def run_pipeline(config: dict) -> dict:
         injected_df = config["data"].get("_injected_df")
         if injected_df is not None and len(injected_df) > 0:
             df_base = injected_df.copy()
-            mtf_data = build_multi_timeframe_view(df_base, timeframes)
         else:
             df_base = load_data(config)
-            mtf_data = build_multi_timeframe_view(df_base, timeframes)
-    else:
-        # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
+        return df_base, build_multi_timeframe_view(df_base, timeframes)
+
+    # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
+    # (load_multi_timeframe_with_failover reads TWELVE_DATA_API_KEY from env).
+    try:
+        mtf_data = load_multi_timeframe_with_failover(
+            td_symbol, timeframes,
+            outputsize=config["data"].get("bars_to_load", 500),
+        )
+        return mtf_data[timeframes[0]], mtf_data
+    except Exception as exc:
+        logger.warning(f"Failover fetch failed, trying load_data: {exc}")
+        df_base = load_data(config)
+        return df_base, build_multi_timeframe_view(df_base, timeframes)
+
+
+def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
+    """Stage 2: Market Quality Score — gate before running 9 engines.
+
+    Returns (mqs_result, report): a non-None report means the gate
+    rejected the session and the pipeline should stop with that NO_TRADE."""
+    mq_cfg = config.get("market_quality", {})
+    mqs_result = assess_market_quality(
+        df=df_base,
+        symbol=config["data"].get("symbol", ""),
+        threshold_good=mq_cfg.get("threshold_good", MQS_THRESHOLD_GOOD),
+        threshold_fair=mq_cfg.get("threshold_fair", MQS_THRESHOLD_FAIR),
+    )
+    features_cfg = config.get("features", {})
+    if features_cfg.get("market_quality_gate", True) and not mqs_result.should_trade:
+        return mqs_result, {
+            "final_verdict": "NO_TRADE",
+            "symbol": config["data"].get("symbol", ""),
+            "summary": f"NO_TRADE: Market Quality Score={mqs_result.score:.0f}/100 ({mqs_result.grade}) — {'; '.join(mqs_result.reasons)}",
+            "market_quality": mqs_result.to_dict(),
+        }
+    return mqs_result, None
+
+
+@dataclass
+class _ConfluenceEval:
+    """Everything the confluence stage decided, for the stages after it."""
+    vote_result: Any
+    score_result: Any
+    contradiction_result: Any
+    mtf_result: Any
+    reversal_veto: Any
+    active_weights: dict
+    adjusted_score: float
+    fail_reasons: list[str]
+    passed: bool
+    symbol_cfg: dict
+
+
+def _evaluate_confluence(
+    config: dict,
+    outputs: list[EngineOutput],
+    mtf_data: dict,
+    regime_state: str,
+    regime_volatility: str,
+) -> _ConfluenceEval:
+    """Stage 3: vote + regime-aware weighted score + contradiction check +
+    MTF confirmation + H013 reversal veto."""
+    # Adjust weights based on current market regime
+    base_weights = config["confluence"]["weights"]
+    active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
+
+    vote_result = tally_votes(outputs, active_weights)
+    score_result = calculate_score(outputs, active_weights)
+    contradiction_result = check_contradictions(outputs)
+
+    # A2: Multi-TF Confirmation — D1 trend must align with H1 signal
+    mtf_result = check_mtf_confirmation(
+        h1_bias=vote_result.winning_bias.value,
+        mtf_data=mtf_data,
+    )
+    adjusted_score = round(
+        max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
+    )
+
+    # Per-symbol min_score override
+    symbol_cfg = _symbol_config(config)
+    min_score = symbol_cfg.get("min_score") or config["confluence"]["min_score_to_trade"]
+    min_engines = config["confluence"]["min_engines_agreeing"]
+
+    fail_reasons: list[str] = []
+    if adjusted_score < min_score:
+        fail_reasons.append(
+            f"Confluence score {adjusted_score} below minimum required {min_score}"
+            + (f" (MTF adjustment: {mtf_result.score_adjustment:+.1f})" if mtf_result.score_adjustment != 0 else "")
+        )
+    if vote_result.agree_count < min_engines:
+        fail_reasons.append(
+            f"Only {vote_result.agree_count} engine(s) agree, minimum required is {min_engines}"
+        )
+    if contradiction_result.blocked:
+        fail_reasons.extend(contradiction_result.reasons)
+
+    # H013: Reversal Engine Group Veto — when 2+ reversal engines
+    # (Divergence, Wyckoff, Sentiment) unanimously oppose the trend
+    # direction → block or reduce size
+    reversal_veto = check_reversal_veto(outputs, vote_result.winning_bias)
+    if reversal_veto.vetoed:
+        fail_reasons.append(reversal_veto.reason)
+    elif reversal_veto.soft_veto:
+        # Soft veto: don't block, but reduce adjusted_score proportionally
+        adjusted_score = round(adjusted_score * reversal_veto.confidence_multiplier, 2)
+        logger.info(
+            f"H013 soft veto applied: score {score_result.final_score} → {adjusted_score}"
+        )
+
+    return _ConfluenceEval(
+        vote_result=vote_result,
+        score_result=score_result,
+        contradiction_result=contradiction_result,
+        mtf_result=mtf_result,
+        reversal_veto=reversal_veto,
+        active_weights=active_weights,
+        adjusted_score=adjusted_score,
+        fail_reasons=fail_reasons,
+        passed=len(fail_reasons) == 0,
+        symbol_cfg=symbol_cfg,
+    )
+
+
+def _risk_gate(config: dict, df_base, conf: _ConfluenceEval):
+    """Stage 4: sovereign risk veto on live portfolio state.
+
+    Returns (risk_result, entry, stop, target) — all None when confluence
+    already failed (risk inputs don't exist without a direction)."""
+    if not conf.passed:
+        return None, None, None, None
+
+    entry = df_base["close"].iloc[-1]
+    atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
+    direction = 1 if conf.vote_result.winning_bias == Bias.BULLISH else -1
+
+    # Per-symbol RR override
+    symbol_rr = conf.symbol_cfg.get("rr") or config["risk"]["min_risk_reward"]
+    sl_multiplier = config.get("risk", {}).get("sl_atr_multiplier", 2.5)
+    stop = entry - direction * atr_estimate * sl_multiplier
+    target = entry + direction * atr_estimate * sl_multiplier * symbol_rr
+
+    # Live portfolio state (drawdown / open risk / correlated exposure)
+    # derived from the outcomes DB — previously hardcoded zeros, which
+    # silently disabled the drawdown stop and exposure caps.
+    portfolio_state = compute_portfolio_state(
+        symbol=config["data"].get("symbol", ""),
+        config=config,
+    )
+    risk_inputs = RiskInputs(
+        account_balance=portfolio_state.account_balance,
+        entry_price=float(entry),
+        stop_loss_price=float(stop),
+        take_profit_price=float(target),
+        current_open_risk_pct=portfolio_state.current_open_risk_pct,
+        current_drawdown_pct=portfolio_state.current_drawdown_pct,
+        correlated_exposure_pct=portfolio_state.correlated_exposure_pct,
+    )
+    return evaluate_risk(risk_inputs, config), entry, stop, target
+
+
+def _news_gate(config: dict, confluence_passed: bool):
+    """Stage 5: news blackout veto. Only runs when confluence passed
+    (saves API calls on NO_TRADE). Returns (news_risk, news_blocked)."""
+    news_risk = None
+    news_blocked = False
+    if confluence_passed and config.get("fundamentals", {}).get("news_filter_enabled", True):
         try:
-            mtf_data = load_multi_timeframe_with_failover(
-                td_symbol, timeframes,
-                outputsize=config["data"].get("bars_to_load", 500),
+            news_risk = assess_news_risk(
+                symbol=config["data"]["symbol"],
+                look_ahead_minutes=config.get("fundamentals", {}).get(
+                    "blackout_look_ahead_min", 60
+                ),
             )
-            df_base = mtf_data[timeframes[0]]
+            news_blocked = news_risk.should_block
+            if news_blocked:
+                logger.info(
+                    f"News blackout for {config['data']['symbol']}: "
+                    f"score={news_risk.news_risk_score} reason={news_risk.blackout_reason}"
+                )
         except Exception as exc:
-            logger.warning(f"Failover fetch failed, trying load_data: {exc}")
-            df_base = load_data(config)
-            mtf_data = build_multi_timeframe_view(df_base, timeframes)
+            logger.warning(f"News risk check failed (non-fatal): {exc}")
+    return news_risk, news_blocked
+
+
+def _final_verdict(
+    config: dict,
+    conf: _ConfluenceEval,
+    risk_pass: bool,
+    news_blocked: bool,
+    regime_state: str,
+    mqs_result: Any,
+    outputs: list[EngineOutput],
+):
+    """Stage 6: combine the gates, apply the per-symbol regime filter and
+    the Meta Decision layer. Returns (final_verdict, meta)."""
+    final_verdict = "EXECUTE" if (conf.passed and risk_pass and not news_blocked) else "NO_TRADE"
+
+    # Apply per-symbol regime filter (Tier 2 symbols: TRENDING only)
+    symbol = config["data"].get("symbol", "")
+    if final_verdict == "EXECUTE" and conf.symbol_cfg.get("regime_filter"):
+        required_regime = conf.symbol_cfg["regime_filter"]
+        if regime_state != required_regime:
+            final_verdict = "NO_TRADE"
+            logger.info(
+                f"Per-symbol regime filter: {symbol} requires {required_regime}, "
+                f"got {regime_state} → NO_TRADE"
+            )
+
+    # Meta Decision Layer — confidence + stability + engine contributions
+    meta = None
+    if final_verdict == "EXECUTE":
+        try:
+            meta = evaluate_meta_decision(
+                outputs=outputs,
+                weights=conf.active_weights,
+                adjusted_score=conf.adjusted_score,
+                vote_result=conf.vote_result,
+                report_context={"market_quality": mqs_result.to_dict()},
+            )
+            # Meta can downgrade EXECUTE to NO_TRADE if confidence too low
+            if meta.verdict == "BLOCK":
+                final_verdict = "NO_TRADE"
+                logger.info(f"Meta Decision BLOCKED: {meta.reason}")
+        except Exception as exc:
+            logger.warning(f"Meta Decision failed (non-fatal): {exc}")
+
+    return final_verdict, meta
+
+
+def _build_report(
+    config: dict,
+    df_base,
+    regime_result,
+    outputs: list[EngineOutput],
+    disabled: list[str],
+    conf: _ConfluenceEval,
+    risk_result,
+    news_risk,
+    news_blocked: bool,
+    entry,
+    stop,
+    target,
+    final_verdict: str,
+    meta,
+) -> dict:
+    """Stage 7: assemble the human summary and the full decision report."""
+    vote_result = conf.vote_result
+    score_result = conf.score_result
+    mtf_result = conf.mtf_result
+
+    if final_verdict == "EXECUTE":
+        summary = (
+            f"EXECUTE {vote_result.winning_bias.value}: "
+            f"{vote_result.agree_count}/{score_result.engines_participating} active engines agreed, "
+            f"confluence score {conf.adjusted_score}/100, risk checks passed."
+        )
+        if news_risk:
+            summary += f" News risk: {news_risk.risk_level} ({news_risk.news_risk_score:.0f}/100)."
+        if mtf_result.score_adjustment > 0:
+            summary += f" D1 confirms direction (+{mtf_result.score_adjustment:.0f}pts)."
+    elif news_blocked and news_risk:
+        summary = f"NO_TRADE: {news_risk.blackout_reason}"
+    elif not conf.passed:
+        summary = "NO_TRADE: " + "; ".join(conf.fail_reasons)
+    else:
+        summary = "NO_TRADE: risk gate rejected — " + "; ".join(risk_result.reasons if risk_result else [])
+
+    return {
+        "symbol": config["data"]["symbol"],
+        "summary": summary,
+        "regime": {
+            "state": regime_result.regime.value,
+            "confidence": regime_result.confidence,
+            "volatility": regime_result.volatility,
+            "trend_strength": regime_result.trend_strength,
+            "notes": regime_result.notes,
+        },
+        "engine_outputs": [o.to_dict() for o in outputs],
+        "disabled_engines": disabled,
+        "confluence": {
+            "vote": {
+                "winning_bias": vote_result.winning_bias.value,
+                "agree_count": vote_result.agree_count,
+                "total_engines": vote_result.total_engines,
+                "breakdown": vote_result.breakdown,
+            },
+            "score": conf.adjusted_score,
+            "raw_score": score_result.final_score,
+            "mtf": {
+                "d1_bias": mtf_result.d1_bias,
+                "d1_adx": mtf_result.d1_adx,
+                "adjustment": mtf_result.score_adjustment,
+                "confirming": mtf_result.confirming,
+                "reason": mtf_result.reason,
+            },
+            "directional_score": score_result.directional_score,
+            "contributions": score_result.contributions,
+            "engines_participating": score_result.engines_participating,
+            "engines_total": score_result.engines_total,
+            "participating_weight_share": score_result.participating_weight_share,
+            "regime_weights_applied": conf.active_weights,
+            "contradiction": {
+                "blocked": conf.contradiction_result.blocked,
+                "reasons": conf.contradiction_result.reasons,
+            },
+            "reversal_veto": conf.reversal_veto.to_dict(),
+            "passed": conf.passed,
+            "fail_reasons": conf.fail_reasons,
+        },
+        "risk": {
+            "passed": risk_result.passed if risk_result else None,
+            "reasons": risk_result.reasons if risk_result else ["Risk gate not evaluated — confluence failed first"],
+            "recommended_risk_pct": risk_result.recommended_risk_pct if risk_result else None,
+            "position_size_units": risk_result.position_size_units if risk_result else None,
+        },
+        "news": news_risk.to_dict() if news_risk else {
+            "news_risk_score": 0,
+            "risk_level": "LOW",
+            "blackout_active": False,
+            "blackout_reason": "News filter not evaluated",
+            "upcoming_events_count": 0,
+            "next_high_impact": None,
+        },
+        # Latest close — populated on EVERY report (EXECUTE and NO_TRADE)
+        # so the scheduler's auto-close can evaluate open outcomes even
+        # when this run produced no trade.
+        "current_price": float(df_base["close"].iloc[-1]),
+        # Trade levels — populated only when confluence passed (risk inputs exist).
+        # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.
+        "entry_price": float(entry) if conf.passed else None,
+        "stop_loss": float(stop) if conf.passed else None,
+        "take_profit": float(target) if conf.passed else None,
+        "risk_reward": f"1:{config['risk']['min_risk_reward']:.0f}" if conf.passed else None,
+        "final_verdict": final_verdict,
+        "meta_decision": meta.to_dict() if meta else None,
+    }
+
+
+def run_pipeline(config: dict) -> dict:
+    logger.info("=== IATIS pipeline starting ===")
+
+    # Fail loudly at boot if confluence config is internally inconsistent
+    # (e.g. requiring more agreeing engines than are enabled), rather than
+    # silently guaranteeing NO_TRADE forever. See confluence/score_calculator.py.
+    validate_confluence_config(config)
+
+    # 1. Load data
+    timeframes = config["data"]["timeframes"]
+    df_base, mtf_data = _load_market_data(config, timeframes)
 
     # 2b. Validate base timeframe (applies to both paths)
     try:
@@ -182,21 +527,8 @@ def run_pipeline(config: dict) -> dict:
         return failure_report
 
     # 3. Market Quality Score — gate before running 9 engines
-    mq_cfg = config.get("market_quality", {})
-    mqs_result = assess_market_quality(
-        df=df_base,
-        symbol=config["data"].get("symbol", ""),
-        threshold_good=mq_cfg.get("threshold_good", MQS_THRESHOLD_GOOD),
-        threshold_fair=mq_cfg.get("threshold_fair", MQS_THRESHOLD_FAIR),
-    )
-    features_cfg = config.get("features", {})
-    if features_cfg.get("market_quality_gate", True) and not mqs_result.should_trade:
-        mqs_report = {
-            "final_verdict": "NO_TRADE",
-            "symbol": config["data"].get("symbol", ""),
-            "summary": f"NO_TRADE: Market Quality Score={mqs_result.score:.0f}/100 ({mqs_result.grade}) — {'; '.join(mqs_result.reasons)}",
-            "market_quality": mqs_result.to_dict(),
-        }
+    mqs_result, mqs_report = _market_quality_gate(config, df_base)
+    if mqs_report is not None:
         _safe_store("decision_log (MQS gate)", log_decision, mqs_report)
         _safe_store("decision_db (MQS gate)", log_decision_db, mqs_report)
         return mqs_report
@@ -217,244 +549,30 @@ def run_pipeline(config: dict) -> dict:
     # entries in the report so the output never hides that they didn't vote.
     disabled = [k for k, v in config.get("engines", {}).get("enabled", {}).items() if not v]
 
-    # 6. Confluence: vote + regime-aware weighted score + contradiction check
+    # 6. Confluence: vote + regime-aware weighted score + contradiction +
+    #    MTF confirmation + H013 reversal veto
     regime_state = regime_result.regime.value if regime_result else "TRENDING"
     regime_volatility = regime_result.volatility if regime_result else "normal"
+    conf = _evaluate_confluence(config, outputs, mtf_data, regime_state, regime_volatility)
 
-    # Adjust weights based on current market regime
-    base_weights = config["confluence"]["weights"]
-    active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
-
-    vote_result = tally_votes(outputs, active_weights)
-    score_result = calculate_score(outputs, active_weights)
-    contradiction_result = check_contradictions(outputs)
-
-    # A2: Multi-TF Confirmation — D1 trend must align with H1 signal
-    mtf_result = check_mtf_confirmation(
-        h1_bias=vote_result.winning_bias.value,
-        mtf_data=mtf_data,
-    )
-    # Apply MTF score adjustment
-    adjusted_score = round(
-        max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
-    )
-
-    # Per-symbol min_score override
-    symbol_cfg_for_score = next(
-        (s for s in config.get("data", {}).get("twelve_data_symbols", [])
-         if s.get("internal") == config["data"].get("symbol", "")),
-        {}
-    )
-    min_score = symbol_cfg_for_score.get("min_score") or config["confluence"]["min_score_to_trade"]
-    min_engines = config["confluence"]["min_engines_agreeing"]
-
-    confluence_fail_reasons: list[str] = []
-    if adjusted_score < min_score:
-        confluence_fail_reasons.append(
-            f"Confluence score {adjusted_score} below minimum required {min_score}"
-            + (f" (MTF adjustment: {mtf_result.score_adjustment:+.1f})" if mtf_result.score_adjustment != 0 else "")
-        )
-    if vote_result.agree_count < min_engines:
-        confluence_fail_reasons.append(
-            f"Only {vote_result.agree_count} engine(s) agree, minimum required is {min_engines}"
-        )
-    if contradiction_result.blocked:
-        confluence_fail_reasons.extend(contradiction_result.reasons)
-
-    # H013: Reversal Engine Group Veto
-    # When 2+ reversal engines (Divergence, Wyckoff, Sentiment)
-    # unanimously oppose the trend direction → block or reduce size
-    reversal_veto = check_reversal_veto(outputs, vote_result.winning_bias)
-    if reversal_veto.vetoed:
-        confluence_fail_reasons.append(reversal_veto.reason)
-    elif reversal_veto.soft_veto:
-        # Soft veto: don't block, but reduce adjusted_score proportionally
-        adjusted_score = round(adjusted_score * reversal_veto.confidence_multiplier, 2)
-        logger.info(
-            f"H013 soft veto applied: score {score_result.final_score} → {adjusted_score}"
-        )
-
-    confluence_pass = len(confluence_fail_reasons) == 0
-
-    # 7. Risk gate (only meaningful if confluence passed — but in Phase 1
-    #    we still demonstrate the risk engine running on illustrative inputs)
-    risk_result = None
-    if confluence_pass:
-        entry = df_base["close"].iloc[-1]
-        atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
-        direction = 1 if vote_result.winning_bias == Bias.BULLISH else -1
-
-        # Per-symbol RR override
-        symbol_rr = symbol_cfg_for_score.get("rr") or config["risk"]["min_risk_reward"]
-        sl_multiplier = config.get("risk", {}).get("sl_atr_multiplier", 2.5)
-        stop = entry - direction * atr_estimate * sl_multiplier
-        target = entry + direction * atr_estimate * sl_multiplier * symbol_rr
-
-        # Live portfolio state (drawdown / open risk / correlated exposure)
-        # derived from the outcomes DB — previously hardcoded zeros, which
-        # silently disabled the drawdown stop and exposure caps.
-        portfolio_state = compute_portfolio_state(
-            symbol=config["data"].get("symbol", ""),
-            config=config,
-        )
-        risk_inputs = RiskInputs(
-            account_balance=portfolio_state.account_balance,
-            entry_price=float(entry),
-            stop_loss_price=float(stop),
-            take_profit_price=float(target),
-            current_open_risk_pct=portfolio_state.current_open_risk_pct,
-            current_drawdown_pct=portfolio_state.current_drawdown_pct,
-            correlated_exposure_pct=portfolio_state.correlated_exposure_pct,
-        )
-        risk_result = evaluate_risk(risk_inputs, config)
-
+    # 7. Risk gate (sovereign veto on live portfolio state)
+    risk_result, entry, stop, target = _risk_gate(config, df_base, conf)
     risk_pass = risk_result.passed if risk_result else False
 
     # 8. News Risk Gate — veto EXECUTE if high-impact event imminent
-    # Only runs when confluence passed (saves API calls on NO_TRADE)
-    news_risk = None
-    news_blocked = False
-    if confluence_pass and config.get("fundamentals", {}).get("news_filter_enabled", True):
-        try:
-            news_risk = assess_news_risk(
-                symbol=config["data"]["symbol"],
-                look_ahead_minutes=config.get("fundamentals", {}).get(
-                    "blackout_look_ahead_min", 60
-                ),
-            )
-            news_blocked = news_risk.should_block
-            if news_blocked:
-                logger.info(
-                    f"News blackout for {config['data']['symbol']}: "
-                    f"score={news_risk.news_risk_score} reason={news_risk.blackout_reason}"
-                )
-        except Exception as exc:
-            logger.warning(f"News risk check failed (non-fatal): {exc}")
+    news_risk, news_blocked = _news_gate(config, conf.passed)
 
-    final_verdict = "EXECUTE" if (confluence_pass and risk_pass and not news_blocked) else "NO_TRADE"
-
-    # Per-symbol overrides: RR, min_score, regime_filter
-    symbol = config["data"].get("symbol", "")
-    symbol_cfg = next(
-        (s for s in config.get("data", {}).get("twelve_data_symbols", [])
-         if s.get("internal") == symbol),
-        {}
+    # 9. Final verdict: combine gates + per-symbol regime filter + Meta Decision
+    final_verdict, meta = _final_verdict(
+        config, conf, risk_pass, news_blocked, regime_state, mqs_result, outputs
     )
-    # Apply per-symbol regime filter (Tier 2 symbols: TRENDING only)
-    if final_verdict == "EXECUTE" and symbol_cfg.get("regime_filter"):
-        required_regime = symbol_cfg["regime_filter"]
-        if regime_state != required_regime:
-            final_verdict = "NO_TRADE"
-            logger.info(
-                f"Per-symbol regime filter: {symbol} requires {required_regime}, "
-                f"got {regime_state} → NO_TRADE"
-            )
 
-    # Meta Decision Layer — confidence + stability + engine contributions
-    meta = None
-    if final_verdict == "EXECUTE":
-        try:
-            meta = evaluate_meta_decision(
-                outputs=outputs,
-                weights=active_weights,
-                adjusted_score=adjusted_score,
-                vote_result=vote_result,
-                report_context={"market_quality": mqs_result.to_dict()},
-            )
-            # Meta can downgrade EXECUTE to NO_TRADE if confidence too low
-            if meta.verdict == "BLOCK":
-                final_verdict = "NO_TRADE"
-                logger.info(f"Meta Decision BLOCKED: {meta.reason}")
-        except Exception as exc:
-            logger.warning(f"Meta Decision failed (non-fatal): {exc}")
-
-    # Build summary
-    if final_verdict == "EXECUTE":
-        summary = (
-            f"EXECUTE {vote_result.winning_bias.value}: "
-            f"{vote_result.agree_count}/{score_result.engines_participating} active engines agreed, "
-            f"confluence score {adjusted_score}/100, risk checks passed."
-        )
-        if news_risk:
-            summary += f" News risk: {news_risk.risk_level} ({news_risk.news_risk_score:.0f}/100)."
-        if mtf_result.score_adjustment > 0:
-            summary += f" D1 confirms direction (+{mtf_result.score_adjustment:.0f}pts)."
-    elif news_blocked and news_risk:
-        summary = f"NO_TRADE: {news_risk.blackout_reason}"
-    elif not confluence_pass:
-        summary = "NO_TRADE: " + "; ".join(confluence_fail_reasons)
-    else:
-        summary = "NO_TRADE: risk gate rejected — " + "; ".join(risk_result.reasons if risk_result else [])
-
-    report = {
-        "symbol": config["data"]["symbol"],
-        "summary": summary,
-        "regime": {
-            "state": regime_result.regime.value,
-            "confidence": regime_result.confidence,
-            "volatility": regime_result.volatility,
-            "trend_strength": regime_result.trend_strength,
-            "notes": regime_result.notes,
-        },
-        "engine_outputs": [o.to_dict() for o in outputs],
-        "disabled_engines": disabled,
-        "confluence": {
-            "vote": {
-                "winning_bias": vote_result.winning_bias.value,
-                "agree_count": vote_result.agree_count,
-                "total_engines": vote_result.total_engines,
-                "breakdown": vote_result.breakdown,
-            },
-            "score": adjusted_score,
-            "raw_score": score_result.final_score,
-            "mtf": {
-                "d1_bias": mtf_result.d1_bias,
-                "d1_adx": mtf_result.d1_adx,
-                "adjustment": mtf_result.score_adjustment,
-                "confirming": mtf_result.confirming,
-                "reason": mtf_result.reason,
-            },
-            "directional_score": score_result.directional_score,
-            "contributions": score_result.contributions,
-            "engines_participating": score_result.engines_participating,
-            "engines_total": score_result.engines_total,
-            "participating_weight_share": score_result.participating_weight_share,
-            "regime_weights_applied": active_weights,
-            "contradiction": {
-                "blocked": contradiction_result.blocked,
-                "reasons": contradiction_result.reasons,
-            },
-            "reversal_veto": reversal_veto.to_dict(),
-            "passed": confluence_pass,
-            "fail_reasons": confluence_fail_reasons,
-        },
-        "risk": {
-            "passed": risk_result.passed if risk_result else None,
-            "reasons": risk_result.reasons if risk_result else ["Risk gate not evaluated — confluence failed first"],
-            "recommended_risk_pct": risk_result.recommended_risk_pct if risk_result else None,
-            "position_size_units": risk_result.position_size_units if risk_result else None,
-        },
-        "news": news_risk.to_dict() if news_risk else {
-            "news_risk_score": 0,
-            "risk_level": "LOW",
-            "blackout_active": False,
-            "blackout_reason": "News filter not evaluated",
-            "upcoming_events_count": 0,
-            "next_high_impact": None,
-        },
-        # Latest close — populated on EVERY report (EXECUTE and NO_TRADE)
-        # so the scheduler's auto-close can evaluate open outcomes even
-        # when this run produced no trade.
-        "current_price": float(df_base["close"].iloc[-1]),
-        # Trade levels — populated only when confluence_pass (risk inputs exist).
-        # Derived from ATR-based estimate in Phase 2; Phase 3 will use SMC levels.
-        "entry_price": float(entry) if confluence_pass else None,
-        "stop_loss": float(stop) if confluence_pass else None,
-        "take_profit": float(target) if confluence_pass else None,
-        "risk_reward": f"1:{config['risk']['min_risk_reward']:.0f}" if confluence_pass else None,
-        "final_verdict": final_verdict,
-        "meta_decision": meta.to_dict() if meta else None,
-    }
+    # 10. Assemble summary + full decision report
+    report = _build_report(
+        config, df_base, regime_result, outputs, disabled, conf,
+        risk_result, news_risk, news_blocked, entry, stop, target,
+        final_verdict, meta,
+    )
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
     _safe_store("decision_log", log_decision, report)

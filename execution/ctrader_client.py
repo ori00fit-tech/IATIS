@@ -1117,7 +1117,10 @@ class CTraderClient:
             period_minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30,
                               "H1": 60, "H4": 240, "D1": 1440}.get(period, 240)
             now_ms = int(time.time() * 1000)
-            from_ms = now_ms - count * period_minutes * 60_000
+            # Over-fetch the calendar window by ~1.5x: markets close nights/
+            # weekends, so `count` bars span more wall-clock than count*period.
+            # cTrader caps the returned count anyway, so a wider window is safe.
+            from_ms = now_ms - int(count * period_minutes * 60_000 * 1.6)
 
             def send() -> None:
                 req = ProtoOAGetTrendbarsReq()

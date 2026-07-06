@@ -266,6 +266,9 @@ class CTraderClient:
         self._details_event = threading.Event()
         self._spots: dict[int, tuple[int, int]] = {}  # symbol_id -> (bid, ask) scaled
         self._spot_event = threading.Event()
+        # Historical trendbars bridge (reactor thread → caller).
+        self._trendbars: list[dict] = []
+        self._trendbar_event = threading.Event()
 
         self._validate_credentials()
 
@@ -506,6 +509,8 @@ class CTraderClient:
                 self._on_execution_event(message)
             elif msg_type == "ProtoOASpotEvent":
                 self._on_spot_event(message)
+            elif msg_type == "ProtoOAGetTrendbarsRes":
+                self._on_trendbars_res(message)
             elif msg_type == "ProtoOAErrorRes":
                 self._on_error_res(message)
             elif msg_type == "ProtoOAOrderErrorEvent":
@@ -1051,6 +1056,94 @@ class CTraderClient:
         except Exception as exc:
             logger.error(f"❌ Spot fetch failed: {exc}")
             return None
+
+    # ─── Historical bars (for backtesting IC Markets symbols) ────────────────
+
+    def list_symbols(self) -> list[str]:
+        """All tradeable cTrader symbol names loaded from the broker."""
+        with self._lock:
+            return sorted(self._symbol_id_to_name.values())
+
+    def _on_trendbars_res(self, message: Any) -> None:
+        """Decode ProtoOAGetTrendbarsRes → OHLCV dicts.
+
+        cTrader trendbars are delta-encoded: `low` is the absolute price,
+        open/high/close are unsigned deltas ADDED to low. All values are
+        integer prices scaled by 1e-5 (divide by 100000). Timestamp is
+        utcTimestampInMinutes.
+        """
+        try:
+            bars = []
+            for tb in getattr(message, "trendbar", []):
+                low = int(getattr(tb, "low", 0))
+                o = (low + int(getattr(tb, "deltaOpen", 0))) / 100000.0
+                h = (low + int(getattr(tb, "deltaHigh", 0))) / 100000.0
+                c = (low + int(getattr(tb, "deltaClose", 0))) / 100000.0
+                lo = low / 100000.0
+                ts = int(getattr(tb, "utcTimestampInMinutes", 0)) * 60
+                bars.append({"timestamp": ts, "open": o, "high": h,
+                             "low": lo, "close": c,
+                             "volume": int(getattr(tb, "volume", 0))})
+            with self._lock:
+                self._trendbars = sorted(bars, key=lambda b: b["timestamp"])
+        except Exception as exc:
+            logger.error(f"❌ Error decoding ProtoOAGetTrendbarsRes: {exc}")
+            with self._lock:
+                self._trendbars = []
+        finally:
+            self._trendbar_event.set()
+
+    def get_trendbars(self, symbol: str, period: str = "H4",
+                      count: int = 1000, timeout: float = 25.0) -> list[dict]:
+        """Fetch up to `count` historical bars for a symbol.
+
+        `symbol` may be an IATIS name (EURUSD) or a raw broker name from
+        list_symbols(). Returns a list of {timestamp, open, high, low,
+        close, volume} dicts, oldest first. Empty list on failure.
+        """
+        ct_symbol = IATIS_TO_CTRADER.get(symbol, symbol)
+        with self._lock:
+            symbol_id = self._symbol_name_to_id.get(ct_symbol)
+        if symbol_id is None:
+            logger.warning(f"get_trendbars: unknown symbol {symbol!r} ({ct_symbol!r})")
+            return []
+
+        try:
+            from twisted.internet import reactor
+            from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetTrendbarsReq
+            from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
+
+            period_val = ProtoOATrendbarPeriod.Value(period)
+            period_minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30,
+                              "H1": 60, "H4": 240, "D1": 1440}.get(period, 240)
+            now_ms = int(time.time() * 1000)
+            # Over-fetch the calendar window by ~1.5x: markets close nights/
+            # weekends, so `count` bars span more wall-clock than count*period.
+            # cTrader caps the returned count anyway, so a wider window is safe.
+            from_ms = now_ms - int(count * period_minutes * 60_000 * 1.6)
+
+            def send() -> None:
+                req = ProtoOAGetTrendbarsReq()
+                req.ctidTraderAccountId = self.account_id
+                req.symbolId = symbol_id
+                req.period = period_val
+                req.fromTimestamp = from_ms
+                req.toTimestamp = now_ms
+                d = self._client.send(req, responseTimeoutInSeconds=timeout)
+                d.addErrback(lambda f: (self._on_error("trendbars", f),
+                                        self._trendbar_event.set()))
+
+            with self._lock:
+                self._trendbars = []
+            self._trendbar_event.clear()
+            reactor.callFromThread(send)
+            self._trendbar_event.wait(timeout=timeout)
+
+            with self._lock:
+                return list(self._trendbars)
+        except Exception as exc:
+            logger.error(f"❌ get_trendbars failed for {symbol}: {exc}")
+            return []
 
     def get_spot(self, iatis_symbol: str) -> "tuple[float, float] | None":
         """Return (bid, ask) as real prices for an IATIS symbol, or None."""

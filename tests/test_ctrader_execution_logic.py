@@ -208,3 +208,45 @@ def test_missing_credentials_raise(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(ValueError, match="Missing cTrader credentials"):
         CTraderClient()
+
+
+# ── historical trendbar decoding (delta-encoded) ───────────────────────────
+
+def test_trendbar_decode_delta_encoding(client):
+    """cTrader trendbars: low is absolute, open/high/close are unsigned
+    deltas ADDED to low, all scaled by 1e-5. A decode bug here corrupts
+    every backtest bar."""
+    from types import SimpleNamespace
+
+    # low=1.08000, open=+0.0005, high=+0.0012, close=+0.0008 (in 1e-5 units)
+    tb = SimpleNamespace(low=108000, deltaOpen=50, deltaHigh=120,
+                         deltaClose=80, volume=1234, utcTimestampInMinutes=28_900_000)
+    msg = SimpleNamespace(trendbar=[tb])
+    client._on_trendbars_res(msg)
+
+    bars = client._trendbars
+    assert len(bars) == 1
+    b = bars[0]
+    assert b["low"] == pytest.approx(1.08000)
+    assert b["open"] == pytest.approx(1.08050)
+    assert b["high"] == pytest.approx(1.08120)
+    assert b["close"] == pytest.approx(1.08080)
+    assert b["volume"] == 1234
+    assert b["timestamp"] == 28_900_000 * 60
+
+
+def test_trendbar_decode_sorts_and_survives_bad_bar(client):
+    from types import SimpleNamespace
+
+    good = SimpleNamespace(low=100000, deltaOpen=0, deltaHigh=0, deltaClose=0,
+                           volume=1, utcTimestampInMinutes=200)
+    older = SimpleNamespace(low=100000, deltaOpen=0, deltaHigh=0, deltaClose=0,
+                            volume=1, utcTimestampInMinutes=100)
+    client._on_trendbars_res(SimpleNamespace(trendbar=[good, older]))
+    ts = [b["timestamp"] for b in client._trendbars]
+    assert ts == sorted(ts)  # oldest first
+
+
+def test_list_symbols_returns_sorted(client):
+    client._symbol_id_to_name = {2: "GBPUSD", 1: "EURUSD", 3: "XAUUSD"}
+    assert client.list_symbols() == ["EURUSD", "GBPUSD", "XAUUSD"]

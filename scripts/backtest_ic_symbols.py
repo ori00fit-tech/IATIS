@@ -83,6 +83,8 @@ def main() -> None:
     ap.add_argument("--all", action="store_true", help="Include equity CFDs, not just macro")
     ap.add_argument("--limit", type=int, default=0, help="Max symbols to backtest (0=all)")
     ap.add_argument("--count", type=int, default=1200, help="H4 bars to fetch per symbol")
+    ap.add_argument("--fresh", action="store_true", help="Ignore any checkpoint and restart the sweep")
+    ap.add_argument("--sleep", type=float, default=0.0, help="Seconds to pause between symbols (be nice to the API)")
     args = ap.parse_args()
 
     from execution.ctrader_client import CTraderClient, IATIS_TO_CTRADER
@@ -121,12 +123,37 @@ def main() -> None:
     cfg = load_config()
     DATA.mkdir(exist_ok=True)
 
-    rows = []
+    # Checkpoint: a big sweep (~351 symbols) is long, and a killed process
+    # must not lose finished work. We persist after EVERY symbol and, on the
+    # next run, skip whatever was already attempted (both scored and skipped),
+    # so an interrupted run just resumes. Pass --fresh to start over.
+    ckpt = DATA / "ic_symbols_backtest.json"
+    rows: list[dict] = []
+    attempted: set[str] = set()
+    if ckpt.exists() and not args.fresh:
+        try:
+            saved = json.loads(ckpt.read_text())
+            rows = saved.get("rows", saved if isinstance(saved, list) else [])
+            attempted = set(saved.get("attempted", [r["symbol"] for r in rows]))
+            print(f"↩️  Resuming: {len(attempted)} symbols already attempted "
+                  f"({len(rows)} scored). Pass --fresh to restart.\n")
+        except Exception as exc:
+            print(f"(could not read checkpoint, starting fresh: {exc})")
+
+    def _save() -> None:
+        ckpt.write_text(json.dumps(
+            {"attempted": sorted(attempted), "rows": rows}, indent=1))
+
     print(f"{'symbol':14s}{'bars':>7s}{'spread':>8s}{'trades':>7s}{'WR%':>6s}{'PF':>7s}")
-    for sym in universe:
+    for i, sym in enumerate(universe, 1):
+        if sym in attempted:
+            continue
+        attempted.add(sym)
         bars = client.get_trendbars(sym, period="H4", count=args.count)
         df = _to_df(bars)
         if df is None or len(df) < MIN_BARS:
+            print(f"{sym:14s}  skipped ({0 if df is None else len(df)} bars < {MIN_BARS})")
+            _save()
             continue
         # real spread in pips from live quote (only for mapped IATIS symbols;
         # get_spot resolves via IATIS_TO_CTRADER)
@@ -139,6 +166,7 @@ def main() -> None:
             r = run_backtest(df, BacktestConfig.from_profile(sym, **kwargs), engine_config=cfg)
         except Exception as exc:
             print(f"{sym:14s}  backtest error: {str(exc)[:40]}")
+            _save()
             continue
         rows.append({"symbol": sym, "bars": len(df),
                      "spread_pips": spread_pips, "trades": r.execute_count,
@@ -146,7 +174,10 @@ def main() -> None:
                      "profit_factor": round(r.profit_factor, 3),
                      "max_dd_pct": round(100 * r.max_drawdown_pct, 1)})
         print(f"{sym:14s}{len(df):>7}{str(spread_pips):>8}{r.execute_count:>7}"
-              f"{100*r.win_rate:>6.1f}{r.profit_factor:>7.2f}")
+              f"{100*r.win_rate:>6.1f}{r.profit_factor:>7.2f}  [{i}/{len(universe)}]")
+        _save()
+        if args.sleep:
+            time.sleep(args.sleep)
 
     client.disconnect()
     rows.sort(key=lambda x: x["profit_factor"], reverse=True)
@@ -170,7 +201,8 @@ def main() -> None:
     except Exception as exc:
         print(f"manifest skipped: {exc}")
 
-    (DATA / "ic_symbols_backtest.json").write_text(json.dumps(rows, indent=1))
+    _save()  # final flush (incremental checkpoint already holds every row)
+    print(f"Results: {ckpt}")
 
 
 if __name__ == "__main__":

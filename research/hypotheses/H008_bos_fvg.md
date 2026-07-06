@@ -73,7 +73,18 @@ FVG detection:
   - Entry = when price retraces into FVG range
 
 ## Status
-PENDING — experiment script to be written in H008_bos_fvg.py
+FAILED (2026-07-06) — closed by H008c.
+
+The initial H008 run on 2yr H1-resampled data showed WR≈55.2% (n small,
+p=0.23) → NEEDS_MORE_DATA. That was an artifact: H1-resampled bars are not
+real M15 microstructure, and the base detector inherited a look-ahead bug
+(centered swing window). H008c re-ran it correctly — real deep M15 (EURUSD
+~1yr, XAUUSD ~3yr), causal swing confirmation (no look-ahead), chronological
+out-of-sample split. Pooled TEST WR=0.489 (n=562, p=0.83): the coin-flip
+baseline. The London+ATR filter H008b hoped would lift WR to 60% collapsed
+out-of-sample (train n=11 63.6% → test 35.5%; pooled test 42.2%). BOS+FVG
+has no standalone directional edge. See `H008c_oos.py`,
+`results/H008c_result.json`, `results/h008c_oos_20260706_manifest.json`.
 
 ## If PASSED
 Enables: `smc_advanced` engine with order blocks, FVG, BOS detection

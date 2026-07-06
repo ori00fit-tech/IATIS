@@ -161,9 +161,14 @@ engines:
 #     until forward paper trading proves the edge (audit Phase 5).
 execution:
   broker: ctrader
-  ctrader_enabled: false      # true + dry_run:false → real orders on the cTrader demo
-  dry_run: true               # true = simulate only (place nothing)
-  allow_live_trading: false   # money-safety gate for LIVE (non-demo) accounts
+  # LIVE ON DEMO (2026-07-06): collecting real forward-trade evidence on the
+  # cTrader demo account (env=demo, $200). Real orders with real spread/
+  # slippage feed the 100-trade counter. allow_live_trading stays false, so
+  # the executor still hard-refuses any non-demo account. To pause: set
+  # dry_run back to true (simulate) or ctrader_enabled back to false.
+  ctrader_enabled: true       # true + dry_run:false → real orders on the cTrader demo
+  dry_run: false              # false = place real orders (on the demo account)
+  allow_live_trading: false   # money-safety gate for LIVE (non-demo) accounts — keep false
   max_open_trades: 5
   min_score_to_execute: 60.0
   oanda_enabled: false

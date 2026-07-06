@@ -99,11 +99,53 @@ research.
 
 ---
 
+## IC Markets full-universe discovery sweep (2026-07-06)
+
+Ran the frozen production strategy against **every** instrument IC Markets
+lists on the cTrader demo — 351 symbols, the broker's own H4 bars, real
+spread where available (`scripts/backtest_ic_symbols.py --all`). 209 had
+≥500 H4 bars and were backtested; 77 showed PF>1.1 with ≥20 trades. **That
+headline is misleading — here is the honest reading.**
+
+**The binding caveat: 72 of the 77 "winners" never paid a real spread.**
+Live-spread measurement (`get_spot`) only resolves the 20 symbols already
+mapped in `IATIS_TO_CTRADER`. Every other symbol — including all the
+top-of-list crypto alts (IPUSD PF 3.31, INJUSD 2.41, STRKUSD 2.39,
+ENAUSD 2.32, NEARUSD 2.25 …) — was charged only the generic default
+spread, optimistic for illiquid alt-coins whose real IC spreads are wide.
+Their true cost-inclusive PF is unknown and almost certainly far lower.
+Add in-sample selection, small n (20–47), and short histories: **these are
+not validated results.**
+
+Only 5 rows in the top list paid a real, measured broker spread:
+
+| symbol | real spread | PF (in-sample) | n | reading |
+|---|---|---|---|---|
+| XAGUSD | 2.0 pip | **2.07** | 36 | silver — liquid, real cost, same family as gold. The one credible NEW signal. |
+| BTCUSD | $12 | 1.78 | 40 | confirms the known crypto edge |
+| AUDJPY | 0.3 pip | 1.61 | 31 | confirms the FX-major edge |
+| NZDUSD | 0.2 pip | 1.58 | 20 | broker H4 disagrees with the Twelve-Data backtest (0.985) that had it disabled — a data-source discrepancy to investigate, not a promotion |
+| XAUUSD | 40 pip | 0.96 | 36 | the 40-pip figure is an off-hours (20:10 UTC) wide-quote snapshot vs the 12-pip peak spread the frozen edge uses — a spread-timing caution, not a refutation |
+
+Excluded on sight: the dated futures contracts (`WTI_N6`, `Wheat_U6`, …)
+are single-expiry, illiquid series — not a continuous tradeable strategy.
+
+**Verdict:** one genuinely credible new macro candidate — **XAGUSD
+(silver)** — and it is *already* `enabled: true` on the demo, so the
+forward-evidence machinery is already testing it. Everything else is either
+already known (BTC / FX majors) or unvalidated (the alts). To evaluate a
+crypto-alt winner honestly it must first be mapped, charged its real (wide)
+spread, and split out-of-sample — the same bar every prior "discovery"
+failed to clear. Full ranked list:
+`research/results/ic_symbols_backtest_20260706_manifest.json` (on the VPS).
+
+---
+
 ## Reproducibility
 
 Every result above is bound to a git-tracked manifest in
 `research/results/*_manifest.json` (commit hash + config hash + dataset
 SHA256): `engine_activation_*`, `crypto_volume_*`, `pairs_trading_*`,
 `h4_yearly_stability_*`, `d1_backtest_*`, `h4_backtest_*`,
-`ctrader_spread_recost_*`. Re-run any experiment from its script in
-`scripts/` to reproduce.
+`ctrader_spread_recost_*`, `ic_symbols_backtest_*`. Re-run any experiment
+from its script in `scripts/` to reproduce.

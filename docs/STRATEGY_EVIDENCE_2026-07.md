@@ -141,6 +141,40 @@ failed to clear. Full ranked list:
 
 ---
 
+## Closed-source signal toolkits (LuxAlgo et al.) — why they add nothing here
+
+Periodically a polished commercial TradingView toolkit (LuxAlgo, and its
+kind) is proposed as an upgrade. Two structural facts settle it before any
+backtest:
+
+1. **It cannot integrate.** These are closed-source Pine Script overlays
+   that run *inside* TradingView, repaint, and expose no API, no historical
+   signal export, no cost-inclusive backtest. There is no artefact to plug
+   into a Python/cTrader automated pipeline. The most you could do is
+   *re-derive the concept* — which brings us to fact 2.
+
+2. **We already have the substance, or measured it away.** Every headline
+   concept maps to an existing IATIS engine or a hypothesis already on the
+   registry:
+
+| LuxAlgo concept | IATIS status (evidence) |
+|---|---|
+| PAC — CHoCH, break-of-structure, order blocks, premium/discount | `smc_engine.py` + `ict_engine.py` + `market_structure_engine.py` — already coded |
+| HTF Sweep Signals (liquidity grab) | **H001/H002/H002b — FAILED, verdict "ABANDON"** (p=0.63/0.22/0.43; unfiltered sweeps have no directional edge) |
+| Ultimate AMD (accumulation / manipulation / distribution) + FVG | Wyckoff accumulation/distribution is *live* (`wyckoff_engine.py`); BOS+FVG is **H008 — NEEDS_MORE_DATA** (not universal; consistent only on EURUSD+XAUUSD) |
+| HTF Reversal Divergences (RSI divergence) | `divergence_engine.py` — coded, dormant |
+| Oscillator Matrix (RSI / MFI / Stochastics cluster) | `quant_engine.py` (H005, RESEARCH); adding oscillator engines **dilutes** (measured PF 1.27→1.11) |
+| HTF Volume Spike & Imbalance | volume A/B — **zero edge** (BTC ΔPF −0.016, ETH 0.000); FX has no real free volume |
+| Predictive Ranges (dynamic ATR bands) | already present via the regime detector / ATR bands |
+| Signal Forge "Strict mode = all filters must agree" | this *is* the IATIS confluence vote |
+| Performance Dashboard (Net Profit % / Win Rate / PF for the current chart) | in-sample, repaint-prone, single-symbol stats — **precisely the artefact this whole document rejects** (cf. the +100% trade-management mirage above) |
+
+**The only open thread these ideas touch is our own H008 (BOS+FVG
+confluence)** — not abandoned, not proven, needs more data / tighter
+filters (H008b). That is a *continuation of our own rigorous research*, not
+an import of marketing. Everything else here is already built or already
+buried. No fix warranted; the discipline is the fix.
+
 ## Reproducibility
 
 Every result above is bound to a git-tracked manifest in

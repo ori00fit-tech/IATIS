@@ -76,11 +76,26 @@ def main() -> None:
 
         a = _summ(zero_df, cfg, sym)
         b = _summ(real_df, cfg, sym)
-        results[sym] = {"zero_volume_feed": a, "real_volume_ccxt": b,
-                        "delta_pf": round(b["profit_factor"] - a["profit_factor"], 3)}
-        print(f"  zero-vol : PF={a['profit_factor']} WR={a['win_rate']}% n={a['trades']}")
-        print(f"  real-vol : PF={b['profit_factor']} WR={b['win_rate']}% n={b['trades']} "
-              f"(vol nonzero {b['volume_nonzero_pct']}%)  ΔPF={results[sym]['delta_pf']:+}")
+
+        # CONTROLLED arm — isolates volume from window/price-source: the
+        # SAME ccxt bars, once real and once with volume zeroed. Any delta
+        # here is attributable to volume ALONE (only Wyckoff consumes it).
+        real_zeroed = real_df.copy()
+        real_zeroed["volume"] = 0.0
+        c = _summ(real_zeroed, cfg, sym)
+        controlled_delta = round(b["profit_factor"] - c["profit_factor"], 3)
+
+        results[sym] = {
+            "zero_volume_feed_TD": a,
+            "real_volume_ccxt": b,
+            "ccxt_bars_volume_zeroed": c,
+            "cross_feed_delta_pf": round(b["profit_factor"] - a["profit_factor"], 3),
+            "controlled_volume_delta_pf": controlled_delta,
+        }
+        print(f"  TD zero-vol        : PF={a['profit_factor']} WR={a['win_rate']}% n={a['trades']}")
+        print(f"  ccxt real-vol      : PF={b['profit_factor']} WR={b['win_rate']}% n={b['trades']} (vol {b['volume_nonzero_pct']}%)")
+        print(f"  ccxt vol-ZEROED    : PF={c['profit_factor']} WR={c['win_rate']}% n={c['trades']}  (same bars, volume removed)")
+        print(f"  → CONTROLLED ΔPF (volume alone) = {controlled_delta:+}   [cross-feed ΔPF={results[sym]['cross_feed_delta_pf']:+}, confounded]")
 
     try:
         from research.manifest import build_manifest, write_manifest

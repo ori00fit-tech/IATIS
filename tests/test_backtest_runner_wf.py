@@ -222,3 +222,19 @@ def test_end_to_end_walk_forward_runs_and_reports(tmp_path):
     assert result.verdict in SymbolVerdict
     d = result.to_dict()
     assert d["symbol"] == "EURUSD" and len(d["windows"]) == 3
+
+
+def test_from_profile_uses_real_spread_as_commission():
+    """Backtests must cost trades at the measured broker spread by
+    default, not the old flat 0.5 pip — otherwise PF for wide-spread
+    assets (gold/crypto/indices) is optimistic. Overridable for ablation."""
+    from backtesting.backtest_engine import BacktestConfig, REAL_SPREAD_PIPS
+
+    # Carriers get their measured spread as the commission floor.
+    assert BacktestConfig.from_profile("XAUUSD").commission_pips == REAL_SPREAD_PIPS["XAUUSD"]
+    assert BacktestConfig.from_profile("BTCUSD").commission_pips == REAL_SPREAD_PIPS["BTCUSD"]
+    # FX (not in the map — measured spreads were below the 0.5 default)
+    # keeps the conservative default.
+    assert BacktestConfig.from_profile("EURUSD").commission_pips == 0.5
+    # Explicit override wins (ablation / sensitivity runs).
+    assert BacktestConfig.from_profile("XAUUSD", commission_pips=0.5).commission_pips == 0.5

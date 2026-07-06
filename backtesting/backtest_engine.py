@@ -21,6 +21,27 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Real broker spread per symbol, in the backtest's pip units (spread in
+# PRICE ÷ pip_size), measured from cTrader / IC Markets demo on
+# 2026-07-06 (scripts/measure_ctrader_spread.py; pip_size 0.0001 FX /
+# 0.01 JPY,metal,energy,index,crypto). These are quiet-hour floors — real
+# fills during signals (often volatile) run wider, which forward paper
+# trading on the cTrader demo will reveal. Used as the commission_pips
+# default in from_profile() so PF numbers reflect real trading cost.
+# FX spreads measured 0.0-0.4 pips (below the old 0.5 default) are left at
+# the conservative 0.5 rather than lowered — never make a backtest look
+# better on an unverified assumption.
+REAL_SPREAD_PIPS: dict[str, float] = {
+    "XAUUSD": 12.0,    # $0.12 spread ÷ 0.01
+    "XAGUSD": 3.7,     # $0.037 ÷ 0.01
+    "USOIL": 2.0,      # $0.02 ÷ 0.01
+    "US30": 120.0,     # 1.2 index points ÷ 0.01
+    "NAS100": 100.0,   # 1.0 ÷ 0.01
+    "SPX500": 50.0,    # 0.5 ÷ 0.01
+    "BTCUSD": 1200.0,  # $12 ÷ 0.01
+    "ETHUSD": 290.0,   # $2.90 ÷ 0.01
+}
+
 
 @dataclass
 class BacktestConfig:
@@ -62,7 +83,15 @@ class BacktestConfig:
 
     @classmethod
     def from_profile(cls, symbol: str, **kwargs) -> "BacktestConfig":
-        """Create config from asset profile automatically."""
+        """Create config from asset profile automatically.
+
+        Commission defaults to the REAL measured broker spread per symbol
+        (REAL_SPREAD_PIPS) so backtests are cost-accurate out of the box.
+        Callers can still override commission_pips explicitly (e.g. for
+        ablation / sensitivity runs)."""
+        # Real spread as the commission floor, unless the caller overrides.
+        if "commission_pips" not in kwargs and symbol.upper() in REAL_SPREAD_PIPS:
+            kwargs = {**kwargs, "commission_pips": REAL_SPREAD_PIPS[symbol.upper()]}
         try:
             from core.asset_profiles import get_profile
             profile = get_profile(symbol.upper())

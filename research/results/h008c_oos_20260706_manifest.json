@@ -1,0 +1,258 @@
+{
+  "kind": "h008c_oos_bosfvg",
+  "generated_at": "2026-07-06T21:44:05.711314+00:00",
+  "git": {
+    "commit": "4e485a08d5281ca49a64708ec2720cf63595fc33",
+    "dirty": true
+  },
+  "reproducible": false,
+  "config": {
+    "sha256": "480d354a9f60c4d7481ff65009ddc5e6cda8fa207e127e5228bc5ff74e65212e",
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 500,
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CHF"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "EURJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPJPY",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "GBP/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "AUDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "AUD/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/GBP"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/CHF"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USOIL",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "WTI/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "US30",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "DJI"
+          },
+          {
+            "enabled": true,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX"
+          },
+          {
+            "enabled": true,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "XAUUSD"
+    ],
+    "train_frac": 0.6,
+    "forward_bars": 20,
+    "swing_window": 3,
+    "bos_max_bars": 10,
+    "filters": "London 02-10 UTC + BOS candle >= 1.5*ATR14",
+    "baseline": "H001 directional WR 0.4978 (n=225)",
+    "method": "causal swing confirmation (no look-ahead); chronological train/test; verdict on TEST"
+  },
+  "datasets": [],
+  "results": {
+    "pooled": {
+      "unfiltered_test": {
+        "n": 562,
+        "wr": 0.4893,
+        "improvement": -0.0085,
+        "p_value": 0.8298
+      },
+      "filtered_test": {
+        "n": 83,
+        "wr": 0.4217,
+        "improvement": -0.0761,
+        "p_value": 0.2354
+      },
+      "unfiltered_train": {
+        "n": 881,
+        "wr": 0.4779,
+        "improvement": -0.0199,
+        "p_value": 0.5933
+      },
+      "filtered_train": {
+        "n": 58,
+        "wr": 0.4483,
+        "improvement": -0.0495,
+        "p_value": 0.5011
+      },
+      "status": "FAILED"
+    }
+  }
+}

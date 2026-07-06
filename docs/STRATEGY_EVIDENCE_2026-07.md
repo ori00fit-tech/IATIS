@@ -169,11 +169,23 @@ backtest:
 | Signal Forge "Strict mode = all filters must agree" | this *is* the IATIS confluence vote |
 | Performance Dashboard (Net Profit % / Win Rate / PF for the current chart) | in-sample, repaint-prone, single-symbol stats — **precisely the artefact this whole document rejects** (cf. the +100% trade-management mirage above) |
 
-**The only open thread these ideas touch is our own H008 (BOS+FVG
-confluence)** — not abandoned, not proven, needs more data / tighter
-filters (H008b). That is a *continuation of our own rigorous research*, not
-an import of marketing. Everything else here is already built or already
-buried. No fix warranted; the discipline is the fix.
+**Update (2026-07-06): the one open thread is now closed too.** H008
+(BOS+FVG) was the only LuxAlgo-adjacent concept not yet settled. It has now
+been re-tested rigorously (H008c) — real deep M15 (EURUSD ~1yr, XAUUSD
+~3yr), look-ahead removed via causal swing confirmation, chronological
+out-of-sample split. **Pooled TEST WR = 0.489 (n=562, p=0.83): the
+coin-flip baseline.** The London+ATR "quality" filter H008b hoped would
+lift WR to 60% collapsed out-of-sample (train n=11 → 63.6%, test → 35.5%;
+pooled test 42.2%) — a textbook overfit the OOS split caught. BOS+FVG has
+no standalone directional edge, joining H001/H002/H002b. Everything on the
+LuxAlgo list is now either already built or measured and buried. No fix
+warranted; the discipline is the fix.
+
+### H008c — the honest BOS+FVG re-test (added to the rejected ledger)
+
+| enhancement | method | verdict |
+|---|---|---|
+| **BOS+FVG entry** (SMC "market-structure break + fair-value-gap", the strongest LuxAlgo PAC concept) | causal (no look-ahead) detector on real deep M15, chronological OOS split, EURUSD+XAUUSD pooled | **No edge.** Pooled OOS test WR 0.489 (n=562, p=0.83) = coin flip; session/ATR filter *worse* (0.422). The earlier 55.2% was shallow, H1-resampled, look-ahead-inflated. |
 
 ## Reproducibility
 
@@ -181,5 +193,6 @@ Every result above is bound to a git-tracked manifest in
 `research/results/*_manifest.json` (commit hash + config hash + dataset
 SHA256): `engine_activation_*`, `crypto_volume_*`, `pairs_trading_*`,
 `h4_yearly_stability_*`, `d1_backtest_*`, `h4_backtest_*`,
-`ctrader_spread_recost_*`, `ic_symbols_backtest_*`. Re-run any experiment
-from its script in `scripts/` to reproduce.
+`ctrader_spread_recost_*`, `ic_symbols_backtest_*`, `h008c_oos_*`. Re-run
+any experiment from its script in `scripts/` (or `run_h008c.py`) to
+reproduce; `scripts/fetch_m15_twelvedata.py` rebuilds the real M15 inputs.

@@ -161,15 +161,27 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 reports.append(report)
                 if report.get("final_verdict") == "EXECUTE":
                     execute_signals.append(internal)
-                    # B1: Execute trade via OANDA (dry_run=True until configured)
-                    oanda_enabled = config.get("execution", {}).get("oanda_enabled", False)
-                    dry_run = config.get("execution", {}).get("dry_run", True)
-                    if oanda_enabled or dry_run:
+                    # B1: Execute the trade. Broker execution runs when the
+                    # matching broker is enabled; otherwise dry_run simulates.
+                    #   ctrader_enabled + dry_run:false → REAL orders on the
+                    #     cTrader account (demo unless allow_live_trading).
+                    #   oanda_enabled  + dry_run:false → OANDA.
+                    #   dry_run:true (default) → simulate, place nothing.
+                    exec_cfg = config.get("execution", {})
+                    oanda_enabled = exec_cfg.get("oanda_enabled", False)
+                    ctrader_enabled = exec_cfg.get("ctrader_enabled", False)
+                    dry_run = exec_cfg.get("dry_run", True)
+                    broker = exec_cfg.get("broker", "ctrader")
+                    broker_live = (ctrader_enabled and broker == "ctrader") or \
+                                  (oanda_enabled and broker == "oanda")
+                    if dry_run or broker_live:
                         try:
                             executor = TradeExecutor(
                                 dry_run=dry_run,
-                                max_open_trades=config.get("execution", {}).get("max_open_trades", 5),
-                                min_score=config.get("execution", {}).get("min_score_to_execute", 60.0),
+                                broker=broker,
+                                max_open_trades=exec_cfg.get("max_open_trades", 5),
+                                min_score=exec_cfg.get("min_score_to_execute", 60.0),
+                                allow_live_trading=exec_cfg.get("allow_live_trading", False),
                             )
                             exec_result = executor.execute_from_report(report)
                             if exec_result.executed and not exec_result.dry_run:

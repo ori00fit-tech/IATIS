@@ -81,17 +81,23 @@ class TradeExecutor:
         broker: str = "ctrader",
         max_open_trades: int = 5,
         min_score: float = 60.0,
+        allow_live_trading: bool = False,
     ):
         self.dry_run = dry_run
         self.broker = broker
         self.max_open_trades = max_open_trades
         self.min_score = min_score
+        # Money-safety gate: real orders are only ever placed on a DEMO
+        # account unless this is explicitly True. Layer-2 forward evidence
+        # runs on demo, so this stays False — enabling ctrader execution
+        # can never touch a live account by accident.
+        self.allow_live_trading = allow_live_trading
         self._client = None
 
         mode = "DRY RUN" if dry_run else f"LIVE ({broker.upper()})"
         logger.info(
-            f"TradeExecutor: mode={mode}, "
-            f"max_trades={max_open_trades}, min_score={min_score}"
+            f"TradeExecutor: mode={mode}, max_trades={max_open_trades}, "
+            f"min_score={min_score}, allow_live={allow_live_trading}"
         )
 
     def _get_client(self):
@@ -189,6 +195,22 @@ class TradeExecutor:
             if self.broker == "ctrader":
                 # cTrader execution path
                 from execution.ctrader_client import CTraderOrder
+
+                # HARD money-safety gate: refuse to place a real order on a
+                # LIVE cTrader account unless explicitly allowed. Demo runs
+                # (forward paper-trade evidence) pass freely.
+                env = getattr(client, "environment", "demo")
+                if env != "demo" and not self.allow_live_trading:
+                    logger.error(
+                        f"REFUSING live order for {symbol}: CTRADER_ENVIRONMENT="
+                        f"{env} but allow_live_trading is False. Set "
+                        f"execution.allow_live_trading only when you truly mean it."
+                    )
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Live trading blocked (env={env}, allow_live_trading=False)",
+                        dry_run=False,
+                    )
 
                 # Get account info for position sizing
                 account = client.get_account_info()

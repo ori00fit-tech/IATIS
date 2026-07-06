@@ -52,17 +52,21 @@ data:
     min_score: 58
     rr: 2.0
     symbol: USD/CHF
-  - enabled: true
+  # Disabled 2026-07-06: PF < 1.0 over 6.4y H4 with the frozen config
+  # (research/results/h4_yearly_stability_20260705_manifest.json). A book
+  # with PF<1 mechanically drags portfolio PF down, so removing it raises
+  # the aggregate. Re-enable if forward paper trading proves otherwise.
+  - enabled: false            # AUDUSD PF 0.938, maxDD 29% (n=273)
     internal: AUDUSD
     min_score: 55
     rr: 2.0
     symbol: AUD/USD
-  - enabled: true
+  - enabled: false            # USDCAD PF 0.954, maxDD 28% (n=282)
     internal: USDCAD
     min_score: 58
     rr: 2.0
     symbol: USD/CAD
-  - enabled: true
+  - enabled: false            # NZDUSD PF 0.985 (n=286)
     internal: NZDUSD
     min_score: 60
     rr: 2.0
@@ -82,12 +86,12 @@ data:
     min_score: 58
     rr: 2.0
     symbol: AUD/JPY
-  - enabled: true
+  - enabled: false            # EURGBP PF 0.635, WR 25.8%, maxDD 51% — structurally broken (n=248)
     internal: EURGBP
     min_score: 58
     rr: 2.0
     symbol: EUR/GBP
-  - enabled: true
+  - enabled: false            # EURCHF PF 0.951 (n=188)
     internal: EURCHF
     min_score: 58
     rr: 2.0

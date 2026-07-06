@@ -151,10 +151,19 @@ engines:
     sentiment: false
     smc: true
     wyckoff: true
+# Order execution. Defaults are SAFE — nothing is placed until you opt in.
+#   Layer-2 forward evidence (real orders on the cTrader DEMO account):
+#     set ctrader_enabled: true  AND  dry_run: false   (leave the two flags
+#     below as-is). Every filled trade then feeds the 100-trade evidence
+#     counter with real spread/slippage instead of simulation.
+#   allow_live_trading gates REAL-MONEY orders: the executor hard-refuses to
+#     trade a non-demo cTrader account unless this is true. Keep it false
+#     until forward paper trading proves the edge (audit Phase 5).
 execution:
   broker: ctrader
-  ctrader_enabled: false
-  dry_run: true
+  ctrader_enabled: false      # true + dry_run:false → real orders on the cTrader demo
+  dry_run: true               # true = simulate only (place nothing)
+  allow_live_trading: false   # money-safety gate for LIVE (non-demo) accounts
   max_open_trades: 5
   min_score_to_execute: 60.0
   oanda_enabled: false

@@ -132,3 +132,63 @@ def test_executor_crypto_dry_run():
     # In dry_run mode, we still log it (no actual OANDA call)
     assert result.executed is True
     assert result.dry_run is True
+
+
+# ---------------------------------------------------------------------------
+# Layer-2 cTrader demo execution: money-safety guard (live account blocked)
+# ---------------------------------------------------------------------------
+
+def test_ctrader_refuses_live_account_without_allow_flag():
+    """A real order must NEVER hit a non-demo cTrader account unless
+    allow_live_trading is explicitly True — even when dry_run is off."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "live"
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "Live trading blocked" in result.skip_reason
+    fake_client.place_market_order.assert_not_called()
+
+
+def test_ctrader_places_on_demo_account():
+    """On a demo account, a real order IS placed (this is layer-2 evidence)."""
+    from execution.trade_executor import ExecutionResult as _ER  # noqa
+
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, position_id="pos123", entry_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    assert result.dry_run is False
+    assert result.trade_id == "pos123"
+    fake_client.place_market_order.assert_called_once()
+
+
+def test_ctrader_live_allowed_when_flag_set():
+    """With allow_live_trading=True, a live account is permitted (the
+    explicit real-money path)."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=True)
+
+    fake_client = MagicMock()
+    fake_client.environment = "live"
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, position_id="live1", entry_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    fake_client.place_market_order.assert_called_once()

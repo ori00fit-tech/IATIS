@@ -174,6 +174,16 @@ and the tie-break removed (a 1-1 tie between two coin-flip-correlated
 engines is *no information* — it should score 0, not "the louder side's
 average"). Checks 6.1–6.3 quantify how often each mechanism fires.
 
+> **IMPLEMENTED (2026-07-09):** mechanisms 1–3 are closed on this branch —
+> `calculate_score()` now takes `winning_bias` from `tally_votes()` (and
+> derives it via the same function when omitted), imports the conviction
+> threshold + `effective_bias()` from `voting_system` instead of re-reading
+> raw biases, and both modules resolve exact conviction ties to NEUTRAL /
+> score 0. Both production call sites (`main.py`, `backtest_engine.py`)
+> pass the vote's winner explicitly. Regression-locked by
+> `tests/test_axis6_consistency.py`. Mechanism 4 (H013 ×0.5, MTF ±8)
+> remains — by design until the shadow-book calibration says otherwise.
+
 ## Axis 7 — 98.4% rejection: philosophy or bug?
 
 **Mostly bug, calibrated by the system's own evidence.** The identical

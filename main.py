@@ -251,7 +251,9 @@ def _evaluate_confluence(
     active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
 
     vote_result = tally_votes(outputs, active_weights)
-    score_result = calculate_score(outputs, active_weights)
+    # winning_bias passed explicitly: the score always describes the side
+    # the vote chose — never the opposite side (audit Axis 6 unification).
+    score_result = calculate_score(outputs, active_weights, vote_result.winning_bias)
     contradiction_result = check_contradictions(outputs)
 
     # A2: Multi-TF Confirmation — D1 trend must align with the signal.

@@ -472,7 +472,8 @@ def run_backtest(
                 )
 
             vote = tally_votes(outputs, active_weights)
-            score = calculate_score(outputs, active_weights)
+            # Same Axis-6 unification as main.py: score follows the vote.
+            score = calculate_score(outputs, active_weights, vote.winning_bias)
             contradiction = check_contradictions(outputs)
 
             # MTF confirmation — D1/H1 alignment adjusts the score

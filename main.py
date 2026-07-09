@@ -217,6 +217,11 @@ def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
             # runs (weekends, dead sessions) would otherwise leave open
             # trades unpriced for that whole tick.
             "current_price": float(df_base["close"].iloc[-1]),
+            # Decision-bar range for intrabar TP/SL detection (open-outcome
+            # hygiene): a level touched inside the bar and retraced is
+            # invisible to a close-only check.
+            "bar_high": float(df_base["high"].iloc[-1]),
+            "bar_low": float(df_base["low"].iloc[-1]),
             "bar_time": str(df_base.index[-1]),
         }
     return mqs_result, None
@@ -545,6 +550,10 @@ def _build_report(
         # so the scheduler's auto-close can evaluate open outcomes even
         # when this run produced no trade.
         "current_price": float(df_base["close"].iloc[-1]),
+        # Decision-bar range for intrabar TP/SL detection (open-outcome
+        # hygiene, philosophy audit priority 4).
+        "bar_high": float(df_base["high"].iloc[-1]),
+        "bar_low": float(df_base["low"].iloc[-1]),
         # Timestamp of the decision bar (last closed candle of the decision
         # timeframe). Used to deduplicate alerts: with a D1 decision TF and
         # a 2-hourly scheduler, the same daily bar is re-evaluated ~12

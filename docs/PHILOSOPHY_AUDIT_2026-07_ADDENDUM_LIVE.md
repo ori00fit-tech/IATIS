@@ -146,6 +146,18 @@ SL/TP at scheduler-tick close prices — stale open outcomes can block new
 signals for hours. Check 7.2 counts these; verify open-outcome hygiene
 before reading them as intended risk behavior.
 
+> **IMPLEMENTED (2026-07-09):** two hygiene mechanisms in
+> `auto_close_outcomes()` — (1) intrabar TP/SL detection: every report now
+> carries the decision bar's `bar_high`/`bar_low` (including MQS-blocked
+> weekend runs) and the scheduler passes them through, so a level touched
+> inside the bar and retraced closes the signal instead of lingering; when
+> both levels sit inside one bar, SL is assumed first (same conservative
+> convention as `backtest_engine.check_exit()`). (2) time stop:
+> `execution.max_open_trade_hours` (168h = 7 days ≈ 42 H4 bars) force-closes
+> stale signals at market, labeled by realized R (±0.1R breakeven band), so
+> the paper book can no longer stay saturated indefinitely.
+> Regression-locked by `tests/test_outcome_hygiene.py`.
+
 ## Axis 6 — Logic discontinuity (the BTC-39 vs ETH-80 case)
 
 **Real, and there are four documented mechanisms in the code:**

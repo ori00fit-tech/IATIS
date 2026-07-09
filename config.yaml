@@ -189,6 +189,13 @@ execution:
   dry_run: false              # false = place real orders (on the demo account)
   allow_live_trading: false   # money-safety gate for LIVE (non-demo) accounts — keep false
   max_open_trades: 5
+  # Open-outcome hygiene (philosophy audit, priority 4): force-close any
+  # paper signal still open after this many hours, at market, labeled by
+  # realized R (win/loss/breakeven). Without it, signals that never touch
+  # TP/SL linger forever, saturate the 5% exposure cap (5 × 1% slots) and
+  # block every new trade — 39 such rejections observed live. 168h = 7
+  # days ≈ 42 H4 bars. 0 disables.
+  max_open_trade_hours: 168
   min_score_to_execute: 60.0
   oanda_enabled: false
 # On/off switches for real, already-built gates — toggle behavior without

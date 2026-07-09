@@ -346,6 +346,12 @@ def run_backtest(
             # Same decision timeframe the production pipeline uses
             # (main.build_active_engines) — gate/vote parity.
             engine.decision_tf = timeframes[0] if timeframes else "H1"
+            if key == "smc":
+                # H017 flag parity with main.build_active_engines — the A/B
+                # (scripts/smc_fullspec_ab.py) flips this through the config.
+                engine.full_spec = bool(
+                    engine_config.get("engines", {}).get("smc_full_spec", False)
+                )
             engines_list.append(engine)
 
     atr_series = compute_atr(df, period=14)

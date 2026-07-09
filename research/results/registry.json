@@ -10,7 +10,7 @@
    "last_updated": "2026-06-21"
   },
   "H002": {
-   "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) \u2014 EURUSD only",
+   "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) — EURUSD only",
    "status": "FAILED",
    "result_file": "results/H002_result.json",
    "tested_on": "EURUSD Yahoo H1 2yr, n=76, wr=0.5789, p=0.2209",
@@ -18,12 +18,12 @@
    "last_updated": "2026-06-25"
   },
   "H002b": {
-   "title": "Qualified sweep \u2014 multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
+   "title": "Qualified sweep — multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
    "status": "FAILED",
    "result_file": "results/H002b_result.json",
    "tested_on": "3 symbols, n=232, combined wr=0.4612 (-3.66pp vs H001), p=0.4337",
    "lesson": "EURUSD WR=57.89% was false positive. At n=232 across 3 symbols, combined WR=46.12% is WORSE than H001 baseline. ATR+regime filter does NOT improve sweep win rate. Do not pursue this direction further.",
-   "conclusion": "ABANDON \u2014 liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
+   "conclusion": "ABANDON — liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
    "last_updated": "2026-06-25"
   },
   "H003": {
@@ -88,23 +88,23 @@
      "p_value": 0.3555
     }
    },
-   "analysis": "EURUSD+XAUUSD show consistent +5.4pp edge on 259 combined setups (p=0.23). GBPUSD shows no edge (-1.6pp). Pattern appears symbol-specific. Statistical significance requires n\u2265600 setups which needs ~8yr H1 data OR higher frequency (M5) data. Edge is too small at +5.4pp to reach significance with 2yr data.",
-   "lesson": "BOS+FVG is NOT a universal edge \u2014 GBPUSD behaves differently. But EURUSD+XAUUSD show consistent direction. Before abandoning: try H008b with tighter filters to raise WR to 60%+",
+   "analysis": "EURUSD+XAUUSD show consistent +5.4pp edge on 259 combined setups (p=0.23). GBPUSD shows no edge (-1.6pp). Pattern appears symbol-specific. Statistical significance requires n≥600 setups which needs ~8yr H1 data OR higher frequency (M5) data. Edge is too small at +5.4pp to reach significance with 2yr data.",
+   "lesson": "BOS+FVG is NOT a universal edge — GBPUSD behaves differently. But EURUSD+XAUUSD show consistent direction. Before abandoning: try H008b with tighter filters to raise WR to 60%+",
    "next_step": "H008b: Add session filter (London open BOS only) + ATR quality filter to target WR>60% on EURUSD+XAUUSD subset",
    "last_updated": "2026-07-06",
-   "conclusion": "CLOSED by H008c. The 55.2% NEEDS_MORE_DATA signal was an artifact of shallow, H1-resampled (not real M15) data. On real deep M15 (EURUSD ~1yr, XAUUSD ~3yr), with look-ahead removed (causal swing confirmation) and a chronological out-of-sample split, pooled TEST WR=0.489 (n=562, p=0.83) \u2014 at the H001 coin-flip baseline. The London+ATR filter made it WORSE OOS (0.422). BOS+FVG has no standalone directional edge. SMC/ICT concepts survive only as confluence filters, never as primary entries (consistent with H001/H002/H002b)."
+   "conclusion": "CLOSED by H008c. The 55.2% NEEDS_MORE_DATA signal was an artifact of shallow, H1-resampled (not real M15) data. On real deep M15 (EURUSD ~1yr, XAUUSD ~3yr), with look-ahead removed (causal swing confirmation) and a chronological out-of-sample split, pooled TEST WR=0.489 (n=562, p=0.83) — at the H001 coin-flip baseline. The London+ATR filter made it WORSE OOS (0.422). BOS+FVG has no standalone directional edge. SMC/ICT concepts survive only as confluence filters, never as primary entries (consistent with H001/H002/H002b)."
   },
   "H008b": {
-   "title": "BOS+FVG + London session (02-10 UTC) + ATR\u00d71.5 filter",
+   "title": "BOS+FVG + London session (02-10 UTC) + ATR×1.5 filter",
    "status": "ABANDONED",
-   "reason": "Filters too restrictive. Session filter removes 64-78% of setups, ATR filter removes 19-35% more. Final n=0-9 across all symbols (need n\u226550). H1 hourly data doesn't have enough London-session BOS+FVG patterns in 2yr period. Would need M15 data or wider session window to get adequate sample.",
+   "reason": "Filters too restrictive. Session filter removes 64-78% of setups, ATR filter removes 19-35% more. Final n=0-9 across all symbols (need n≥50). H1 hourly data doesn't have enough London-session BOS+FVG patterns in 2yr period. Would need M15 data or wider session window to get adequate sample.",
    "lesson": "BOS+FVG works as CONFLUENCE FILTER (already in SMC engine implicitly) but not as standalone primary signal on H1 data. The pattern is too rare to test statistically with available data.",
    "last_updated": "2026-06-25"
   },
   "H009": {
    "title": "IATIS 6-engine confluence as systematic trading signal (already validated)",
    "status": "PASSED",
-   "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF\u22651.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4.",
+   "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF≥1.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4.",
    "result": {
     "symbols": 6,
     "windows": 18,
@@ -118,27 +118,27 @@
    "title": "RSI/MACD Divergence Engine",
    "status": "RESEARCH",
    "engine": "divergence",
-   "notes": "Paper trading \u2014 collecting data via engine_tracker",
+   "notes": "Paper trading — collecting data via engine_tracker",
    "last_updated": "2026-06-26"
   },
   "H011": {
    "title": "Market Structure BOS/CHoCH/MSS Engine",
    "status": "RESEARCH",
    "engine": "market_structure",
-   "notes": "Paper trading \u2014 collecting data via engine_tracker",
+   "notes": "Paper trading — collecting data via engine_tracker",
    "last_updated": "2026-06-26"
   },
   "H012": {
    "title": "COT + Retail Sentiment Engine",
    "status": "RESEARCH",
    "engine": "sentiment",
-   "notes": "Paper trading \u2014 collecting data via engine_tracker",
-   "last_updated": "2026-06-26"
+   "notes": "Paper trading. REAL COT now wired: scripts/download_cot.py fetches CFTC legacy futures-only weekly (free) into data/cot/{SYMBOL}.json which the engine already consumes; engine._symbol wired in main.build_active_engines (was 'UNKNOWN', so COT could never load). Engine stays DISABLED — real data is a prerequisite for evaluating H012, not a license to enable it.",
+   "last_updated": "2026-07-09"
   },
   "H013": {
    "title": "Reversal Engine Group Agreement as Counter-Signal",
    "status": "RESEARCH",
-   "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines \u2014 market reversed BULLISH confirming reversal engines.",
+   "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines — market reversed BULLISH confirming reversal engines.",
    "hypothesis": "If Divergence+Wyckoff+Sentiment all agree on direction X, and trend engines agree on -X, lower confidence or block the trade.",
    "evidence": {
     "case_1": {
@@ -149,7 +149,7 @@
      ],
      "trend_engines": "BEARISH (SMC+NNFX+PA+Quant)",
      "reversal_engines": "BULLISH (Divergence+Wyckoff+Sentiment)",
-     "market_outcome": "BULLISH \u2014 reversal engines were correct",
+     "market_outcome": "BULLISH — reversal engines were correct",
      "trade_result": "loss (5 trades hit SL)"
     }
    },
@@ -158,9 +158,9 @@
     "file": "confluence/reversal_veto.py",
     "integrated_in": "main.py",
     "rules": {
-     "hard_veto": "3/3 reversal engines unanimously oppose \u2192 BLOCK trade",
-     "soft_veto": "2/3 reversal engines oppose \u2192 reduce score by 50%",
-     "no_effect": "0-1 reversal engines oppose \u2192 normal confluence"
+     "hard_veto": "3/3 reversal engines unanimously oppose → BLOCK trade",
+     "soft_veto": "2/3 reversal engines oppose → reduce score by 50%",
+     "no_effect": "0-1 reversal engines oppose → normal confluence"
     },
     "date_implemented": "2026-06-27"
    }
@@ -168,7 +168,7 @@
   "H014": {
    "title": "Engine Orthogonality Test",
    "status": "RESEARCH",
-   "description": "Measure pairwise correlation between engine vote directions. If SMC\u2194ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
+   "description": "Measure pairwise correlation between engine vote directions. If SMC↔ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
    "implementation": {
     "file": "scripts/engine_research.py",
     "function": "run_h014"
@@ -176,7 +176,7 @@
    "last_updated": "2026-06-28"
   },
   "H015": {
-   "title": "Ablation Study \u2014 Minimum Engine Set",
+   "title": "Ablation Study — Minimum Engine Set",
    "status": "RESEARCH",
    "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
    "implementation": {
@@ -196,7 +196,7 @@
    "last_updated": "2026-06-28"
   },
   "H008c": {
-   "title": "BOS+FVG re-test \u2014 look-ahead-free + out-of-sample on real deep M15",
+   "title": "BOS+FVG re-test — look-ahead-free + out-of-sample on real deep M15",
    "status": "FAILED",
    "result_file": "results/H008c_result.json",
    "tested_on": "EURUSD ~35k M15 (1yr) + XAUUSD ~80k M15 (3yr), pooled test n=562",
@@ -204,6 +204,13 @@
    "conclusion": "ABANDON the SMC-entry direction. Definitively no standalone edge.",
    "manifest": "results/h008c_oos_20260706_manifest.json",
    "last_updated": "2026-07-06"
+  },
+  "H017": {
+   "title": "SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH as score modulators)",
+   "status": "RESEARCH",
+   "notes": "Implemented causally behind engines.smc_full_spec (default FALSE — live voting unchanged). Components modulate SMC's structural score only; never standalone entries (H001/H002/H008c measured no standalone edge: pooled OOS WR 0.489, p=0.83). Liquidity sweeps deliberately NOT implemented (failed 3 hypotheses). Decision rule pre-registered in scripts/smc_fullspec_ab.py: adopt only if chronological-TEST mean PF improves >= 0.03 with <= 1 losing symbol.",
+   "result_file": null,
+   "last_updated": "2026-07-09"
   }
  },
  "walk_forward_validation": {
@@ -262,10 +269,10 @@
   },
   "conclusion": "Edge is real and generalizes to unseen data. 18/18 test windows above PF=1.5. This is statistically significant (p<0.0001). IATIS has a provable edge on FX majors, crypto, and energy.",
   "warnings": [
-   "AUDUSD W2=1.50 (borderline) \u2014 monitor for degradation",
-   "USOIL W3 WR=44.8% in 2026 \u2014 possible weakening",
-   "Data limited to 2yr H1 \u2014 longer history would strengthen conclusion",
-   "No slippage modeled \u2014 real results will be lower"
+   "AUDUSD W2=1.50 (borderline) — monitor for degradation",
+   "USOIL W3 WR=44.8% in 2026 — possible weakening",
+   "Data limited to 2yr H1 — longer history would strengthen conclusion",
+   "No slippage modeled — real results will be lower"
   ]
  }
 }

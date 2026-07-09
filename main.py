@@ -120,11 +120,20 @@ def build_active_engines(config: dict) -> list:
     check_edge_gate(enabled)
 
     dtf = decision_timeframe(config)
+    symbol = config.get("data", {}).get("symbol", "")
+    smc_full_spec = bool(config.get("engines", {}).get("smc_full_spec", False))
     engines = []
     for key, cls in _ALL_ENGINES.items():
         if enabled.get(key, False):
             engine = cls()
             engine.decision_tf = dtf
+            # Symbol context — SentimentEngine keys its COT cache on this;
+            # it previously defaulted to "UNKNOWN" so COT could never load.
+            engine._symbol = symbol
+            if key == "smc":
+                # H017: full-spec SMC (OB+FVG+BOS/CHoCH as internal
+                # confluence) — off by default until the A/B justifies it.
+                engine.full_spec = smc_full_spec
             engines.append(engine)
     return engines
 

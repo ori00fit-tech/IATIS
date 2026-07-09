@@ -17,10 +17,12 @@ Philosophy:
   COT net longs increasing → bullish sentiment
   COT net longs decreasing rapidly → bearish sentiment
 
-Status: RESEARCH
-Note: Full COT integration requires weekly data download.
-      Current implementation uses price-based retail sentiment proxy
-      until COT data is wired up.
+Status: RESEARCH (H012)
+Note: Real COT is wired: scripts/download_cot.py (weekly cron) writes
+      data/cot/{SYMBOL}.json and this engine consumes it as the primary
+      signal; the price-based retail proxy remains the explicit fallback
+      when no fresh COT cache exists. Engine stays disabled pending H012
+      evidence — real data enables EVALUATION, not activation.
 """
 
 from __future__ import annotations
@@ -57,10 +59,11 @@ COT_SYMBOLS = {
 def _load_cot_data(symbol: str) -> dict | None:
     """Load most recent COT data for symbol from local cache.
 
-    Cache location: data/cot/{SYMBOL}.json
-    Updated weekly by: scripts/download_cot.py (to be built)
+    Cache location: data/cot/{SYMBOL}.json (override dir: IATIS_COT_DIR)
+    Updated weekly by scripts/download_cot.py (CFTC legacy futures-only
+    report — free, no key; run it from cron/systemd every Saturday).
     """
-    cache_path = Path("data/cot") / f"{symbol}.json"
+    cache_path = Path(os.environ.get("IATIS_COT_DIR", "data/cot")) / f"{symbol}.json"
     if not cache_path.exists():
         return None
     try:

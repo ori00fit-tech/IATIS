@@ -214,6 +214,22 @@ confluence. Two remedies, in order:
    computed and stored — gate on it (e.g., ≥ 0.5 of enabled weight must be
    informative) instead of leaving it decorative.
 
+> **IMPLEMENTED (2026-07-09):** `confluence.min_informative_weight_share`
+> gate, wired identically in `main.py` and `backtest_engine.py` (new
+> `info_share` gate-rejection bucket), computed by
+> `voting_system.informative_weight_share()` — informative = any effective
+> vote, agreeing *or* dissenting, over the weight of the engines that ran.
+> Calibrated at **0.6**, not the 0.5 sketched above: with production
+> weights, SMC+PriceAction alone are ≈56.6% of enabled weight, so a 0.5
+> gate would not have caught the exact live failure mode. At 0.6 the
+> starved panel fails with an explicit *"panel mostly mute"* fail_reason,
+> any mix including a speaking NNFX passes, and NNFX-NEUTRAL (no trend)
+> correctly refuses trend trades. The share is also persisted per decision
+> (`confluence.informative_weight_share` in the report). Meta/regime-filter
+> downgrades now write a `downgrade_reason` persisted as `fail_reason`
+> (closing check 1.3), and news blackouts get the same treatment.
+> Regression-locked by `tests/test_axis8_and_downgrade.py`.
+
 Also answered here: the per-symbol confluence table (US30 71.2 vs EURUSD
 47.0) does **not** mean "the system suits indices". US30/NAS100/SPX500 ride
 the Yahoo-only data path and have **zero committed backtest evidence** (main

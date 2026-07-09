@@ -1,6 +1,18 @@
 confluence:
   min_engines_agreeing: 2
   min_score_to_trade: 58
+  # Axis-8 gate (philosophy audit): at least this fraction of the ENABLED
+  # panel's weight must produce an informative (non-NEUTRAL, above the
+  # conviction threshold) vote — agreeing or dissenting — for confluence
+  # to mean anything. Prevents the 2-of-4 quorum from silently degenerating
+  # into "the only two fed engines co-signed" when the rest of the panel
+  # is mute (e.g. a data-starved NNFX). 0.0 disables the gate.
+  # Calibrated at 0.6: the observed live failure mode (NNFX+Wyckoff mute,
+  # only SMC+PriceAction speaking) is ~57% of enabled weight and must FAIL;
+  # any healthy mix that includes a speaking NNFX is >=60% and passes.
+  # NNFX-NEUTRAL-with-SMC+PA-only also fails by design: no trend baseline,
+  # no trend trade.
+  min_informative_weight_share: 0.6
   weights:
     divergence: 0.0606
     ict: 0.0657

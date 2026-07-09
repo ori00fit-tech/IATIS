@@ -114,10 +114,20 @@ def log_decision_db(report: dict) -> None:
     cf = report.get("confluence", {})
     risk = report.get("risk", {})
 
+    # Primary fail reason, in gate order: confluence → risk → post-gate
+    # downgrade (regime filter / Meta BLOCK) → news blackout. The last two
+    # previously left fail_reason NULL, making those NO_TRADEs unauditable
+    # (philosophy audit, Axis 1 check 1.3).
     fail_reasons = cf.get("fail_reasons", [])
     if not fail_reasons and verdict == "NO_TRADE":
         if risk and risk.get("passed") is False:
             fail_reasons = risk.get("reasons", [])
+        elif report.get("downgrade_reason"):
+            fail_reasons = [report["downgrade_reason"]]
+        else:
+            news = report.get("news") or {}
+            if news.get("blackout_active") and news.get("blackout_reason"):
+                fail_reasons = [f"News blackout: {news['blackout_reason']}"]
     primary_fail = fail_reasons[0] if fail_reasons else None
 
     decision_values = (

@@ -63,6 +63,37 @@ _NAME_TO_KEY = {
 }
 
 
+def informative_weight_share(
+    outputs: list[EngineOutput],
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Fraction of the ENABLED panel's weight that produced an effective
+    (non-NEUTRAL, above-conviction) vote — agreeing OR dissenting.
+
+    Axis-8 input (philosophy audit): a 2-of-4 quorum is only meaningful if
+    the panel is actually speaking. When half the enabled weight is mute
+    (e.g. a data-starved NNFX), 'confluence' degenerates into two engines
+    co-signing with no opposition information. This measures that
+    degeneration; main.py gates on it via
+    confluence.min_informative_weight_share.
+
+    Denominator = weight of the engines that RAN (outputs contains enabled
+    engines only), so disabled engines don't dilute the share.
+    """
+    total = 0.0
+    informative = 0.0
+    for o in outputs:
+        if weights:
+            key = _NAME_TO_KEY.get(o.engine_name, o.engine_name.lower())
+            w = weights.get(key, 0.01)
+        else:
+            w = 1.0
+        total += w
+        if effective_bias(o) != Bias.NEUTRAL:
+            informative += w
+    return informative / total if total > 0 else 0.0
+
+
 def tally_votes(
     outputs: list[EngineOutput],
     weights: dict[str, float] | None = None,

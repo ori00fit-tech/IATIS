@@ -70,8 +70,15 @@ def evaluate_risk(inputs: RiskInputs, config: dict) -> RiskCheckResult:
         return RiskCheckResult(passed=False, reasons=reasons)
 
     # --- Risk/reward floor ---
+    # Tolerance note: SL/TP are constructed as entry ± atr·mult(·rr), so a
+    # signal at the floor computes rr = min_rr EXACTLY in real arithmetic —
+    # but the float add/subtract round-trip leaves rr short by ~1e-14 about
+    # 25% of the time, and the strict `<` rejected those valid signals with
+    # "Risk/reward 2.00 below minimum required 2.00" (17 observed live,
+    # philosophy audit follow-up). 1e-9 relative tolerance is ~5 orders
+    # above float dust and ~7 below any economically meaningful RR gap.
     rr = _risk_reward_ratio(inputs.entry_price, inputs.stop_loss_price, inputs.take_profit_price)
-    if rr < min_rr:
+    if rr < min_rr * (1.0 - 1e-9):
         reasons.append(f"Risk/reward {rr:.2f} below minimum required {min_rr:.2f}")
 
     # --- Correlation exposure cap ---

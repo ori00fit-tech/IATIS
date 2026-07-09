@@ -27,8 +27,20 @@ from engines.base_engine import Bias, EngineOutput
 
 
 # Engines with score below this threshold are treated as NEUTRAL
-# (too weak to be a real signal — just noise)
+# (too weak to be a real signal — just noise).
+# SINGLE SOURCE OF TRUTH: score_calculator.py imports both this constant
+# and effective_bias() below, so the vote layer and the score layer can
+# never again disagree about whether an engine voted (philosophy audit
+# addendum, Axis 6).
 MIN_CONVICTION_SCORE = 20
+
+
+def effective_bias(output: EngineOutput) -> Bias:
+    """The bias an engine's vote actually counts as, after the conviction
+    threshold: a sub-threshold BULLISH/BEARISH is noise → NEUTRAL."""
+    if output.bias != Bias.NEUTRAL and output.score >= MIN_CONVICTION_SCORE:
+        return output.bias
+    return Bias.NEUTRAL
 
 
 @dataclass
@@ -51,6 +63,37 @@ _NAME_TO_KEY = {
 }
 
 
+def informative_weight_share(
+    outputs: list[EngineOutput],
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Fraction of the ENABLED panel's weight that produced an effective
+    (non-NEUTRAL, above-conviction) vote — agreeing OR dissenting.
+
+    Axis-8 input (philosophy audit): a 2-of-4 quorum is only meaningful if
+    the panel is actually speaking. When half the enabled weight is mute
+    (e.g. a data-starved NNFX), 'confluence' degenerates into two engines
+    co-signing with no opposition information. This measures that
+    degeneration; main.py gates on it via
+    confluence.min_informative_weight_share.
+
+    Denominator = weight of the engines that RAN (outputs contains enabled
+    engines only), so disabled engines don't dilute the share.
+    """
+    total = 0.0
+    informative = 0.0
+    for o in outputs:
+        if weights:
+            key = _NAME_TO_KEY.get(o.engine_name, o.engine_name.lower())
+            w = weights.get(key, 0.01)
+        else:
+            w = 1.0
+        total += w
+        if effective_bias(o) != Bias.NEUTRAL:
+            informative += w
+    return informative / total if total > 0 else 0.0
+
+
 def tally_votes(
     outputs: list[EngineOutput],
     weights: dict[str, float] | None = None,
@@ -64,12 +107,7 @@ def tally_votes(
     regardless of their stated bias.
     """
     # Effective biases (after conviction threshold)
-    effective_biases = []
-    for o in outputs:
-        if o.bias != Bias.NEUTRAL and o.score >= MIN_CONVICTION_SCORE:
-            effective_biases.append(o.bias)
-        else:
-            effective_biases.append(Bias.NEUTRAL)
+    effective_biases = [effective_bias(o) for o in outputs]
 
     counts = Counter(b.value for b in effective_biases)
     bullish_count = counts.get(Bias.BULLISH.value, 0)
@@ -92,21 +130,17 @@ def tally_votes(
         elif eff_bias == Bias.BEARISH:
             bear_conviction += w * o.score
 
-    # Majority by WEIGHTED CONVICTION (not raw count)
+    # Majority by WEIGHTED CONVICTION (not raw count).
+    # An exact conviction tie between two voting sides is NO INFORMATION —
+    # it resolves to NEUTRAL. The previous fallback (pick BULLISH when
+    # counts were equal) manufactured a direction out of a dead heat and
+    # was one of the Axis-6 discontinuity mechanisms (philosophy audit).
     if bull_conviction > bear_conviction and bullish_count > 0:
         winning = Bias.BULLISH
         agree_count = bullish_count
     elif bear_conviction > bull_conviction and bearish_count > 0:
         winning = Bias.BEARISH
         agree_count = bearish_count
-    elif bullish_count > 0 and bull_conviction == bear_conviction:
-        # Tie in conviction — fall back to count
-        if bullish_count >= bearish_count:
-            winning = Bias.BULLISH
-            agree_count = bullish_count
-        else:
-            winning = Bias.BEARISH
-            agree_count = bearish_count
     else:
         winning = Bias.NEUTRAL
         agree_count = 0

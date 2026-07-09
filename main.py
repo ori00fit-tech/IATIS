@@ -26,7 +26,7 @@ from confluence.mtf_confirmation import check_mtf_confirmation
 from confluence.meta_decision import evaluate_meta_decision
 from confluence.regime_weights import apply_regime_weights
 from confluence.score_calculator import calculate_score, validate_confluence_config
-from confluence.voting_system import tally_votes
+from confluence.voting_system import informative_weight_share, tally_votes
 from core.data_loader import load_data, load_multi_timeframe_with_failover
 from core.data_validator import DataValidationError, validate_ohlcv
 from core.market_quality import assess_market_quality, MQS_THRESHOLD_FAIR, MQS_THRESHOLD_GOOD
@@ -217,6 +217,11 @@ def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
             # runs (weekends, dead sessions) would otherwise leave open
             # trades unpriced for that whole tick.
             "current_price": float(df_base["close"].iloc[-1]),
+            # Decision-bar range for intrabar TP/SL detection (open-outcome
+            # hygiene): a level touched inside the bar and retraced is
+            # invisible to a close-only check.
+            "bar_high": float(df_base["high"].iloc[-1]),
+            "bar_low": float(df_base["low"].iloc[-1]),
             "bar_time": str(df_base.index[-1]),
         }
     return mqs_result, None
@@ -235,6 +240,7 @@ class _ConfluenceEval:
     fail_reasons: list[str]
     passed: bool
     symbol_cfg: dict
+    informative_weight_share: float = 1.0
 
 
 def _evaluate_confluence(
@@ -251,7 +257,9 @@ def _evaluate_confluence(
     active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
 
     vote_result = tally_votes(outputs, active_weights)
-    score_result = calculate_score(outputs, active_weights)
+    # winning_bias passed explicitly: the score always describes the side
+    # the vote chose — never the opposite side (audit Axis 6 unification).
+    score_result = calculate_score(outputs, active_weights, vote_result.winning_bias)
     contradiction_result = check_contradictions(outputs)
 
     # A2: Multi-TF Confirmation — D1 trend must align with the signal.
@@ -281,6 +289,17 @@ def _evaluate_confluence(
         fail_reasons.append(
             f"Only {vote_result.agree_count} engine(s) agree, minimum required is {min_engines}"
         )
+
+    # Axis-8 gate (philosophy audit): confluence requires a SPEAKING panel.
+    # A quorum met while most of the enabled weight is mute (NEUTRAL or
+    # below the conviction threshold) is co-signature, not confluence.
+    min_info_share = config["confluence"].get("min_informative_weight_share", 0.0)
+    info_share = informative_weight_share(outputs, active_weights)
+    if min_info_share > 0 and info_share < min_info_share:
+        fail_reasons.append(
+            f"Only {info_share:.0%} of enabled engine weight voted informatively "
+            f"(minimum {min_info_share:.0%}) — panel mostly mute"
+        )
     if contradiction_result.blocked:
         fail_reasons.extend(contradiction_result.reasons)
 
@@ -308,6 +327,7 @@ def _evaluate_confluence(
         fail_reasons=fail_reasons,
         passed=len(fail_reasons) == 0,
         symbol_cfg=symbol_cfg,
+        informative_weight_share=round(info_share, 3),
     )
 
 
@@ -382,8 +402,14 @@ def _final_verdict(
     outputs: list[EngineOutput],
 ):
     """Stage 6: combine the gates, apply the per-symbol regime filter and
-    the Meta Decision layer. Returns (final_verdict, meta)."""
+    the Meta Decision layer. Returns (final_verdict, meta, downgrade_reason).
+
+    downgrade_reason is non-None exactly when an EXECUTE was downgraded to
+    NO_TRADE by this stage (regime filter or Meta BLOCK) — previously these
+    downgrades left no fail_reason in the decision record, so they were
+    unauditable (philosophy audit addendum, Axis 1 check 1.3)."""
     final_verdict = "EXECUTE" if (conf.passed and risk_pass and not news_blocked) else "NO_TRADE"
+    downgrade_reason: str | None = None
 
     # Apply per-symbol regime filter (Tier 2 symbols: TRENDING only)
     symbol = config["data"].get("symbol", "")
@@ -391,10 +417,11 @@ def _final_verdict(
         required_regime = conf.symbol_cfg["regime_filter"]
         if regime_state != required_regime:
             final_verdict = "NO_TRADE"
-            logger.info(
+            downgrade_reason = (
                 f"Per-symbol regime filter: {symbol} requires {required_regime}, "
-                f"got {regime_state} → NO_TRADE"
+                f"got {regime_state}"
             )
+            logger.info(f"{downgrade_reason} → NO_TRADE")
 
     # Meta Decision Layer — confidence + stability + engine contributions
     meta = None
@@ -410,11 +437,12 @@ def _final_verdict(
             # Meta can downgrade EXECUTE to NO_TRADE if confidence too low
             if meta.verdict == "BLOCK":
                 final_verdict = "NO_TRADE"
+                downgrade_reason = f"Meta Decision blocked: {meta.reason}"
                 logger.info(f"Meta Decision BLOCKED: {meta.reason}")
         except Exception as exc:
             logger.warning(f"Meta Decision failed (non-fatal): {exc}")
 
-    return final_verdict, meta
+    return final_verdict, meta, downgrade_reason
 
 
 def _build_report(
@@ -432,6 +460,7 @@ def _build_report(
     target,
     final_verdict: str,
     meta,
+    downgrade_reason: str | None = None,
 ) -> dict:
     """Stage 7: assemble the human summary and the full decision report."""
     vote_result = conf.vote_result
@@ -452,6 +481,11 @@ def _build_report(
         summary = f"NO_TRADE: {news_risk.blackout_reason}"
     elif not conf.passed:
         summary = "NO_TRADE: " + "; ".join(conf.fail_reasons)
+    elif downgrade_reason:
+        # Regime-filter / Meta downgrade — previously this fell through to
+        # the risk branch below and produced the actively misleading
+        # "risk gate rejected — All risk checks passed".
+        summary = "NO_TRADE: " + downgrade_reason
     else:
         summary = "NO_TRADE: risk gate rejected — " + "; ".join(risk_result.reasons if risk_result else [])
 
@@ -488,6 +522,7 @@ def _build_report(
             "engines_participating": score_result.engines_participating,
             "engines_total": score_result.engines_total,
             "participating_weight_share": score_result.participating_weight_share,
+            "informative_weight_share": conf.informative_weight_share,
             "regime_weights_applied": conf.active_weights,
             "contradiction": {
                 "blocked": conf.contradiction_result.blocked,
@@ -515,6 +550,10 @@ def _build_report(
         # so the scheduler's auto-close can evaluate open outcomes even
         # when this run produced no trade.
         "current_price": float(df_base["close"].iloc[-1]),
+        # Decision-bar range for intrabar TP/SL detection (open-outcome
+        # hygiene, philosophy audit priority 4).
+        "bar_high": float(df_base["high"].iloc[-1]),
+        "bar_low": float(df_base["low"].iloc[-1]),
         # Timestamp of the decision bar (last closed candle of the decision
         # timeframe). Used to deduplicate alerts: with a D1 decision TF and
         # a 2-hourly scheduler, the same daily bar is re-evaluated ~12
@@ -528,6 +567,10 @@ def _build_report(
         "risk_reward": f"1:{config['risk']['min_risk_reward']:.0f}" if conf.passed else None,
         "final_verdict": final_verdict,
         "meta_decision": meta.to_dict() if meta else None,
+        # Non-None exactly when an EXECUTE was downgraded post-gates
+        # (regime filter / Meta BLOCK) — decision_db persists this as the
+        # fail_reason so downgrades are auditable (audit Axis 1.3).
+        "downgrade_reason": downgrade_reason,
     }
 
 
@@ -542,6 +585,25 @@ def run_pipeline(config: dict) -> dict:
     # 1. Load data
     timeframes = config["data"]["timeframes"]
     df_base, mtf_data = _load_market_data(config, timeframes)
+
+    # 2a. Data-depth guard: NNFX needs 210+ decision-TF bars (EMA200) and
+    # the MTF gate needs 50+ D1 bars — below these they degrade SILENTLY
+    # (NEUTRAL vote / zero adjustment), which starved live decisions for
+    # weeks before the philosophy audit caught it. Warn loudly instead.
+    dtf = decision_timeframe(config)
+    dtf_bars = len(mtf_data.get(dtf, ()))
+    d1_bars = len(mtf_data.get("D1", ()))
+    if dtf_bars < 210:
+        logger.warning(
+            f"DATA STARVATION: only {dtf_bars} {dtf} bars (<210) — NNFX will "
+            f"vote NEUTRAL on every run. Raise data.bars_to_load "
+            f"(currently {config['data'].get('bars_to_load')})."
+        )
+    if "D1" in timeframes and dtf != "D1" and d1_bars < 50:
+        logger.warning(
+            f"DATA STARVATION: only {d1_bars} D1 bars (<50) — the MTF "
+            f"confirmation gate is inert. Raise data.bars_to_load."
+        )
 
     # 2b. Validate base timeframe (applies to both paths)
     try:
@@ -589,7 +651,7 @@ def run_pipeline(config: dict) -> dict:
     news_risk, news_blocked = _news_gate(config, conf.passed)
 
     # 9. Final verdict: combine gates + per-symbol regime filter + Meta Decision
-    final_verdict, meta = _final_verdict(
+    final_verdict, meta, downgrade_reason = _final_verdict(
         config, conf, risk_pass, news_blocked, regime_state, mqs_result, outputs
     )
 
@@ -597,7 +659,7 @@ def run_pipeline(config: dict) -> dict:
     report = _build_report(
         config, df_base, regime_result, outputs, disabled, conf,
         risk_result, news_risk, news_blocked, entry, stop, target,
-        final_verdict, meta,
+        final_verdict, meta, downgrade_reason,
     )
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")

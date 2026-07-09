@@ -306,13 +306,37 @@ def recent_signals(limit: int = 10) -> list[dict]:
 
 # ─── Auto-Close ────────────────────────────────────────────────────────────
 
-def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
+def auto_close_outcomes(
+    current_prices: dict[str, float],
+    bar_ranges: dict[str, tuple[float, float]] | None = None,
+    max_open_hours: float | None = None,
+) -> list[dict]:
     """Check open signals against current prices and auto-close if TP/SL hit.
 
     Called automatically at the end of each scheduler run.
 
+    Open-outcome hygiene (philosophy audit, priority 4): stale open paper
+    trades saturate the 5%% exposure cap (risk_per_trade_max=0.01 × 5 slots)
+    and were observed blocking new signals live. Two mechanisms fix that:
+
+    1. INTRABAR detection via ``bar_ranges``: the old check compared only
+       the tick-time close, so a TP/SL touched inside the bar and retraced
+       was never detected — the trade stayed open (and its eventual label
+       was wrong). With the decision bar's (high, low) the touch is seen.
+       Convention parity with backtesting/backtest_engine.check_exit():
+       when BOTH levels are touched within one bar, SL is assumed first
+       (conservative — counts as a loss).
+    2. TIME STOP via ``max_open_hours``: a signal that never reaches TP or
+       SL now force-closes at the current price after this many hours
+       (outcome by realized R: > +0.1R win, < −0.1R loss, else breakeven),
+       so the paper book cannot stay saturated indefinitely.
+
     Args:
         current_prices: {symbol: current_price} from latest pipeline data
+        bar_ranges: optional {symbol: (bar_high, bar_low)} of the latest
+            closed decision bar; falls back to close-only checks if absent
+        max_open_hours: force-close signals open longer than this
+            (None/0 disables — old behavior)
 
     Returns:
         One record per closed signal:
@@ -322,6 +346,8 @@ def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
     _init_db()
     open_signals = get_open_signals()
     closed: list[dict] = []
+    bar_ranges = bar_ranges or {}
+    now = datetime.now(timezone.utc)
 
     for sig in open_signals:
         symbol = sig.get("symbol", "")
@@ -338,22 +364,61 @@ def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
         if not all([entry, sl, tp, sig_id]):
             continue
 
+        # Effective extremes for this tick: the decision bar's range when
+        # provided, else the close price for both (old behavior).
+        rng = bar_ranges.get(symbol)
+        if rng and rng[0] is not None and rng[1] is not None:
+            hi, lo = float(rng[0]), float(rng[1])
+        else:
+            hi = lo = float(price)
+
         # Check TP/SL hit.
         # log_signal() stores direction as the vote's winning bias
         # (BULLISH/BEARISH); broker paths may store BUY/SELL. Accept
         # both — previously only BUY/SELL matched, so signals logged by
         # the pipeline could NEVER auto-close.
+        # SL BEFORE TP when both are inside the bar (backtest parity).
         hit = None
         if direction in ("BUY", "BULLISH"):
-            if price >= tp:
-                hit = ("win", tp)
-            elif price <= sl:
+            if lo <= sl:
                 hit = ("loss", sl)
+            elif hi >= tp:
+                hit = ("win", tp)
         elif direction in ("SELL", "BEARISH"):
-            if price <= tp:
-                hit = ("win", tp)
-            elif price >= sl:
+            if hi >= sl:
                 hit = ("loss", sl)
+            elif lo <= tp:
+                hit = ("win", tp)
+
+        # Time stop: neither level reached but the signal is stale.
+        if hit is None and max_open_hours:
+            age_h = _open_age_hours(sig.get("entry_time"), now)
+            if age_h is not None and age_h >= max_open_hours:
+                is_buy = direction in ("BUY", "BULLISH")
+                diff = (price - entry) if is_buy else (entry - price)
+                sl_dist = abs(entry - sl)
+                r = diff / sl_dist if sl_dist > 0 else 0.0
+                outcome = "win" if r > 0.1 else "loss" if r < -0.1 else "breakeven"
+                success = close_signal(
+                    signal_id=sig_id,
+                    exit_price=float(price),
+                    outcome=outcome,
+                    notes=f"time_stop: open {age_h:.0f}h >= {max_open_hours:.0f}h, "
+                          f"closed at market ({r:+.2f}R)",
+                )
+                if success:
+                    closed.append({
+                        "signal_id": sig_id,
+                        "symbol": symbol,
+                        "direction": direction,
+                        "outcome": outcome,
+                        "exit_price": float(price),
+                    })
+                    logger.info(
+                        f"Time-stopped {sig_id} ({symbol} {direction}): "
+                        f"{outcome} @ {price:.5f} after {age_h:.0f}h"
+                    )
+            continue
 
         if hit:
             outcome, exit_px = hit
@@ -361,7 +426,8 @@ def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
                 signal_id=sig_id,
                 exit_price=exit_px,
                 outcome=outcome,
-                notes=f"auto_close: price={price:.5f} hit {'TP' if outcome=='win' else 'SL'}",
+                notes=f"auto_close: bar range [{lo:.5f}, {hi:.5f}] "
+                      f"hit {'TP' if outcome == 'win' else 'SL'}",
             )
             if success:
                 closed.append({
@@ -373,7 +439,20 @@ def auto_close_outcomes(current_prices: dict[str, float]) -> list[dict]:
                 })
                 logger.info(
                     f"Auto-closed {sig_id} ({symbol} {direction}): "
-                    f"{outcome} @ {exit_px:.5f} (price={price:.5f})"
+                    f"{outcome} @ {exit_px:.5f} (bar=[{lo:.5f}, {hi:.5f}])"
                 )
 
     return closed
+
+
+def _open_age_hours(entry_time: str | None, now: datetime) -> float | None:
+    """Age of an open signal in hours; None when entry_time is unparseable."""
+    if not entry_time:
+        return None
+    try:
+        opened = datetime.fromisoformat(str(entry_time))
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        return (now - opened).total_seconds() / 3600.0
+    except (ValueError, TypeError):
+        return None

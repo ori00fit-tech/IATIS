@@ -5,15 +5,29 @@ Weighted confluence score.
 
 Formula: score = weighted avg of AGREEING engines' scores only.
 
-Only engines that voted for the MAJORITY direction are included in the
-score. Opposing engines are handled by check_contradictions(), not here.
+"Agreeing" means: effectively voting (bias != NEUTRAL AND score >=
+MIN_CONVICTION_SCORE — the same threshold the vote layer applies) for the
+SAME side tally_votes() declared the winner by weighted conviction.
 
-This means:
-  - 3 engines BULLISH, 1 BEARISH → score = avg of the 3 BULLISH engines
-  - All NEUTRAL → score = 0
-  - The contradiction_engine handles the BEARISH case separately
+Unified with voting_system (philosophy audit, Axis 6). Previously this
+module picked its own majority by raw engine COUNT (ties broken by the
+higher-average side) while tally_votes picked the verdict direction by
+weighted CONVICTION — the two could select opposite sides, so the stored
+cf_score sometimes described the direction the verdict didn't take, and a
+1-point nudge in one engine could flip the reported score between the two
+sides' averages (the BTC-39 vs ETH-80 discontinuity). It also ignored the
+conviction threshold, so an engine at score 19 was NEUTRAL for the quorum
+yet still steered the score. Both inconsistencies are now closed:
 
-Why separate concerns:
+  - calculate_score() takes the winning bias from tally_votes() (callers
+    pass vote_result.winning_bias; if omitted it derives it by calling
+    tally_votes itself — one definition, one place).
+  - The conviction threshold is imported from voting_system and applied
+    identically here.
+  - winning_bias == NEUTRAL (including exact conviction ties) → score 0:
+    a dead heat is no information, not "the louder side's average".
+
+Why separate concerns (unchanged):
   - score_calculator asks: "how confident are the agreeing engines?"
   - contradiction_engine asks: "is there meaningful opposition?"
   - These are different questions that should not cancel each other out.
@@ -22,6 +36,7 @@ Why separate concerns:
 from __future__ import annotations
 from dataclasses import dataclass, field
 from engines.base_engine import Bias, EngineOutput
+from confluence.voting_system import MIN_CONVICTION_SCORE, effective_bias, tally_votes
 
 
 class ConfluenceConfigError(Exception):
@@ -61,77 +76,69 @@ def _engine_key(engine_name: str) -> str | None:
     return snake if snake else None
 
 
-def calculate_score(outputs: list[EngineOutput], weights: dict[str, float]) -> ScoreResult:
-    """Score = weighted average of MAJORITY-side engines' scores.
+def calculate_score(
+    outputs: list[EngineOutput],
+    weights: dict[str, float],
+    winning_bias: Bias | None = None,
+) -> ScoreResult:
+    """Score = weighted average of the WINNING side's effective votes.
 
-    Step 1: find the majority direction (BULLISH or BEARISH)
-    Step 2: score = sum(weight_i × score_i) / sum(weight_i) for majority engines
-    Step 3: directional_score = positive for bullish, negative for bearish
+    Step 1: the winning direction comes from tally_votes() — pass
+            vote_result.winning_bias; when omitted it is derived here by
+            the same function, so there is exactly one majority definition
+            in the system (weighted conviction, philosophy audit Axis 6).
+    Step 2: score = sum(weight_i × score_i) / sum(weight_i) over engines
+            whose EFFECTIVE bias (conviction threshold applied) equals the
+            winning bias.
+    Step 3: directional_score = +score for BULLISH, -score for BEARISH.
+    winning_bias == NEUTRAL (no votes, or an exact conviction tie) → 0.
 
     Opposition is handled by check_contradictions(), not by this function.
     """
+    if winning_bias is None:
+        winning_bias = tally_votes(outputs, weights).winning_bias
+
     full_weight_total = sum(weights.values()) or 1.0
+
+    # Contributions use the same effective bias as the vote layer: an
+    # engine below MIN_CONVICTION_SCORE contributes exactly nothing,
+    # instead of being NEUTRAL for the quorum but non-zero here.
     contributions: dict[str, float] = {}
-
-    bull_engines = [o for o in outputs if o.bias == Bias.BULLISH]
-    bear_engines = [o for o in outputs if o.bias == Bias.BEARISH]
-
-    def _weighted_score(engines_subset):
-        total_w = 0.0
-        total_ws = 0.0
-        for o in engines_subset:
-            key = _engine_key(o.engine_name)
-            w = weights.get(key, 0.0) if key else 0.0
-            total_w += w
-            total_ws += w * o.score
-        return total_ws / total_w if total_w > 0 else 0.0, total_w
-
-    bull_score, bull_weight = _weighted_score(bull_engines)
-    bear_score, bear_weight = _weighted_score(bear_engines)
-
     for o in outputs:
         key = _engine_key(o.engine_name)
         w = weights.get(key, 0.0) if key else 0.0
-        sign = 1 if o.bias == Bias.BULLISH else -1 if o.bias == Bias.BEARISH else 0
+        eff = effective_bias(o)
+        sign = 1 if eff == Bias.BULLISH else -1 if eff == Bias.BEARISH else 0
         contributions[o.engine_name] = round(w * o.score * sign / 100, 4)
 
-    # Majority direction
-    if len(bull_engines) > len(bear_engines):
-        final_score = round(min(bull_score, 100.0), 2)
-        directional_score = final_score
-        participating = len(bull_engines)
-        participating_weight = bull_weight
-    elif len(bear_engines) > len(bull_engines):
-        final_score = round(min(bear_score, 100.0), 2)
-        directional_score = -final_score
-        participating = len(bear_engines)
-        participating_weight = bear_weight
-    elif len(bull_engines) == len(bear_engines) and len(bull_engines) > 0:
-        # Tie — use higher scoring side
-        if bull_score >= bear_score:
-            final_score = round(min(bull_score, 100.0), 2)
-            directional_score = final_score
-            participating = len(bull_engines)
-            participating_weight = bull_weight
-        else:
-            final_score = round(min(bear_score, 100.0), 2)
-            directional_score = -final_score
-            participating = len(bear_engines)
-            participating_weight = bear_weight
-    else:
+    if winning_bias == Bias.NEUTRAL:
         return ScoreResult(
             final_score=0.0, directional_score=0.0,
             contributions=contributions, engines_participating=0,
             engines_total=len(outputs), participating_weight_share=0.0,
         )
 
+    agreeing = [o for o in outputs if effective_bias(o) == winning_bias]
+
+    total_w = 0.0
+    total_ws = 0.0
+    for o in agreeing:
+        key = _engine_key(o.engine_name)
+        w = weights.get(key, 0.0) if key else 0.0
+        total_w += w
+        total_ws += w * o.score
+    side_score = total_ws / total_w if total_w > 0 else 0.0
+
+    final_score = round(min(side_score, 100.0), 2)
+    direction = 1 if winning_bias == Bias.BULLISH else -1
+
     return ScoreResult(
         final_score=final_score,
-        directional_score=round(directional_score, 2),
+        directional_score=round(direction * final_score, 2),
         contributions=contributions,
-        engines_participating=participating,
+        engines_participating=len(agreeing),
         engines_total=len(outputs),
-        participating_weight_share=round(participating_weight / full_weight_total, 3),
+        participating_weight_share=round(total_w / full_weight_total, 3),
     )
 
 

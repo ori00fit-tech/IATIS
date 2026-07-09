@@ -228,15 +228,27 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # function scope and previously caused an UnboundLocalError.
         try:
             current_prices: dict[str, float] = {}
+            bar_ranges: dict[str, tuple[float, float]] = {}
             for r in reports:
                 sym = r.get("symbol") or r.get("data", {}).get("symbol")
                 price = r.get("current_price") or r.get("entry_price")
                 if sym and price:
                     current_prices[str(sym)] = float(price)
+                    # Decision-bar range → intrabar TP/SL detection
+                    # (open-outcome hygiene, audit priority 4).
+                    if r.get("bar_high") is not None and r.get("bar_low") is not None:
+                        bar_ranges[str(sym)] = (float(r["bar_high"]), float(r["bar_low"]))
             if current_prices:
-                closed = auto_close_outcomes(current_prices)
+                closed = auto_close_outcomes(
+                    current_prices,
+                    bar_ranges=bar_ranges,
+                    max_open_hours=config.get("execution", {}).get(
+                        "max_open_trade_hours", 0
+                    ),
+                )
                 for c in closed:
-                    icon = "✅" if c["outcome"] == "win" else "❌"
+                    icon = ("✅" if c["outcome"] == "win"
+                            else "➖" if c["outcome"] == "breakeven" else "❌")
                     send_raw(
                         f"{icon} <b>Auto-closed:</b> {c['symbol']} "
                         f"→ {c['outcome'].upper()} at {c['exit_price']}"

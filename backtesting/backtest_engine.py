@@ -208,7 +208,7 @@ class BacktestResult:
     gate_rejections: dict = field(
         default_factory=lambda: {
             "mqs": 0, "score": 0, "votes": 0,
-            "contradiction": 0, "reversal_veto": 0,
+            "contradiction": 0, "reversal_veto": 0, "info_share": 0,
         }
     )
 
@@ -302,7 +302,7 @@ def run_backtest(
     from engines.nnfx_engine import NNFXEngine
     from engines.quant_engine import QuantEngine
     from engines.wyckoff_engine import WyckoffEngine
-    from confluence.voting_system import tally_votes
+    from confluence.voting_system import informative_weight_share, tally_votes
     from confluence.score_calculator import calculate_score
     from confluence.contradiction_engine import check_contradictions
     from confluence.mtf_confirmation import check_mtf_confirmation
@@ -320,6 +320,8 @@ def run_backtest(
     weights = engine_config["confluence"]["weights"]
     min_score = engine_config["confluence"]["min_score_to_trade"]
     min_engines = engine_config["confluence"]["min_engines_agreeing"]
+    # Axis-8 gate parity with main.py (0.0 = disabled).
+    min_info_share = engine_config["confluence"].get("min_informative_weight_share", 0.0)
     timeframes = engine_config["data"]["timeframes"]
 
     engines_list = []
@@ -472,7 +474,8 @@ def run_backtest(
                 )
 
             vote = tally_votes(outputs, active_weights)
-            score = calculate_score(outputs, active_weights)
+            # Same Axis-6 unification as main.py: score follows the vote.
+            score = calculate_score(outputs, active_weights, vote.winning_bias)
             contradiction = check_contradictions(outputs)
 
             # MTF confirmation — D1/H1 alignment adjusts the score
@@ -499,12 +502,21 @@ def run_backtest(
                         adjusted_score * veto.confidence_multiplier, 2
                     )
 
+            # Axis-8 gate parity with main.py: confluence requires a
+            # speaking panel, not a quorum of the only two fed engines.
+            info_share_ok = True
+            if min_info_share > 0:
+                info_share_ok = (
+                    informative_weight_share(outputs, active_weights) >= min_info_share
+                )
+
             ok = (
                 adjusted_score >= min_score
                 and vote.agree_count >= min_engines
                 and not contradiction.blocked
                 and not veto_blocked
                 and vote.winning_bias.value != "NEUTRAL"
+                and info_share_ok
             )
             if not ok:
                 result.no_trade_count += 1
@@ -514,6 +526,8 @@ def run_backtest(
                     result.gate_rejections["score"] += 1
                 elif contradiction.blocked:
                     result.gate_rejections["contradiction"] += 1
+                elif not info_share_ok:
+                    result.gate_rejections["info_share"] += 1
                 else:
                     result.gate_rejections["votes"] += 1
                 continue

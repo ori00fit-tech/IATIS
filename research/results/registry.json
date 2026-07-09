@@ -173,7 +173,8 @@
     "file": "scripts/engine_research.py",
     "function": "run_h014"
    },
-   "last_updated": "2026-06-28"
+   "last_updated": "2026-07-09",
+   "conclusion": "Informed by the independence matrix (ablation_20260703.json) + H015: engines are non-redundant (pairwise agreement mostly 27-76%); no engine pair is collinear enough to drop for orthogonality reasons. No change warranted."
   },
   "H015": {
    "title": "Ablation Study — Minimum Engine Set",
@@ -183,7 +184,10 @@
     "file": "scripts/engine_research.py",
     "function": "run_h015"
    },
-   "last_updated": "2026-06-28"
+   "last_updated": "2026-07-09",
+   "conclusion": "RESOLVED (2026-07-09): production-4 (smc+price_action+nnfx+wyckoff) is the OOS-optimal set. Greedy bidirectional search from prod4 climbed IN-SAMPLE to PF 1.26 by adding market_structure+ict, but that 6-set UNDERPERFORMS prod4 out-of-sample (TEST 1.219 vs 1.239). all-9 is worse (1.156). Dropping any single prod engine also fails OOS (drop smc -0.071, price_action -0.362, nnfx -0.073, wyckoff +0.012 within noise). The old single-LOO 'SMC dilutes / market_structure adds' was an in-sample artifact.",
+   "result_file": "results/engine_subset_search.json",
+   "manifest": "results/engine_subset_search_20260709_manifest.json"
   },
   "H016": {
    "title": "Engine Pair Synergy Analysis",
@@ -193,7 +197,8 @@
     "file": "scripts/engine_research.py",
     "function": "run_h016"
    },
-   "last_updated": "2026-06-28"
+   "last_updated": "2026-07-09",
+   "conclusion": "Subsumed by H015's subset search: no engine pair addition to prod4 survives OOS. Pair-synergy pruning offers no OOS PF gain over the current 4."
   },
   "H008c": {
    "title": "BOS+FVG re-test — look-ahead-free + out-of-sample on real deep M15",

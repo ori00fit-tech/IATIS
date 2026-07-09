@@ -212,7 +212,9 @@ def _set_file_permissions(path) -> None:
 # ---------------------------------------------------------------------------
 class AnalyzeRequest(BaseModel):
     source: str = "twelve_data"
-    bars: int = 500
+    # Match config.yaml bars_to_load: below ~210 decision-TF bars NNFX is
+    # mute and below 50 D1 bars the MTF gate is inert (philosophy audit).
+    bars: int = 3000
     timeframes: list[str] = ["M15", "H1", "H4", "D1"]
 
 

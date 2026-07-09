@@ -13,7 +13,14 @@ confluence:
     smc: 0.202
     wyckoff: 0.0707
 data:
-  bars_to_load: 500
+  # 3000 H1 bars → ~750 resampled H4 bars and ~125 resampled D1 bars.
+  # The Twelve Data Free plan serves H4/D1 as resamples of the H1 fetch
+  # (core/data_loader.py), so this depth is what feeds NNFX (needs 210+
+  # decision-TF bars for EMA200) and the MTF D1 gate (needs 50+ D1 bars).
+  # At the previous 500, both were silently starved in live operation —
+  # see docs/PHILOSOPHY_AUDIT_2026-07_ADDENDUM_LIVE.md. Free-plan max per
+  # request is 5000; cost is 1 credit per request regardless of size.
+  bars_to_load: 3000
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

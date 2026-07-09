@@ -543,6 +543,25 @@ def run_pipeline(config: dict) -> dict:
     timeframes = config["data"]["timeframes"]
     df_base, mtf_data = _load_market_data(config, timeframes)
 
+    # 2a. Data-depth guard: NNFX needs 210+ decision-TF bars (EMA200) and
+    # the MTF gate needs 50+ D1 bars — below these they degrade SILENTLY
+    # (NEUTRAL vote / zero adjustment), which starved live decisions for
+    # weeks before the philosophy audit caught it. Warn loudly instead.
+    dtf = decision_timeframe(config)
+    dtf_bars = len(mtf_data.get(dtf, ()))
+    d1_bars = len(mtf_data.get("D1", ()))
+    if dtf_bars < 210:
+        logger.warning(
+            f"DATA STARVATION: only {dtf_bars} {dtf} bars (<210) — NNFX will "
+            f"vote NEUTRAL on every run. Raise data.bars_to_load "
+            f"(currently {config['data'].get('bars_to_load')})."
+        )
+    if "D1" in timeframes and dtf != "D1" and d1_bars < 50:
+        logger.warning(
+            f"DATA STARVATION: only {d1_bars} D1 bars (<50) — the MTF "
+            f"confirmation gate is inert. Raise data.bars_to_load."
+        )
+
     # 2b. Validate base timeframe (applies to both paths)
     try:
         validate_ohlcv(df_base)

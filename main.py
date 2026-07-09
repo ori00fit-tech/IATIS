@@ -187,12 +187,20 @@ def _load_market_data(config: dict, timeframes: list[str]):
             df_base = load_data(config)
         return df_base, build_multi_timeframe_view(df_base, timeframes)
 
-    # Fetch with failover: Twelve Data → Yahoo Finance → Alpha Vantage → Finnhub
-    # (load_multi_timeframe_with_failover reads TWELVE_DATA_API_KEY from env).
+    # Fetch with asset-class-aware failover (core/data_providers.py):
+    # crypto → ccxt/Binance first (native H4/D1); fx/metals/indices →
+    # broker feed (cTrader) first when configured; then Twelve Data →
+    # Yahoo → Alpha Vantage → Finnhub. Chains overridable per class via
+    # config.yaml data.provider_chains.
     try:
+        from core.data_providers import provider_chain_for
+        chain = provider_chain_for(
+            internal_sym, config["data"].get("provider_chains")
+        )
         mtf_data = load_multi_timeframe_with_failover(
             td_symbol, timeframes,
             outputsize=config["data"].get("bars_to_load", 500),
+            providers=chain,
         )
         return mtf_data[timeframes[0]], mtf_data
     except Exception as exc:

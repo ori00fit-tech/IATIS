@@ -243,11 +243,16 @@ def load_multi_timeframe_with_failover(
     timeframes: list[str],
     outputsize: int = 500,
     use_cache: bool = True,
+    providers: list[str] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch multiple timeframes with automatic provider failover.
 
-    Provider order: Twelve Data → Yahoo Finance → Alpha Vantage
-    Falls back automatically if primary provider fails.
+    Provider order is asset-class aware (core/data_providers.py
+    provider_chain_for): crypto leads with ccxt/Binance (native H4/D1,
+    free, unlimited), fx/metals/indices lead with the broker feed
+    (cTrader) when credentials exist, then Twelve Data → Yahoo →
+    Alpha Vantage → Finnhub. Override per class in config.yaml
+    data.provider_chains, or per call via `providers`.
     """
     from core.data_providers import fetch_multi_timeframe_with_failover
     return fetch_multi_timeframe_with_failover(
@@ -255,6 +260,7 @@ def load_multi_timeframe_with_failover(
         timeframes=timeframes,
         outputsize=outputsize,
         use_cache=use_cache,
+        providers=providers,
     )
 
 

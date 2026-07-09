@@ -52,6 +52,48 @@ ENGINE_HYPOTHESIS_MAP = {
 # "RESEARCH" = approved for paper trading / data collection only (not live)
 ALLOWED_STATUSES = {"PASSED", "RESEARCH"}
 
+# ── Promotion criteria (codified 2026-07-09, philosophy-audit follow-up) ──
+# A hypothesis may only be TRUSTED as PASSED when its registry entry carries
+# an `evidence` block meeting every bar below. This turns the promotion bar
+# from prose into code: a PASSED entry without qualifying evidence is
+# flagged loudly at boot and should be read as RESEARCH. (Enabling stays
+# allowed — trust is what's withheld, so boot never breaks on legacy rows.)
+PROMOTION_CRITERIA = {
+    "min_trades": 300,          # sample size before PF means anything
+    "min_oos_pf": 1.2,          # PF on an out-of-sample / forward slice
+    "require_walk_forward": True,
+    "require_monte_carlo": True,
+}
+
+
+def audit_passed_hypotheses(hypotheses: dict) -> list[str]:
+    """One warning per PASSED hypothesis whose `evidence` block fails the
+    codified promotion criteria. Non-fatal by design: it flags stale or
+    under-evidenced PASSED statuses (e.g. H009's PF-3.08 walk-forward that
+    the production audit found non-reproducible) without breaking boot."""
+    warnings = []
+    for hid, h in hypotheses.items():
+        if h.get("status") != "PASSED":
+            continue
+        ev = h.get("evidence") or {}
+        problems = []
+        if (ev.get("oos_trades") or 0) < PROMOTION_CRITERIA["min_trades"]:
+            problems.append(
+                f"oos_trades={ev.get('oos_trades', 'missing')} < {PROMOTION_CRITERIA['min_trades']}")
+        if (ev.get("oos_pf") or 0) < PROMOTION_CRITERIA["min_oos_pf"]:
+            problems.append(
+                f"oos_pf={ev.get('oos_pf', 'missing')} < {PROMOTION_CRITERIA['min_oos_pf']}")
+        if PROMOTION_CRITERIA["require_walk_forward"] and not ev.get("walk_forward"):
+            problems.append("walk_forward evidence missing")
+        if PROMOTION_CRITERIA["require_monte_carlo"] and not ev.get("monte_carlo"):
+            problems.append("monte_carlo evidence missing")
+        if problems:
+            warnings.append(
+                f"{hid} is PASSED but fails the codified promotion criteria "
+                f"({'; '.join(problems)}) — treat as RESEARCH until re-validated."
+            )
+    return warnings
+
 
 class EdgeNotProvenError(Exception):
     """Raised when config.yaml tries to enable an engine without a PASSED hypothesis."""
@@ -89,5 +131,10 @@ def check_edge_gate(enabled_engines: dict[str, bool]) -> None:
                 f"config.yaml enables engine '{engine_key}' but its backing hypothesis "
                 f"{hyp_id} has status '{status}', not in {ALLOWED_STATUSES}. Blocking."
             )
+
+    # Trust audit: loud, non-fatal. A PASSED status without qualifying
+    # evidence must never silently launder itself into "proven".
+    for warning in audit_passed_hypotheses(hypotheses):
+        logger.warning(f"EDGE GATE TRUST AUDIT: {warning}")
 
     logger.info("Edge gate check passed — all enabled engines are exempt or proven.")

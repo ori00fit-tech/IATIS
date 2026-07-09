@@ -159,6 +159,11 @@ data:
     rr: 2.0
     symbol: ETH/USD
 engines:
+  # H017 — SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH
+  # modulating SMC's structural score; implemented causally, never entries).
+  # OFF until scripts/smc_fullspec_ab.py shows an OOS improvement — flipping
+  # this changes live voting behavior. See registry H017.
+  smc_full_spec: false
   enabled:
     divergence: false
     ict: false

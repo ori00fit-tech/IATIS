@@ -42,6 +42,7 @@ measured. Each failed or proved to be an artifact.
 | **Statistical arbitrage / pairs trading** | Engle-Granger cointegration (in-sample select) + z-score (OOS test), all asset classes | **No edge.** 3/105 FX-crypto pairs cointegrated, 0 profitable OOS. Gold/silver didn't even cointegrate; indices didn't cointegrate with each other. |
 | **Advanced trade management** (partial TP + breakeven + ATR trail) | re-simulate same entries with managed exits | **No improvement** once intrabar look-ahead was removed and OOS-split: ΔPF −0.008 / −0.011 / −0.125. The naive version showed +100% PF — a pure methodology artifact (a caution worth remembering). |
 | **Currency index strength** (relative value) | per-currency strength z-score, fade & follow, OOS | **Losing.** Portfolio PF 0.90 (fade) / 0.49 (follow). |
+| **Engine-set change** (H015 rigorous subset search) | greedy bidirectional add/drop from prod4 on TRAIN, validated on a held-out TEST slice (EURUSD/XAUUSD/BTCUSD H4) | **Production-4 is OOS-optimal.** In-sample the greedy climbed to PF 1.26 by adding market_structure+ict — but that 6-set *loses* OOS (TEST 1.219 vs prod4 1.239); all-9 is worse (1.156); dropping any single prod engine also fails OOS (drop smc −0.071, price_action −0.362, nnfx −0.073, wyckoff +0.012 within noise). The old single-LOO "SMC dilutes / market_structure adds" was an in-sample mirage. |
 
 **Conclusion: the system is at the edge frontier available on free
 data.** Every sophisticated addition tested either dilutes the existing
@@ -193,6 +194,7 @@ Every result above is bound to a git-tracked manifest in
 `research/results/*_manifest.json` (commit hash + config hash + dataset
 SHA256): `engine_activation_*`, `crypto_volume_*`, `pairs_trading_*`,
 `h4_yearly_stability_*`, `d1_backtest_*`, `h4_backtest_*`,
-`ctrader_spread_recost_*`, `ic_symbols_backtest_*`, `h008c_oos_*`. Re-run
+`ctrader_spread_recost_*`, `ic_symbols_backtest_*`, `h008c_oos_*`,
+`engine_subset_search_*`. Re-run
 any experiment from its script in `scripts/` (or `run_h008c.py`) to
 reproduce; `scripts/fetch_m15_twelvedata.py` rebuilds the real M15 inputs.

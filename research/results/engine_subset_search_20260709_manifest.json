@@ -1,0 +1,344 @@
+{
+  "kind": "engine_subset_search",
+  "generated_at": "2026-07-09T19:21:21.901668+00:00",
+  "git": {
+    "commit": "d641412eaf84ab7dd861c08722dc040b5822d7f5",
+    "dirty": true
+  },
+  "reproducible": false,
+  "config": {
+    "sha256": "480d354a9f60c4d7481ff65009ddc5e6cda8fa207e127e5228bc5ff74e65212e",
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 500,
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CHF"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "EURJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPJPY",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "GBP/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "AUDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "AUD/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/GBP"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/CHF"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USOIL",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "WTI/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "US30",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "DJI"
+          },
+          {
+            "enabled": true,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX"
+          },
+          {
+            "enabled": true,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "symbols": [
+      "EURUSD",
+      "XAUUSD",
+      "BTCUSD"
+    ],
+    "bars": 6000,
+    "train_frac": 0.65,
+    "step": 6,
+    "improve_eps": 0.005,
+    "adopt_margin": 0.03
+  },
+  "datasets": [],
+  "results": {
+    "train_trail": [
+      {
+        "move": "start",
+        "subset": [
+          "nnfx",
+          "price_action",
+          "smc",
+          "wyckoff"
+        ],
+        "train_pf": 1.114
+      },
+      {
+        "move": "add market_structure",
+        "subset": [
+          "market_structure",
+          "nnfx",
+          "price_action",
+          "smc",
+          "wyckoff"
+        ],
+        "train_pf": 1.2456
+      },
+      {
+        "move": "add ict",
+        "subset": [
+          "ict",
+          "market_structure",
+          "nnfx",
+          "price_action",
+          "smc",
+          "wyckoff"
+        ],
+        "train_pf": 1.2602
+      }
+    ],
+    "test_scores": {
+      "prod4": {
+        "subset": [
+          "nnfx",
+          "price_action",
+          "smc",
+          "wyckoff"
+        ],
+        "mean_pf": 1.2392,
+        "per_symbol": {
+          "EURUSD": {
+            "pf": 0.9142,
+            "trades": 42
+          },
+          "XAUUSD": {
+            "pf": 1.3571,
+            "trades": 67
+          },
+          "BTCUSD": {
+            "pf": 1.4464,
+            "trades": 33
+          }
+        }
+      },
+      "all9": {
+        "subset": [
+          "divergence",
+          "ict",
+          "market_structure",
+          "nnfx",
+          "price_action",
+          "quant",
+          "sentiment",
+          "smc",
+          "wyckoff"
+        ],
+        "mean_pf": 1.1556,
+        "per_symbol": {
+          "EURUSD": {
+            "pf": 0.5871,
+            "trades": 30
+          },
+          "XAUUSD": {
+            "pf": 1.5707,
+            "trades": 45
+          },
+          "BTCUSD": {
+            "pf": 1.3089,
+            "trades": 31
+          }
+        }
+      },
+      "selected": {
+        "subset": [
+          "ict",
+          "market_structure",
+          "nnfx",
+          "price_action",
+          "smc",
+          "wyckoff"
+        ],
+        "mean_pf": 1.2192,
+        "per_symbol": {
+          "EURUSD": {
+            "pf": 1.0065,
+            "trades": 35
+          },
+          "XAUUSD": {
+            "pf": 1.5798,
+            "trades": 62
+          },
+          "BTCUSD": {
+            "pf": 1.0712,
+            "trades": 35
+          }
+        }
+      }
+    },
+    "recommendation": "KEEP prod4",
+    "adopt": false
+  }
+}

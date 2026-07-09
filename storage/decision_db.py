@@ -137,7 +137,13 @@ def log_decision_db(report: dict) -> None:
         regime_d.get("trend_strength"),
         cf.get("score"),
         cf.get("engines_participating"),
-        1 if risk and risk.get("passed") else 0 if risk else None,
+        # Tri-state: 1 passed / 0 failed / NULL never evaluated. The risk
+        # gate only runs when confluence passes (main._risk_gate returns
+        # None otherwise) — the old expression wrote 0 there, fabricating
+        # a risk verdict on confluence-failed rows (philosophy audit,
+        # Axis 1 check 1.4: 159 such rows observed live).
+        (None if not risk or risk.get("passed") is None
+         else 1 if risk.get("passed") else 0),
         primary_fail,
         report.get("summary"),
         json.dumps(report, default=str),

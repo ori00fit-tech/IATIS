@@ -1028,6 +1028,17 @@ async def research_center(
         except Exception:
             pass
 
+    # Trust audit: which PASSED entries actually clear the codified
+    # promotion criteria (research/edge_gate.py) — the dashboard must never
+    # render an under-evidenced PASSED as green.
+    try:
+        from research.edge_gate import PROMOTION_CRITERIA, audit_passed_hypotheses
+        trust_warnings = audit_passed_hypotheses(hypotheses_raw)
+        flagged_ids = {w.split(" ", 1)[0] for w in trust_warnings}
+        promotion_criteria = PROMOTION_CRITERIA
+    except Exception:
+        trust_warnings, flagged_ids, promotion_criteria = [], set(), {}
+
     hypotheses = []
     for h_id, h_data in hypotheses_raw.items():
         entry = {
@@ -1036,6 +1047,8 @@ async def research_center(
             "status": h_data.get("status", "UNKNOWN"),
             "description": h_data.get("description", "")[:120],
             "last_updated": h_data.get("last_updated", ""),
+            "conclusion": (h_data.get("conclusion") or h_data.get("lesson") or "")[:300],
+            "trusted": h_data.get("status") != "PASSED" or h_id not in flagged_ids,
         }
         # Load result file if exists
         result_file = h_data.get("result_file")
@@ -1092,9 +1105,97 @@ async def research_center(
             "needs_data": sum(1 for h in hypotheses if h["status"] == "NEEDS_MORE_DATA"),
         },
         "hypotheses": hypotheses,
+        "trust_audit": {
+            "criteria": promotion_criteria,
+            "warnings": trust_warnings,
+        },
         "engine_performance": stats,
         "outcome_summary": outcomes,
         "latest_backtest": latest_backtest,
+    }
+
+
+@app.get("/philosophy-audit")
+async def philosophy_audit_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """System Philosophy Audit — the same 29 checks as
+    `python -m scripts.philosophy_audit`, on demand from the dashboard.
+
+    Read-only (SELECTs against the decisions DB). Takes ~10-20s because it
+    issues multiple D1 round-trips; the frontend calls it from a button,
+    never on a poll."""
+    _check_auth(x_api_key, iatis_session)
+
+    def _run() -> dict[str, Any]:
+        from scripts.philosophy_audit import run_all
+        from storage import d1_client
+        # Ensure the audited tables exist (CREATE IF NOT EXISTS) — a fresh
+        # DB (or the tests' fake D1) has none until a first decision lands.
+        from storage.decision_db import init_db as _init_decisions
+        from storage.outcome_tracker import _init_db as _init_outcomes
+        _init_decisions()
+        _init_outcomes()
+        with d1_client.d1_connection() as con:
+            checks = run_all(con)
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "summary": {
+                "total": len(checks),
+                "fail": sum(1 for c in checks if c.status == "FAIL"),
+                "warn": sum(1 for c in checks if c.status == "WARN"),
+                "pass": sum(1 for c in checks if c.status == "PASS"),
+                "info": sum(1 for c in checks if c.status == "INFO"),
+            },
+            "checks": [
+                {"axis": c.axis, "name": c.name, "status": c.status,
+                 "detail": c.detail,
+                 "evidence": [str(e) for e in c.evidence[:12]]}
+                for c in checks
+            ],
+        }
+
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(_executor, _run)
+    except Exception as exc:
+        logger.error(f"Philosophy audit failed: {exc}")
+        raise HTTPException(status_code=503,
+                            detail="Audit unavailable — decisions DB unreachable.")
+
+
+@app.get("/provider-chains")
+async def provider_chains_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Data-layer transparency: the per-asset-class provider chains in
+    effect, which providers are actually usable right now (credentials /
+    dependencies present), and each timeframe's native coverage."""
+    _check_auth(x_api_key, iatis_session)
+    import os as _os
+    from core.data_providers import DEFAULT_CHAINS, _NATIVE_TF, provider_chain_for
+
+    config = _get_config()
+    overrides = config.get("data", {}).get("provider_chains") or {}
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+    active = [s["internal"] for s in symbols_cfg if s.get("enabled")]
+
+    availability = {
+        "ctrader": bool(_os.getenv("CTRADER_CLIENT_ID") and _os.getenv("CTRADER_ACCESS_TOKEN")),
+        "twelve_data": bool(_os.getenv("TWELVE_DATA_API_KEY")),
+        "yahoo_finance": True,
+        "alpha_vantage": bool(_os.getenv("ALPHA_VANTAGE_API_KEY")),
+        "finnhub": bool(_os.getenv("FINNHUB_API_KEY")),
+        "ccxt": True,
+    }
+    return {
+        "chains": {cls: (overrides.get(cls) or chain)
+                   for cls, chain in DEFAULT_CHAINS.items()},
+        "native_timeframes": {p: sorted(tfs) for p, tfs in _NATIVE_TF.items()},
+        "availability": availability,
+        "per_symbol": {sym: provider_chain_for(sym, overrides) for sym in active},
     }
 
 

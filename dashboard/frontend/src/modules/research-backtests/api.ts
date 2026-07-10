@@ -6,14 +6,24 @@ export interface Hypothesis {
   status: string
   description: string
   last_updated: string
+  conclusion?: string
+  // false = PASSED status that fails the codified promotion criteria
+  // (research/edge_gate.py) — render as untrusted, never as green.
+  trusted?: boolean
   sample_size?: number
   win_rate?: number
   p_value?: number
 }
 
+export interface TrustAudit {
+  criteria: Record<string, number | boolean>
+  warnings: string[]
+}
+
 export interface ResearchResponse {
   hypothesis_summary: { total: number; passed: number; failed: number; research: number; needs_data: number }
   hypotheses: Hypothesis[]
+  trust_audit?: TrustAudit
   latest_backtest: {
     file: string
     generated_at: string

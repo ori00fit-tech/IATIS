@@ -478,6 +478,7 @@ def _build_report(
     final_verdict: str,
     meta,
     downgrade_reason: str | None = None,
+    mtf_data: dict | None = None,
 ) -> dict:
     """Stage 7: assemble the human summary and the full decision report."""
     vote_result = conf.vote_result
@@ -563,6 +564,11 @@ def _build_report(
             "upcoming_events_count": 0,
             "next_high_impact": None,
         },
+        # Which provider actually served each timeframe this run (set by
+        # fetch_multi_timeframe_with_failover via df.attrs) — data-layer
+        # transparency for the dashboard and per-decision auditability.
+        "data_providers": {tf: str(df.attrs.get("provider", "unknown"))
+                           for tf, df in (mtf_data or {}).items()},
         # Latest close — populated on EVERY report (EXECUTE and NO_TRADE)
         # so the scheduler's auto-close can evaluate open outcomes even
         # when this run produced no trade.
@@ -676,7 +682,7 @@ def run_pipeline(config: dict) -> dict:
     report = _build_report(
         config, df_base, regime_result, outputs, disabled, conf,
         risk_result, news_risk, news_blocked, entry, stop, target,
-        final_verdict, meta, downgrade_reason,
+        final_verdict, meta, downgrade_reason, mtf_data,
     )
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")

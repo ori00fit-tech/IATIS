@@ -178,14 +178,14 @@
   },
   "H015": {
    "title": "Ablation Study — Minimum Engine Set",
-   "status": "RESEARCH",
+   "status": "RESOLVED",
    "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
    "implementation": {
     "file": "scripts/engine_research.py",
     "function": "run_h015"
    },
-   "last_updated": "2026-07-09",
-   "conclusion": "RESOLVED (2026-07-09): production-4 (smc+price_action+nnfx+wyckoff) is the OOS-optimal set. Greedy bidirectional search from prod4 climbed IN-SAMPLE to PF 1.26 by adding market_structure+ict, but that 6-set UNDERPERFORMS prod4 out-of-sample (TEST 1.219 vs 1.239). all-9 is worse (1.156). Dropping any single prod engine also fails OOS (drop smc -0.071, price_action -0.362, nnfx -0.073, wyckoff +0.012 within noise). The old single-LOO 'SMC dilutes / market_structure adds' was an in-sample artifact.",
+   "last_updated": "2026-07-10",
+   "conclusion": "CLOSED (2026-07-10, 15-symbol confirmation). The pre-registered rule held: selected-7 beat prod4 on TEST mean-PF (1.0398 vs 0.8695, delta +0.170) but won only 9/15 symbols (< the required 2/3) -> KEEP prod4. Decisive observation: the 'better subset' is UNSTABLE across universes — the 3-symbol search chose {ict,nnfx,pa,quant,wyckoff}, the 15-symbol search chose {divergence,nnfx,pa,quant,sentiment,smc,wyckoff} (including the sentiment price-proxy, a noise-fitting tell). Universe-dependent selection = no robust engine-set improvement exists; prod4 is kept by burden-of-proof, not by being measured optimal. Stable signals across ALL runs: nnfx and price_action are load-bearing (dropping either always hurts); drop-smc helps mildly in-train everywhere but no alternative containing it survives the adoption rule OOS. SECONDARY FINDING (flagged to the operator): prod4 TEST-window (~mid-2025 to mid-2026) mean-PF across 15 symbols = 0.87 — the FX book drags below breakeven while carriers (XAU 1.33, BTC 1.37) stay positive, matching the philosophy audit's core verdict. Results: engine_subset_search.json (3-sym) + engine_subset_search_15sym.json + 20260710 manifest (clean tree).",
    "result_file": "results/engine_subset_search.json",
    "manifest": "results/engine_subset_search_20260709_manifest.json"
   },

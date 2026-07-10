@@ -178,14 +178,14 @@
   },
   "H015": {
    "title": "Ablation Study — Minimum Engine Set",
-   "status": "RESEARCH",
+   "status": "RESOLVED",
    "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
    "implementation": {
     "file": "scripts/engine_research.py",
     "function": "run_h015"
    },
    "last_updated": "2026-07-10",
-   "conclusion": "REOPENED (2026-07-10). The 2026-07-09 'prod4 confirmed optimal' verdict measured the OLD voting logic. A clean-tree re-run AFTER the Axis-6 unification (one majority definition, consistent conviction threshold, tie=NEUTRAL) + info-share gate flips the result: greedy TRAIN search now DROPS smc first (train PF 1.088->1.245), selects {ict,nnfx,price_action,quant,wyckoff}, and that 5-set beats prod4 OOS: TEST mean-PF 1.2492 vs 1.1915 (delta +0.058 >= the pre-registered 0.03, wins 2/3). Converges with the original H1 LOO signal (removing smc improved 7/10 symbols) that the 07-09 run had dismissed. NOT adopted yet: one 3-symbol run is insufficient for a live engine-set change. Pre-registered confirmation: same script on the full 15-symbol deep-H4 universe (--symbols ...); adopt only if the script's own rule (delta >= +0.03 AND wins >= 2/3 of symbols) holds there too. Result: results/engine_subset_search.json + engine_subset_search_20260710_manifest.json (VPS).",
+   "conclusion": "CLOSED (2026-07-10, 15-symbol confirmation). The pre-registered rule held: selected-7 beat prod4 on TEST mean-PF (1.0398 vs 0.8695, delta +0.170) but won only 9/15 symbols (< the required 2/3) -> KEEP prod4. Decisive observation: the 'better subset' is UNSTABLE across universes — the 3-symbol search chose {ict,nnfx,pa,quant,wyckoff}, the 15-symbol search chose {divergence,nnfx,pa,quant,sentiment,smc,wyckoff} (including the sentiment price-proxy, a noise-fitting tell). Universe-dependent selection = no robust engine-set improvement exists; prod4 is kept by burden-of-proof, not by being measured optimal. Stable signals across ALL runs: nnfx and price_action are load-bearing (dropping either always hurts); drop-smc helps mildly in-train everywhere but no alternative containing it survives the adoption rule OOS. SECONDARY FINDING (flagged to the operator): prod4 TEST-window (~mid-2025 to mid-2026) mean-PF across 15 symbols = 0.87 — the FX book drags below breakeven while carriers (XAU 1.33, BTC 1.37) stay positive, matching the philosophy audit's core verdict. Results: engine_subset_search.json (3-sym) + engine_subset_search_15sym.json + 20260710 manifest (clean tree).",
    "result_file": "results/engine_subset_search.json",
    "manifest": "results/engine_subset_search_20260709_manifest.json"
   },

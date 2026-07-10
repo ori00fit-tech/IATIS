@@ -213,3 +213,16 @@ With H001/H002/H002b (sweeps), H008/H008b/H008c (BOS+FVG entries) and now
 H017 (internal confluence), every formulation of the SMC concept family has
 been measured. The structural swing bias that already runs is the only part
 that earns its seat.
+
+### H015 final — engine-subset search closed (2026-07-10, post-Axis-6 voting)
+
+| enhancement | method | verdict |
+|---|---|---|
+| **Any engine-subset change to prod4** (greedy bidirectional search under the unified voting logic) | TRAIN-only search + held-out TEST, run at 3 symbols and re-run at 15 (pre-registered rule: ΔPF ≥ +0.03 AND wins ≥ ⅔) | **No robust improvement exists.** The 3-symbol run selected a 5-set (+0.058, 2/3 — passed); the 15-symbol confirmation selected a *different* 7-set (Δ+0.170 but 9/15 wins < ⅔ — failed). Universe-dependent selection = noise-fitting (the 15-sym pick even includes the sentiment price-proxy). prod4 kept by burden-of-proof. Stable across every run: nnfx + price_action are load-bearing; nothing else is provable. |
+
+Sobering side-reading the operator should keep: on the held-out TEST year
+(~mid-2025→mid-2026) prod4's mean PF across the full 15-symbol universe was
+**0.87** — the FX book sits below breakeven while the carriers (XAUUSD 1.33,
+BTCUSD 1.37) stay positive. Third independent confirmation of the audit's
+core verdict: the edge lives in the carriers; FX pays for the privilege of
+diversification it doesn't deliver.

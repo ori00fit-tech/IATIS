@@ -28,6 +28,16 @@ research/results/*_result.json
 cloudflare/node_modules/
 cloudflare/.wrangler/
 
+# VPS runtime artifacts (operational junk that previously polluted
+# `git status` on the server)
+.wrangler/
+backups/
+audit/
+decisions.csv
+storage/td_cache/
+data/cot/
+iatis_d1_auditor.py
+
 # OS
 .DS_Store
 

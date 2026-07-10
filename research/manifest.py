@@ -53,8 +53,14 @@ def _git_state() -> dict[str, Any]:
             ["git", "rev-parse", "HEAD"],
             cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
         ).stdout.strip() or "unknown"
+        # --untracked-files=no: only MODIFICATIONS TO TRACKED FILES make a
+        # run non-reproducible — untracked runtime artifacts (decision
+        # logs, caches, backups) don't change what code produced the
+        # numbers. Without this, every VPS run was permanently labeled
+        # NOT REPRODUCIBLE because the server always carries untracked
+        # operational files (observed: 8 of 13 manifests falsely red).
         dirty = bool(subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=10,
         ).stdout.strip())
         return {"commit": commit, "dirty": dirty}

@@ -198,3 +198,18 @@ SHA256): `engine_activation_*`, `crypto_volume_*`, `pairs_trading_*`,
 `engine_subset_search_*`. Re-run
 any experiment from its script in `scripts/` (or `run_h008c.py`) to
 reproduce; `scripts/fetch_m15_twelvedata.py` rebuilds the real M15 inputs.
+
+### H017 — SMC full-spec as internal confluence (added to the rejected ledger, 2026-07-10)
+
+The one formulation H008c left open: OB+FVG+BOS/CHoCH not as *entries* but
+as causal *score modulators inside* the SMC engine, A/B'd with one flag
+(`engines.smc_full_spec`) against a pre-registered decision rule.
+
+| enhancement | method | verdict |
+|---|---|---|
+| **SMC full-spec internal confluence** (order blocks + FVG + BOS/CHoCH modulating SMC's structural score, ±12/±8/±8) | controlled A/B, same bars/config, chronological 65/35 split, EURUSD/XAUUSD/BTCUSD/ETHUSD deep H4 (`scripts/smc_fullspec_ab.py`) | **No improvement.** TEST mean ΔPF **−0.04** (rule required ≥ +0.03), 3/4 symbols worse (EURUSD −0.152, XAUUSD −0.190, BTCUSD −0.354; ETHUSD +0.536 is a single-symbol n=55 outlier — per-symbol enabling would be selection bias). TRAIN showed the usual mirage (XAUUSD +0.062 flipped negative OOS). Flag stays FALSE; detectors remain in-repo for future re-tests. |
+
+With H001/H002/H002b (sweeps), H008/H008b/H008c (BOS+FVG entries) and now
+H017 (internal confluence), every formulation of the SMC concept family has
+been measured. The structural swing bias that already runs is the only part
+that earns its seat.

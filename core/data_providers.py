@@ -152,6 +152,14 @@ def _fetch_yahoo_finance(
     else:
         df.index = df.index.tz_convert("UTC")
 
+    # H4 is not a native yfinance interval — the map above fetches 1h.
+    # Resample before returning so a direct H4 request never gets 1h bars
+    # mislabeled as H4 (pre-audit latent bug; the multi-TF path now avoids
+    # asking Yahoo for H4 at all via _NATIVE_TF).
+    if interval == "H4":
+        from core.timeframe_sync import resample
+        df = resample(df, "H4")
+
     df = df.tail(outputsize)
     logger.info(f"Yahoo Finance: {len(df)} bars for {symbol}")
     return df
@@ -340,6 +348,119 @@ def _fetch_finnhub(
 # Main failover fetch function
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Asset-class provider chains (philosophy-audit data-layer proposal)
+#
+# One-size-fits-all failover caused the July starvation incident: crypto has
+# better free sources than Twelve Data (Binance via ccxt — native H4/D1,
+# unlimited), and the broker's own bars (cTrader) are what live executions
+# actually trade against (the NZDUSD broker-vs-TD discrepancy documented in
+# STRATEGY_EVIDENCE was a data-source artifact). Chains are per asset class,
+# overridable from config.yaml data.provider_chains.
+# ---------------------------------------------------------------------------
+
+# Timeframes each provider serves NATIVELY (everything else is resampled
+# from the best fetched base). twelve_data reflects the Free plan (H4/D1
+# return 403); yahoo H4 is intentionally absent — its "H4" is 1h data.
+_NATIVE_TF: dict[str, set] = {
+    "ctrader":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    "ccxt":          {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    "twelve_data":   {"M1", "M5", "M15", "H1"},
+    "yahoo_finance": {"H1", "D1"},
+    "alpha_vantage": {"M1", "M5", "M15", "M30", "H1"},
+    "finnhub":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+}
+
+DEFAULT_CHAINS: dict[str, list[str]] = {
+    "crypto":  ["ccxt", "twelve_data", "yahoo_finance", "finnhub"],
+    "metals":  ["ctrader", "twelve_data", "yahoo_finance", "finnhub"],
+    "energy":  ["ctrader", "yahoo_finance", "finnhub"],
+    "indices": ["ctrader", "yahoo_finance", "finnhub"],
+    "fx":      ["ctrader", "twelve_data", "yahoo_finance", "alpha_vantage", "finnhub"],
+}
+
+_CRYPTO = {"BTCUSD", "ETHUSD"}
+_METALS = {"XAUUSD", "XAGUSD"}
+_ENERGY = {"USOIL"}
+_INDICES = {"US30", "NAS100", "SPX500"}
+
+# Fetch-symbol → internal name for the non-trivial cases (main._YF_ONLY
+# uses these fetch names for the Yahoo-only symbols).
+_FETCH_TO_INTERNAL = {"WTI/USD": "USOIL", "DJI": "US30", "NDX": "NAS100", "SPX": "SPX500"}
+
+
+def _internal_symbol(symbol: str) -> str:
+    return _FETCH_TO_INTERNAL.get(symbol, symbol.replace("/", ""))
+
+
+def symbol_class(symbol: str) -> str:
+    internal = _internal_symbol(symbol)
+    if internal in _CRYPTO:
+        return "crypto"
+    if internal in _METALS:
+        return "metals"
+    if internal in _ENERGY:
+        return "energy"
+    if internal in _INDICES:
+        return "indices"
+    return "fx"
+
+
+def provider_chain_for(symbol: str, overrides: dict | None = None) -> list[str]:
+    """Provider order for this symbol's asset class. `overrides` is the
+    config.yaml data.provider_chains mapping (class → list), if any."""
+    cls = symbol_class(symbol)
+    chain = (overrides or {}).get(cls) or DEFAULT_CHAINS[cls]
+    return list(chain)
+
+
+def _fetch_ccxt_provider(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Crypto via ccxt (Binance) — free, unlimited, NATIVE H4/D1."""
+    from core.ccxt_provider import fetch_ccxt
+    internal = _internal_symbol(symbol)
+    tf_minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30,
+                  "H1": 60, "H4": 240, "D1": 1440}.get(interval, 60)
+    days = max(2, int(outputsize * tf_minutes / (24 * 60)) + 3)
+    df = fetch_ccxt(internal, timeframe=interval, days=days)
+    if df is None or df.empty:
+        raise DataFetchError(f"ccxt: no data for {internal} @ {interval}")
+    return df.tail(outputsize)
+
+
+_ctrader_feed_client = None
+_ctrader_feed_lock = None
+
+
+def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Broker bars via the existing cTrader client (lazy, shared connection).
+
+    Guarded: raises DataFetchError immediately when credentials are absent,
+    so the chain falls through with zero side effects on machines without
+    a broker session (tests, CI, local dev)."""
+    if not (os.getenv("CTRADER_CLIENT_ID") and os.getenv("CTRADER_ACCESS_TOKEN")):
+        raise DataFetchError("cTrader feed not configured (no credentials in env)")
+
+    global _ctrader_feed_client, _ctrader_feed_lock
+    import threading
+    if _ctrader_feed_lock is None:
+        _ctrader_feed_lock = threading.Lock()
+    with _ctrader_feed_lock:
+        if _ctrader_feed_client is None:
+            from execution.ctrader_client import CTraderClient
+            client = CTraderClient()
+            if not client.connect(timeout=30):
+                raise DataFetchError("cTrader feed: connect failed")
+            _ctrader_feed_client = client
+    internal = _internal_symbol(symbol)
+    bars = _ctrader_feed_client.get_trendbars(internal, period=interval,
+                                              count=outputsize)
+    if not bars:
+        raise DataFetchError(f"cTrader feed: no trendbars for {internal} @ {interval}")
+    df = pd.DataFrame(bars)
+    df.index = pd.to_datetime(df.pop("timestamp"), unit="ms", utc=True)
+    return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
+
+
 def fetch_with_failover(
     symbol: str,
     interval: str,
@@ -378,6 +499,10 @@ def fetch_with_failover(
                 df = _fetch_alpha_vantage(symbol, interval, outputsize)
             elif provider == "finnhub":
                 df = _fetch_finnhub(symbol, interval, outputsize)
+            elif provider == "ccxt":
+                df = _fetch_ccxt_provider(symbol, interval, outputsize)
+            elif provider == "ctrader":
+                df = _fetch_ctrader(symbol, interval, outputsize)
             else:
                 raise DataFetchError(f"Unknown provider: {provider}")
 
@@ -417,33 +542,51 @@ def fetch_multi_timeframe_with_failover(
     timeframes: list[str],
     outputsize: int = 500,
     use_cache: bool = True,
+    providers: list[str] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch multiple timeframes with failover, resampling higher TFs.
+
+    Native-timeframe aware (data-layer redesign): each timeframe is first
+    requested from the chain providers that serve it NATIVELY (ccxt and
+    cTrader serve H4/D1 directly — no resampling, no starvation); only
+    when no native provider delivers does it fall back to resampling from
+    the best fetched base. The chain defaults to the symbol's asset class
+    (provider_chain_for) and can be overridden per class via config.yaml
+    data.provider_chains or per call via `providers`.
 
     Returns dict {timeframe: DataFrame}
     """
     from core.timeframe_sync import resample
 
-    FREE_PLAN_NATIVE = {"M1", "M5", "M15", "H1"}
+    chain = providers or provider_chain_for(symbol)
 
     views: dict[str, pd.DataFrame] = {}
     best_base_df: pd.DataFrame | None = None
     best_base_label: str | None = None
-    _TF_ORDER = {"D1": 0, "H4": 1, "H1": 2, "M15": 3, "M5": 4, "M1": 5}
+    _TF_ORDER = {"D1": 0, "H4": 1, "H1": 2, "M30": 3, "M15": 4, "M5": 5, "M1": 6}
 
     for tf in timeframes:
-        if tf in FREE_PLAN_NATIVE:
+        native = [p for p in chain if tf in _NATIVE_TF.get(p, set())]
+        if not native:
+            continue
+        try:
             df, provider = fetch_with_failover(
-                symbol, tf, outputsize=outputsize, use_cache=use_cache
+                symbol, tf, outputsize=outputsize, use_cache=use_cache,
+                providers=native,
             )
-            views[tf] = df
-            current_order = _TF_ORDER.get(tf, 99)
-            best_order = _TF_ORDER.get(best_base_label, 99) if best_base_label else 99
-            if best_base_df is None or current_order < best_order:
-                best_base_df = df
-                best_base_label = tf
+        except DataFetchError as exc:
+            logger.warning(f"No native provider delivered {symbol} @ {tf}: {exc}")
+            continue
+        views[tf] = df
+        # Base for resampling missing TFs: prefer the coarsest fetched
+        # intraday TF (H1 over M15 — coarser base = more accurate resample).
+        current_order = _TF_ORDER.get(tf, 99)
+        best_order = _TF_ORDER.get(best_base_label, 99) if best_base_label else 99
+        if tf != "D1" and (best_base_df is None or current_order < best_order):
+            best_base_df = df
+            best_base_label = tf
 
-    # Resample higher timeframes
+    # Resample whatever is still missing from the best base
     if best_base_df is not None:
         for tf in timeframes:
             if tf not in views:

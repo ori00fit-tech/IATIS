@@ -33,6 +33,19 @@ data:
   # see docs/PHILOSOPHY_AUDIT_2026-07_ADDENDUM_LIVE.md. Free-plan max per
   # request is 5000; cost is 1 credit per request regardless of size.
   bars_to_load: 3000
+  # Asset-class provider chains (core/data_providers.py). Order matters —
+  # first provider that serves the timeframe NATIVELY wins; resampling is
+  # the last resort. cTrader activates automatically when its credentials
+  # exist in .env (it is the broker feed live trades execute against —
+  # eliminates data-source/backtest divergence like the documented NZDUSD
+  # broker-vs-TwelveData discrepancy). ccxt = Binance, free, unlimited,
+  # native H4/D1 for crypto. Omit this block to use the same defaults.
+  provider_chains:
+    crypto:  [ccxt, twelve_data, yahoo_finance, finnhub]
+    metals:  [ctrader, twelve_data, yahoo_finance, finnhub]
+    energy:  [ctrader, yahoo_finance, finnhub]
+    indices: [ctrader, yahoo_finance, finnhub]
+    fx:      [ctrader, twelve_data, yahoo_finance, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

@@ -22,30 +22,37 @@
         "smc",
         "wyckoff"
       ],
-      "train_pf": 1.114
+      "train_pf": 1.0875
     },
     {
-      "move": "add market_structure",
+      "move": "drop smc",
       "subset": [
-        "market_structure",
         "nnfx",
         "price_action",
-        "smc",
         "wyckoff"
       ],
-      "train_pf": 1.2456
+      "train_pf": 1.2447
+    },
+    {
+      "move": "add quant",
+      "subset": [
+        "nnfx",
+        "price_action",
+        "quant",
+        "wyckoff"
+      ],
+      "train_pf": 1.3548
     },
     {
       "move": "add ict",
       "subset": [
         "ict",
-        "market_structure",
         "nnfx",
         "price_action",
-        "smc",
+        "quant",
         "wyckoff"
       ],
-      "train_pf": 1.2602
+      "train_pf": 1.4468
     }
   ],
   "test_scores": {
@@ -56,19 +63,19 @@
         "smc",
         "wyckoff"
       ],
-      "mean_pf": 1.2392,
+      "mean_pf": 1.1915,
       "per_symbol": {
         "EURUSD": {
-          "pf": 0.9142,
-          "trades": 42
+          "pf": 0.8755,
+          "trades": 38
         },
         "XAUUSD": {
-          "pf": 1.3571,
-          "trades": 67
+          "pf": 1.3252,
+          "trades": 65
         },
         "BTCUSD": {
-          "pf": 1.4464,
-          "trades": 33
+          "pf": 1.3739,
+          "trades": 34
         }
       }
     },
@@ -84,48 +91,47 @@
         "smc",
         "wyckoff"
       ],
-      "mean_pf": 1.1556,
+      "mean_pf": 1.3175,
       "per_symbol": {
         "EURUSD": {
-          "pf": 0.5871,
-          "trades": 30
+          "pf": 0.6362,
+          "trades": 24
         },
         "XAUUSD": {
-          "pf": 1.5707,
-          "trades": 45
+          "pf": 1.677,
+          "trades": 34
         },
         "BTCUSD": {
-          "pf": 1.3089,
-          "trades": 31
+          "pf": 1.6392,
+          "trades": 22
         }
       }
     },
     "selected": {
       "subset": [
         "ict",
-        "market_structure",
         "nnfx",
         "price_action",
-        "smc",
+        "quant",
         "wyckoff"
       ],
-      "mean_pf": 1.2192,
+      "mean_pf": 1.2492,
       "per_symbol": {
         "EURUSD": {
-          "pf": 1.0065,
-          "trades": 35
+          "pf": 0.6478,
+          "trades": 36
         },
         "XAUUSD": {
-          "pf": 1.5798,
-          "trades": 62
+          "pf": 1.3423,
+          "trades": 50
         },
         "BTCUSD": {
-          "pf": 1.0712,
-          "trades": 35
+          "pf": 1.7574,
+          "trades": 34
         }
       }
     }
   },
-  "recommendation": "KEEP prod4",
-  "adopt": false
+  "recommendation": "ADOPT ['ict', 'nnfx', 'price_action', 'quant', 'wyckoff']",
+  "adopt": true
 }

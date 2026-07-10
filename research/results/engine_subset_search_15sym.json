@@ -1,0 +1,301 @@
+{
+  "study": "H015_engine_subset_search",
+  "method": "greedy bidirectional from prod4 on TRAIN; validate on TEST",
+  "params": {
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "USDCHF",
+      "AUDUSD",
+      "USDCAD",
+      "NZDUSD",
+      "EURJPY",
+      "GBPJPY",
+      "AUDJPY",
+      "EURGBP",
+      "EURCHF",
+      "XAUUSD",
+      "BTCUSD",
+      "ETHUSD"
+    ],
+    "bars": 6000,
+    "train_frac": 0.65,
+    "step": 6,
+    "improve_eps": 0.005,
+    "adopt_margin": 0.03
+  },
+  "train_trail": [
+    {
+      "move": "start",
+      "subset": [
+        "nnfx",
+        "price_action",
+        "smc",
+        "wyckoff"
+      ],
+      "train_pf": 0.9644
+    },
+    {
+      "move": "add quant",
+      "subset": [
+        "nnfx",
+        "price_action",
+        "quant",
+        "smc",
+        "wyckoff"
+      ],
+      "train_pf": 1.008
+    },
+    {
+      "move": "add sentiment",
+      "subset": [
+        "nnfx",
+        "price_action",
+        "quant",
+        "sentiment",
+        "smc",
+        "wyckoff"
+      ],
+      "train_pf": 1.07
+    },
+    {
+      "move": "add divergence",
+      "subset": [
+        "divergence",
+        "nnfx",
+        "price_action",
+        "quant",
+        "sentiment",
+        "smc",
+        "wyckoff"
+      ],
+      "train_pf": 1.0923
+    }
+  ],
+  "test_scores": {
+    "prod4": {
+      "subset": [
+        "nnfx",
+        "price_action",
+        "smc",
+        "wyckoff"
+      ],
+      "mean_pf": 0.8695,
+      "per_symbol": {
+        "EURUSD": {
+          "pf": 0.8755,
+          "trades": 38
+        },
+        "GBPUSD": {
+          "pf": 1.0816,
+          "trades": 33
+        },
+        "USDJPY": {
+          "pf": 0.369,
+          "trades": 40
+        },
+        "USDCHF": {
+          "pf": 0.4307,
+          "trades": 38
+        },
+        "AUDUSD": {
+          "pf": 0.5242,
+          "trades": 38
+        },
+        "USDCAD": {
+          "pf": 1.8004,
+          "trades": 25
+        },
+        "NZDUSD": {
+          "pf": 0.7257,
+          "trades": 33
+        },
+        "EURJPY": {
+          "pf": 0.8072,
+          "trades": 34
+        },
+        "GBPJPY": {
+          "pf": 0.5281,
+          "trades": 34
+        },
+        "AUDJPY": {
+          "pf": 1.3279,
+          "trades": 27
+        },
+        "EURGBP": {
+          "pf": 0.3967,
+          "trades": 28
+        },
+        "EURCHF": {
+          "pf": 0.5748,
+          "trades": 31
+        },
+        "XAUUSD": {
+          "pf": 1.3252,
+          "trades": 65
+        },
+        "BTCUSD": {
+          "pf": 1.3739,
+          "trades": 34
+        },
+        "ETHUSD": {
+          "pf": 0.9023,
+          "trades": 35
+        }
+      }
+    },
+    "all9": {
+      "subset": [
+        "divergence",
+        "ict",
+        "market_structure",
+        "nnfx",
+        "price_action",
+        "quant",
+        "sentiment",
+        "smc",
+        "wyckoff"
+      ],
+      "mean_pf": 0.9779,
+      "per_symbol": {
+        "EURUSD": {
+          "pf": 0.6362,
+          "trades": 24
+        },
+        "GBPUSD": {
+          "pf": 1.5344,
+          "trades": 18
+        },
+        "USDJPY": {
+          "pf": 0.4696,
+          "trades": 19
+        },
+        "USDCHF": {
+          "pf": 0.452,
+          "trades": 16
+        },
+        "AUDUSD": {
+          "pf": 0.3334,
+          "trades": 20
+        },
+        "USDCAD": {
+          "pf": 1.757,
+          "trades": 21
+        },
+        "NZDUSD": {
+          "pf": 0.721,
+          "trades": 21
+        },
+        "EURJPY": {
+          "pf": 0.8193,
+          "trades": 17
+        },
+        "GBPJPY": {
+          "pf": 0.8996,
+          "trades": 20
+        },
+        "AUDJPY": {
+          "pf": 1.2049,
+          "trades": 21
+        },
+        "EURGBP": {
+          "pf": 0.221,
+          "trades": 18
+        },
+        "EURCHF": {
+          "pf": 1.2078,
+          "trades": 13
+        },
+        "XAUUSD": {
+          "pf": 1.677,
+          "trades": 34
+        },
+        "BTCUSD": {
+          "pf": 1.6392,
+          "trades": 22
+        },
+        "ETHUSD": {
+          "pf": 1.0955,
+          "trades": 14
+        }
+      }
+    },
+    "selected": {
+      "subset": [
+        "divergence",
+        "nnfx",
+        "price_action",
+        "quant",
+        "sentiment",
+        "smc",
+        "wyckoff"
+      ],
+      "mean_pf": 1.0398,
+      "per_symbol": {
+        "EURUSD": {
+          "pf": 0.8584,
+          "trades": 26
+        },
+        "GBPUSD": {
+          "pf": 0.9531,
+          "trades": 27
+        },
+        "USDJPY": {
+          "pf": 0.3203,
+          "trades": 33
+        },
+        "USDCHF": {
+          "pf": 0.8871,
+          "trades": 22
+        },
+        "AUDUSD": {
+          "pf": 0.4266,
+          "trades": 22
+        },
+        "USDCAD": {
+          "pf": 2.2748,
+          "trades": 22
+        },
+        "NZDUSD": {
+          "pf": 0.6533,
+          "trades": 23
+        },
+        "EURJPY": {
+          "pf": 0.8914,
+          "trades": 28
+        },
+        "GBPJPY": {
+          "pf": 0.9159,
+          "trades": 25
+        },
+        "AUDJPY": {
+          "pf": 1.3086,
+          "trades": 25
+        },
+        "EURGBP": {
+          "pf": 0.4464,
+          "trades": 20
+        },
+        "EURCHF": {
+          "pf": 1.2026,
+          "trades": 18
+        },
+        "XAUUSD": {
+          "pf": 1.7544,
+          "trades": 45
+        },
+        "BTCUSD": {
+          "pf": 1.5937,
+          "trades": 29
+        },
+        "ETHUSD": {
+          "pf": 1.1098,
+          "trades": 25
+        }
+      }
+    }
+  },
+  "recommendation": "KEEP prod4",
+  "adopt": false
+}

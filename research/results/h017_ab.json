@@ -1,0 +1,132 @@
+{
+ "train": {
+  "EURUSD": {
+   "baseline": {
+    "pf": 0.965,
+    "wr": 33.3,
+    "trades": 156,
+    "max_dd": 0.2
+   },
+   "full_spec": {
+    "pf": 0.917,
+    "wr": 32.1,
+    "trades": 156,
+    "max_dd": 0.2
+   },
+   "delta_pf": -0.048
+  },
+  "XAUUSD": {
+   "baseline": {
+    "pf": 1.075,
+    "wr": 35.6,
+    "trades": 177,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.137,
+    "wr": 37.0,
+    "trades": 189,
+    "max_dd": 0.1
+   },
+   "delta_pf": 0.062
+  },
+  "BTCUSD": {
+   "baseline": {
+    "pf": 1.367,
+    "wr": 41.6,
+    "trades": 125,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.339,
+    "wr": 40.9,
+    "trades": 132,
+    "max_dd": 0.1
+   },
+   "delta_pf": -0.028
+  },
+  "ETHUSD": {
+   "baseline": {
+    "pf": 1.197,
+    "wr": 37.6,
+    "trades": 125,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.111,
+    "wr": 36.0,
+    "trades": 139,
+    "max_dd": 0.1
+   },
+   "delta_pf": -0.086
+  }
+ },
+ "test": {
+  "EURUSD": {
+   "baseline": {
+    "pf": 1.059,
+    "wr": 35.6,
+    "trades": 73,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 0.907,
+    "wr": 32.6,
+    "trades": 89,
+    "max_dd": 0.1
+   },
+   "delta_pf": -0.152
+  },
+  "XAUUSD": {
+   "baseline": {
+    "pf": 1.585,
+    "wr": 46.4,
+    "trades": 97,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.395,
+    "wr": 43.6,
+    "trades": 101,
+    "max_dd": 0.1
+   },
+   "delta_pf": -0.19
+  },
+  "BTCUSD": {
+   "baseline": {
+    "pf": 1.727,
+    "wr": 46.8,
+    "trades": 77,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.373,
+    "wr": 41.4,
+    "trades": 70,
+    "max_dd": 0.1
+   },
+   "delta_pf": -0.354
+  },
+  "ETHUSD": {
+   "baseline": {
+    "pf": 1.288,
+    "wr": 38.9,
+    "trades": 54,
+    "max_dd": 0.1
+   },
+   "full_spec": {
+    "pf": 1.824,
+    "wr": 47.3,
+    "trades": 55,
+    "max_dd": 0.1
+   },
+   "delta_pf": 0.536
+  }
+ },
+ "verdict": {
+  "test_mean_delta_pf": -0.04,
+  "losing_symbols": 3,
+  "decision": "KEEP FLAG OFF"
+ },
+ "_provenance": "Run on the VPS 2026-07-10 (deep H4 CSVs, scripts/smc_fullspec_ab.py); committed from the operator-pasted output."
+}

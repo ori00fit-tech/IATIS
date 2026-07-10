@@ -518,6 +518,11 @@ class CTraderClient:
             elif msg_type in ("ProtoOAApplicationAuthRes", "ProtoOAAccountAuthRes"):
                 # Handled by the correlated auth callbacks; nothing to do here.
                 logger.debug(f"↩ {msg_type}")
+            elif msg_type == "ProtoHeartbeatEvent":
+                # Server keep-alive on a long-lived connection (every ~30s —
+                # constant on the shared data-feed session). Expected traffic,
+                # not an anomaly: WARNING here produced ~2,880 log lines/day.
+                logger.debug("💓 ProtoHeartbeatEvent")
             else:
                 code = getattr(message, "errorCode", "")
                 extra = (

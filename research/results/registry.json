@@ -212,10 +212,11 @@
   },
   "H017": {
    "title": "SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH as score modulators)",
-   "status": "RESEARCH",
+   "status": "FAILED",
    "notes": "Implemented causally behind engines.smc_full_spec (default FALSE — live voting unchanged). Components modulate SMC's structural score only; never standalone entries (H001/H002/H008c measured no standalone edge: pooled OOS WR 0.489, p=0.83). Liquidity sweeps deliberately NOT implemented (failed 3 hypotheses). Decision rule pre-registered in scripts/smc_fullspec_ab.py: adopt only if chronological-TEST mean PF improves >= 0.03 with <= 1 losing symbol.",
-   "result_file": null,
-   "last_updated": "2026-07-09"
+   "result_file": "results/h017_ab.json",
+   "last_updated": "2026-07-10",
+   "conclusion": "FAILED by the pre-registered rule (2026-07-10): chronological-TEST mean dPF = -0.04 (needed >= +0.03) with 3/4 losing symbols (allowed <= 1). TRAIN showed the usual mirage (XAUUSD +0.062 flipped to -0.190 OOS). ETHUSD's +0.536 (n=55) is a single-symbol outlier — enabling per-symbol would be the exact selection bias the audit condemns. engines.smc_full_spec stays FALSE; the causal detectors remain in the codebase for any future re-test on deeper data. Consistent with H008c: SMC concepts add nothing even as internal confluence, not just as entries."
   }
  },
  "walk_forward_validation": {

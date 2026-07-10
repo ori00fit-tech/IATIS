@@ -4,6 +4,7 @@ import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import type { CacheStatus } from './api'
 import { getDataHealth } from './api'
+import { getProviderChains } from '../system-audit/api'
 
 const POLL_MS = 60_000
 
@@ -17,6 +18,7 @@ const CELL_CLASS: Record<CacheStatus, string> = {
 export function DataCenter() {
   const { markUnauthenticated } = useAuth()
   const { data, loading, error } = usePolling(getDataHealth, POLL_MS, markUnauthenticated)
+  const chains = usePolling(getProviderChains, POLL_MS * 5, markUnauthenticated)
 
   const timeframeSet = new Set<string>()
   data?.symbols.forEach((s) => Object.keys(s.timeframes).forEach((tf) => timeframeSet.add(tf)))
@@ -75,6 +77,43 @@ export function DataCenter() {
               ))}
             </tbody>
           </table>
+        )}
+      </Panel>
+
+      <Panel title="Provider Chains" right="asset-class failover order — first native provider wins">
+        {!chains.data ? (
+          <Empty>{chains.loading ? 'Loading...' : 'Could not load provider chains'}</Empty>
+        ) : (
+          <div className="p-4 flex flex-col gap-3">
+            {Object.entries(chains.data.chains).map(([cls, providers]) => (
+              <div key={cls} className="flex items-center gap-2 flex-wrap">
+                <span className="w-20 text-[0.75em] uppercase tracking-[1px] text-muted font-semibold">{cls}</span>
+                {providers.map((p, i) => (
+                  <span key={p} className="flex items-center gap-2">
+                    {i > 0 && <span className="text-muted text-[0.7em]">→</span>}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[0.75em] font-bold border ${
+                        chains.data!.availability[p]
+                          ? 'text-green border-green/40 bg-green/10'
+                          : 'text-muted border-border bg-surface/50'
+                      }`}
+                      title={
+                        (chains.data!.availability[p] ? 'available' : 'not configured (no credentials)') +
+                        ' · native: ' +
+                        (chains.data!.native_timeframes[p]?.join(' ') ?? '?')
+                      }
+                    >
+                      {p}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            ))}
+            <div className="text-[0.7em] text-muted mt-1">
+              Greyed providers lack credentials and are skipped instantly. Hover a provider for its native timeframes —
+              a timeframe no chain member serves natively is resampled from the best fetched base.
+            </div>
+          </div>
         )}
       </Panel>
     </div>

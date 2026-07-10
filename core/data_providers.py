@@ -577,6 +577,7 @@ def fetch_multi_timeframe_with_failover(
         except DataFetchError as exc:
             logger.warning(f"No native provider delivered {symbol} @ {tf}: {exc}")
             continue
+        df.attrs["provider"] = provider          # surfaced in decision reports
         views[tf] = df
         # Base for resampling missing TFs: prefer the coarsest fetched
         # intraday TF (H1 over M15 — coarser base = more accurate resample).
@@ -592,6 +593,10 @@ def fetch_multi_timeframe_with_failover(
             if tf not in views:
                 try:
                     views[tf] = resample(best_base_df, tf)
+                    views[tf].attrs["provider"] = (
+                        f"resampled:{best_base_label}"
+                        f"({best_base_df.attrs.get('provider', '?')})"
+                    )
                     logger.info(f"Resampled {symbol} @ {tf} from {best_base_label}")
                 except Exception as exc:
                     logger.warning(f"Could not resample {tf}: {exc}")

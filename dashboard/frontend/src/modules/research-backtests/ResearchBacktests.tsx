@@ -97,8 +97,16 @@ export function ResearchBacktests() {
 
   const hypothesisColumns: Column<Hypothesis>[] = [
     { header: 'ID', render: (h) => <span className="font-bold text-accent">{h.id}</span> },
-    { header: 'Title', render: (h) => h.title },
-    { header: 'Status', render: (h) => <Badge tone={statusTone(h.status)}>{h.status}</Badge> },
+    { header: 'Title', render: (h) => <span title={h.conclusion || undefined}>{h.title}</span> },
+    {
+      header: 'Status',
+      render: (h) =>
+        h.status === 'PASSED' && h.trusted === false ? (
+          <Badge tone="marginal">PASSED (untrusted)</Badge>
+        ) : (
+          <Badge tone={statusTone(h.status)}>{h.status}</Badge>
+        ),
+    },
     { header: 'N', render: (h) => h.sample_size ?? '—', align: 'right' },
     { header: 'Win Rate', render: (h) => (h.win_rate != null ? `${h.win_rate}%` : '—'), align: 'right' },
     { header: 'p-value', render: (h) => h.p_value ?? '—', align: 'right' },
@@ -177,6 +185,21 @@ export function ResearchBacktests() {
           </Empty>
         )}
       </Panel>
+
+      {research.data?.trust_audit && research.data.trust_audit.warnings.length > 0 && (
+        <Panel
+          title="Edge Gate Trust Audit"
+          right={`promotion bar: ≥${research.data.trust_audit.criteria.min_trades ?? 300} OOS trades · PF ≥ ${research.data.trust_audit.criteria.min_oos_pf ?? 1.2} · walk-forward · Monte Carlo`}
+        >
+          <div className="p-4 flex flex-col gap-2">
+            {research.data.trust_audit.warnings.map((w, i) => (
+              <div key={i} className="text-[0.8em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+                ⚠️ {w}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Hypothesis Registry">
         {research.data && research.data.hypotheses.length > 0 ? (

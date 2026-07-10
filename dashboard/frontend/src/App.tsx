@@ -6,6 +6,7 @@ import { LiveSignals } from './modules/live-signals/LiveSignals'
 import { DataCenter } from './modules/data-center/DataCenter'
 import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
 import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
+import { SystemAudit } from './modules/system-audit/SystemAudit'
 import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
 const TABS = [
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'data-center', label: 'Data Center' },
   { id: 'engine-monitor', label: 'Engine Monitor' },
   { id: 'research', label: 'Research & Backtests' },
+  { id: 'system-audit', label: 'System Audit' },
   { id: 'roadmap', label: 'Roadmap' },
 ] as const
 
@@ -72,6 +74,7 @@ function Shell() {
         {tab === 'data-center' && <DataCenter />}
         {tab === 'engine-monitor' && <EngineMonitor />}
         {tab === 'research' && <ResearchBacktests />}
+        {tab === 'system-audit' && <SystemAudit />}
         {tab === 'roadmap' && <RoadmapGrid />}
       </main>
     </div>

@@ -354,6 +354,22 @@ def axis8_no_information(con):
 
 # ────────────────────────────── main ──────────────────────────────────
 
+def run_all(con) -> list[Check]:
+    """Run all 8 axes against an open decisions-DB connection and return
+    the checks. Used by the CLI below and by GET /philosophy-audit
+    (execution/api_server.py) so the dashboard runs the same audit."""
+    RESULTS.clear()
+    axis1_hierarchy(con)
+    axis2_independence(con)
+    axis3_phantom(con)
+    axis4_impact(con)
+    axis5_bottleneck(con)
+    axis6_discontinuity(con)
+    axis7_selectivity(con)
+    axis8_no_information(con)
+    return list(RESULTS)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -361,14 +377,7 @@ def main() -> int:
 
     try:
         with d1_client.d1_connection() as con:
-            axis1_hierarchy(con)
-            axis2_independence(con)
-            axis3_phantom(con)
-            axis4_impact(con)
-            axis5_bottleneck(con)
-            axis6_discontinuity(con)
-            axis7_selectivity(con)
-            axis8_no_information(con)
+            run_all(con)
     except Exception as exc:
         print(f"ERROR: cannot reach the decisions DB ({exc}).\n"
               "Run on the VPS with D1_WORKER_URL / D1_PROXY_TOKEN set.",

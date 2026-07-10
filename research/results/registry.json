@@ -184,8 +184,8 @@
     "file": "scripts/engine_research.py",
     "function": "run_h015"
    },
-   "last_updated": "2026-07-09",
-   "conclusion": "RESOLVED (2026-07-09): production-4 (smc+price_action+nnfx+wyckoff) is the OOS-optimal set. Greedy bidirectional search from prod4 climbed IN-SAMPLE to PF 1.26 by adding market_structure+ict, but that 6-set UNDERPERFORMS prod4 out-of-sample (TEST 1.219 vs 1.239). all-9 is worse (1.156). Dropping any single prod engine also fails OOS (drop smc -0.071, price_action -0.362, nnfx -0.073, wyckoff +0.012 within noise). The old single-LOO 'SMC dilutes / market_structure adds' was an in-sample artifact.",
+   "last_updated": "2026-07-10",
+   "conclusion": "REOPENED (2026-07-10). The 2026-07-09 'prod4 confirmed optimal' verdict measured the OLD voting logic. A clean-tree re-run AFTER the Axis-6 unification (one majority definition, consistent conviction threshold, tie=NEUTRAL) + info-share gate flips the result: greedy TRAIN search now DROPS smc first (train PF 1.088->1.245), selects {ict,nnfx,price_action,quant,wyckoff}, and that 5-set beats prod4 OOS: TEST mean-PF 1.2492 vs 1.1915 (delta +0.058 >= the pre-registered 0.03, wins 2/3). Converges with the original H1 LOO signal (removing smc improved 7/10 symbols) that the 07-09 run had dismissed. NOT adopted yet: one 3-symbol run is insufficient for a live engine-set change. Pre-registered confirmation: same script on the full 15-symbol deep-H4 universe (--symbols ...); adopt only if the script's own rule (delta >= +0.03 AND wins >= 2/3 of symbols) holds there too. Result: results/engine_subset_search.json + engine_subset_search_20260710_manifest.json (VPS).",
    "result_file": "results/engine_subset_search.json",
    "manifest": "results/engine_subset_search_20260709_manifest.json"
   },

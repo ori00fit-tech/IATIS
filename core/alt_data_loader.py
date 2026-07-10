@@ -179,26 +179,155 @@ def today() -> str:
     return date.today().isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Official macro sources (data-layer redesign follow-up):
+#   VIX   → CBOE's own daily-history CSV (free, no key — the source of truth)
+#   DXY   → FRED DTWEXBGS (Nominal Broad U.S. Dollar Index — the free
+#           official dollar-strength series; ICE's DXY itself is licensed).
+#           Trend direction is what the Macro engine consumes, and the two
+#           track closely for that purpose. Yahoo's DX-Y.NYB stays as the
+#           fallback (it IS the ICE DXY, just an unofficial feed).
+#   Yields→ FRED DGS10 / DGS2
+# FRED needs FRED_API_KEY in .env; without it the keyless fredgraph.csv
+# endpoint is tried before falling back to Yahoo.
+# ---------------------------------------------------------------------------
+
+CBOE_VIX_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"
+
+_FRED_SERIES = {
+    "DXY":   "DTWEXBGS",   # broad dollar index (proxy — see note above)
+    "VIX":   "VIXCLS",
+    "US10Y": "DGS10",
+    "US02Y": "DGS2",
+    "SPY":   "SP500",
+}
+
+
+def _close_only_frame(dates, closes) -> pd.DataFrame:
+    """FRED/CBOE-style close series → OHLCV contract (o=h=l=c). The Macro
+    engine computes EMAs on closes, so synthetic OHLC is honest here."""
+    idx = pd.to_datetime(dates, utc=True)
+    s = pd.to_numeric(pd.Series(list(closes), index=idx), errors="coerce")
+    s = s.dropna().sort_index()
+    df = pd.DataFrame({"open": s, "high": s, "low": s, "close": s, "volume": 0.0})
+    df.index.name = "datetime"
+    return df[~df.index.duplicated(keep="first")]
+
+
+def load_vix_from_cboe(months: int = 6) -> pd.DataFrame:
+    """VIX daily history straight from CBOE (full OHLC, no key)."""
+    import requests as req
+    resp = req.get(CBOE_VIX_URL, timeout=20)
+    resp.raise_for_status()
+    df = pd.read_csv(pd.io.common.StringIO(resp.text))
+    df.columns = [c.strip().lower() for c in df.columns]
+    df["datetime"] = pd.to_datetime(df["date"], utc=True)
+    df = df.set_index("datetime")[["open", "high", "low", "close"]].astype(float)
+    df["volume"] = 0.0
+    df = df.sort_index()
+    cutoff = df.index.max() - pd.Timedelta(days=months * 31)
+    df = df[df.index >= cutoff]
+    logger.info(f"CBOE: {len(df)} VIX bars ({df.index[0].date()} to {df.index[-1].date()})")
+    return df
+
+
+def load_from_fred(series_id: str, months: int = 6) -> pd.DataFrame:
+    """Daily FRED series → OHLCV frame. Uses the API when FRED_API_KEY is
+    set, else the keyless fredgraph.csv export."""
+    import os
+    from datetime import date, timedelta
+
+    import requests as req
+
+    start = (date.today() - timedelta(days=months * 31)).isoformat()
+    api_key = os.environ.get("FRED_API_KEY", "")
+    if api_key:
+        resp = req.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": api_key,
+                    "file_type": "json", "observation_start": start},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        obs = resp.json().get("observations", [])
+        df = _close_only_frame([o["date"] for o in obs],
+                               [o["value"] for o in obs])
+    else:
+        resp = req.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            params={"id": series_id, "cosd": start},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        raw = pd.read_csv(pd.io.common.StringIO(resp.text))
+        df = _close_only_frame(raw.iloc[:, 0], raw.iloc[:, 1])
+    if df.empty:
+        raise ValueError(f"FRED returned no usable observations for {series_id}")
+    logger.info(f"FRED: {len(df)} bars for {series_id}")
+    return df
+
+
+# Snapshot cache — the engine may be invoked once per symbol per run;
+# macro series are daily, so refetching 4-6 tickers x 15 symbols per cycle
+# was pure waste. 1h TTL keeps a scheduler run on one fetch set.
+_SNAPSHOT_CACHE: dict[str, Any] = {"at": 0.0, "key": None, "data": None}
+_SNAPSHOT_TTL_S = 3600
+
+
 def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFrame]:
     """Load a snapshot of key macro indicators (daily, last 6 months).
 
     Used by the Macro Engine to compute DXY trend, risk-on/off state,
     and yield curve signals.
 
-    Default symbols: DXY, US10Y, US02Y, VIX, GLD (Gold ETF), SPY
+    Source order per series (official first, Yahoo as fallback):
+        VIX   : CBOE CSV → FRED VIXCLS → Yahoo ^VIX
+        DXY   : FRED DTWEXBGS (broad-dollar proxy) → Yahoo DX-Y.NYB
+        US10Y : FRED DGS10 → Yahoo ^TNX     US02Y: FRED DGS2 → Yahoo ^IRX
+        SPY   : Yahoo SPY → FRED SP500      GLD  : Yahoo GLD
     """
+    import time as _time
+
     if symbols is None:
         symbols = ["DXY", "US10Y", "US02Y", "VIX", "GLD", "SPY"]
 
+    cache_key = tuple(sorted(symbols))
+    if (_SNAPSHOT_CACHE["data"] is not None
+            and _SNAPSHOT_CACHE["key"] == cache_key
+            and _time.time() - _SNAPSHOT_CACHE["at"] < _SNAPSHOT_TTL_S):
+        return _SNAPSHOT_CACHE["data"]
+
+    def _yahoo(sym: str) -> pd.DataFrame:
+        return load_from_yfinance(sym, interval="D1", period="6mo")
+
+    def _fred(sym: str) -> pd.DataFrame:
+        return load_from_fred(_FRED_SERIES[sym])
+
+    _SOURCES: dict[str, list] = {
+        "VIX":   [("cboe", lambda s: load_vix_from_cboe()), ("fred", _fred), ("yahoo", _yahoo)],
+        "DXY":   [("fred", _fred), ("yahoo", _yahoo)],
+        "US10Y": [("fred", _fred), ("yahoo", _yahoo)],
+        "US02Y": [("fred", _fred), ("yahoo", _yahoo)],
+        "SPY":   [("yahoo", _yahoo), ("fred", _fred)],
+    }
+
     snapshot = {}
     for sym in symbols:
-        try:
-            df = load_from_yfinance(sym, interval="D1", period="6mo")
-            snapshot[sym] = df
-            logger.info(f"Macro snapshot: {sym} loaded ({len(df)} bars)")
-        except Exception as exc:
-            logger.warning(f"Macro snapshot: failed to load {sym}: {exc}")
+        for source_name, fetch in _SOURCES.get(sym, [("yahoo", _yahoo)]):
+            try:
+                df = fetch(sym)
+                if df is None or df.empty:
+                    raise ValueError("empty frame")
+                df.attrs["provider"] = source_name
+                snapshot[sym] = df
+                logger.info(f"Macro snapshot: {sym} via {source_name} ({len(df)} bars)")
+                break
+            except Exception as exc:
+                logger.warning(f"Macro snapshot: {sym} via {source_name} failed: {exc}")
+        else:
+            logger.warning(f"Macro snapshot: ALL sources failed for {sym}")
 
+    _SNAPSHOT_CACHE.update(at=_time.time(), key=cache_key, data=snapshot)
     return snapshot
 
 

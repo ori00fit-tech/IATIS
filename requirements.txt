@@ -16,4 +16,9 @@ yfinance>=0.2.40,<1.0.0
 
 # System monitoring (/health/full endpoint)
 psutil>=5.9.0,<6.0.0
-ccxt
+
+# Crypto exchange data (ccxt's own cryptography>=2.6.1 bound has no upper
+# limit and will silently accept a vulnerable resolved version — floor it
+# explicitly; audit finding, 2026-07-11)
+ccxt>=4.5.0,<5.0.0
+cryptography>=42.0.0,<46.0.0

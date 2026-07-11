@@ -9,6 +9,7 @@ import { ResearchBacktests } from './modules/research-backtests/ResearchBacktest
 import { SystemAudit } from './modules/system-audit/SystemAudit'
 import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
+import { AlertCenter } from './modules/alert-center/AlertCenter'
 import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
 const TABS = [
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'system-audit', label: 'System Audit' },
   { id: 'logs', label: 'Live Logs' },
   { id: 'files', label: 'File Explorer' },
+  { id: 'alerts', label: 'Alert Center' },
   { id: 'roadmap', label: 'Roadmap' },
 ] as const
 
@@ -81,6 +83,7 @@ function Shell() {
         {tab === 'system-audit' && <SystemAudit />}
         {tab === 'logs' && <LiveLogs />}
         {tab === 'files' && <FileExplorer />}
+        {tab === 'alerts' && <AlertCenter />}
         {tab === 'roadmap' && <RoadmapGrid />}
       </main>
     </div>

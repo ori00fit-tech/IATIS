@@ -468,6 +468,101 @@ def test_files_diff_denies_secret_path(client, fake_repo):
     assert r.status_code == 403
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers extracted for Alert Center reuse (module 14) — verify the
+# extraction didn't change behavior, independent of the routes that call them.
+# ---------------------------------------------------------------------------
+
+def test_scheduler_status_unknown_without_any_log(tmp_path, monkeypatch):
+    import execution.api_server as m
+    monkeypatch.chdir(tmp_path)
+    assert m._scheduler_status()["status"] == "unknown"
+
+
+def test_scheduler_status_running_from_log_file(tmp_path, monkeypatch):
+    import execution.api_server as m
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "storage" / "system.log").write_text("2026-07-11 10:00:00 | INFO | Run complete | 3 EXECUTE\n")
+    monkeypatch.chdir(tmp_path)
+    status = m._scheduler_status()
+    assert status["status"] == "running"
+    assert status["last_execute_count"] == 3
+
+
+def test_load_manifests_reads_research_results(tmp_path, monkeypatch):
+    import json as _json
+    import execution.api_server as m
+
+    (tmp_path / "research" / "results").mkdir(parents=True)
+    manifest = {
+        "kind": "test_kind", "generated_at": "2026-07-11T00:00:00+00:00",
+        "reproducible": False, "git": {"commit": "abcdef1234", "dirty": True},
+        "params": {}, "datasets": [], "results": {},
+    }
+    (tmp_path / "research" / "results" / "foo_manifest.json").write_text(_json.dumps(manifest))
+    monkeypatch.chdir(tmp_path)
+
+    manifests = m._load_manifests()
+    assert len(manifests) == 1
+    assert manifests[0]["reproducible"] is False
+    assert manifests[0]["git_commit"] == "abcdef12"
+
+
+def test_forward_rule_alerts_silent_with_few_trades():
+    from storage.outcome_tracker import log_signal, close_signal
+    import execution.api_server as m
+
+    report = {
+        "symbol": "EURUSD", "final_verdict": "EXECUTE",
+        "entry_price": 1.0, "stop_loss": 0.99, "take_profit": 1.02,
+        "confluence": {"score": 70.0, "vote": {"winning_bias": "BULLISH"}},
+        "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 5.0},
+        "engine_outputs": [],
+    }
+    sid = log_signal(report)
+    close_signal(sid, 1.02, "win")
+
+    # One closed trade is far below every pre-registered min_n (40/100) and
+    # below the 80% early-warning threshold too — no alert should fire yet.
+    assert m._forward_rule_alerts() == []
+
+
+# ---------------------------------------------------------------------------
+# Alert Center (module 14) — aggregates existing signals, never a new
+# data source of its own.
+# ---------------------------------------------------------------------------
+
+def test_alerts_requires_auth(client):
+    assert client.get("/alerts").status_code == 401
+
+
+def test_alerts_response_shape_and_severity_counts(client):
+    r = client.get("/alerts", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"checked_at", "count", "by_severity", "alerts"}.issubset(body.keys())
+    assert body["count"] == len(body["alerts"])
+    assert sum(body["by_severity"].values()) == body["count"]
+    for a in body["alerts"]:
+        assert {"severity", "category", "message", "detail"}.issubset(a.keys())
+        assert a["severity"] in ("error", "warning", "info")
+
+
+def test_alerts_flags_missing_provider_credentials(client):
+    # tests/conftest.py strips all credential env vars for every test, so
+    # every provider must show up as a provider_failure warning here.
+    body = client.get("/alerts", headers=HDR).json()
+    provider_alerts = {a["detail"]["provider"] for a in body["alerts"] if a["category"] == "provider_failure"}
+    assert {"twelve_data", "alpha_vantage", "finnhub", "ctrader"}.issubset(provider_alerts)
+
+
+def test_alerts_sorted_errors_before_warnings_before_info(client):
+    order = {"error": 0, "warning": 1, "info": 2}
+    severities = [a["severity"] for a in client.get("/alerts", headers=HDR).json()["alerts"]]
+    ranks = [order[s] for s in severities]
+    assert ranks == sorted(ranks)
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

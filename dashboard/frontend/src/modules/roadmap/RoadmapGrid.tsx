@@ -7,7 +7,6 @@ const PLANNED = [
   { title: 'News Intelligence', note: 'Calendar countdown, blackout windows — planned v2' },
   { title: 'Execution Center', note: 'cTrader open/closed orders, execution log — planned v2' },
   { title: 'Cloudflare Panel', note: 'Requests, cache, firewall — needs Cloudflare API integration' },
-  { title: 'Alerts Center', note: 'Consolidated system alerts — planned v2' },
   { title: 'System Performance Charts', note: 'CPU/RAM/latency history — planned v2' },
   { title: 'Settings', note: 'Engine toggles, weight edits, risk limits — planned v2' },
 ] as const

@@ -1002,30 +1002,7 @@ async def research_manifests(
     `reproducible: false` flag for runs from a dirty working tree.
     """
     _check_auth(x_api_key, iatis_session)
-    import json as _json
-    from pathlib import Path
-
-    manifests: list[dict[str, Any]] = []
-    for f in sorted(Path("research/results").glob("*_manifest.json"), reverse=True):
-        try:
-            m = _json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        params = m.get("params") or {}
-        git = m.get("git") or {}
-        manifests.append({
-            "file": f.name,
-            "kind": m.get("kind"),
-            "generated_at": m.get("generated_at"),
-            "reproducible": m.get("reproducible"),
-            "git_commit": (git.get("commit") or "")[:8],
-            "git_dirty": git.get("dirty"),
-            "decision_timeframe": params.get("decision_timeframe"),
-            "engines_enabled": params.get("engines_enabled"),
-            "note": params.get("note"),
-            "datasets_count": len(m.get("datasets") or []),
-            "results": m.get("results"),
-        })
+    manifests = _load_manifests()
     return {"count": len(manifests), "manifests": manifests}
 
 
@@ -1320,6 +1297,80 @@ async def close_outcome(
     return {"success": success, "signal_id": signal_id, "outcome": outcome}
 
 
+def _scheduler_status() -> dict[str, Any]:
+    """Last scheduler run, from a local log file or journalctl.
+
+    Shared by /health/full and /alerts — extracted so both read the exact
+    same signal instead of two slightly-different implementations drifting
+    apart over time.
+    """
+    import re as _re
+    log_candidates = [
+        Path("storage/system.log"),
+        Path("/var/log/iatis-scheduler.log"),
+    ]
+    last_run = None
+    last_execute_count = 0
+    for sched_log in log_candidates:
+        if sched_log.exists():
+            lines = sched_log.read_text().splitlines()
+            for line in reversed(lines[-500:]):
+                if "Run complete" in line:
+                    last_run = line.split("|")[0].strip()
+                    m = _re.search(r"(\d+) EXECUTE", line)
+                    if m: last_execute_count = int(m.group(1))
+                    break
+            if last_run:
+                break
+    if not last_run:
+        import subprocess
+        result = subprocess.run(
+            ["journalctl", "-u", "iatis-scheduler", "-n", "100", "--no-pager", "--output=cat"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in reversed(result.stdout.splitlines()):
+            if "Run complete" in line:
+                last_run = line[:30].strip()
+                m = _re.search(r"(\d+) EXECUTE", line)
+                if m: last_execute_count = int(m.group(1))
+                break
+    return {
+        "last_run": last_run,
+        "last_execute_count": last_execute_count,
+        "status": "running" if last_run else "unknown",
+    }
+
+
+def _load_manifests() -> list[dict[str, Any]]:
+    """Git-tracked evidence manifests — shared by /research/manifests and
+    /alerts (which flags any non-reproducible or newly-generated one).
+    """
+    import json as _json
+
+    manifests: list[dict[str, Any]] = []
+    for f in sorted(Path("research/results").glob("*_manifest.json"), reverse=True):
+        try:
+            m = _json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        params = m.get("params") or {}
+        git = m.get("git") or {}
+        manifests.append({
+            "file": f.name,
+            "kind": m.get("kind"),
+            "generated_at": m.get("generated_at"),
+            "reproducible": m.get("reproducible"),
+            "git_commit": (git.get("commit") or "")[:8],
+            "git_dirty": git.get("dirty"),
+            "decision_timeframe": params.get("decision_timeframe"),
+            "engines_enabled": params.get("engines_enabled"),
+            "note": params.get("note"),
+            "datasets_count": len(m.get("datasets") or []),
+            "results": m.get("results"),
+        })
+    return manifests
+
+
 @app.get("/health/full")
 async def system_health_full(
     x_api_key: str | None = Header(default=None),
@@ -1355,43 +1406,7 @@ async def system_health_full(
 
     # 2. Scheduler last run
     try:
-        import re as _re
-        # Try multiple log locations
-        log_candidates = [
-            Path("storage/system.log"),
-            Path("/var/log/iatis-scheduler.log"),
-        ]
-        last_run = None
-        last_execute_count = 0
-        for sched_log in log_candidates:
-            if sched_log.exists():
-                lines = sched_log.read_text().splitlines()
-                for line in reversed(lines[-500:]):
-                    if "Run complete" in line:
-                        last_run = line.split("|")[0].strip()
-                        m = _re.search(r"(\d+) EXECUTE", line)
-                        if m: last_execute_count = int(m.group(1))
-                        break
-                if last_run:
-                    break
-        # Also try journalctl
-        if not last_run:
-            import subprocess
-            result = subprocess.run(
-                ["journalctl", "-u", "iatis-scheduler", "-n", "100", "--no-pager", "--output=cat"],
-                capture_output=True, text=True, timeout=5
-            )
-            for line in reversed(result.stdout.splitlines()):
-                if "Run complete" in line:
-                    last_run = line[:30].strip()
-                    m = _re.search(r"(\d+) EXECUTE", line)
-                    if m: last_execute_count = int(m.group(1))
-                    break
-        checks["scheduler"] = {
-            "last_run": last_run,
-            "last_execute_count": last_execute_count,
-            "status": "running" if last_run else "unknown",
-        }
+        checks["scheduler"] = _scheduler_status()
     except Exception as e:
         checks["scheduler"] = {"status": "error", "error": str(e)[:80]}
 
@@ -1496,6 +1511,42 @@ _DH_CONFIG_TO_DM = {"M15": "15m", "H1": "1h", "H4": "4h", "D1": "1d"}
 _DH_STATUS_RANK = {"OK": 0, "GAPS": 1, "STALE": 2, "MISSING": 3}  # higher = worse
 
 
+def _data_health_snapshot() -> dict[str, Any]:
+    """Per-symbol/timeframe OHLCV cache completeness — shared by
+    /data-health and /alerts (which flags STALE/GAPS/MISSING symbols).
+    """
+    from core.data_manager import DataManager
+
+    config = _get_config()
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+    active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
+    config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
+
+    dm = DataManager()
+    results = []
+    summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
+
+    for symbol in active_symbols:
+        tf_status: dict[str, Any] = {}
+        worst = "OK"
+        for tf in config_timeframes:
+            dm_tf = _DH_CONFIG_TO_DM.get(tf)
+            if not dm_tf:
+                continue
+            status = dm.cache_status(symbol, dm_tf)
+            tf_status[tf] = status
+            if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
+                worst = status["status"]
+        results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
+        summary[worst.lower()] += 1
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "symbols": results,
+        "summary": summary,
+    }
+
+
 @app.get("/data-health")
 async def data_health(
     x_api_key: str | None = Header(default=None),
@@ -1508,36 +1559,7 @@ async def data_health(
     """
     _check_auth(x_api_key, iatis_session)
     try:
-        from core.data_manager import DataManager
-
-        config = _get_config()
-        symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
-        active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
-        config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
-
-        dm = DataManager()
-        results = []
-        summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
-
-        for symbol in active_symbols:
-            tf_status: dict[str, Any] = {}
-            worst = "OK"
-            for tf in config_timeframes:
-                dm_tf = _DH_CONFIG_TO_DM.get(tf)
-                if not dm_tf:
-                    continue
-                status = dm.cache_status(symbol, dm_tf)
-                tf_status[tf] = status
-                if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
-                    worst = status["status"]
-            results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
-            summary[worst.lower()] += 1
-
-        return {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "symbols": results,
-            "summary": summary,
-        }
+        return _data_health_snapshot()
     except Exception as exc:
         logger.error(f"Data health error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
@@ -1869,6 +1891,144 @@ async def files_search(
             break
 
     return {"query": query, "path": root_rel, "results": results, "truncated": truncated}
+
+
+# ---------------------------------------------------------------------------
+# Alert Center (Mission Control module 14) — aggregates signals already
+# computed elsewhere into one feed. Never a new data source of its own:
+# every alert traces back to _scheduler_status, provider env checks (same
+# ones /health/full makes), _data_health_snapshot, _load_manifests, or the
+# pre-registered forward decision rules (scripts/forward_review.py) —
+# reused, not reimplemented, per the "no future phase functionality
+# pretending to be complete" rule.
+# ---------------------------------------------------------------------------
+def _forward_rule_alerts() -> list[dict[str, Any]]:
+    """Evaluate registry.json's pre-registered D001/D002 rules against
+    closed forward outcomes — the exact same logic scripts/forward_review.py
+    prints to the console, reused here instead of reimplemented.
+    """
+    import json as _json
+    from scripts.forward_review import REGISTRY, FX, CARRIERS, _bucket_stats, _closed_outcomes
+
+    rules = _json.loads(REGISTRY.read_text()).get("_decision_rules", {})
+    if not rules:
+        return []
+
+    rows = _closed_outcomes()
+    buckets = {"fx": _bucket_stats(rows, FX), "carriers": _bucket_stats(rows, CARRIERS)}
+
+    out: list[dict[str, Any]] = []
+    for rule_id, rule in rules.items():
+        if rule_id.startswith("_") or not isinstance(rule, dict):
+            continue
+        b = buckets.get(rule["bucket"])
+        if b is None:
+            continue
+        n, min_n = b["n"], rule["min_n"]
+        if n < min_n:
+            if n >= min_n * 0.8:
+                out.append({
+                    "severity": "info", "category": "forward_milestone",
+                    "message": f"{rule_id} approaching evaluation: n={n}/{min_n} closed {rule['bucket']} trades.",
+                    "detail": {"rule_id": rule_id, "n": n, "min_n": min_n},
+                })
+            continue
+        metric = b.get(rule["metric"])
+        triggered = (metric is not None
+                     and ((rule["op"] == "<" and metric < rule["threshold"])
+                          or (rule["op"] == ">=" and metric >= rule["threshold"])))
+        if triggered:
+            out.append({
+                "severity": "warning", "category": "forward_milestone",
+                "message": f"{rule_id} VERDICT REACHED: {rule['statement']}",
+                "detail": {"rule_id": rule_id, "n": n, "metric": rule["metric"], "value": metric, "action": rule.get("action")},
+            })
+    return out
+
+
+@app.get("/alerts")
+async def list_alerts(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    now = datetime.now(timezone.utc).isoformat()
+    items: list[dict[str, Any]] = []
+
+    def add(severity: str, category: str, message: str, detail: dict[str, Any] | None = None) -> None:
+        items.append({"severity": severity, "category": category, "message": message, "detail": detail})
+
+    try:
+        sched = _scheduler_status()
+        if sched["status"] != "running":
+            add("error", "service_offline", "Scheduler status unknown — no recent 'Run complete' log line found.", sched)
+    except Exception as exc:
+        add("error", "service_offline", f"Could not determine scheduler status: {exc}")
+
+    provider_env = {
+        "twelve_data": "TWELVE_DATA_API_KEY",
+        "alpha_vantage": "ALPHA_VANTAGE_API_KEY",
+        "finnhub": "FINNHUB_API_KEY",
+    }
+    for name, env_var in provider_env.items():
+        if not os.environ.get(env_var):
+            add("warning", "provider_failure", f"{name} API key not configured ({env_var}).", {"provider": name})
+    ct_token = os.environ.get("CTRADER_ACCESS_TOKEN", "")
+    if not (ct_token and ct_token != "TOKEN_HERE"):
+        add("warning", "provider_failure", "cTrader access token not configured.", {"provider": "ctrader"})
+
+    try:
+        dh = _data_health_snapshot()
+        for sym in dh["symbols"]:
+            status = sym["overall_status"]
+            if status in ("STALE", "GAPS", "MISSING"):
+                add(
+                    "error" if status == "MISSING" else "warning",
+                    "missing_data",
+                    f"{sym['symbol']} data is {status}.",
+                    {"symbol": sym["symbol"], "status": status},
+                )
+    except Exception as exc:
+        add("error", "missing_data", f"Could not check data health: {exc}")
+
+    try:
+        for m in _load_manifests():
+            if m.get("reproducible") is False:
+                add(
+                    "warning", "manifest_mismatch",
+                    f"{m['file']} is not reproducible (dirty working tree at generation time).",
+                    {"file": m["file"], "kind": m.get("kind")},
+                )
+            gen_at = m.get("generated_at")
+            if gen_at:
+                try:
+                    gen_dt = datetime.fromisoformat(gen_at)
+                    if (datetime.now(timezone.utc) - gen_dt).total_seconds() < 86400:
+                        add(
+                            "info", "research_completed",
+                            f"New manifest: {m['file']} ({m.get('kind')}).",
+                            {"file": m["file"], "kind": m.get("kind")},
+                        )
+                except ValueError:
+                    pass
+    except Exception as exc:
+        add("error", "manifest_mismatch", f"Could not load manifests: {exc}")
+
+    try:
+        for a in _forward_rule_alerts():
+            add(a["severity"], a["category"], a["message"], a["detail"])
+    except Exception as exc:
+        add("error", "forward_milestone", f"Could not evaluate forward decision rules: {exc}")
+
+    severity_order = {"error": 0, "warning": 1, "info": 2}
+    items.sort(key=lambda a: severity_order.get(a["severity"], 3))
+
+    return {
+        "checked_at": now,
+        "count": len(items),
+        "by_severity": {sev: sum(1 for a in items if a["severity"] == sev) for sev in ("error", "warning", "info")},
+        "alerts": items,
+    }
 
 
 @app.post("/ai/optimize-weights")

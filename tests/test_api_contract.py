@@ -614,6 +614,63 @@ def test_alerts_response_is_strict_json(client):
 
 
 # ---------------------------------------------------------------------------
+# Research Integrity (module 9) — leakage guard, survivorship checker,
+# manifest validator. Read-only, no network calls.
+# ---------------------------------------------------------------------------
+
+def test_research_integrity_requires_auth(client):
+    assert client.get("/research/integrity").status_code == 401
+
+
+def test_research_integrity_contract(client):
+    r = client.get("/research/integrity", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"checked_at", "overall", "checks"}.issubset(body.keys())
+    assert body["overall"] in ("PASS", "WARNING", "FAIL", "ERROR")
+    assert {"leakage_guard", "survivorship", "manifest_validator"}.issubset(body["checks"].keys())
+    for check in body["checks"].values():
+        assert check["status"] in ("PASS", "WARNING", "FAIL", "ERROR")
+
+
+def test_leakage_guard_report_scans_real_research_scripts():
+    import execution.api_server as m
+
+    report = m._leakage_guard_report()
+    assert report["status"] in ("PASS", "WARNING")
+    assert report["files_scanned"] > 0
+
+
+def test_leakage_guard_report_advisory_only_never_fails():
+    # A hard invariant of research/guards/static_scan.py's own design: it
+    # is CLEAN or WARNINGS_FOUND, never a blocking verdict. The wrapper
+    # here must not invent a FAIL state that contradicts that.
+    import execution.api_server as m
+
+    report = m._leakage_guard_report()
+    assert report["status"] != "FAIL"
+
+
+def test_manifest_validator_matches_load_manifests():
+    import execution.api_server as m
+
+    report = m._manifest_validator_report()
+    manifests = m._load_manifests()
+    assert report["total"] == len(manifests)
+    non_repro = sum(1 for x in manifests if x.get("reproducible") is False)
+    assert report["reproducible_count"] == len(manifests) - non_repro
+    assert report["status"] == ("WARNING" if non_repro else "PASS")
+
+
+def test_survivorship_report_shape():
+    import execution.api_server as m
+
+    report = m._survivorship_report()
+    assert report["status"] in ("PASS", "WARNING", "FAIL")
+    assert "symbol_evidence" in report and "selection_disclosure" in report
+
+
+# ---------------------------------------------------------------------------
 # Alert Center (module 14) — aggregates existing signals, never a new
 # data source of its own.
 # ---------------------------------------------------------------------------

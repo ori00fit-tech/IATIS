@@ -51,6 +51,7 @@ roadmap placeholders instead of mock screens.
 | File Explorer | `/files/tree`, `/files/read`, `/files/download`, `/files/search`, `/files/diff` | read-only, path-confined to the repo root, secret-shaped paths denylisted server-side, see Mission Control module 11 |
 | Alert Center | `/alerts` | aggregates signals already computed by other endpoints (scheduler status, provider config, data health, manifests, forward decision rules) — no new data source, see Mission Control module 14 |
 | Forward Demo | `/outcomes` (extended with profit_factor/avg_r_multiple), `/forward-review`, `/shadow-book` | D001/D002 pre-registered forward decision rule progress + the shadow-book counterfactual gate ledger, see Mission Control module 6 |
+| Research Integrity | `/research/integrity` | leakage guard (static scan), survivorship checker, manifest validator — button-triggered next to the philosophy audit on the System Audit tab. Cross-provider diff deliberately excluded (burns provider API quota; belongs in the future Experiment Runner). See Mission Control module 9 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

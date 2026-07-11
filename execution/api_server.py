@@ -1161,6 +1161,107 @@ async def philosophy_audit_endpoint(
                             detail="Audit unavailable — decisions DB unreachable.")
 
 
+# ---------------------------------------------------------------------------
+# Research Integrity (Mission Control module 9) — on-demand, read-only
+# checks alongside the philosophy audit above. Deliberately excludes
+# cross-provider diff (scripts/cross_provider_diff.py): that tool makes
+# live provider API calls and burns rate-limited quota (see /budget), so
+# it belongs in the Experiment Runner (module 5) where a human explicitly
+# kicks off a job with visible cost, not a casual dashboard click.
+# ---------------------------------------------------------------------------
+def _leakage_guard_report() -> dict[str, Any]:
+    """Static leakage scan (research/guards/static_scan.py) over every
+    research/experiment script. Advisory only, by that module's own
+    design — CLEAN or WARNINGS_FOUND, never a hard FAIL; see its
+    docstring for why a heuristic AST scan must never claim proof.
+    """
+    from research.guards.static_scan import scan_paths
+
+    paths: list[Path] = []
+    for d in ("research", "scripts"):
+        paths.extend(sorted(Path(d).rglob("*.py")))
+    paths.extend(sorted(Path(".").glob("run_h*.py")))
+
+    report = scan_paths(paths)
+    return {"status": "PASS" if report["verdict"] == "CLEAN" else "WARNING", **report}
+
+
+def _survivorship_report() -> dict[str, Any]:
+    """Symbol-evidence + selection-disclosure gate
+    (research/survivorship_checker.py) — matches that module's own
+    return-code convention: an enabled symbol with zero committed
+    evidence is a FAIL, everything else advisory-only WARNING/PASS.
+    """
+    from research.survivorship_checker import check_selection_disclosure, check_symbol_evidence
+
+    config = _get_config()
+    symbol_report = check_symbol_evidence(config)
+    selection_report = check_selection_disclosure()
+    if symbol_report["enabled_no_evidence"]:
+        status = "FAIL"
+    elif (symbol_report["disabled_no_evidence"] or selection_report["undisclosed"]
+          or selection_report["invalid_label"]):
+        status = "WARNING"
+    else:
+        status = "PASS"
+    return {"status": status, "symbol_evidence": symbol_report, "selection_disclosure": selection_report}
+
+
+def _manifest_validator_report() -> dict[str, Any]:
+    """Which evidence manifests are reproducible=false — reuses
+    _load_manifests() (also backing /research/manifests and /alerts) so
+    this never drifts from what those already show.
+    """
+    manifests = _load_manifests()
+    non_reproducible = [m for m in manifests if m.get("reproducible") is False]
+    return {
+        "status": "WARNING" if non_reproducible else "PASS",
+        "total": len(manifests),
+        "reproducible_count": len(manifests) - len(non_reproducible),
+        "non_reproducible": [
+            {"file": m["file"], "kind": m.get("kind"), "git_dirty": m.get("git_dirty")}
+            for m in non_reproducible
+        ],
+    }
+
+
+@app.get("/research/integrity")
+async def research_integrity(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Integrity — leakage guard, survivorship checker, and
+    manifest validator, on demand. Read-only, no network calls, never
+    modifies research evidence. See module docstring above for what's
+    deliberately excluded and why.
+    """
+    _check_auth(x_api_key, iatis_session)
+
+    def _run() -> dict[str, Any]:
+        checks: dict[str, Any] = {}
+        for name, fn in (
+            ("leakage_guard", _leakage_guard_report),
+            ("survivorship", _survivorship_report),
+            ("manifest_validator", _manifest_validator_report),
+        ):
+            try:
+                checks[name] = fn()
+            except Exception as exc:
+                checks[name] = {"status": "ERROR", "error": str(exc)[:300]}
+
+        statuses = {c.get("status") for c in checks.values()}
+        overall = (
+            "FAIL" if "FAIL" in statuses else
+            "ERROR" if "ERROR" in statuses else
+            "WARNING" if "WARNING" in statuses else
+            "PASS"
+        )
+        return {"checked_at": datetime.now(timezone.utc).isoformat(), "overall": overall, "checks": checks}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _run)
+
+
 @app.get("/provider-chains")
 async def provider_chains_endpoint(
     x_api_key: str | None = Header(default=None),

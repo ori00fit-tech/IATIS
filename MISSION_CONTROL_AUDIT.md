@@ -145,3 +145,43 @@ front-loading fully-missing modules the team already flagged as wanted:
 This file will be updated as each module lands (what was audited, reused,
 removed, added — per iteration, in commit messages) rather than restating
 the full audit each time.
+
+## Progress log
+
+- **2026-07-11 — Decision Explorer (module 7):** `GET /decisions` gained
+  symbol/date/engine/min_score/risk_rejected/reason filters
+  (`storage/decision_log.filter_decisions`) plus a raw-JSON viewer in
+  Live Signals. Found and fixed a real bug while testing it: `log_decision`/
+  `read_decisions`/`summarize_decisions` bound their `path` default at
+  function-definition time, so test monkeypatching of `DEFAULT_LOG_PATH`
+  silently no-opped on any call that omitted `path=` — including both
+  call sites in `api_server.py`. Switched to a `None`-default resolved at
+  call time. 66 new/changed backend tests, 593→602 suite total at that
+  point.
+- **2026-07-11 — Live Logs (module 13):** New `GET /logs` + `/logs/sources`,
+  whitelist-only (5 hardcoded systemd units + a "system" file fallback),
+  fixed-argv `journalctl` calls, never `shell=True`. New Live Logs tab.
+  Removed "Logs" from the Roadmap grid.
+- **2026-07-11 — File Explorer (module 11):** New `GET /files/tree`,
+  `/files/read`, `/files/download`, `/files/search`, `/files/diff`. Paths
+  are confined to a filesystem-anchored repo root and checked against a
+  secret-shaped denylist (`.git`, `.env*`, `storage/sessions.json`,
+  `storage/td_cache`, private-key extensions, whole-word
+  token/secret/credential/password matches) before ever touching disk.
+  Denylist uses whole-word matching specifically so
+  `dashboard/frontend/src/theme/tokens.css` (a real file) isn't a false
+  positive. Smoke-tested against the actual repo tree.
+- **2026-07-11 — Alert Center (module 14):** New `GET /alerts`. Not a new
+  data source — extracted `_scheduler_status()`, `_load_manifests()`, and
+  `_data_health_snapshot()` out of `/health/full`, `/research/manifests`,
+  and `/data-health` respectively so both the original routes and
+  `/alerts` read one shared implementation, and added
+  `_forward_rule_alerts()` which evaluates the registry's pre-registered
+  D001/D002 rules via `scripts/forward_review.py`'s own helpers. 629
+  backend tests pass; the three extractions are behavior-preserving
+  (existing route tests plus new direct tests of each extracted helper).
+
+At this checkpoint: 629 backend tests, all green; frontend `tsc`/`vite
+build`/`oxlint` clean on every commit. 4 of 15 modules now real (7, 11,
+13, 14); 11 remain per the recommended order above, starting with
+Forward Demo (6).

@@ -185,3 +185,38 @@ At this checkpoint: 629 backend tests, all green; frontend `tsc`/`vite
 build`/`oxlint` clean on every commit. 4 of 15 modules now real (7, 11,
 13, 14); 11 remain per the recommended order above, starting with
 Forward Demo (6).
+
+- **2026-07-11 — Forward Demo (module 6):** `performance_summary()` gains
+  `profit_factor`/`avg_r_multiple` (the latter recomputed exactly from
+  each trade's own entry/stop/exit, not approximated). New
+  `GET /forward-review` evaluates D001/D002 via a new
+  `_forward_rule_progress()`, which `_forward_rule_alerts()` now derives
+  from instead of a second parallel implementation. New Forward Demo tab
+  wires the previously-unused `GET /shadow-book` in. **Found and fixed a
+  real bug**: Python's `json.dumps` emits a bare `Infinity` token for
+  `float("inf")`, which is not valid JSON — a browser's `fetch().json()`
+  throws on it. `profit_factor`/`current_value` can be infinite (zero
+  losing trades in a bucket), so both are sanitized to a JSON-safe string
+  sentinel at the API boundary, after any numeric comparisons that need
+  the real float. Added a strict-JSON regression test.
+- **2026-07-11 — Research Integrity (module 9):** New
+  `GET /research/integrity` wires the leakage guard (static AST scan),
+  survivorship checker, and manifest validator into a button next to the
+  philosophy audit. Cross-provider diff deliberately excluded — it makes
+  live provider API calls and burns rate-limited quota, so it's scoped
+  into Experiment Runner (module 5) instead of a casual dashboard click.
+- **2026-07-11 — Reports (module 10):** New `GET /reports/{kind}`
+  (research, manifest_summary, system, provider, forward) as Markdown
+  download or JSON view, assembled from data other endpoints already
+  compute. No PDF — no dependency for it exists in requirements.txt.
+
+At this second checkpoint: 658 backend tests, all green. 7 of 15 modules
+real (6, 7, 9, 10, 11, 13, 14). Remaining: Experiment Runner (5), VPS
+Operations (12), Engine Analytics (8), Data Quality actions (3), Data
+Providers telemetry (2), System Health completion (1), Research Center
+drill-down (4), Security/RBAC (15). Modules 5 and 12 are a different risk
+category from everything shipped so far — they let the dashboard trigger
+real subprocess execution (long-running backtests, service restarts) on
+what may be a live trading VPS, rather than only reading existing data.
+Scope for those two should be confirmed with the operator before
+building, not assumed.

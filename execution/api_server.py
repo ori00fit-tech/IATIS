@@ -291,20 +291,39 @@ async def analyze(
 async def decisions(
     limit: int = Query(default=20, ge=1, le=200),
     verdict: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="ISO date/timestamp, inclusive lower bound"),
+    date_to: str | None = Query(default=None, description="ISO date/timestamp, inclusive upper bound"),
+    engine: str | None = Query(default=None, description="Engine name that voted on this decision"),
+    min_score: float | None = Query(default=None, ge=0, le=100),
+    risk_rejected: bool = Query(default=False, description="Only decisions the risk gate rejected"),
+    reason: str | None = Query(default=None, description="Substring search over NO_TRADE/rejection reasons"),
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     _check_auth(x_api_key, iatis_session)
     try:
-        from storage.decision_log import read_decisions, summarize_decisions
+        from storage.decision_log import read_decisions, summarize_decisions, filter_decisions
         all_d = read_decisions()
+        total_in_log = len(all_d)
         if verdict:
             all_d = [d for d in all_d if d.get("final_verdict") == verdict.upper()]
+        matched = filter_decisions(
+            all_d,
+            symbol=symbol,
+            date_from=date_from,
+            date_to=date_to,
+            engine=engine,
+            min_score=min_score,
+            risk_rejected=risk_rejected or None,
+            reason=reason,
+        )
         return {
-            "total_in_log": len(all_d),
-            "returned": len(all_d[-limit:]),
+            "total_in_log": total_in_log,
+            "matched": len(matched),
+            "returned": len(matched[-limit:]),
             "summary": summarize_decisions(),
-            "decisions": list(reversed(all_d[-limit:])),
+            "decisions": list(reversed(matched[-limit:])),
         }
     except Exception as exc:
         logger.error(f"Decisions error: {exc}", exc_info=True)

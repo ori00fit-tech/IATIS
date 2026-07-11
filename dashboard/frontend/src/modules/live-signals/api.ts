@@ -26,9 +26,21 @@ export interface DecisionEntry {
 
 export interface DecisionsResponse {
   total_in_log: number
+  matched: number
   returned: number
   summary: { total: number; execute: number; no_trade: number; no_trade_reasons: Record<string, number> }
   decisions: DecisionEntry[]
+}
+
+export interface DecisionFilters {
+  verdict?: string
+  symbol?: string
+  date_from?: string
+  date_to?: string
+  engine?: string
+  min_score?: number
+  risk_rejected?: boolean
+  reason?: string
 }
 
 export interface OpenSignal {
@@ -49,7 +61,8 @@ export interface OutcomesResponse {
   recent: OpenSignal[]
 }
 
-export const getDecisions = (limit = 20) => apiGet<DecisionsResponse>('/decisions', { limit })
+export const getDecisions = (limit = 20, filters: DecisionFilters = {}) =>
+  apiGet<DecisionsResponse>('/decisions', { limit, ...filters })
 export const getOutcomes = (limit = 20) => apiGet<OutcomesResponse>('/outcomes', { limit })
 
 // AI explanation layer (ai/ai_analyzer.py) — read-only, explanation only.

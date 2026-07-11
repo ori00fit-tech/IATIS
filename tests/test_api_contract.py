@@ -173,6 +173,72 @@ def test_health_exposes_decision_timeframe(client):
     assert body["decision_timeframe"] == load_config()["data"]["timeframes"][0]
 
 
+# ---------------------------------------------------------------------------
+# Decision Explorer filters (module 7) — /decisions query params
+# ---------------------------------------------------------------------------
+
+def _log_decision(monkeypatch, tmp_path, **report_overrides):
+    from storage.decision_log import log_decision
+
+    path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", path)
+    report = {
+        "symbol": "EURUSD",
+        "final_verdict": "NO_TRADE",
+        "confluence": {"score": 40.0, "fail_reasons": ["Only 1 engine(s) agree"]},
+        "engine_outputs": [{"engine": "smc", "bias": "BEARISH", "score": 40}],
+        "risk": {"passed": False, "reasons": ["RR below minimum"]},
+    }
+    report.update(report_overrides)
+    log_decision(report, path=path)
+    return path
+
+
+def test_decisions_filters_by_symbol(client, tmp_path, monkeypatch):
+    path = _log_decision(monkeypatch, tmp_path, symbol="EURUSD")
+    from storage.decision_log import log_decision
+    log_decision({"symbol": "XAUUSD", "final_verdict": "NO_TRADE"}, path=path)
+
+    r = client.get("/decisions", params={"symbol": "xauusd"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched"] == 1
+    assert all(d["symbol"] == "XAUUSD" for d in body["decisions"])
+
+
+def test_decisions_filters_by_min_score(client, tmp_path, monkeypatch):
+    _log_decision(monkeypatch, tmp_path, confluence={"score": 40.0})
+    r = client.get("/decisions", params={"min_score": 60}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["matched"] == 0
+
+
+def test_decisions_filters_by_risk_rejected(client, tmp_path, monkeypatch):
+    path = _log_decision(monkeypatch, tmp_path, risk={"passed": False, "reasons": ["RR below minimum"]})
+    from storage.decision_log import log_decision
+    log_decision(
+        {"symbol": "EURUSD", "final_verdict": "EXECUTE", "risk": {"passed": True, "reasons": []}},
+        path=path,
+    )
+
+    r = client.get("/decisions", params={"risk_rejected": True}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched"] == 1
+    assert body["decisions"][0]["report"]["risk"]["passed"] is False
+
+
+def test_decisions_filters_by_reason_substring(client, tmp_path, monkeypatch):
+    _log_decision(monkeypatch, tmp_path, confluence={"score": 40.0, "fail_reasons": ["News blackout window"]})
+    r = client.get("/decisions", params={"reason": "blackout"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["matched"] == 1
+
+
+def test_decisions_requires_auth(client):
+    assert client.get("/decisions").status_code == 401
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

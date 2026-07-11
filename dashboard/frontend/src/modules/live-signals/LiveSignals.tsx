@@ -6,12 +6,122 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
-import { getDecisions, getOutcomes, explainTrade, type DecisionEntry, type OpenSignal, type TradeExplanation } from './api'
+import { getDecisions, getOutcomes, explainTrade, type DecisionEntry, type DecisionFilters, type OpenSignal, type TradeExplanation } from './api'
 
 const POLL_MS = 18_000
 
 function scoreColor(score: number) {
   return score >= 65 ? 'text-green' : score >= 55 ? 'text-amber' : 'text-red'
+}
+
+interface FilterState {
+  verdict: string
+  symbol: string
+  engine: string
+  minScore: string
+  dateFrom: string
+  dateTo: string
+  reason: string
+  riskRejected: boolean
+}
+
+const EMPTY_FILTERS: FilterState = {
+  verdict: '',
+  symbol: '',
+  engine: '',
+  minScore: '',
+  dateFrom: '',
+  dateTo: '',
+  reason: '',
+  riskRejected: false,
+}
+
+function toApiFilters(f: FilterState): DecisionFilters {
+  const out: DecisionFilters = {}
+  if (f.verdict) out.verdict = f.verdict
+  if (f.symbol) out.symbol = f.symbol.toUpperCase()
+  if (f.engine) out.engine = f.engine
+  if (f.minScore) out.min_score = Number(f.minScore)
+  if (f.dateFrom) out.date_from = f.dateFrom
+  if (f.dateTo) out.date_to = f.dateTo
+  if (f.reason) out.reason = f.reason
+  if (f.riskRejected) out.risk_rejected = true
+  return out
+}
+
+function DecisionFilterBar({
+  filters,
+  onChange,
+  onApply,
+  onClear,
+}: {
+  filters: FilterState
+  onChange: (f: FilterState) => void
+  onApply: () => void
+  onClear: () => void
+}) {
+  const input = 'bg-surface border border-border rounded px-2 py-1.5 text-[0.82em] text-text placeholder:text-muted'
+  return (
+    <div className="flex flex-wrap items-end gap-2 px-4 py-3 border-b border-border bg-surface/40">
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Symbol</span>
+        <input className={input} placeholder="EURUSD" value={filters.symbol} onChange={(e) => onChange({ ...filters, symbol: e.target.value })} />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Verdict</span>
+        <select className={input} value={filters.verdict} onChange={(e) => onChange({ ...filters, verdict: e.target.value })}>
+          <option value="">All</option>
+          <option value="EXECUTE">EXECUTE</option>
+          <option value="NO_TRADE">NO_TRADE</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Engine</span>
+        <input className={input} placeholder="smc, nnfx..." value={filters.engine} onChange={(e) => onChange({ ...filters, engine: e.target.value })} />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Min score</span>
+        <input className={`${input} w-20`} type="number" min={0} max={100} value={filters.minScore} onChange={(e) => onChange({ ...filters, minScore: e.target.value })} />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">From</span>
+        <input className={input} type="date" value={filters.dateFrom} onChange={(e) => onChange({ ...filters, dateFrom: e.target.value })} />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">To</span>
+        <input className={input} type="date" value={filters.dateTo} onChange={(e) => onChange({ ...filters, dateTo: e.target.value })} />
+      </label>
+      <label className="flex flex-col gap-1 min-w-[160px]">
+        <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Reason contains</span>
+        <input className={input} placeholder="e.g. RR too low" value={filters.reason} onChange={(e) => onChange({ ...filters, reason: e.target.value })} />
+      </label>
+      <label className="flex items-center gap-1.5 pb-1.5 text-[0.78em] text-muted">
+        <input type="checkbox" checked={filters.riskRejected} onChange={(e) => onChange({ ...filters, riskRejected: e.target.checked })} />
+        Risk-rejected only
+      </label>
+      <div className="flex gap-2 pb-0.5">
+        <button onClick={onApply} className="px-3 py-1.5 text-[0.78em] rounded bg-accent/15 text-accent hover:bg-accent/25">
+          Apply
+        </button>
+        <button onClick={onClear} className="px-3 py-1.5 text-[0.78em] rounded text-muted hover:text-text">
+          Clear
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DecisionJsonPanel({ decision, onClose }: { decision: DecisionEntry; onClose: () => void }) {
+  return (
+    <Panel
+      title={`Decision JSON — ${decision.symbol} @ ${decision.timestamp}`}
+      right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}
+    >
+      <pre className="p-4 text-[0.78em] overflow-auto max-h-[480px] whitespace-pre-wrap break-words">
+        {JSON.stringify(decision, null, 2)}
+      </pre>
+    </Panel>
+  )
 }
 
 function AIExplanationPanel({ decision, onClose }: { decision: DecisionEntry; onClose: () => void }) {
@@ -88,9 +198,17 @@ function AIExplanationPanel({ decision, onClose }: { decision: DecisionEntry; on
 
 export function LiveSignals() {
   const { markUnauthenticated } = useAuth()
-  const decisions = usePolling(() => getDecisions(30), POLL_MS, markUnauthenticated)
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
+  const [appliedFilters, setAppliedFilters] = useState<FilterState>(EMPTY_FILTERS)
+  const decisions = usePolling(() => getDecisions(30, toApiFilters(appliedFilters)), POLL_MS, markUnauthenticated)
   const outcomes = usePolling(() => getOutcomes(20), POLL_MS, markUnauthenticated)
   const [explaining, setExplaining] = useState<DecisionEntry | null>(null)
+  const [viewingJson, setViewingJson] = useState<DecisionEntry | null>(null)
+
+  useEffect(() => {
+    decisions.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(appliedFilters)])
 
   const s = decisions.data?.summary
   const total = s?.total ?? 0
@@ -128,6 +246,19 @@ export function LiveSignals() {
       ),
       align: 'right',
     },
+    {
+      header: 'JSON',
+      render: (d) => (
+        <button
+          onClick={() => setViewingJson(d)}
+          className="text-muted hover:text-text text-[0.85em] underline decoration-dotted"
+          title="View the full decision report"
+        >
+          View
+        </button>
+      ),
+      align: 'right',
+    },
   ]
 
   const openColumns: Column<OpenSignal>[] = [
@@ -152,11 +283,23 @@ export function LiveSignals() {
         <KpiCard value={outcomes.data?.summary.win_rate != null ? `${outcomes.data.summary.win_rate.toFixed(1)}%` : '—'} label="Win Rate" color="green" />
       </div>
 
-      <Panel title="Recent Decisions" right={decisions.data ? `${decisions.data.total_in_log} logged` : undefined}>
+      <Panel
+        title="Decision Explorer"
+        right={decisions.data ? `${decisions.data.matched} matched / ${decisions.data.total_in_log} logged` : undefined}
+      >
+        <DecisionFilterBar
+          filters={filters}
+          onChange={setFilters}
+          onApply={() => setAppliedFilters(filters)}
+          onClear={() => {
+            setFilters(EMPTY_FILTERS)
+            setAppliedFilters(EMPTY_FILTERS)
+          }}
+        />
         {decisions.data && decisions.data.decisions.length > 0 ? (
           <DataTable columns={decisionColumns} rows={decisions.data.decisions} rowKey={(d) => `${d.timestamp}-${d.symbol}`} />
         ) : (
-          <Empty>{decisions.loading ? 'Loading...' : 'No decisions logged yet'}</Empty>
+          <Empty>{decisions.loading ? 'Loading...' : 'No decisions match these filters'}</Empty>
         )}
       </Panel>
 
@@ -169,6 +312,7 @@ export function LiveSignals() {
       </Panel>
 
       {explaining && <AIExplanationPanel decision={explaining} onClose={() => setExplaining(null)} />}
+      {viewingJson && <DecisionJsonPanel decision={viewingJson} onClose={() => setViewingJson(null)} />}
     </div>
   )
 }

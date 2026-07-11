@@ -1,0 +1,34 @@
+{
+  "manifest_type": "comprehensive_backtest",
+  "date": "2026-07-11T15:34:00.462680+00:00",
+  "git_commit": "0c5a262889cb291954960e277c2e4f856e2fce2b",
+  "git_branch": "claude/backtest-comprehensive-review-x5vaek",
+  "description": "1-year comprehensive backtest \u2014 all 20 symbols, H1 data, walk-forward validation",
+  "period": "2025-07-10 to 2026-07-11",
+  "scripts_run": [
+    "scripts/download_yf_requests.py --years 1",
+    "scripts/backtest_all_symbols.py --step 8",
+    "scripts/walk_forward_validation.py --symbols EURUSD GBPUSD XAUUSD BTCUSD ETHUSD XAGUSD --step 8"
+  ],
+  "outputs": {
+    "data": "data/*_H1_1y.csv (20 files)",
+    "full_backtest": "storage/backtest_report_FULL.json",
+    "html_report": "storage/backtest_report.html",
+    "walk_forward": "storage/walk_forward_results.json",
+    "comprehensive_result": "research/results/comprehensive_review_1y_20260711.json",
+    "per_symbol_jsons": "storage/backtest_*.json (20 files)"
+  },
+  "key_findings": {
+    "symbols_tested": 20,
+    "total_trades": 1846,
+    "grade_good": 0,
+    "grade_marginal": 1,
+    "grade_poor": 19,
+    "best_symbol": "XAGUSD (PF=1.71, WR=47.4%, Ret=+44.2%)",
+    "worst_symbol": "EURGBP (PF=0.66, WR=27.2%, Ret=-18.0%)",
+    "fx_avg_pf": 0.92,
+    "carrier_best": "XAGUSD PF=1.71",
+    "d001_signal": "TRIGGERED (9 FX symbols PF<1.0 with n>=40)",
+    "d002_signal": "BTCUSD eligible (PF=1.29, n=157)"
+  }
+}

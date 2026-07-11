@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>IATIS Full Backtest Report</title>
+<style>body{font-family:monospace;background:#0d1117;color:#c9d1d9;margin:24px}h1{color:#58a6ff}h2{color:#79c0ff;border-bottom:1px solid #30363d;padding-bottom:4px}.cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 20px;min-width:120px}.val{font-size:1.8em;font-weight:bold}.lbl{color:#8b949e;font-size:0.8em}table{width:100%;border-collapse:collapse;margin:8px 0}th{background:#161b22;color:#8b949e;text-align:left;padding:8px;font-size:0.85em}td{padding:8px;border-bottom:1px solid #21262d;font-size:0.9em}tr:hover td{background:#161b22}.ok{color:#3fb950}.warn{color:#d29922}.bad{color:#f85149}</style>
+</head>
+<body>
+<h1>&#x1F4CA; IATIS Full Backtest Report</h1>
+<p style="color:#8b949e">Generated: 2026-07-11 15:31 UTC | Duration: 161s | Strategy: 6-Engine Confluence</p>
+
+<div class="cards">
+  <div class="card"><div class="val">20</div><div class="lbl">Total Symbols</div></div>
+  <div class="card"><div class="val ok">0</div><div class="lbl">GOOD (PF≥1.5)</div></div>
+  <div class="card"><div class="val warn">1</div><div class="lbl">MARGINAL</div></div>
+  <div class="card"><div class="val bad">19</div><div class="lbl">POOR</div></div>
+  <div class="card"><div class="val" style="color:#8b949e">0</div><div class="lbl">Error/Skip</div></div>
+</div>
+
+<h2>Results by Symbol</h2>
+<p style="color:#8b949e;font-size:0.85em">
+  Criteria: GOOD = PF≥1.5 &amp; WR≥50% &amp; DD≤15% | MARGINAL = PF≥1.2 | POOR = below marginal
+</p>
+<table>
+<tr>
+  <th>Symbol</th><th>Class</th><th>Period</th><th>Trades</th>
+  <th>Win Rate</th><th>Profit Factor</th><th>Return</th>
+  <th>Max DD</th><th>Sharpe</th><th>Grade</th>
+</tr>
+<tr><td><b>XAGUSD</b></td><td style='color:#8b949e;font-size:0.85em'>metal</td><td>2025-07-11 → 2026-07-10</td><td>97</td><td style='color:#d29922'>47.4%</td><td style='color:#3fb950'>1.71</td><td>44.2%</td><td style='color:#f85149'>5.9%</td><td>0.53</td><td style='color:#d29922'><b>MARGINAL</b></td></tr>
+<tr><td><b>EURUSD</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>93</td><td style='color:#f85149'>29.0%</td><td style='color:#f85149'>0.77</td><td>-15.2%</td><td style='color:#f85149'>18.5%</td><td>-0.24</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>GBPUSD</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>120</td><td style='color:#f85149'>33.3%</td><td style='color:#f85149'>0.97</td><td>-2.3%</td><td style='color:#f85149'>15.9%</td><td>-0.01</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>USDJPY</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>88</td><td style='color:#f85149'>31.8%</td><td style='color:#f85149'>0.89</td><td>-6.8%</td><td style='color:#f85149'>17.8%</td><td>-0.10</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>USDCHF</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>92</td><td style='color:#f85149'>31.5%</td><td style='color:#f85149'>0.87</td><td>-8.6%</td><td style='color:#f85149'>12.1%</td><td>-0.12</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>AUDUSD</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>115</td><td style='color:#f85149'>33.9%</td><td style='color:#f85149'>0.91</td><td>-7.7%</td><td style='color:#f85149'>18.6%</td><td>-0.09</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>USDCAD</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>80</td><td style='color:#f85149'>42.5%</td><td style='color:#d29922'>1.28</td><td>14.4%</td><td style='color:#f85149'>13.6%</td><td>0.21</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>NZDUSD</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>119</td><td style='color:#f85149'>38.7%</td><td style='color:#d29922'>1.15</td><td>12.0%</td><td style='color:#f85149'>12.8%</td><td>0.16</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>EURJPY</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>96</td><td style='color:#f85149'>28.1%</td><td style='color:#f85149'>0.75</td><td>-17.3%</td><td style='color:#f85149'>24.5%</td><td>-0.28</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>GBPJPY</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>96</td><td style='color:#f85149'>28.1%</td><td style='color:#f85149'>0.73</td><td>-17.7%</td><td style='color:#f85149'>19.3%</td><td>-0.28</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>AUDJPY</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>108</td><td style='color:#f85149'>35.2%</td><td style='color:#f85149'>0.98</td><td>-1.5%</td><td style='color:#f85149'>10.4%</td><td>-0.00</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>EURGBP</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>81</td><td style='color:#f85149'>27.2%</td><td style='color:#f85149'>0.66</td><td>-18.0%</td><td style='color:#f85149'>25.9%</td><td>-0.32</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>EURCHF</b></td><td style='color:#8b949e;font-size:0.85em'>forex</td><td>2025-07-10 → 2026-07-10</td><td>52</td><td style='color:#f85149'>36.5%</td><td style='color:#d29922'>1.03</td><td>0.9%</td><td style='color:#f85149'>9.2%</td><td>0.03</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>XAUUSD</b></td><td style='color:#8b949e;font-size:0.85em'>metal</td><td>2025-07-11 → 2026-07-10</td><td>87</td><td style='color:#f85149'>37.9%</td><td style='color:#d29922'>1.22</td><td>13.6%</td><td style='color:#f85149'>11.6%</td><td>0.21</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>USOIL</b></td><td style='color:#8b949e;font-size:0.85em'>metal</td><td>2025-07-11 → 2026-07-10</td><td>101</td><td style='color:#f85149'>36.6%</td><td style='color:#d29922'>1.15</td><td>10.5%</td><td style='color:#f85149'>9.9%</td><td>0.16</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>US30</b></td><td style='color:#8b949e;font-size:0.85em'>index</td><td>2025-07-11 → 2026-07-10</td><td>36</td><td style='color:#f85149'>30.6%</td><td style='color:#f85149'>0.79</td><td>-5.4%</td><td style='color:#f85149'>8.7%</td><td>-0.26</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>NAS100</b></td><td style='color:#8b949e;font-size:0.85em'>index</td><td>2025-07-11 → 2026-07-10</td><td>38</td><td style='color:#f85149'>36.8%</td><td style='color:#f85149'>0.93</td><td>-2.0%</td><td style='color:#f85149'>8.6%</td><td>-0.06</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>SPX500</b></td><td style='color:#8b949e;font-size:0.85em'>index</td><td>2025-07-11 → 2026-07-10</td><td>38</td><td style='color:#f85149'>31.6%</td><td style='color:#f85149'>0.83</td><td>-4.4%</td><td style='color:#f85149'>10.7%</td><td>-0.20</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>BTCUSD</b></td><td style='color:#8b949e;font-size:0.85em'>crypto</td><td>2025-07-11 → 2026-07-11</td><td>157</td><td style='color:#f85149'>39.5%</td><td style='color:#d29922'>1.29</td><td>31.8%</td><td style='color:#f85149'>8.7%</td><td>0.27</td><td style='color:#f85149'><b>POOR</b></td></tr>
+<tr><td><b>ETHUSD</b></td><td style='color:#8b949e;font-size:0.85em'>crypto</td><td>2025-07-11 → 2026-07-11</td><td>152</td><td style='color:#f85149'>30.3%</td><td style='color:#f85149'>0.84</td><td>-15.5%</td><td style='color:#f85149'>25.1%</td><td>-0.15</td><td style='color:#f85149'><b>POOR</b></td></tr>
+</table>
+
+<h2>&#x26A0; Important Caveats</h2>
+<ul style="color:#8b949e;line-height:1.8">
+  <li>In-sample data only — same period used for development</li>
+  <li>No slippage modeled — real slippage reduces performance</li>
+  <li>Commission = 0.5 pips for FX, 0 for others</li>
+  <li>Position sizing: 1% risk per trade, 1:3 minimum R:R</li>
+  <li>Walk-forward simulation (no lookahead bias)</li>
+  <li>GOOD grade does NOT guarantee future performance</li>
+</ul>
+
+<p style="color:#8b949e;font-size:0.8em;margin-top:32px">
+  IATIS v0.3.1 | Full backtest across all asset classes
+</p>
+</body>
+</html>

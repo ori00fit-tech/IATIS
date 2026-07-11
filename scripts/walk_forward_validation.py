@@ -143,7 +143,7 @@ def main():
     for symbol in args.symbols:
         # Find CSV file
         csv_file = None
-        for pattern in [f"{symbol}_H1_2y.csv", f"{symbol}_H1_5y.csv"]:
+        for pattern in [f"{symbol}_H1_2y.csv", f"{symbol}_H1_5y.csv", f"{symbol}_H1_1y.csv"]:
             p = data_dir / pattern
             if p.exists():
                 csv_file = p

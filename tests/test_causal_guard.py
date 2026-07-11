@@ -1,8 +1,8 @@
 """
-tests/test_leakage_guard.py
+tests/test_causal_guard.py
 ------------------------------
-research/leakage_guard.py: point-in-time assertions for research scripts
-(audit follow-up, 2026-07-11) — catches the bug shape behind the
+research/guards/causal_guard.py: point-in-time assertions for research
+scripts (audit follow-up, 2026-07-11) — catches the bug shape behind the
 trade-management "+100%" mirage and the raw H008 BOS+FVG result.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from datetime import timedelta
 import pandas as pd
 import pytest
 
-from research import leakage_guard as lg
+from research.guards import causal_guard as lg
 
 
 def _series(timestamps: list[str], **cols) -> pd.DataFrame:

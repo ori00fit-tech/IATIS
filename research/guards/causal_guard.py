@@ -1,7 +1,9 @@
 """
-research/leakage_guard.py
----------------------------
-Reusable point-in-time / causal-join assertions for research scripts.
+research/guards/causal_guard.py
+----------------------------------
+Reusable point-in-time / causal-join assertions for research scripts —
+the RUNTIME half of the Research Integrity Layer (see
+research/guards/static_scan.py for the complementary static half).
 
 This project has already been bitten twice by the same bug shape: the
 trade-management "+100%" result (docs/STRATEGY_EVIDENCE_2026-07.md) and the
@@ -12,13 +14,21 @@ offending script. This module extracts the pattern into something every
 future hypothesis (starting with H019's funding-rate alignment) can import
 instead of re-deriving.
 
+Naming note: this module deliberately does NOT split "lookahead" and
+"leakage" into separate files — in this codebase's own vocabulary (see the
+docstring above and every prior audit doc) they name the same failure mode,
+just with a value known-too-early. One cohesive module beats two files
+that would import each other for the same primitives.
+
 Scope, stated honestly: this is a set of RUNTIME ASSERTIONS over point-in-time
 joins, not a static analyzer. It cannot detect every way a script can leak
-information (e.g. fitting a parameter on the full dataset before slicing).
-It catches the specific, recurring shape: "a value was pulled from a
-time-indexed source that hadn't published yet as of the decision timestamp."
-Use it at every join between a decision timestamp and an external time series
-(funding rates, OI, news, macro releases, resampled bars).
+information (e.g. fitting a parameter on the full dataset before slicing) —
+that's what static_scan.py's heuristic source scan is for, with its own,
+different honesty limits. This module catches the specific, recurring shape:
+"a value was pulled from a time-indexed source that hadn't published yet as
+of the decision timestamp." Use it at every join between a decision
+timestamp and an external time series (funding rates, OI, news, macro
+releases, resampled bars).
 """
 from __future__ import annotations
 

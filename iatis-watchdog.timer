@@ -1,0 +1,13 @@
+# Fires iatis-watchdog.service every 10 minutes.
+#   systemctl enable --now iatis-watchdog.timer
+[Unit]
+Description=Run the IATIS health watchdog every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+# If the box was asleep/down when a run was due, run on next boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

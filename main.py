@@ -698,6 +698,13 @@ def run_pipeline(config: dict) -> dict:
     _safe_store("decision_db", log_decision_db, report)
     _safe_store("engine_tracker", record_engine_votes, report)
 
+    # Shadow book — counterfactual for every rejected DIRECTIONAL decision
+    # (philosophy audit: the gates rejected ~98% of candidates with no
+    # outcome tracking, making threshold calibration permanently blind).
+    if final_verdict == "NO_TRADE":
+        from storage.shadow_book import log_shadow_signal
+        _safe_store("shadow_book", log_shadow_signal, report, config)
+
     # Experience Database — record EVERY decision (EXECUTE + NO_TRADE)
     # This is the foundation for MROS: learning from every decision
     try:

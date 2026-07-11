@@ -1,0 +1,30 @@
+# IATIS watchdog — independent liveness/disk monitor (fired by
+# iatis-watchdog.timer every 10 minutes; do not enable this .service
+# directly, enable the .timer).
+#
+# Deliberately a separate unit from iatis-api/iatis-scheduler: it must
+# outlive their crashes to report them. Reads .env only for the Telegram
+# token; makes no market-data or D1 calls.
+[Unit]
+Description=IATIS health watchdog (oneshot; scheduled by iatis-watchdog.timer)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Paths follow the live deploy. After the non-root migration
+# (scripts/setup_service_user.sh) these become /opt/iatis + User=iatis.
+User=root
+WorkingDirectory=/root/IATIS
+EnvironmentFile=-/root/IATIS/.env
+Environment=PATH=/root/IATIS/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/root/IATIS/venv/bin/python3 -m scripts.watchdog
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/root/IATIS/storage
+MemoryMax=256M
+TasksMax=32

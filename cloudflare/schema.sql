@@ -164,3 +164,26 @@ CREATE INDEX IF NOT EXISTS idx_exp_verdict ON experiences(verdict);
 CREATE INDEX IF NOT EXISTS idx_exp_ts ON experiences(ts);
 CREATE INDEX IF NOT EXISTS idx_exp_outcome ON experiences(outcome);
 CREATE INDEX IF NOT EXISTS idx_exp_score ON experiences(confluence_score);
+
+-- ─── shadow_book.py → shadow_signals ───────────────────────────────────────
+-- Counterfactual outcomes of gate-rejected signals (philosophy audit's
+-- shadow book). Same exit conventions as outcomes.
+
+CREATE TABLE IF NOT EXISTS shadow_signals (
+    shadow_id    TEXT PRIMARY KEY,
+    ts           TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    direction    TEXT NOT NULL,
+    entry_price  REAL NOT NULL,
+    stop_loss    REAL NOT NULL,
+    take_profit  REAL NOT NULL,
+    cf_score     REAL,
+    primary_gate TEXT,
+    fail_reasons TEXT,
+    outcome      TEXT DEFAULT 'open',
+    exit_time    TEXT,
+    exit_price   REAL,
+    r_multiple   REAL
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_outcome ON shadow_signals(outcome);
+CREATE INDEX IF NOT EXISTS idx_shadow_gate ON shadow_signals(primary_gate);

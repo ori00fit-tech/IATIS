@@ -1,0 +1,12 @@
+# Fires iatis-backup.service nightly at 04:10 UTC (dead hour across
+# sessions; after the 04:00 COT/News windows).
+#   systemctl enable --now iatis-backup.timer
+[Unit]
+Description=Nightly IATIS D1 backup
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

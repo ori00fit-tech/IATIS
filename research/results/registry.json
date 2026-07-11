@@ -217,6 +217,12 @@
    "result_file": "results/h017_ab.json",
    "last_updated": "2026-07-10",
    "conclusion": "FAILED by the pre-registered rule (2026-07-10): chronological-TEST mean dPF = -0.04 (needed >= +0.03) with 3/4 losing symbols (allowed <= 1). TRAIN showed the usual mirage (XAUUSD +0.062 flipped to -0.190 OOS). ETHUSD's +0.536 (n=55) is a single-symbol outlier — enabling per-symbol would be the exact selection bias the audit condemns. engines.smc_full_spec stays FALSE; the causal detectors remain in the codebase for any future re-test on deeper data. Consistent with H008c: SMC concepts add nothing even as internal confluence, not just as entries."
+  },
+  "H018": {
+   "title": "Structure-based stop placement (SL at OB/swing level instead of raw ATRx2.5)",
+   "status": "PLANNED",
+   "notes": "PRE-REGISTERED ONLY — no code runs. The exit side has never received the hypothesis treatment the entries got (17 hypotheses on entries, zero on exits; current exits are ATRx2.5 / fixed RR). Design: reuse the H017 causal detectors (order-block bottom / confirmed swing low) as the SL anchor; TP keeps the RR floor. Decision rule (written before any result): controlled A/B like H017 (scripts/smc_fullspec_ab.py pattern), chronological TEST slice, adopt only if mean dPF >= +0.05 with <= 1 losing symbol of 4+. DO NOT START until the forward demo sample reaches ~100 closed trades — changing exits mid-sample would corrupt the only prospective evidence being accumulated (D002).",
+   "last_updated": "2026-07-11"
   }
  },
  "walk_forward_validation": {
@@ -280,5 +286,26 @@
    "Data limited to 2yr H1 — longer history would strengthen conclusion",
    "No slippage modeled — real results will be lower"
   ]
+ },
+ "_decision_rules": {
+  "D001_fx_cut": {
+   "statement": "If the forward (demo, real-fill) FX book shows no edge after an adequate sample, cut FX and run carriers-only. Pre-registered 2026-07-11 — three independent in-sample confirmations already point this way (audit FX-12 p=0.078; H4 stability FX ~1.0; H015 15-sym TEST FX below breakeven).",
+   "bucket": "fx",
+   "metric": "pf",
+   "op": "<",
+   "threshold": 1.0,
+   "min_n": 40,
+   "action": "disable all FX symbols in config.yaml (enabled: false), keep carriers; re-admit FX only via a new hypothesis"
+  },
+  "D002_carrier_confirmation": {
+   "statement": "The carrier edge (XAU/XAG/BTC/ETH) is confirmed forward when PF >= 1.2 at n >= 100 closed demo trades — the promotion bar applied to the live book. Only then may any live-capital discussion begin.",
+   "bucket": "carriers",
+   "metric": "pf",
+   "op": ">=",
+   "threshold": 1.2,
+   "min_n": 100,
+   "action": "carriers edge CONFIRMED forward — live-capital discussion may open (allow_live_trading stays false until explicitly decided)"
+  },
+  "_evaluator": "scripts/forward_review.py — applies these rules, never invents thresholds at read time"
  }
 }

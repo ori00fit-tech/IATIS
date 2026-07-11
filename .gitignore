@@ -45,3 +45,5 @@ iatis_d1_auditor.py
 .coverage
 .coverage.*
 htmlcov/
+cloudflare/package-lock.json
+data/ic_symbols_backtest.json

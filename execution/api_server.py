@@ -1199,6 +1199,23 @@ async def provider_chains_endpoint(
     }
 
 
+@app.get("/shadow-book")
+async def shadow_book_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Per-gate counterfactual ledger: what the rejected signals would have
+    done (storage/shadow_book.py). avg_r < 0 = the gate saves losses;
+    avg_r > 0 = the gate rejects profit. The audit's calibration input."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.shadow_book import gate_ledger
+        return gate_ledger()
+    except Exception as exc:
+        logger.error(f"shadow-book failed: {exc}")
+        raise HTTPException(status_code=503, detail="Shadow book unavailable.")
+
+
 @app.get("/meta-analysis")
 async def meta_analysis(
     x_api_key: str | None = Header(default=None),

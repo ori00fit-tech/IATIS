@@ -52,6 +52,17 @@ class BacktestConfig:
     # which meant the backtest validated a different system than production.
     min_rr: float = 2.0
     commission_pips: float = 0.5
+    # Swap/rollover cost in PIPS PER NIGHT HELD, charged on exit for every
+    # UTC-day boundary the trade crossed (philosophy audit tier-2 gap #7:
+    # H4 trades hold for days — the 168h time stop allows 7 — and at FX
+    # PF 1.03-1.10 an unmodeled nightly financing cost can flip the sign).
+    # Default 0.0 = old behavior. Fill real per-symbol values in
+    # data/swap_rates.json (template + provenance notes there) and
+    # from_profile() picks them up. Simplifications, documented: same cost
+    # both directions (real swaps are signed per side) and no Wednesday
+    # triple — both make this a CONSERVATIVE-to-neutral floor, not an
+    # exact broker statement.
+    swap_pips_per_night: float = 0.0
     # Slippage applied against the trader on entry AND on SL exits
     # (limit-like TP exits are assumed filled at price). 0 to disable.
     slippage_pips: float = 0.5
@@ -92,6 +103,19 @@ class BacktestConfig:
         # Real spread as the commission floor, unless the caller overrides.
         if "commission_pips" not in kwargs and symbol.upper() in REAL_SPREAD_PIPS:
             kwargs = {**kwargs, "commission_pips": REAL_SPREAD_PIPS[symbol.upper()]}
+        # Swap/rollover per night from data/swap_rates.json when present.
+        if "swap_pips_per_night" not in kwargs:
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                rates = _json.loads(
+                    (_Path(__file__).resolve().parent.parent
+                     / "data" / "swap_rates.json").read_text())
+                if symbol.upper() in rates.get("pips_per_night", {}):
+                    kwargs = {**kwargs, "swap_pips_per_night":
+                              float(rates["pips_per_night"][symbol.upper()])}
+            except Exception:
+                pass  # no rates file = swap stays 0.0 (old behavior)
         try:
             from core.asset_profiles import get_profile
             profile = get_profile(symbol.upper())
@@ -421,12 +445,23 @@ def run_backtest(
         diff = sign * (exit_price - trade.entry_price)
         trade.exit_bar, trade.exit_time = bar_idx, bar_time
         trade.exit_price = exit_price
-        trade.pnl_pips = diff / config.pip_size - config.commission_pips
+        # Swap/rollover: pips-per-night x UTC-day boundaries crossed. Zero
+        # unless configured (data/swap_rates.json or explicit kwarg).
+        swap_pips = 0.0
+        if config.swap_pips_per_night and trade.entry_time is not None and bar_time is not None:
+            try:
+                nights = max(0, (bar_time.date() - trade.entry_time.date()).days)
+                swap_pips = config.swap_pips_per_night * nights
+            except (AttributeError, TypeError):
+                pass
+        trade.pnl_pips = diff / config.pip_size - config.commission_pips - swap_pips
         trade.pnl_usd = _calc_pnl_usd(diff, trade.position_size, trade.entry_price)
         if ac == "forex":
-            trade.pnl_usd -= config.commission_pips * _pip_value_usd(
+            trade.pnl_usd -= (config.commission_pips + swap_pips) * _pip_value_usd(
                 trade.entry_price, trade.position_size
             )
+        elif swap_pips:
+            trade.pnl_usd -= swap_pips * config.pip_size * trade.position_size
         trade.exit_reason = exit_reason
         return trade.pnl_usd
 

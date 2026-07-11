@@ -46,7 +46,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = PROJECT_ROOT / "backups"
-TABLES = ["decisions", "engine_votes", "outcomes", "engine_performance", "experiences"]
+TABLES = ["decisions", "engine_votes", "outcomes", "engine_performance",
+          "experiences", "shadow_signals"]
 KEEP_N = 14
 
 

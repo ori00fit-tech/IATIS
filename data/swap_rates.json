@@ -1,0 +1,43 @@
+{
+  "_notes": [
+    "Swap/rollover cost in PIPS PER NIGHT charged by the backtest engine",
+    "(BacktestConfig.from_profile) for every UTC-day boundary a trade holds",
+    "across. All values ship as 0.0 = mechanism OFF until YOU fill real",
+    "numbers — invented financing costs would be worse than none.",
+    "",
+    "Where to get real values (IC Markets): cTrader app > symbol info >",
+    "'Swap Long / Swap Short' (points per lot per night). Convert to pips",
+    "and, since this model is direction-agnostic, enter the WORSE (more",
+    "negative) of the two sides as a conservative floor, as a POSITIVE",
+    "pip cost here (e.g. swap short EURUSD -0.61 pips/night -> 0.61).",
+    "Known simplifications (documented in backtest_engine.py): one cost",
+    "for both directions, no Wednesday triple-swap.",
+    "",
+    "Why it matters: H4 trades hold days (time stop allows 7 nights); at",
+    "FX PF 1.03-1.10 a real ~0.3-0.8 pip/night financing drag is capable",
+    "of flipping the book's sign. Filling this table and re-running",
+    "h4_yearly_stability is a pre-registered check on the FX book."
+  ],
+  "pips_per_night": {
+    "EURUSD": 0.0,
+    "GBPUSD": 0.0,
+    "USDJPY": 0.0,
+    "USDCHF": 0.0,
+    "AUDUSD": 0.0,
+    "USDCAD": 0.0,
+    "NZDUSD": 0.0,
+    "EURJPY": 0.0,
+    "GBPJPY": 0.0,
+    "AUDJPY": 0.0,
+    "EURGBP": 0.0,
+    "EURCHF": 0.0,
+    "XAUUSD": 0.0,
+    "XAGUSD": 0.0,
+    "USOIL": 0.0,
+    "US30": 0.0,
+    "NAS100": 0.0,
+    "SPX500": 0.0,
+    "BTCUSD": 0.0,
+    "ETHUSD": 0.0
+  }
+}

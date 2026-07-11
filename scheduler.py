@@ -239,13 +239,20 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                     if r.get("bar_high") is not None and r.get("bar_low") is not None:
                         bar_ranges[str(sym)] = (float(r["bar_high"]), float(r["bar_low"]))
             if current_prices:
+                max_open_h = config.get("execution", {}).get("max_open_trade_hours", 0)
                 closed = auto_close_outcomes(
                     current_prices,
                     bar_ranges=bar_ranges,
-                    max_open_hours=config.get("execution", {}).get(
-                        "max_open_trade_hours", 0
-                    ),
+                    max_open_hours=max_open_h,
                 )
+                # Shadow counterfactuals resolve with the same mechanics —
+                # silent (measurements, not alerts).
+                try:
+                    from storage.shadow_book import auto_close_shadows
+                    auto_close_shadows(current_prices, bar_ranges=bar_ranges,
+                                       max_open_hours=max_open_h)
+                except Exception as exc:
+                    logger.warning(f"Shadow auto-close failed (non-fatal): {exc}")
                 for c in closed:
                     icon = ("✅" if c["outcome"] == "win"
                             else "➖" if c["outcome"] == "breakeven" else "❌")

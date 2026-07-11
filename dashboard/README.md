@@ -50,6 +50,7 @@ roadmap placeholders instead of mock screens.
 | Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
 | File Explorer | `/files/tree`, `/files/read`, `/files/download`, `/files/search`, `/files/diff` | read-only, path-confined to the repo root, secret-shaped paths denylisted server-side, see Mission Control module 11 |
 | Alert Center | `/alerts` | aggregates signals already computed by other endpoints (scheduler status, provider config, data health, manifests, forward decision rules) — no new data source, see Mission Control module 14 |
+| Forward Demo | `/outcomes` (extended with profit_factor/avg_r_multiple), `/forward-review`, `/shadow-book` | D001/D002 pre-registered forward decision rule progress + the shadow-book counterfactual gate ledger, see Mission Control module 6 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

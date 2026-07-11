@@ -10,11 +10,13 @@ import { SystemAudit } from './modules/system-audit/SystemAudit'
 import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
 import { AlertCenter } from './modules/alert-center/AlertCenter'
+import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
 import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
 const TABS = [
   { id: 'mission-control', label: 'Mission Control' },
   { id: 'live-signals', label: 'Live Signals' },
+  { id: 'forward-demo', label: 'Forward Demo' },
   { id: 'data-center', label: 'Data Center' },
   { id: 'engine-monitor', label: 'Engine Monitor' },
   { id: 'research', label: 'Research & Backtests' },
@@ -77,6 +79,7 @@ function Shell() {
       <main className="px-6 py-5 max-w-[1400px] mx-auto">
         {tab === 'mission-control' && <MissionControl />}
         {tab === 'live-signals' && <LiveSignals />}
+        {tab === 'forward-demo' && <ForwardDemo />}
         {tab === 'data-center' && <DataCenter />}
         {tab === 'engine-monitor' && <EngineMonitor />}
         {tab === 'research' && <ResearchBacktests />}

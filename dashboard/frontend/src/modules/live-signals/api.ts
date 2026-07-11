@@ -55,8 +55,19 @@ export interface OpenSignal {
   regime: string | null
 }
 
+export interface OutcomesSummary {
+  total_closed: number
+  wins: number
+  losses: number
+  win_rate: number
+  total_pips: number
+  profit_factor: number | 'Infinity' | null
+  avg_r_multiple: number | null
+  open_signals: number
+}
+
 export interface OutcomesResponse {
-  summary: { total_closed: number; wins: number; losses: number; win_rate: number; total_pips: number; open_signals: number }
+  summary: OutcomesSummary
   open_signals: OpenSignal[]
   recent: OpenSignal[]
 }

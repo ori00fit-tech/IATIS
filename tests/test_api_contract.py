@@ -11,6 +11,7 @@ fake in-memory D1 the whole suite runs on (tests/conftest.py).
 """
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -525,6 +526,91 @@ def test_forward_rule_alerts_silent_with_few_trades():
     # One closed trade is far below every pre-registered min_n (40/100) and
     # below the 80% early-warning threshold too — no alert should fire yet.
     assert m._forward_rule_alerts() == []
+
+
+# ---------------------------------------------------------------------------
+# Forward Demo (module 6) — pre-registered D001/D002 rule progress.
+# ---------------------------------------------------------------------------
+
+def test_forward_rule_progress_covers_both_registered_rules():
+    import execution.api_server as m
+    from storage.outcome_tracker import _init_db
+
+    _init_db()  # outcomes table exists in prod before this is ever called
+    progress = m._forward_rule_progress()
+    ids = {p["rule_id"] for p in progress}
+    assert ids == {"D001_fx_cut", "D002_carrier_confirmation"}
+    for p in progress:
+        assert {"statement", "bucket", "metric", "current_value", "op", "threshold",
+                "n", "min_n", "progress_pct", "sufficient_n", "triggered", "action"}.issubset(p.keys())
+        assert p["n"] == 0  # no outcomes in the fake D1 for this test
+        assert p["sufficient_n"] is False
+        assert p["triggered"] is False
+
+
+def test_forward_review_requires_auth(client):
+    assert client.get("/forward-review").status_code == 401
+
+
+def test_forward_review_contract(client):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()  # outcomes table exists in prod before this is ever called
+    r = client.get("/forward-review", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"checked_at", "rules"}.issubset(body.keys())
+    assert {p["rule_id"] for p in body["rules"]} == {"D001_fx_cut", "D002_carrier_confirmation"}
+
+
+def test_outcomes_includes_profit_factor(client):
+    body = client.get("/outcomes", headers=HDR).json()
+    assert "profit_factor" in body["summary"]
+    assert "avg_r_multiple" in body["summary"]
+
+
+def _assert_strict_json(text: str) -> None:
+    """A browser's fetch().json() uses strict JSON.parse, which rejects the
+    bare Infinity/-Infinity/NaN tokens Python's json.dumps emits by default
+    for those float values — pytest's/requests' own json() is lenient and
+    would never catch this. Parse under the strict rule instead.
+    """
+    def reject(token):
+        raise AssertionError(f"Response contains a non-standard JSON token: {token!r} in {text[:300]}")
+    json.loads(text, parse_constant=reject)
+
+
+def test_outcomes_response_is_strict_json_even_with_infinite_profit_factor(client):
+    # Zero losing trades → profit_factor is mathematically infinite. This
+    # must round-trip as a JSON string sentinel, not a raw Infinity token
+    # (see storage/outcome_tracker.py's performance_summary).
+    from storage.outcome_tracker import log_signal, close_signal
+
+    report = {
+        "symbol": "EURUSD", "final_verdict": "EXECUTE",
+        "entry_price": 1.0850, "stop_loss": 1.0920, "take_profit": 1.0640,
+        "confluence": {"score": 70.0, "vote": {"winning_bias": "BEARISH"}},
+        "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 5.0},
+        "engine_outputs": [],
+    }
+    sid = log_signal(report)
+    close_signal(sid, 1.0640, "win")
+
+    r = client.get("/outcomes", headers=HDR)
+    _assert_strict_json(r.text)
+    assert r.json()["summary"]["profit_factor"] == "Infinity"
+
+
+def test_forward_review_response_is_strict_json(client):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()
+    r = client.get("/forward-review", headers=HDR)
+    _assert_strict_json(r.text)
+
+
+def test_alerts_response_is_strict_json(client):
+    _assert_strict_json(client.get("/alerts", headers=HDR).text)
 
 
 # ---------------------------------------------------------------------------

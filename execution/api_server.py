@@ -1894,26 +1894,21 @@ async def files_search(
 
 
 # ---------------------------------------------------------------------------
-# Alert Center (Mission Control module 14) — aggregates signals already
-# computed elsewhere into one feed. Never a new data source of its own:
-# every alert traces back to _scheduler_status, provider env checks (same
-# ones /health/full makes), _data_health_snapshot, _load_manifests, or the
-# pre-registered forward decision rules (scripts/forward_review.py) —
-# reused, not reimplemented, per the "no future phase functionality
-# pretending to be complete" rule.
+# Forward decision rules (D001/D002) — shared by Forward Demo (module 6,
+# /forward-review) and Alert Center (module 14, /alerts). registry.json's
+# `_decision_rules` block is the single source of truth; this only reads
+# and evaluates it, via scripts/forward_review.py's own helpers — never
+# reinvents the rule logic.
 # ---------------------------------------------------------------------------
-def _forward_rule_alerts() -> list[dict[str, Any]]:
-    """Evaluate registry.json's pre-registered D001/D002 rules against
-    closed forward outcomes — the exact same logic scripts/forward_review.py
-    prints to the console, reused here instead of reimplemented.
+def _forward_rule_progress() -> list[dict[str, Any]]:
+    """Full progress snapshot for every pre-registered rule, whether or
+    not it has triggered — the Forward Demo view. Alert Center derives
+    its (much shorter) alert list from this same data.
     """
     import json as _json
     from scripts.forward_review import REGISTRY, FX, CARRIERS, _bucket_stats, _closed_outcomes
 
     rules = _json.loads(REGISTRY.read_text()).get("_decision_rules", {})
-    if not rules:
-        return []
-
     rows = _closed_outcomes()
     buckets = {"fx": _bucket_stats(rows, FX), "carriers": _bucket_stats(rows, CARRIERS)}
 
@@ -1921,29 +1916,85 @@ def _forward_rule_alerts() -> list[dict[str, Any]]:
     for rule_id, rule in rules.items():
         if rule_id.startswith("_") or not isinstance(rule, dict):
             continue
-        b = buckets.get(rule["bucket"])
-        if b is None:
-            continue
+        b = buckets.get(rule["bucket"]) or {"n": 0, "wr": None, "pf": None}
         n, min_n = b["n"], rule["min_n"]
-        if n < min_n:
-            if n >= min_n * 0.8:
-                out.append({
-                    "severity": "info", "category": "forward_milestone",
-                    "message": f"{rule_id} approaching evaluation: n={n}/{min_n} closed {rule['bucket']} trades.",
-                    "detail": {"rule_id": rule_id, "n": n, "min_n": min_n},
-                })
-            continue
         metric = b.get(rule["metric"])
-        triggered = (metric is not None
-                     and ((rule["op"] == "<" and metric < rule["threshold"])
-                          or (rule["op"] == ">=" and metric >= rule["threshold"])))
-        if triggered:
+        sufficient_n = n >= min_n
+        triggered = bool(
+            sufficient_n and metric is not None
+            and ((rule["op"] == "<" and metric < rule["threshold"])
+                 or (rule["op"] == ">=" and metric >= rule["threshold"]))
+        )
+        # Sanitize AFTER the numeric comparisons above — a bare `Infinity`
+        # token (what json.dumps would emit for float("inf")) isn't valid
+        # JSON and makes a browser's fetch().json() throw. The frontend
+        # renders this string sentinel as "∞".
+        if metric == float("inf"):
+            json_safe_metric: float | str | None = "Infinity"
+        elif metric == float("-inf"):
+            json_safe_metric = "-Infinity"
+        else:
+            json_safe_metric = metric
+        out.append({
+            "rule_id": rule_id,
+            "statement": rule["statement"],
+            "bucket": rule["bucket"],
+            "metric": rule["metric"],
+            "current_value": json_safe_metric,
+            "op": rule["op"],
+            "threshold": rule["threshold"],
+            "n": n,
+            "min_n": min_n,
+            "progress_pct": round(min(100.0, 100.0 * n / min_n), 1) if min_n else None,
+            "sufficient_n": sufficient_n,
+            "triggered": triggered,
+            "action": rule.get("action"),
+        })
+    return out
+
+
+def _forward_rule_alerts() -> list[dict[str, Any]]:
+    """The subset of _forward_rule_progress() worth surfacing as an alert:
+    a triggered rule, or one that's crossed 80% of its required sample.
+    """
+    out: list[dict[str, Any]] = []
+    for p in _forward_rule_progress():
+        if p["triggered"]:
             out.append({
                 "severity": "warning", "category": "forward_milestone",
-                "message": f"{rule_id} VERDICT REACHED: {rule['statement']}",
-                "detail": {"rule_id": rule_id, "n": n, "metric": rule["metric"], "value": metric, "action": rule.get("action")},
+                "message": f"{p['rule_id']} VERDICT REACHED: {p['statement']}",
+                "detail": {"rule_id": p["rule_id"], "n": p["n"], "metric": p["metric"],
+                           "value": p["current_value"], "action": p["action"]},
+            })
+        elif not p["sufficient_n"] and p["n"] >= p["min_n"] * 0.8:
+            out.append({
+                "severity": "info", "category": "forward_milestone",
+                "message": f"{p['rule_id']} approaching evaluation: n={p['n']}/{p['min_n']} closed {p['bucket']} trades.",
+                "detail": {"rule_id": p["rule_id"], "n": p["n"], "min_n": p["min_n"]},
             })
     return out
+
+
+@app.get("/forward-review")
+async def forward_review_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Forward Demo (module 6) — pre-registered D001/D002 rule progress,
+    read-only. Live decisions still follow scripts/forward_review.py run
+    by a human/cron, per CLAUDE.md's "live decisions follow pre-registered
+    rules... never invented at read time" — this endpoint only displays
+    the same evaluation, it doesn't act on it.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        return {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "rules": _forward_rule_progress(),
+        }
+    except Exception as exc:
+        logger.error(f"Forward review error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
 
 
 @app.get("/alerts")

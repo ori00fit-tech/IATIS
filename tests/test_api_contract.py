@@ -324,6 +324,150 @@ def test_logs_journal_source_never_shells_out_unsanitized(client, monkeypatch):
     assert r.json()["entries"] == ["log line"]
 
 
+# ---------------------------------------------------------------------------
+# File Explorer (module 11) — read-only, path-confined, secret-denylisted.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_repo(tmp_path, monkeypatch):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "run.py").write_text("print('hello')\n")
+    (tmp_path / "README.md").write_text("# Project\nSome content with NEEDLE inside.\n")
+    (tmp_path / ".env").write_text("CTRADER_ACCESS_TOKEN=shhh\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[core]\n")
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "storage" / "sessions.json").write_text('{"abc": 123}')
+    (tmp_path / "dashboard").mkdir()
+    # A real filename from this repo — must NOT be caught by the "token"
+    # denylist word (it's design tokens, not an auth token).
+    (tmp_path / "dashboard" / "tokens.css").write_text(":root { --accent: #fff; }\n")
+    monkeypatch.setattr("execution.api_server._REPO_ROOT", tmp_path)
+    return tmp_path
+
+
+def test_files_tree_requires_auth(client):
+    assert client.get("/files/tree").status_code == 401
+
+
+def test_files_tree_excludes_denylisted_entries(client, fake_repo):
+    r = client.get("/files/tree", headers=HDR)
+    assert r.status_code == 200, r.text
+    names = {e["name"] for e in r.json()["entries"]}
+    assert "README.md" in names and "scripts" in names
+    assert ".env" not in names and ".git" not in names
+
+
+def test_files_tree_excludes_sessions_file(client, fake_repo):
+    r = client.get("/files/tree", params={"path": "storage"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    names = {e["name"] for e in r.json()["entries"]}
+    assert "sessions.json" not in names
+
+
+def test_files_tree_rejects_traversal(client, fake_repo):
+    r = client.get("/files/tree", params={"path": "../../etc"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_files_tree_rejects_bare_parent_traversal(client, fake_repo):
+    r = client.get("/files/tree", params={"path": ".."}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_files_tree_missing_path_404s(client, fake_repo):
+    r = client.get("/files/tree", params={"path": "does/not/exist"}, headers=HDR)
+    assert r.status_code == 404
+
+
+def test_files_read_returns_content(client, fake_repo):
+    r = client.get("/files/read", params={"path": "README.md"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "NEEDLE" in body["content"]
+    assert body["binary"] is False
+
+
+def test_files_read_denies_env_file(client, fake_repo):
+    r = client.get("/files/read", params={"path": ".env"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_read_denies_git_internals(client, fake_repo):
+    r = client.get("/files/read", params={"path": ".git/config"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_read_denies_sessions_file(client, fake_repo):
+    r = client.get("/files/read", params={"path": "storage/sessions.json"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_read_allows_tokens_css_false_positive_check(client, fake_repo):
+    r = client.get("/files/read", params={"path": "dashboard/tokens.css"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert "--accent" in r.json()["content"]
+
+
+def test_files_read_rejects_traversal(client, fake_repo):
+    r = client.get("/files/read", params={"path": "../outside.txt"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_files_download_requires_auth(client):
+    assert client.get("/files/download", params={"path": "README.md"}).status_code == 401
+
+
+def test_files_download_denies_secret_path(client, fake_repo):
+    r = client.get("/files/download", params={"path": ".env"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_download_serves_allowed_file(client, fake_repo):
+    r = client.get("/files/download", params={"path": "README.md"}, headers=HDR)
+    assert r.status_code == 200
+    assert b"NEEDLE" in r.content
+
+
+def test_files_search_finds_content_match_and_skips_denied(client, fake_repo):
+    r = client.get("/files/search", params={"query": "NEEDLE"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    paths = {res["path"] for res in r.json()["results"]}
+    assert "README.md" in paths
+
+    # The secret lives only inside .env, which must never be scanned.
+    r2 = client.get("/files/search", params={"query": "shhh"}, headers=HDR)
+    assert r2.json()["results"] == []
+
+
+def test_files_search_finds_filename_match(client, fake_repo):
+    r = client.get("/files/search", params={"query": "run.py"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert any(res["path"] == "scripts/run.py" for res in r.json()["results"])
+
+
+def test_files_diff_uses_fixed_argv_never_shell(client, fake_repo, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        import subprocess as _sp
+        return _sp.CompletedProcess(argv, 0, stdout="diff --git a/README.md b/README.md\n", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    r = client.get("/files/diff", params={"path": "README.md"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert captured["argv"] == ["git", "diff", "--no-color", "HEAD", "--", "README.md"]
+    assert captured["kwargs"].get("shell", False) is False
+    assert r.json()["has_changes"] is True
+
+
+def test_files_diff_denies_secret_path(client, fake_repo):
+    r = client.get("/files/diff", params={"path": ".env"}, headers=HDR)
+    assert r.status_code == 403
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

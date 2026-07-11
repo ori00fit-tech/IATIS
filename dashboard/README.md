@@ -48,6 +48,7 @@ roadmap placeholders instead of mock screens.
 | Engine Monitor | `/engine-stats` | per-engine vote/accuracy stats, current vs. suggested weights |
 | Research & Backtests | `/research`, `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
 | Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
+| File Explorer | `/files/tree`, `/files/read`, `/files/download`, `/files/search`, `/files/diff` | read-only, path-confined to the repo root, secret-shaped paths denylisted server-side, see Mission Control module 11 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

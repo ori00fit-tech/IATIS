@@ -1,0 +1,30 @@
+# IATIS nightly database backup (fired by iatis-backup.timer; enable the
+# .timer, not this unit). Dumps all D1 tables + decisions.jsonl to
+# backups/, verifies, rotates (keep 14). Telegram-alerts on failure only.
+[Unit]
+Description=IATIS D1 backup (oneshot; scheduled by iatis-backup.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Paths follow the live deploy. After the non-root migration
+# (scripts/setup_service_user.sh) these become /opt/iatis + User=iatis.
+User=root
+WorkingDirectory=/root/IATIS
+EnvironmentFile=-/root/IATIS/.env
+Environment=PATH=/root/IATIS/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/root/IATIS/venv/bin/python3 -m scripts.backup_d1
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/root/IATIS/storage /root/IATIS/backups
+MemoryMax=512M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

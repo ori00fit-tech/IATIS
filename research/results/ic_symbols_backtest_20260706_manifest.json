@@ -1,0 +1,2802 @@
+{
+  "kind": "ic_symbols_backtest",
+  "generated_at": "2026-07-06T20:47:09.826327+00:00",
+  "git": {
+    "commit": "14a50d6ed2667c1ea7cc5172f76d173855a56279",
+    "dirty": true
+  },
+  "reproducible": false,
+  "config": {
+    "sha256": "480d354a9f60c4d7481ff65009ddc5e6cda8fa207e127e5228bc5ff74e65212e",
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 500,
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CHF"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "EURJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPJPY",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "GBP/JPY"
+          },
+          {
+            "enabled": true,
+            "internal": "AUDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "AUD/JPY"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/GBP"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/CHF"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "USOIL",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "WTI/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "US30",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "DJI"
+          },
+          {
+            "enabled": true,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX"
+          },
+          {
+            "enabled": true,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "universe": "all",
+    "count": 1200,
+    "min_bars": 500,
+    "source": "IC Markets H4 trendbars + live spread via cTrader",
+    "note": "Discovery scan; IN-SAMPLE. Promote a winner only after walk-forward + forward demo evidence."
+  },
+  "datasets": [],
+  "results": {
+    "ranked": [
+      {
+        "symbol": "LNKUSD",
+        "bars": 1918,
+        "spread_pips": null,
+        "trades": 4,
+        "win_rate": 75.0,
+        "profit_factor": 14.105,
+        "max_dd_pct": 10.3
+      },
+      {
+        "symbol": "GALAUSD",
+        "bars": 1440,
+        "spread_pips": null,
+        "trades": 4,
+        "win_rate": 75.0,
+        "profit_factor": 6.4,
+        "max_dd_pct": 1.7
+      },
+      {
+        "symbol": "ARBUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 64.3,
+        "profit_factor": 4.929,
+        "max_dd_pct": 3.0
+      },
+      {
+        "symbol": "IPUSD",
+        "bars": 1812,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 53.3,
+        "profit_factor": 3.312,
+        "max_dd_pct": 9.3
+      },
+      {
+        "symbol": "APTUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 17,
+        "win_rate": 58.8,
+        "profit_factor": 2.745,
+        "max_dd_pct": 4.1
+      },
+      {
+        "symbol": "NOR25",
+        "bars": 650,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 59.1,
+        "profit_factor": 2.596,
+        "max_dd_pct": 26.7
+      },
+      {
+        "symbol": "OPUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 2.442,
+        "max_dd_pct": 2.0
+      },
+      {
+        "symbol": "INJUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 46.7,
+        "profit_factor": 2.412,
+        "max_dd_pct": 11.3
+      },
+      {
+        "symbol": "STRKUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 54.5,
+        "profit_factor": 2.392,
+        "max_dd_pct": 5.2
+      },
+      {
+        "symbol": "ENAUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 54.3,
+        "profit_factor": 2.32,
+        "max_dd_pct": 2.9
+      },
+      {
+        "symbol": "NEARUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 48.6,
+        "profit_factor": 2.254,
+        "max_dd_pct": 5.3
+      },
+      {
+        "symbol": "GRTUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 2.18,
+        "max_dd_pct": 3.1
+      },
+      {
+        "symbol": "DEXEUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 65.6,
+        "profit_factor": 2.145,
+        "max_dd_pct": 44.0
+      },
+      {
+        "symbol": "FLOWUSD",
+        "bars": 1848,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 51.7,
+        "profit_factor": 2.098,
+        "max_dd_pct": 2.3
+      },
+      {
+        "symbol": "XAGUSD",
+        "bars": 1348,
+        "spread_pips": 2.0,
+        "trades": 36,
+        "win_rate": 50.0,
+        "profit_factor": 2.066,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "SANDUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 54.5,
+        "profit_factor": 1.991,
+        "max_dd_pct": 3.1
+      },
+      {
+        "symbol": "SUIUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.978,
+        "max_dd_pct": 3.9
+      },
+      {
+        "symbol": "ATOMUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 45.8,
+        "profit_factor": 1.97,
+        "max_dd_pct": 6.5
+      },
+      {
+        "symbol": "Corn_Z6",
+        "bars": 521,
+        "spread_pips": null,
+        "trades": 9,
+        "win_rate": 55.6,
+        "profit_factor": 1.96,
+        "max_dd_pct": 52.8
+      },
+      {
+        "symbol": "ADAUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 48.1,
+        "profit_factor": 1.915,
+        "max_dd_pct": 4.9
+      },
+      {
+        "symbol": "KSMUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 48.6,
+        "profit_factor": 1.897,
+        "max_dd_pct": 27.4
+      },
+      {
+        "symbol": "1000xBONK",
+        "bars": 1246,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 57.1,
+        "profit_factor": 1.851,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "1000xFLOKI",
+        "bars": 1251,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 1.823,
+        "max_dd_pct": 4.1
+      },
+      {
+        "symbol": "XRPUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 46.7,
+        "profit_factor": 1.823,
+        "max_dd_pct": 7.1
+      },
+      {
+        "symbol": "Corn_N6",
+        "bars": 534,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 50.0,
+        "profit_factor": 1.82,
+        "max_dd_pct": 250.3
+      },
+      {
+        "symbol": "TRXUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 47,
+        "win_rate": 48.9,
+        "profit_factor": 1.782,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "BTCUSD",
+        "bars": 1919,
+        "spread_pips": 120000.0,
+        "trades": 40,
+        "win_rate": 47.5,
+        "profit_factor": 1.777,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "ONDOUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 48.4,
+        "profit_factor": 1.772,
+        "max_dd_pct": 4.8
+      },
+      {
+        "symbol": "THETAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.759,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "XTIUSD",
+        "bars": 1347,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 55.0,
+        "profit_factor": 1.736,
+        "max_dd_pct": 49.2
+      },
+      {
+        "symbol": "ENSUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 39,
+        "win_rate": 46.2,
+        "profit_factor": 1.723,
+        "max_dd_pct": 28.8
+      },
+      {
+        "symbol": "SWI20",
+        "bars": 651,
+        "spread_pips": null,
+        "trades": 16,
+        "win_rate": 50.0,
+        "profit_factor": 1.72,
+        "max_dd_pct": 68.4
+      },
+      {
+        "symbol": "RAYUSD",
+        "bars": 1859,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 41.7,
+        "profit_factor": 1.719,
+        "max_dd_pct": 4.1
+      },
+      {
+        "symbol": "USDCNH",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 46.9,
+        "profit_factor": 1.7,
+        "max_dd_pct": 5.6
+      },
+      {
+        "symbol": "NOKSEK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 17,
+        "win_rate": 52.9,
+        "profit_factor": 1.655,
+        "max_dd_pct": 4.3
+      },
+      {
+        "symbol": "JTOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.65,
+        "max_dd_pct": 3.5
+      },
+      {
+        "symbol": "XBRUSD",
+        "bars": 1350,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 52.4,
+        "profit_factor": 1.615,
+        "max_dd_pct": 47.4
+      },
+      {
+        "symbol": "COMPUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 47.8,
+        "profit_factor": 1.61,
+        "max_dd_pct": 32.6
+      },
+      {
+        "symbol": "AUDJPY",
+        "bars": 1356,
+        "spread_pips": 0.3,
+        "trades": 31,
+        "win_rate": 45.2,
+        "profit_factor": 1.606,
+        "max_dd_pct": 3.9
+      },
+      {
+        "symbol": "AEROUSD",
+        "bars": 1274,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 45.5,
+        "profit_factor": 1.604,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "TWTUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 50.0,
+        "profit_factor": 1.592,
+        "max_dd_pct": 4.3
+      },
+      {
+        "symbol": "NZDUSD",
+        "bars": 1356,
+        "spread_pips": 0.2,
+        "trades": 20,
+        "win_rate": 45.0,
+        "profit_factor": 1.58,
+        "max_dd_pct": 3.0
+      },
+      {
+        "symbol": "USDSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 42.9,
+        "profit_factor": 1.572,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "AAVEUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 39,
+        "win_rate": 46.2,
+        "profit_factor": 1.567,
+        "max_dd_pct": 308.3
+      },
+      {
+        "symbol": "FARTCOINUSD",
+        "bars": 1812,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 44.8,
+        "profit_factor": 1.554,
+        "max_dd_pct": 4.4
+      },
+      {
+        "symbol": "LDOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 41.7,
+        "profit_factor": 1.55,
+        "max_dd_pct": 3.2
+      },
+      {
+        "symbol": "XPDUSD",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 42.9,
+        "profit_factor": 1.545,
+        "max_dd_pct": 3289.1
+      },
+      {
+        "symbol": "XAGAUD",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 52.9,
+        "profit_factor": 1.526,
+        "max_dd_pct": 77.2
+      },
+      {
+        "symbol": "XTZUSD",
+        "bars": 1908,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 44.4,
+        "profit_factor": 1.522,
+        "max_dd_pct": 3.2
+      },
+      {
+        "symbol": "1INCHUSD",
+        "bars": 1242,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 1.501,
+        "max_dd_pct": 4.2
+      },
+      {
+        "symbol": "WIFUSD",
+        "bars": 1773,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.481,
+        "max_dd_pct": 4.0
+      },
+      {
+        "symbol": "UK100",
+        "bars": 1316,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 43.5,
+        "profit_factor": 1.479,
+        "max_dd_pct": 2915.9
+      },
+      {
+        "symbol": "WLFIUSD",
+        "bars": 1845,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 45.5,
+        "profit_factor": 1.472,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "DOTUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 28.6,
+        "profit_factor": 1.423,
+        "max_dd_pct": 9.3
+      },
+      {
+        "symbol": "AUDUSD",
+        "bars": 1356,
+        "spread_pips": 0.1,
+        "trades": 27,
+        "win_rate": 40.7,
+        "profit_factor": 1.421,
+        "max_dd_pct": 4.9
+      },
+      {
+        "symbol": "ICPUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 36,
+        "win_rate": 38.9,
+        "profit_factor": 1.416,
+        "max_dd_pct": 12.4
+      },
+      {
+        "symbol": "Wheat_U6",
+        "bars": 582,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 1.406,
+        "max_dd_pct": 148.2
+      },
+      {
+        "symbol": "USDCAD",
+        "bars": 1356,
+        "spread_pips": 1.1,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.394,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "USDHKD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 42.9,
+        "profit_factor": 1.391,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "XMRUSD",
+        "bars": 1898,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.376,
+        "max_dd_pct": 147.9
+      },
+      {
+        "symbol": "WLDUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 40.6,
+        "profit_factor": 1.365,
+        "max_dd_pct": 4.7
+      },
+      {
+        "symbol": "Wheat_Z6",
+        "bars": 503,
+        "spread_pips": null,
+        "trades": 9,
+        "win_rate": 44.4,
+        "profit_factor": 1.364,
+        "max_dd_pct": 56.4
+      },
+      {
+        "symbol": "ETHUSD",
+        "bars": 1919,
+        "spread_pips": 29000.0,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.363,
+        "max_dd_pct": 4.4
+      },
+      {
+        "symbol": "AUSD",
+        "bars": 1257,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 40.9,
+        "profit_factor": 1.355,
+        "max_dd_pct": 4.0
+      },
+      {
+        "symbol": "ES35",
+        "bars": 881,
+        "spread_pips": null,
+        "trades": 17,
+        "win_rate": 47.1,
+        "profit_factor": 1.338,
+        "max_dd_pct": 147.6
+      },
+      {
+        "symbol": "IT40",
+        "bars": 880,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 44.0,
+        "profit_factor": 1.326,
+        "max_dd_pct": 6882.1
+      },
+      {
+        "symbol": "MANAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 40.0,
+        "profit_factor": 1.322,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "AVXUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 37.1,
+        "profit_factor": 1.315,
+        "max_dd_pct": 62.7
+      },
+      {
+        "symbol": "JP225",
+        "bars": 1343,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.313,
+        "max_dd_pct": 7592.9
+      },
+      {
+        "symbol": "SOLUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 40.5,
+        "profit_factor": 1.305,
+        "max_dd_pct": 243.2
+      },
+      {
+        "symbol": "POLUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 40.0,
+        "profit_factor": 1.297,
+        "max_dd_pct": 2.1
+      },
+      {
+        "symbol": "BNBUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 51,
+        "win_rate": 43.1,
+        "profit_factor": 1.286,
+        "max_dd_pct": 489.8
+      },
+      {
+        "symbol": "ETCUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 39.3,
+        "profit_factor": 1.284,
+        "max_dd_pct": 49.8
+      },
+      {
+        "symbol": "TRUMPUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 45.7,
+        "profit_factor": 1.268,
+        "max_dd_pct": 28.0
+      },
+      {
+        "symbol": "EURHKD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 37.9,
+        "profit_factor": 1.261,
+        "max_dd_pct": 4.5
+      },
+      {
+        "symbol": "Wheat_N6",
+        "bars": 510,
+        "spread_pips": null,
+        "trades": 13,
+        "win_rate": 46.2,
+        "profit_factor": 1.247,
+        "max_dd_pct": 151.1
+      },
+      {
+        "symbol": "KAIAUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.238,
+        "max_dd_pct": 6.6
+      },
+      {
+        "symbol": "GLMUSD",
+        "bars": 1268,
+        "spread_pips": null,
+        "trades": 19,
+        "win_rate": 42.1,
+        "profit_factor": 1.234,
+        "max_dd_pct": 7.8
+      },
+      {
+        "symbol": "SPXUSD",
+        "bars": 1274,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 39.1,
+        "profit_factor": 1.231,
+        "max_dd_pct": 6.4
+      },
+      {
+        "symbol": "FETUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.228,
+        "max_dd_pct": 5.4
+      },
+      {
+        "symbol": "GBPUSD",
+        "bars": 1356,
+        "spread_pips": 0.2,
+        "trades": 21,
+        "win_rate": 38.1,
+        "profit_factor": 1.222,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "GBPAUD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 38.7,
+        "profit_factor": 1.217,
+        "max_dd_pct": 5.8
+      },
+      {
+        "symbol": "HYPEUSD",
+        "bars": 1896,
+        "spread_pips": null,
+        "trades": 40,
+        "win_rate": 42.5,
+        "profit_factor": 1.215,
+        "max_dd_pct": 91.9
+      },
+      {
+        "symbol": "IMXUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 38,
+        "win_rate": 36.8,
+        "profit_factor": 1.211,
+        "max_dd_pct": 5.5
+      },
+      {
+        "symbol": "RENDERUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 40,
+        "win_rate": 37.5,
+        "profit_factor": 1.211,
+        "max_dd_pct": 10.3
+      },
+      {
+        "symbol": "ZECUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 47,
+        "win_rate": 44.7,
+        "profit_factor": 1.207,
+        "max_dd_pct": 65.8
+      },
+      {
+        "symbol": "SEIUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 40.7,
+        "profit_factor": 1.202,
+        "max_dd_pct": 10.0
+      },
+      {
+        "symbol": "SE30",
+        "bars": 646,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 46.7,
+        "profit_factor": 1.199,
+        "max_dd_pct": 102.3
+      },
+      {
+        "symbol": "CROUSD",
+        "bars": 616,
+        "spread_pips": null,
+        "trades": 7,
+        "win_rate": 57.1,
+        "profit_factor": 1.197,
+        "max_dd_pct": 3.1
+      },
+      {
+        "symbol": "UNIUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 46,
+        "win_rate": 32.6,
+        "profit_factor": 1.191,
+        "max_dd_pct": 24.3
+      },
+      {
+        "symbol": "EURAUD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 33,
+        "win_rate": 39.4,
+        "profit_factor": 1.173,
+        "max_dd_pct": 8.6
+      },
+      {
+        "symbol": "PYTHUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 36,
+        "win_rate": 38.9,
+        "profit_factor": 1.17,
+        "max_dd_pct": 4.2
+      },
+      {
+        "symbol": "MYXUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 7,
+        "win_rate": 42.9,
+        "profit_factor": 1.169,
+        "max_dd_pct": 23.7
+      },
+      {
+        "symbol": "CADJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 40.9,
+        "profit_factor": 1.162,
+        "max_dd_pct": 35.9
+      },
+      {
+        "symbol": "STXUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.158,
+        "max_dd_pct": 8.9
+      },
+      {
+        "symbol": "ALGOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.136,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "BRETTUSD",
+        "bars": 549,
+        "spread_pips": null,
+        "trades": 7,
+        "win_rate": 42.9,
+        "profit_factor": 1.136,
+        "max_dd_pct": 3.1
+      },
+      {
+        "symbol": "DYDXUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 38.1,
+        "profit_factor": 1.132,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "LTCUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 37.5,
+        "profit_factor": 1.13,
+        "max_dd_pct": 116.2
+      },
+      {
+        "symbol": "GBPCHF",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 18,
+        "win_rate": 38.9,
+        "profit_factor": 1.129,
+        "max_dd_pct": 6.6
+      },
+      {
+        "symbol": "NOKJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.127,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "BCHUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 41.2,
+        "profit_factor": 1.106,
+        "max_dd_pct": 866.9
+      },
+      {
+        "symbol": "EURNOK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 34.6,
+        "profit_factor": 1.088,
+        "max_dd_pct": 5.5
+      },
+      {
+        "symbol": "USTEC",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 37.9,
+        "profit_factor": 1.087,
+        "max_dd_pct": 262.2
+      },
+      {
+        "symbol": "CHINAH",
+        "bars": 1135,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 33.3,
+        "profit_factor": 1.076,
+        "max_dd_pct": 9141.0
+      },
+      {
+        "symbol": "USDHUF",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 33.3,
+        "profit_factor": 1.067,
+        "max_dd_pct": 239.5
+      },
+      {
+        "symbol": "PENGUUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 39.3,
+        "profit_factor": 1.061,
+        "max_dd_pct": 4.4
+      },
+      {
+        "symbol": "AUDNZD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 37.0,
+        "profit_factor": 1.055,
+        "max_dd_pct": 6.0
+      },
+      {
+        "symbol": "Corn_U6",
+        "bars": 582,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 33.3,
+        "profit_factor": 1.054,
+        "max_dd_pct": 279.5
+      },
+      {
+        "symbol": "CFXUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 36.7,
+        "profit_factor": 1.05,
+        "max_dd_pct": 5.3
+      },
+      {
+        "symbol": "XNGUSD",
+        "bars": 1347,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 37.9,
+        "profit_factor": 1.039,
+        "max_dd_pct": 15.7
+      },
+      {
+        "symbol": "GBPNOK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 33.3,
+        "profit_factor": 1.036,
+        "max_dd_pct": 5.4
+      },
+      {
+        "symbol": "XAGEUR",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 48.6,
+        "profit_factor": 1.034,
+        "max_dd_pct": 96.5
+      },
+      {
+        "symbol": "IOTAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 36.7,
+        "profit_factor": 1.03,
+        "max_dd_pct": 9.8
+      },
+      {
+        "symbol": "XLMUSD",
+        "bars": 1915,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 33.3,
+        "profit_factor": 1.024,
+        "max_dd_pct": 3.0
+      },
+      {
+        "symbol": "USDNOK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 35.0,
+        "profit_factor": 0.997,
+        "max_dd_pct": 8.2
+      },
+      {
+        "symbol": "EURUSD",
+        "bars": 1356,
+        "spread_pips": 0.1,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 0.989,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "STOXX50",
+        "bars": 880,
+        "spread_pips": null,
+        "trades": 17,
+        "win_rate": 41.2,
+        "profit_factor": 0.985,
+        "max_dd_pct": 3110.3
+      },
+      {
+        "symbol": "XAUEUR",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 48.4,
+        "profit_factor": 0.976,
+        "max_dd_pct": 155.5
+      },
+      {
+        "symbol": "US2000",
+        "bars": 1347,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 35.5,
+        "profit_factor": 0.973,
+        "max_dd_pct": 1199.4
+      },
+      {
+        "symbol": "GBPJPY",
+        "bars": 1356,
+        "spread_pips": 0.5,
+        "trades": 29,
+        "win_rate": 34.5,
+        "profit_factor": 0.968,
+        "max_dd_pct": 9.9
+      },
+      {
+        "symbol": "PIUSD",
+        "bars": 549,
+        "spread_pips": null,
+        "trades": 6,
+        "win_rate": 33.3,
+        "profit_factor": 0.968,
+        "max_dd_pct": 3.0
+      },
+      {
+        "symbol": "XAUCHF",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 46.2,
+        "profit_factor": 0.965,
+        "max_dd_pct": 189.0
+      },
+      {
+        "symbol": "XAUUSD",
+        "bars": 1348,
+        "spread_pips": 40.0,
+        "trades": 36,
+        "win_rate": 41.7,
+        "profit_factor": 0.957,
+        "max_dd_pct": 18.9
+      },
+      {
+        "symbol": "EURSEK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 30.4,
+        "profit_factor": 0.956,
+        "max_dd_pct": 6.5
+      },
+      {
+        "symbol": "XAUGBP",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 33,
+        "win_rate": 42.4,
+        "profit_factor": 0.953,
+        "max_dd_pct": 165.8
+      },
+      {
+        "symbol": "US30",
+        "bars": 1347,
+        "spread_pips": 7000.0,
+        "trades": 27,
+        "win_rate": 33.3,
+        "profit_factor": 0.952,
+        "max_dd_pct": 8.7
+      },
+      {
+        "symbol": "CHFJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 30.8,
+        "profit_factor": 0.951,
+        "max_dd_pct": 50.1
+      },
+      {
+        "symbol": "XAUAUD",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 46.7,
+        "profit_factor": 0.95,
+        "max_dd_pct": 167.0
+      },
+      {
+        "symbol": "NZDCAD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 32.0,
+        "profit_factor": 0.947,
+        "max_dd_pct": 8.3
+      },
+      {
+        "symbol": "SYRUPUSD",
+        "bars": 1274,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 34.5,
+        "profit_factor": 0.939,
+        "max_dd_pct": 7.9
+      },
+      {
+        "symbol": "2ZUSD",
+        "bars": 1239,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 31.0,
+        "profit_factor": 0.923,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "TAOUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 40.5,
+        "profit_factor": 0.911,
+        "max_dd_pct": 3032.2
+      },
+      {
+        "symbol": "EURNZD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 34.6,
+        "profit_factor": 0.908,
+        "max_dd_pct": 8.3
+      },
+      {
+        "symbol": "BRENT_Q6",
+        "bars": 564,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 33.3,
+        "profit_factor": 0.906,
+        "max_dd_pct": 236.8
+      },
+      {
+        "symbol": "GBPSEK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 18,
+        "win_rate": 33.3,
+        "profit_factor": 0.902,
+        "max_dd_pct": 8.1
+      },
+      {
+        "symbol": "PENDLEUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 27.3,
+        "profit_factor": 0.902,
+        "max_dd_pct": 8.2
+      },
+      {
+        "symbol": "USDTRY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 48,
+        "win_rate": 39.6,
+        "profit_factor": 0.9,
+        "max_dd_pct": 29.3
+      },
+      {
+        "symbol": "USDTHB",
+        "bars": 1354,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 34.8,
+        "profit_factor": 0.89,
+        "max_dd_pct": 18.3
+      },
+      {
+        "symbol": "USDPLN",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 32.1,
+        "profit_factor": 0.858,
+        "max_dd_pct": 6.2
+      },
+      {
+        "symbol": "US500",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 31.2,
+        "profit_factor": 0.857,
+        "max_dd_pct": 10737.5
+      },
+      {
+        "symbol": "USDSEK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 35.0,
+        "profit_factor": 0.853,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "XAUJPY",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 41,
+        "win_rate": 39.0,
+        "profit_factor": 0.853,
+        "max_dd_pct": 112467.9
+      },
+      {
+        "symbol": "CAKEUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 31.0,
+        "profit_factor": 0.849,
+        "max_dd_pct": 9.9
+      },
+      {
+        "symbol": "BRENT_U6",
+        "bars": 598,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 35.7,
+        "profit_factor": 0.847,
+        "max_dd_pct": 239.9
+      },
+      {
+        "symbol": "TIAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 39,
+        "win_rate": 33.3,
+        "profit_factor": 0.847,
+        "max_dd_pct": 9.2
+      },
+      {
+        "symbol": "CRVUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 46,
+        "win_rate": 30.4,
+        "profit_factor": 0.837,
+        "max_dd_pct": 9.7
+      },
+      {
+        "symbol": "SUSD",
+        "bars": 1841,
+        "spread_pips": null,
+        "trades": 44,
+        "win_rate": 31.8,
+        "profit_factor": 0.825,
+        "max_dd_pct": 16.3
+      },
+      {
+        "symbol": "AUDSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 29.2,
+        "profit_factor": 0.812,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "Sbean_Q6",
+        "bars": 582,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 28.6,
+        "profit_factor": 0.795,
+        "max_dd_pct": 697.8
+      },
+      {
+        "symbol": "USDDKK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 32.0,
+        "profit_factor": 0.792,
+        "max_dd_pct": 9.0
+      },
+      {
+        "symbol": "HK50",
+        "bars": 1127,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 29.6,
+        "profit_factor": 0.788,
+        "max_dd_pct": 8458.9
+      },
+      {
+        "symbol": "EURTRY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 31.2,
+        "profit_factor": 0.782,
+        "max_dd_pct": 59.1
+      },
+      {
+        "symbol": "XPTUSD",
+        "bars": 1347,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 35.7,
+        "profit_factor": 0.778,
+        "max_dd_pct": 4464.6
+      },
+      {
+        "symbol": "USDCZK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 30.0,
+        "profit_factor": 0.771,
+        "max_dd_pct": 8.2
+      },
+      {
+        "symbol": "JUPUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 36,
+        "win_rate": 27.8,
+        "profit_factor": 0.761,
+        "max_dd_pct": 12.3
+      },
+      {
+        "symbol": "DE40",
+        "bars": 1320,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 26.9,
+        "profit_factor": 0.757,
+        "max_dd_pct": 32986.9
+      },
+      {
+        "symbol": "SGDJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 31.0,
+        "profit_factor": 0.752,
+        "max_dd_pct": 55.3
+      },
+      {
+        "symbol": "1000xSHIB",
+        "bars": 1892,
+        "spread_pips": null,
+        "trades": 41,
+        "win_rate": 34.1,
+        "profit_factor": 0.735,
+        "max_dd_pct": 19.0
+      },
+      {
+        "symbol": "MUSD",
+        "bars": 1887,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 35.7,
+        "profit_factor": 0.729,
+        "max_dd_pct": 33.7
+      },
+      {
+        "symbol": "HBARUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 45,
+        "win_rate": 28.9,
+        "profit_factor": 0.726,
+        "max_dd_pct": 16.1
+      },
+      {
+        "symbol": "EURJPY",
+        "bars": 1356,
+        "spread_pips": 1.1,
+        "trades": 35,
+        "win_rate": 28.6,
+        "profit_factor": 0.718,
+        "max_dd_pct": 13.4
+      },
+      {
+        "symbol": "ASTERUSD",
+        "bars": 1695,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 27.3,
+        "profit_factor": 0.716,
+        "max_dd_pct": 7.2
+      },
+      {
+        "symbol": "MORPHOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 41,
+        "win_rate": 29.3,
+        "profit_factor": 0.713,
+        "max_dd_pct": 19.0
+      },
+      {
+        "symbol": "1000xPEPE",
+        "bars": 1884,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 34.3,
+        "profit_factor": 0.701,
+        "max_dd_pct": 16.3
+      },
+      {
+        "symbol": "VIRTUALUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 40,
+        "win_rate": 27.5,
+        "profit_factor": 0.7,
+        "max_dd_pct": 14.7
+      },
+      {
+        "symbol": "USDCHF",
+        "bars": 1356,
+        "spread_pips": 1.0,
+        "trades": 24,
+        "win_rate": 29.2,
+        "profit_factor": 0.692,
+        "max_dd_pct": 8.1
+      },
+      {
+        "symbol": "USDJPY",
+        "bars": 1356,
+        "spread_pips": 1.0,
+        "trades": 29,
+        "win_rate": 27.6,
+        "profit_factor": 0.679,
+        "max_dd_pct": 9.6
+      },
+      {
+        "symbol": "VETUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 32.4,
+        "profit_factor": 0.674,
+        "max_dd_pct": 14.9
+      },
+      {
+        "symbol": "DE30",
+        "bars": 610,
+        "spread_pips": null,
+        "trades": 18,
+        "win_rate": 27.8,
+        "profit_factor": 0.666,
+        "max_dd_pct": 25310.1
+      },
+      {
+        "symbol": "SG30",
+        "bars": 1355,
+        "spread_pips": null,
+        "trades": 33,
+        "win_rate": 27.3,
+        "profit_factor": 0.659,
+        "max_dd_pct": 542.1
+      },
+      {
+        "symbol": "AUDCHF",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 29.6,
+        "profit_factor": 0.644,
+        "max_dd_pct": 8.3
+      },
+      {
+        "symbol": "SEKJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 27.3,
+        "profit_factor": 0.641,
+        "max_dd_pct": 22.1
+      },
+      {
+        "symbol": "FILUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 29.7,
+        "profit_factor": 0.638,
+        "max_dd_pct": 20.7
+      },
+      {
+        "symbol": "NETH25",
+        "bars": 884,
+        "spread_pips": null,
+        "trades": 19,
+        "win_rate": 31.6,
+        "profit_factor": 0.627,
+        "max_dd_pct": 930.0
+      },
+      {
+        "symbol": "GBPDKK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 23.1,
+        "profit_factor": 0.619,
+        "max_dd_pct": 11.8
+      },
+      {
+        "symbol": "SA40",
+        "bars": 652,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 35.7,
+        "profit_factor": 0.613,
+        "max_dd_pct": 261.9
+      },
+      {
+        "symbol": "EURCAD",
+        "bars": 1345,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 26.9,
+        "profit_factor": 0.603,
+        "max_dd_pct": 10.6
+      },
+      {
+        "symbol": "XPLUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 26.9,
+        "profit_factor": 0.602,
+        "max_dd_pct": 13.5
+      },
+      {
+        "symbol": "CHINA50",
+        "bars": 1202,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 23.1,
+        "profit_factor": 0.598,
+        "max_dd_pct": 485.5
+      },
+      {
+        "symbol": "EURCHF",
+        "bars": 1356,
+        "spread_pips": 0.3,
+        "trades": 27,
+        "win_rate": 22.2,
+        "profit_factor": 0.581,
+        "max_dd_pct": 10.6
+      },
+      {
+        "symbol": "NZDJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 26.9,
+        "profit_factor": 0.58,
+        "max_dd_pct": 69.0
+      },
+      {
+        "symbol": "EURPLN",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 24.0,
+        "profit_factor": 0.566,
+        "max_dd_pct": 10.6
+      },
+      {
+        "symbol": "GBPCAD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 25.0,
+        "profit_factor": 0.565,
+        "max_dd_pct": 10.9
+      },
+      {
+        "symbol": "WTI_N6",
+        "bars": 522,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 25.0,
+        "profit_factor": 0.563,
+        "max_dd_pct": 328.1
+      },
+      {
+        "symbol": "MidDE50",
+        "bars": 660,
+        "spread_pips": null,
+        "trades": 12,
+        "win_rate": 25.0,
+        "profit_factor": 0.556,
+        "max_dd_pct": 387.4
+      },
+      {
+        "symbol": "EURZAR",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 26.7,
+        "profit_factor": 0.544,
+        "max_dd_pct": 24.6
+      },
+      {
+        "symbol": "WTI_Q6",
+        "bars": 597,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 21.4,
+        "profit_factor": 0.544,
+        "max_dd_pct": 322.0
+      },
+      {
+        "symbol": "EURSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 21.9,
+        "profit_factor": 0.536,
+        "max_dd_pct": 11.0
+      },
+      {
+        "symbol": "GBPSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 24.0,
+        "profit_factor": 0.533,
+        "max_dd_pct": 10.7
+      },
+      {
+        "symbol": "EURDKK",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 19,
+        "win_rate": 26.3,
+        "profit_factor": 0.514,
+        "max_dd_pct": 7.2
+      },
+      {
+        "symbol": "QNTUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 22.7,
+        "profit_factor": 0.514,
+        "max_dd_pct": 385.7
+      },
+      {
+        "symbol": "AUDCAD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 20.7,
+        "profit_factor": 0.513,
+        "max_dd_pct": 10.9
+      },
+      {
+        "symbol": "EURGBP",
+        "bars": 1356,
+        "spread_pips": 0.1,
+        "trades": 28,
+        "win_rate": 21.4,
+        "profit_factor": 0.506,
+        "max_dd_pct": 16.9
+      },
+      {
+        "symbol": "TONUSD",
+        "bars": 1841,
+        "spread_pips": null,
+        "trades": 11,
+        "win_rate": 36.4,
+        "profit_factor": 0.485,
+        "max_dd_pct": 18.4
+      },
+      {
+        "symbol": "GBPNZD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 22.2,
+        "profit_factor": 0.478,
+        "max_dd_pct": 12.9
+      },
+      {
+        "symbol": "Sbean_N6",
+        "bars": 534,
+        "spread_pips": null,
+        "trades": 16,
+        "win_rate": 25.0,
+        "profit_factor": 0.478,
+        "max_dd_pct": 1715.0
+      },
+      {
+        "symbol": "AUS200",
+        "bars": 1320,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 21.4,
+        "profit_factor": 0.462,
+        "max_dd_pct": 3101.8
+      },
+      {
+        "symbol": "F40",
+        "bars": 884,
+        "spread_pips": null,
+        "trades": 14,
+        "win_rate": 21.4,
+        "profit_factor": 0.448,
+        "max_dd_pct": 3228.2
+      },
+      {
+        "symbol": "NZDCHF",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 21.4,
+        "profit_factor": 0.444,
+        "max_dd_pct": 15.8
+      },
+      {
+        "symbol": "CADCHF",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 16.7,
+        "profit_factor": 0.439,
+        "max_dd_pct": 13.5
+      },
+      {
+        "symbol": "GBPTRY",
+        "bars": 1351,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 22.6,
+        "profit_factor": 0.421,
+        "max_dd_pct": 104.1
+      },
+      {
+        "symbol": "USDMXN",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 20.6,
+        "profit_factor": 0.406,
+        "max_dd_pct": 23.3
+      },
+      {
+        "symbol": "CHFSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 14.3,
+        "profit_factor": 0.346,
+        "max_dd_pct": 13.2
+      },
+      {
+        "symbol": "Sbean_U6",
+        "bars": 582,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 19.0,
+        "profit_factor": 0.334,
+        "max_dd_pct": 1782.0
+      },
+      {
+        "symbol": "USDZAR",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 24.1,
+        "profit_factor": 0.332,
+        "max_dd_pct": 36.3
+      },
+      {
+        "symbol": "TecDE30",
+        "bars": 659,
+        "spread_pips": null,
+        "trades": 15,
+        "win_rate": 13.3,
+        "profit_factor": 0.328,
+        "max_dd_pct": 9814.4
+      },
+      {
+        "symbol": "COAIUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 10,
+        "win_rate": 10.0,
+        "profit_factor": 0.203,
+        "max_dd_pct": 6.5
+      },
+      {
+        "symbol": "PUMPUSD",
+        "bars": 899,
+        "spread_pips": null,
+        "trades": 13,
+        "win_rate": 7.7,
+        "profit_factor": 0.071,
+        "max_dd_pct": 18.1
+      }
+    ],
+    "winners": [
+      {
+        "symbol": "IPUSD",
+        "bars": 1812,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 53.3,
+        "profit_factor": 3.312,
+        "max_dd_pct": 9.3
+      },
+      {
+        "symbol": "NOR25",
+        "bars": 650,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 59.1,
+        "profit_factor": 2.596,
+        "max_dd_pct": 26.7
+      },
+      {
+        "symbol": "INJUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 46.7,
+        "profit_factor": 2.412,
+        "max_dd_pct": 11.3
+      },
+      {
+        "symbol": "STRKUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 54.5,
+        "profit_factor": 2.392,
+        "max_dd_pct": 5.2
+      },
+      {
+        "symbol": "ENAUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 54.3,
+        "profit_factor": 2.32,
+        "max_dd_pct": 2.9
+      },
+      {
+        "symbol": "NEARUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 48.6,
+        "profit_factor": 2.254,
+        "max_dd_pct": 5.3
+      },
+      {
+        "symbol": "DEXEUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 65.6,
+        "profit_factor": 2.145,
+        "max_dd_pct": 44.0
+      },
+      {
+        "symbol": "FLOWUSD",
+        "bars": 1848,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 51.7,
+        "profit_factor": 2.098,
+        "max_dd_pct": 2.3
+      },
+      {
+        "symbol": "XAGUSD",
+        "bars": 1348,
+        "spread_pips": 2.0,
+        "trades": 36,
+        "win_rate": 50.0,
+        "profit_factor": 2.066,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "SANDUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 54.5,
+        "profit_factor": 1.991,
+        "max_dd_pct": 3.1
+      },
+      {
+        "symbol": "SUIUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.978,
+        "max_dd_pct": 3.9
+      },
+      {
+        "symbol": "ATOMUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 45.8,
+        "profit_factor": 1.97,
+        "max_dd_pct": 6.5
+      },
+      {
+        "symbol": "ADAUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 48.1,
+        "profit_factor": 1.915,
+        "max_dd_pct": 4.9
+      },
+      {
+        "symbol": "KSMUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 48.6,
+        "profit_factor": 1.897,
+        "max_dd_pct": 27.4
+      },
+      {
+        "symbol": "XRPUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 46.7,
+        "profit_factor": 1.823,
+        "max_dd_pct": 7.1
+      },
+      {
+        "symbol": "TRXUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 47,
+        "win_rate": 48.9,
+        "profit_factor": 1.782,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "BTCUSD",
+        "bars": 1919,
+        "spread_pips": 120000.0,
+        "trades": 40,
+        "win_rate": 47.5,
+        "profit_factor": 1.777,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "ONDOUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 48.4,
+        "profit_factor": 1.772,
+        "max_dd_pct": 4.8
+      },
+      {
+        "symbol": "THETAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.759,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "XTIUSD",
+        "bars": 1347,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 55.0,
+        "profit_factor": 1.736,
+        "max_dd_pct": 49.2
+      },
+      {
+        "symbol": "ENSUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 39,
+        "win_rate": 46.2,
+        "profit_factor": 1.723,
+        "max_dd_pct": 28.8
+      },
+      {
+        "symbol": "RAYUSD",
+        "bars": 1859,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 41.7,
+        "profit_factor": 1.719,
+        "max_dd_pct": 4.1
+      },
+      {
+        "symbol": "USDCNH",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 46.9,
+        "profit_factor": 1.7,
+        "max_dd_pct": 5.6
+      },
+      {
+        "symbol": "JTOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.65,
+        "max_dd_pct": 3.5
+      },
+      {
+        "symbol": "XBRUSD",
+        "bars": 1350,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 52.4,
+        "profit_factor": 1.615,
+        "max_dd_pct": 47.4
+      },
+      {
+        "symbol": "COMPUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 47.8,
+        "profit_factor": 1.61,
+        "max_dd_pct": 32.6
+      },
+      {
+        "symbol": "AUDJPY",
+        "bars": 1356,
+        "spread_pips": 0.3,
+        "trades": 31,
+        "win_rate": 45.2,
+        "profit_factor": 1.606,
+        "max_dd_pct": 3.9
+      },
+      {
+        "symbol": "AEROUSD",
+        "bars": 1274,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 45.5,
+        "profit_factor": 1.604,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "TWTUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 50.0,
+        "profit_factor": 1.592,
+        "max_dd_pct": 4.3
+      },
+      {
+        "symbol": "NZDUSD",
+        "bars": 1356,
+        "spread_pips": 0.2,
+        "trades": 20,
+        "win_rate": 45.0,
+        "profit_factor": 1.58,
+        "max_dd_pct": 3.0
+      },
+      {
+        "symbol": "USDSGD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 42.9,
+        "profit_factor": 1.572,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "AAVEUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 39,
+        "win_rate": 46.2,
+        "profit_factor": 1.567,
+        "max_dd_pct": 308.3
+      },
+      {
+        "symbol": "FARTCOINUSD",
+        "bars": 1812,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 44.8,
+        "profit_factor": 1.554,
+        "max_dd_pct": 4.4
+      },
+      {
+        "symbol": "LDOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 24,
+        "win_rate": 41.7,
+        "profit_factor": 1.55,
+        "max_dd_pct": 3.2
+      },
+      {
+        "symbol": "XAGAUD",
+        "bars": 1348,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 52.9,
+        "profit_factor": 1.526,
+        "max_dd_pct": 77.2
+      },
+      {
+        "symbol": "XTZUSD",
+        "bars": 1908,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 44.4,
+        "profit_factor": 1.522,
+        "max_dd_pct": 3.2
+      },
+      {
+        "symbol": "WIFUSD",
+        "bars": 1773,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.481,
+        "max_dd_pct": 4.0
+      },
+      {
+        "symbol": "UK100",
+        "bars": 1316,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 43.5,
+        "profit_factor": 1.479,
+        "max_dd_pct": 2915.9
+      },
+      {
+        "symbol": "WLFIUSD",
+        "bars": 1845,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 45.5,
+        "profit_factor": 1.472,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "DOTUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 28.6,
+        "profit_factor": 1.423,
+        "max_dd_pct": 9.3
+      },
+      {
+        "symbol": "AUDUSD",
+        "bars": 1356,
+        "spread_pips": 0.1,
+        "trades": 27,
+        "win_rate": 40.7,
+        "profit_factor": 1.421,
+        "max_dd_pct": 4.9
+      },
+      {
+        "symbol": "ICPUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 36,
+        "win_rate": 38.9,
+        "profit_factor": 1.416,
+        "max_dd_pct": 12.4
+      },
+      {
+        "symbol": "USDCAD",
+        "bars": 1356,
+        "spread_pips": 1.1,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.394,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "XMRUSD",
+        "bars": 1898,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.376,
+        "max_dd_pct": 147.9
+      },
+      {
+        "symbol": "WLDUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 40.6,
+        "profit_factor": 1.365,
+        "max_dd_pct": 4.7
+      },
+      {
+        "symbol": "ETHUSD",
+        "bars": 1919,
+        "spread_pips": 29000.0,
+        "trades": 30,
+        "win_rate": 43.3,
+        "profit_factor": 1.363,
+        "max_dd_pct": 4.4
+      },
+      {
+        "symbol": "AUSD",
+        "bars": 1257,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 40.9,
+        "profit_factor": 1.355,
+        "max_dd_pct": 4.0
+      },
+      {
+        "symbol": "IT40",
+        "bars": 880,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 44.0,
+        "profit_factor": 1.326,
+        "max_dd_pct": 6882.1
+      },
+      {
+        "symbol": "MANAUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 40.0,
+        "profit_factor": 1.322,
+        "max_dd_pct": 5.0
+      },
+      {
+        "symbol": "AVXUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 37.1,
+        "profit_factor": 1.315,
+        "max_dd_pct": 62.7
+      },
+      {
+        "symbol": "JP225",
+        "bars": 1343,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 41.4,
+        "profit_factor": 1.313,
+        "max_dd_pct": 7592.9
+      },
+      {
+        "symbol": "SOLUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 37,
+        "win_rate": 40.5,
+        "profit_factor": 1.305,
+        "max_dd_pct": 243.2
+      },
+      {
+        "symbol": "POLUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 20,
+        "win_rate": 40.0,
+        "profit_factor": 1.297,
+        "max_dd_pct": 2.1
+      },
+      {
+        "symbol": "BNBUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 51,
+        "win_rate": 43.1,
+        "profit_factor": 1.286,
+        "max_dd_pct": 489.8
+      },
+      {
+        "symbol": "ETCUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 28,
+        "win_rate": 39.3,
+        "profit_factor": 1.284,
+        "max_dd_pct": 49.8
+      },
+      {
+        "symbol": "TRUMPUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 35,
+        "win_rate": 45.7,
+        "profit_factor": 1.268,
+        "max_dd_pct": 28.0
+      },
+      {
+        "symbol": "EURHKD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 29,
+        "win_rate": 37.9,
+        "profit_factor": 1.261,
+        "max_dd_pct": 4.5
+      },
+      {
+        "symbol": "KAIAUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.238,
+        "max_dd_pct": 6.6
+      },
+      {
+        "symbol": "SPXUSD",
+        "bars": 1274,
+        "spread_pips": null,
+        "trades": 23,
+        "win_rate": 39.1,
+        "profit_factor": 1.231,
+        "max_dd_pct": 6.4
+      },
+      {
+        "symbol": "FETUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 26,
+        "win_rate": 38.5,
+        "profit_factor": 1.228,
+        "max_dd_pct": 5.4
+      },
+      {
+        "symbol": "GBPUSD",
+        "bars": 1356,
+        "spread_pips": 0.2,
+        "trades": 21,
+        "win_rate": 38.1,
+        "profit_factor": 1.222,
+        "max_dd_pct": 6.8
+      },
+      {
+        "symbol": "GBPAUD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 31,
+        "win_rate": 38.7,
+        "profit_factor": 1.217,
+        "max_dd_pct": 5.8
+      },
+      {
+        "symbol": "HYPEUSD",
+        "bars": 1896,
+        "spread_pips": null,
+        "trades": 40,
+        "win_rate": 42.5,
+        "profit_factor": 1.215,
+        "max_dd_pct": 91.9
+      },
+      {
+        "symbol": "IMXUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 38,
+        "win_rate": 36.8,
+        "profit_factor": 1.211,
+        "max_dd_pct": 5.5
+      },
+      {
+        "symbol": "RENDERUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 40,
+        "win_rate": 37.5,
+        "profit_factor": 1.211,
+        "max_dd_pct": 10.3
+      },
+      {
+        "symbol": "ZECUSD",
+        "bars": 1873,
+        "spread_pips": null,
+        "trades": 47,
+        "win_rate": 44.7,
+        "profit_factor": 1.207,
+        "max_dd_pct": 65.8
+      },
+      {
+        "symbol": "SEIUSD",
+        "bars": 1250,
+        "spread_pips": null,
+        "trades": 27,
+        "win_rate": 40.7,
+        "profit_factor": 1.202,
+        "max_dd_pct": 10.0
+      },
+      {
+        "symbol": "UNIUSD",
+        "bars": 1920,
+        "spread_pips": null,
+        "trades": 46,
+        "win_rate": 32.6,
+        "profit_factor": 1.191,
+        "max_dd_pct": 24.3
+      },
+      {
+        "symbol": "EURAUD",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 33,
+        "win_rate": 39.4,
+        "profit_factor": 1.173,
+        "max_dd_pct": 8.6
+      },
+      {
+        "symbol": "PYTHUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 36,
+        "win_rate": 38.9,
+        "profit_factor": 1.17,
+        "max_dd_pct": 4.2
+      },
+      {
+        "symbol": "CADJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 22,
+        "win_rate": 40.9,
+        "profit_factor": 1.162,
+        "max_dd_pct": 35.9
+      },
+      {
+        "symbol": "STXUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.158,
+        "max_dd_pct": 8.9
+      },
+      {
+        "symbol": "ALGOUSD",
+        "bars": 1861,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.136,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "DYDXUSD",
+        "bars": 1238,
+        "spread_pips": null,
+        "trades": 21,
+        "win_rate": 38.1,
+        "profit_factor": 1.132,
+        "max_dd_pct": 5.9
+      },
+      {
+        "symbol": "LTCUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 32,
+        "win_rate": 37.5,
+        "profit_factor": 1.13,
+        "max_dd_pct": 116.2
+      },
+      {
+        "symbol": "NOKJPY",
+        "bars": 1356,
+        "spread_pips": null,
+        "trades": 25,
+        "win_rate": 36.0,
+        "profit_factor": 1.127,
+        "max_dd_pct": 5.1
+      },
+      {
+        "symbol": "BCHUSD",
+        "bars": 1919,
+        "spread_pips": null,
+        "trades": 34,
+        "win_rate": 41.2,
+        "profit_factor": 1.106,
+        "max_dd_pct": 866.9
+      }
+    ]
+  }
+}

@@ -1,0 +1,1875 @@
+[
+ {
+  "symbol": "EURUSD",
+  "status": "OK",
+  "issues": [
+   "market_structure: H1 bearish structure (H4 ranging/insufficient)"
+  ],
+  "engines": {
+   "smc": {
+    "bias": "BEARISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bearish structure: 7/10 swing pairs falling (LH+LL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (73% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 20.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (1.14699) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=52.4 neutral zone"
+   },
+   "quant": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Quant signals mixed \u2014 no clear direction"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [1.13915 \u2013 1.14658] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 70,
+    "enabled": false,
+    "reason": "RSI regular bearish: Price HH (1.14422>1.14419), Indicator LH"
+   },
+   "market_structure": {
+    "bias": "BEARISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "H1 bearish structure (H4 ranging/insufficient)",
+    "starved": true
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 37% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.1,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 1.14337,
+  "mqs": {
+   "score": 84.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 2,
+   "score": 32.0,
+   "informative_share": 0.625,
+   "blocking_gates": [
+    "score 32.0 < 60"
+   ]
+  }
+ },
+ {
+  "symbol": "GBPUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": true,
+    "reason": "Mixed structure: 5 bullish vs 4 bearish pairs out of 10 \u2014 no clear maj"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 45.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (67% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (1.33274) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=53.6 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "Positive momentum: ROC(10)=+0.37%"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [1.33239 \u2013 1.34300] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (57.2)"
+   },
+   "market_structure": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "H1 ranging (HH=True, HL=False, LH=False, LL=True)"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 79% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 1.33954,
+  "mqs": {
+   "score": 87.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "high"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 1,
+   "score": 30.0,
+   "informative_share": 0.331,
+   "blocking_gates": [
+    "score 30.0 < 58",
+    "quorum 1 < 2",
+    "info_share 33% < 60%"
+   ]
+  }
+ },
+ {
+  "symbol": "USDJPY",
+  "status": "OK",
+  "issues": [
+   "market_structure: H1 bullish structure (H4 ranging/insufficient)"
+  ],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bullish structure: 7/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (67% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 68.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (161.22567) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=61.2 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 15.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (61.2) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Volume unavailable (FX) \u2014 Wyckoff analysis is price-only"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 42.8,
+    "enabled": false,
+    "reason": "MACD regular bearish only: Price HH (162.66642>162.33415), Indicator L"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "H1 bullish structure (H4 ranging/insufficient)",
+    "starved": true
+   },
+   "sentiment": {
+    "bias": "BEARISH",
+    "score": 18,
+    "enabled": false,
+    "reason": "Retail proxy: price at 86% of 751-bar range \u2014 retail likely long, cont"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 162.37456,
+  "mqs": {
+   "score": 87.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 57.41,
+   "informative_share": 0.625,
+   "blocking_gates": [
+    "score 57.41 < 58"
+   ]
+  }
+ },
+ {
+  "symbol": "USDCHF",
+  "status": "OK",
+  "issues": [
+   "market_structure: H1 bullish structure (H4 ranging/insufficient)"
+  ],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price at EQUILIBRIUM (43%) \u2014 no zone bias"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (0.80271) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=51.5 neutral zone"
+   },
+   "quant": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "High volatility (ATR pct=83%) \u2014 elevated risk, reduce size"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [0.80100 \u2013 0.81084] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 55,
+    "enabled": false,
+    "reason": "RSI hidden bearish: Price LH, Indicator HH \u2014 bearish continuation"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "H1 bullish structure (H4 ranging/insufficient)",
+    "starved": true
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 71% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 0.80724,
+  "mqs": {
+   "score": 84.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "high"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 60.71,
+   "informative_share": 0.625,
+   "blocking_gates": []
+  }
+ },
+ {
+  "symbol": "AUDUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": true,
+    "reason": "Mixed structure: 5 bullish vs 4 bearish pairs out of 10 \u2014 no clear maj"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 35.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (71% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 20.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (0.69768) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=52.2 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "Positive momentum: ROC(10)=+0.32%"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [0.69063 \u2013 0.69607] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 42.0,
+    "enabled": false,
+    "reason": "MACD regular bearish only: Price HH (0.69568>0.69458), Indicator LH"
+   },
+   "market_structure": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "H1 ranging (HH=False, HL=False, LH=False, LL=True)"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 36% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 3.2,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 0.69448,
+  "mqs": {
+   "score": 84.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 1,
+   "score": 20.0,
+   "informative_share": 0.331,
+   "blocking_gates": [
+    "score 20.0 < 55",
+    "quorum 1 < 2",
+    "info_share 33% < 60%"
+   ]
+  }
+ },
+ {
+  "symbol": "USDCAD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BEARISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bearish structure: 6/10 swing pairs falling (LH+LL majority)"
+   },
+   "ict": {
+    "bias": "BULLISH",
+    "score": 35.0,
+    "enabled": false,
+    "reason": "Price in DISCOUNT zone (20% of range) \u2014 ICT expects bullish move towar"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 55.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (1.41098) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "BEARISH",
+    "score": 40.0,
+    "enabled": true,
+    "reason": "RSI=34.3 bearish momentum (falling, <45)"
+   },
+   "quant": {
+    "bias": "BEARISH",
+    "score": 15.0,
+    "enabled": false,
+    "reason": "RSI leaning bearish (34.3) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "BULLISH",
+    "score": 25.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [1.41537 \u2013 1.42391] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (41.9)"
+   },
+   "market_structure": {
+    "bias": "BEARISH",
+    "score": 85,
+    "enabled": false,
+    "reason": "H1 MSS bearish confirmed by H4 bearish structure"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 78% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 5.9,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 1.41711,
+  "mqs": {
+   "score": 76.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "high"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 2,
+   "score": 39.48,
+   "informative_share": 1.0,
+   "blocking_gates": [
+    "score 39.48 < 58"
+   ]
+  }
+ },
+ {
+  "symbol": "NZDUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (100%) but H1 uptrend active \u2014 no reversal bias "
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 53.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (0.57353) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "BULLISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "RSI=69.3 bullish momentum (rising, >55)"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 45.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (69.3) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "BEARISH",
+    "score": 25.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [0.56714 \u2013 0.57529] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BULLISH",
+    "score": 42.0,
+    "enabled": false,
+    "reason": "MACD regular bullish only: Price LL (0.56753<0.56843), Indicator HL"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 CHoCH bullish but H4 still ranging \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 53% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 6.9,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 0.57529,
+  "mqs": {
+   "score": 79.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "extreme"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 3,
+   "score": 56.6,
+   "informative_share": 1.0,
+   "blocking_gates": [
+    "score 56.6 < 60"
+   ]
+  }
+ },
+ {
+  "symbol": "EURJPY",
+  "status": "OK",
+  "issues": [
+   "market_structure: H1 bullish structure (H4 ranging/insufficient)"
+  ],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bullish structure: 7/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (84% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 65.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (184.91262) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "BULLISH",
+    "score": 40.0,
+    "enabled": true,
+    "reason": "RSI=72.4 bullish momentum (rising, >55)"
+   },
+   "quant": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "RSI overbought (72.4) \u2014 bearish momentum exhaustion"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Volume unavailable (FX) \u2014 Wyckoff analysis is price-only"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (64.8)"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "H1 bullish structure (H4 ranging/insufficient)",
+    "starved": true
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 79% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 185.65529,
+  "mqs": {
+   "score": 77.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "low"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 3,
+   "score": 51.02,
+   "informative_share": 0.897,
+   "blocking_gates": [
+    "score 51.02 < 58"
+   ]
+  }
+ },
+ {
+  "symbol": "GBPJPY",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bullish structure: 7/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (69%) but H1 uptrend active \u2014 no reversal bias ("
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (214.86341) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=66.2 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 45.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (66.2) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Volume unavailable (FX) \u2014 Wyckoff analysis is price-only"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (65.0)"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 65,
+    "enabled": false,
+    "reason": "H1+H4 bullish structure (BOS continuation)"
+   },
+   "sentiment": {
+    "bias": "BEARISH",
+    "score": 24,
+    "enabled": false,
+    "reason": "Retail proxy: price at 90% of 751-bar range \u2014 retail likely long, cont"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 217.49349,
+  "mqs": {
+   "score": 90.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 63.77,
+   "informative_share": 0.625,
+   "blocking_gates": []
+  }
+ },
+ {
+  "symbol": "AUDJPY",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (74% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 53.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (112.47343) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=58.9 bullish momentum (rising, >55)"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 15.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (58.9) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "BEARISH",
+    "score": 25.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [111.34111 \u2013 112.80784] (consolidation "
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (58.7)"
+   },
+   "market_structure": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "H1 ranging (HH=False, HL=True, LH=True, LL=False)"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 62% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 112.65727,
+  "mqs": {
+   "score": 87.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 46.41,
+   "informative_share": 0.728,
+   "blocking_gates": [
+    "score 46.41 < 58"
+   ]
+  }
+ },
+ {
+  "symbol": "EURGBP",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BEARISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bearish structure: 7/10 swing pairs falling (LH+LL majority)"
+   },
+   "ict": {
+    "bias": "BULLISH",
+    "score": 35.0,
+    "enabled": false,
+    "reason": "Price in DISCOUNT zone (38% of range) \u2014 ICT expects bullish move towar"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (0.86064) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=45.5 neutral zone"
+   },
+   "quant": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Quant signals mixed \u2014 no clear direction"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [0.85173 \u2013 0.85753] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BULLISH",
+    "score": 71,
+    "enabled": false,
+    "reason": "RSI regular bullish: Price LL (0.85398<0.85538), Indicator HL"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 CHoCH bullish but H4 still bearish \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "BULLISH",
+    "score": 24,
+    "enabled": false,
+    "reason": "Retail proxy: price at 10% of 751-bar range \u2014 retail likely short, con"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.7,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 0.85355,
+  "mqs": {
+   "score": 87.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 2,
+   "score": 63.77,
+   "informative_share": 0.625,
+   "blocking_gates": []
+  }
+ },
+ {
+  "symbol": "EURCHF",
+  "status": "OK",
+  "issues": [
+   "market_structure: H1 bullish structure (H4 ranging/insufficient)"
+  ],
+  "engines": {
+   "smc": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": true,
+    "reason": "Mixed structure: 5 bullish vs 5 bearish pairs out of 10 \u2014 no clear maj"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 35.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (76% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (0.92062) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=56.9 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 15.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (56.9) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "BEARISH",
+    "score": 25.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [0.91608 \u2013 0.92386] (consolidation phas"
+   },
+   "divergence": {
+    "bias": "BULLISH",
+    "score": 42.0,
+    "enabled": false,
+    "reason": "MACD regular bullish only: Price LL (0.91748<0.91842), Indicator HL"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "H1 bullish structure (H4 ranging/insufficient)",
+    "starved": true
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 58% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.9,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 0.92275,
+  "mqs": {
+   "score": 84.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 1,
+   "score": 80.0,
+   "informative_share": 0.434,
+   "blocking_gates": [
+    "quorum 1 < 2",
+    "info_share 43% < 60%"
+   ]
+  }
+ },
+ {
+  "symbol": "XAUUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (64% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (4189.75896) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": true,
+    "reason": "RSI=49.7 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "Positive momentum: ROC(10)=+0.65%"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [4022.20256 \u2013 4202.03378] (consolidatio"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 42.0,
+    "enabled": false,
+    "reason": "MACD regular bearish only: Price HH (4184.07633>4178.66879), Indicator"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 CHoCH bullish but H4 still bearish \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 40% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 4123.60844,
+  "mqs": {
+   "score": 87.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 1,
+   "score": 80.0,
+   "informative_share": 0.897,
+   "blocking_gates": [
+    "quorum 1 < 2"
+   ]
+  }
+ },
+ {
+  "symbol": "XAGUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price at EQUILIBRIUM (58%) \u2014 no zone bias"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (65.92952) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": true,
+    "reason": "RSI=47.2 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "Positive momentum: ROC(10)=+0.92%"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [57.55500 \u2013 63.73000] (consolidation ph"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (52.3)"
+   },
+   "market_structure": {
+    "bias": "BEARISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 CHoCH bearish but H4 still ranging \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 22% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 811,
+   "D1": 161,
+   "H1": 3000
+  },
+  "fetch_seconds": 6.3,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 60.64500045776367,
+  "mqs": {
+   "score": 80.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 1,
+   "score": 80.0,
+   "informative_share": 0.897,
+   "blocking_gates": [
+    "quorum 1 < 2"
+   ]
+  }
+ },
+ {
+  "symbol": "USOIL",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BEARISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bearish structure: 7/10 swing pairs falling (LH+LL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price at EQUILIBRIUM (59%) \u2014 no zone bias"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (79.37782) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=62.0 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 45.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (62.0) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [67.04000 \u2013 76.08000] (consolidation ph"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (54.9)"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 MSS bullish but H4 still ranging \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "BULLISH",
+    "score": 14,
+    "enabled": false,
+    "reason": "Retail proxy: price at 16% of 811-bar range \u2014 retail likely short, con"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 811,
+   "D1": 160,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.4,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 72.72000122070312,
+  "mqs": {
+   "score": 90.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "high"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 2,
+   "score": 50.53,
+   "informative_share": 0.625,
+   "blocking_gates": [
+    "score 50.53 < 55"
+   ]
+  }
+ },
+ {
+  "symbol": "US30",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 52.0,
+    "enabled": true,
+    "reason": "Bullish structure: 8/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price at EQUILIBRIUM (48%) \u2014 no zone bias"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 80.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (49995.39185) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=55.6 neutral zone"
+   },
+   "quant": {
+    "bias": "BEARISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (55.6) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "No clear Wyckoff pattern \u2014 price not in identifiable structure"
+   },
+   "divergence": {
+    "bias": "BULLISH",
+    "score": 40,
+    "enabled": false,
+    "reason": "RSI hidden bullish: Price HL, Indicator LL \u2014 bullish continuation"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 65,
+    "enabled": false,
+    "reason": "H1+H4 bullish structure (BOS continuation)"
+   },
+   "sentiment": {
+    "bias": "BEARISH",
+    "score": 23,
+    "enabled": false,
+    "reason": "Retail proxy: price at 90% of 1028-bar range \u2014 retail likely long, con"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 1028,
+   "D1": 433,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.6,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 52427.01953125,
+  "mqs": {
+   "score": 82.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 66.83,
+   "informative_share": 0.625,
+   "blocking_gates": []
+  }
+ },
+ {
+  "symbol": "NAS100",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BEARISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bearish structure: 6/10 swing pairs falling (LH+LL majority)"
+   },
+   "ict": {
+    "bias": "BEARISH",
+    "score": 55.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (80% of range) \u2014 ICT expects bearish move toward"
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 68.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (24879.18290) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=58.7 neutral zone"
+   },
+   "quant": {
+    "bias": "BEARISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (58.7) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "No clear Wyckoff pattern \u2014 price not in identifiable structure"
+   },
+   "divergence": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "No divergence detected. RSI neutral (52.0)"
+   },
+   "market_structure": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "H1 ranging (HH=False, HL=True, LH=True, LL=False)"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 82% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 1028,
+   "D1": 433,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.6,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 26007.65625,
+  "mqs": {
+   "score": 76.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 1,
+   "score": 68.0,
+   "informative_share": 0.625,
+   "blocking_gates": [
+    "quorum 1 < 2"
+   ]
+  }
+ },
+ {
+  "symbol": "SPX500",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 39.0,
+    "enabled": true,
+    "reason": "Bullish structure: 6/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price in PREMIUM zone (84%) but H1 uptrend active \u2014 no reversal bias ("
+   },
+   "nnfx": {
+    "bias": "BULLISH",
+    "score": 68.0,
+    "enabled": true,
+    "reason": "Price above EMA200 (7208.82647) \u2014 bullish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=63.3 neutral zone"
+   },
+   "quant": {
+    "bias": "BULLISH",
+    "score": 15.0,
+    "enabled": false,
+    "reason": "RSI leaning bullish (63.3) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "BEARISH",
+    "score": 40.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [7237.85010 \u2013 7577.91992] (consolidatio"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "MACD hidden bearish only: Price LH, Indicator HH \u2014 bearish continuatio"
+   },
+   "market_structure": {
+    "bias": "BULLISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 MSS bullish but H4 still ranging \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "BEARISH",
+    "score": 26,
+    "enabled": false,
+    "reason": "Retail proxy: price at 92% of 1028-bar range \u2014 retail likely long, con"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 1028,
+   "D1": 433,
+   "H1": 3000
+  },
+  "fetch_seconds": 7.5,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 7510.43017578125,
+  "mqs": {
+   "score": 90.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "RANGING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BULLISH",
+   "agree": 2,
+   "score": 54.35,
+   "informative_share": 0.728,
+   "blocking_gates": [
+    "score 54.35 < 55"
+   ]
+  }
+ },
+ {
+  "symbol": "BTCUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bullish structure: 7/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price at EQUILIBRIUM (42%) \u2014 no zone bias"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 53.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (63721.64807) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "RSI=46.8 neutral zone"
+   },
+   "quant": {
+    "bias": "BEARISH",
+    "score": 30.0,
+    "enabled": false,
+    "reason": "Negative momentum: ROC(10)=-1.03%"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [61162.79000 \u2013 64658.85000] (consolidat"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 82,
+    "enabled": false,
+    "reason": "RSI regular bearish: Price HH (64001.84000>63233.98000), Indicator LH"
+   },
+   "market_structure": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "H1 ranging (HH=False, HL=True, LH=True, LL=False)"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 52% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 62673.49,
+  "mqs": {
+   "score": 80.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 1,
+   "score": 53.0,
+   "informative_share": 0.625,
+   "blocking_gates": [
+    "score 53.0 < 55",
+    "quorum 1 < 2"
+   ]
+  }
+ },
+ {
+  "symbol": "ETHUSD",
+  "status": "OK",
+  "issues": [],
+  "engines": {
+   "smc": {
+    "bias": "BULLISH",
+    "score": 45.5,
+    "enabled": true,
+    "reason": "Bullish structure: 7/10 swing pairs rising (HH+HL majority)"
+   },
+   "ict": {
+    "bias": "NEUTRAL",
+    "score": 20.0,
+    "enabled": false,
+    "reason": "Price in DISCOUNT zone (22%) but H1 downtrend active \u2014 no reversal bia"
+   },
+   "nnfx": {
+    "bias": "BEARISH",
+    "score": 53.0,
+    "enabled": true,
+    "reason": "Price below EMA200 (1743.18685) \u2014 bearish baseline"
+   },
+   "price_action": {
+    "bias": "BEARISH",
+    "score": 40.0,
+    "enabled": true,
+    "reason": "RSI=41.3 bearish momentum (falling, <45)"
+   },
+   "quant": {
+    "bias": "BEARISH",
+    "score": 45.0,
+    "enabled": false,
+    "reason": "RSI leaning bearish (41.3) but not extreme"
+   },
+   "wyckoff": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": true,
+    "reason": "Price in Wyckoff trading range [1692.40000 \u2013 1830.66000] (consolidatio"
+   },
+   "divergence": {
+    "bias": "BEARISH",
+    "score": 74,
+    "enabled": false,
+    "reason": "RSI regular bearish: Price HH (1799.04000>1791.04000), Indicator LH"
+   },
+   "market_structure": {
+    "bias": "BEARISH",
+    "score": 50,
+    "enabled": false,
+    "reason": "H1 MSS bearish but H4 still ranging \u2014 early reversal"
+   },
+   "sentiment": {
+    "bias": "NEUTRAL",
+    "score": 0.0,
+    "enabled": false,
+    "reason": "Retail proxy: price at 68% of range \u2014 neutral zone"
+   },
+   "macro": {
+    "bias": "NEUTRAL",
+    "score": 0,
+    "enabled": false,
+    "reason": "DXY rising (EMA10=100.99 > EMA20=100.72, spread=+0.27%) \u2014 USD bullish"
+   }
+  },
+  "data": {
+   "H4": 751,
+   "D1": 126,
+   "H1": 3000
+  },
+  "fetch_seconds": 0.0,
+  "last_bar": "2026-07-09 12:00:00+00:00",
+  "close": 1739.97,
+  "mqs": {
+   "score": 80.0,
+   "grade": "GOOD",
+   "should_trade": true
+  },
+  "regime": {
+   "state": "TRENDING",
+   "volatility": "normal"
+  },
+  "confluence": {
+   "bias": "BEARISH",
+   "agree": 2,
+   "score": 47.13,
+   "informative_share": 0.897,
+   "blocking_gates": [
+    "score 47.13 < 60"
+   ]
+  }
+ }
+]

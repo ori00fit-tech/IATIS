@@ -9,7 +9,6 @@ const PLANNED = [
   { title: 'Cloudflare Panel', note: 'Requests, cache, firewall — needs Cloudflare API integration' },
   { title: 'Alerts Center', note: 'Consolidated system alerts — planned v2' },
   { title: 'System Performance Charts', note: 'CPU/RAM/latency history — planned v2' },
-  { title: 'Logs', note: 'Live-tailed API/decision/scheduler logs — planned v2' },
   { title: 'Settings', note: 'Engine toggles, weight edits, risk limits — planned v2' },
 ] as const
 

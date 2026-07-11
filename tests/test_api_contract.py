@@ -239,6 +239,91 @@ def test_decisions_requires_auth(client):
     assert client.get("/decisions").status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# Live Logs (module 13) — whitelisted sources only, no arbitrary unit/path.
+# ---------------------------------------------------------------------------
+
+def test_log_sources_requires_auth(client):
+    assert client.get("/logs/sources").status_code == 401
+
+
+def test_log_sources_lists_whitelist(client):
+    r = client.get("/logs/sources", headers=HDR)
+    assert r.status_code == 200, r.text
+    ids = {s["id"] for s in r.json()["sources"]}
+    assert ids == {"system", "api", "scheduler", "watchdog", "backup", "d1_backup"}
+
+
+def test_logs_requires_auth(client):
+    assert client.get("/logs", params={"source": "system"}).status_code == 401
+
+
+def test_logs_rejects_unknown_source(client):
+    r = client.get("/logs", params={"source": "not-a-real-unit"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_logs_rejects_arbitrary_source_injection_attempt(client):
+    # Whitelist enforcement: a value crafted to look like a shell/journalctl
+    # injection must be rejected outright, never passed through.
+    r = client.get("/logs", params={"source": "api; rm -rf /"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_logs_system_source_reads_file(client, tmp_path, monkeypatch):
+    (tmp_path / "storage").mkdir()
+    log_file = tmp_path / "storage" / "system.log"
+    log_file.write_text("line one\nERROR something broke\nline three\n")
+    monkeypatch.chdir(tmp_path)
+    r = client.get("/logs", params={"source": "system"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["lines_returned"] == 3
+    assert "ERROR something broke" in body["entries"]
+
+
+def test_logs_system_source_missing_file_reports_error_not_500(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    r = client.get("/logs", params={"source": "system"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["entries"] == []
+    assert body["error"]
+
+
+def test_logs_search_filters_entries(client, tmp_path, monkeypatch):
+    (tmp_path / "storage").mkdir()
+    log_file = tmp_path / "storage" / "system.log"
+    log_file.write_text("all is well\nERROR disk full\nall is well again\n")
+    monkeypatch.chdir(tmp_path)
+    r = client.get("/logs", params={"source": "system", "search": "error"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["lines_returned"] == 1
+    assert "ERROR disk full" in body["entries"][0]
+
+
+def test_logs_journal_source_never_shells_out_unsanitized(client, monkeypatch):
+    # journalctl may be genuinely absent/inert in CI — assert the call
+    # shape instead of real journal output: argv must be a fixed list
+    # with the exact whitelisted unit name, never a user-controlled string
+    # and never shell=True.
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        import subprocess as _sp
+        return _sp.CompletedProcess(argv, 0, stdout="log line\n", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    r = client.get("/logs", params={"source": "scheduler", "lines": 50}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert captured["argv"] == ["journalctl", "-u", "iatis-scheduler", "-n", "50", "--no-pager", "--output=cat"]
+    assert captured["kwargs"].get("shell", False) is False
+    assert r.json()["entries"] == ["log line"]
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

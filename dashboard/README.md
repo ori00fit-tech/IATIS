@@ -47,6 +47,7 @@ roadmap placeholders instead of mock screens.
 | Data Center | `/data-health` (new) | OHLCV cache completeness per symbol/timeframe |
 | Engine Monitor | `/engine-stats` | per-engine vote/accuracy stats, current vs. suggested weights |
 | Research & Backtests | `/research`, `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
+| Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

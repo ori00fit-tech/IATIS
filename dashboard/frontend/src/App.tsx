@@ -11,6 +11,7 @@ import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
 import { AlertCenter } from './modules/alert-center/AlertCenter'
 import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
+import { Reports } from './modules/reports/Reports'
 import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
 const TABS = [
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'logs', label: 'Live Logs' },
   { id: 'files', label: 'File Explorer' },
   { id: 'alerts', label: 'Alert Center' },
+  { id: 'reports', label: 'Reports' },
   { id: 'roadmap', label: 'Roadmap' },
 ] as const
 
@@ -87,6 +89,7 @@ function Shell() {
         {tab === 'logs' && <LiveLogs />}
         {tab === 'files' && <FileExplorer />}
         {tab === 'alerts' && <AlertCenter />}
+        {tab === 'reports' && <Reports />}
         {tab === 'roadmap' && <RoadmapGrid />}
       </main>
     </div>

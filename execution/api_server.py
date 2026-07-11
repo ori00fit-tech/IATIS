@@ -36,7 +36,7 @@ load_dotenv()
 
 try:
     from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError as exc:
@@ -1260,6 +1260,95 @@ async def research_integrity(
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_executor, _run)
+
+
+# ---------------------------------------------------------------------------
+# Reports (Mission Control module 10) — on-demand snapshots assembled from
+# data other endpoints already compute; never a second implementation of
+# the same numbers. Markdown or JSON only — no PDF dependency exists in
+# this project's requirements.txt, and we don't claim functionality that
+# isn't real (docs/VISION_v2.md's "no future phase functionality
+# pretending to be complete" rule).
+# ---------------------------------------------------------------------------
+_REPORT_TITLES: dict[str, str] = {
+    "research": "IATIS Research Report",
+    "manifest_summary": "IATIS Manifest Summary",
+    "system": "IATIS System Health Report",
+    "provider": "IATIS Data Provider Report",
+    "forward": "IATIS Forward Demo Report",
+}
+
+
+def _dict_to_md(title: str, data: dict[str, Any], generated_at: str) -> str:
+    """Generic dict → Markdown for report kinds without a dedicated table
+    formatter (system/provider/forward): a titled doc with the exact data
+    as a JSON block. Honest about being a snapshot, not hand-formatted
+    prose — good enough for an operator to read or paste elsewhere."""
+    import json as _json
+
+    return "\n".join([
+        f"# {title}", "", f"Generated {generated_at}.", "",
+        "```json", _json.dumps(data, indent=2, default=str), "```", "",
+    ])
+
+
+def _build_manifest_summary_md(manifests: dict[str, dict]) -> str:
+    from scripts.generate_research_report import build_manifest_table
+
+    n_total = len(manifests)
+    n_repro = sum(1 for m in manifests.values() if m.get("reproducible"))
+    return "\n".join([
+        "# IATIS Manifest Summary", "",
+        f"Generated {datetime.now(timezone.utc).isoformat()}.", "",
+        f"{n_total} manifests, {n_repro} reproducible, {n_total - n_repro} NOT reproducible.", "",
+        build_manifest_table(manifests), "",
+    ])
+
+
+@app.get("/reports/{kind}")
+async def generate_report(
+    kind: str,
+    format: str = Query(default="md", pattern="^(md|json)$"),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> Any:
+    _check_auth(x_api_key, iatis_session)
+    if kind not in _REPORT_TITLES:
+        raise HTTPException(status_code=404, detail=f"Unknown report kind '{kind}'. Choose from: {sorted(_REPORT_TITLES)}")
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    title = _REPORT_TITLES[kind]
+
+    if kind == "research":
+        from scripts.generate_research_report import build_report, load_manifests, load_registry
+        registry = load_registry()
+        manifests = load_manifests()
+        markdown = build_report(registry, manifests)
+        data: dict[str, Any] = {"registry": registry, "manifests": manifests}
+    elif kind == "manifest_summary":
+        from scripts.generate_research_report import load_manifests
+        manifests = load_manifests()
+        data = {"manifests": manifests}
+        markdown = _build_manifest_summary_md(manifests)
+    elif kind == "system":
+        data = await system_health_full(x_api_key, iatis_session)
+        markdown = _dict_to_md(title, data, generated_at)
+    elif kind == "provider":
+        data = await provider_chains_endpoint(x_api_key, iatis_session)
+        markdown = _dict_to_md(title, data, generated_at)
+    else:  # "forward"
+        data = {
+            "forward_review": await forward_review_endpoint(x_api_key, iatis_session),
+            "outcomes_summary": (await get_outcomes(x_api_key, iatis_session))["summary"],
+        }
+        markdown = _dict_to_md(title, data, generated_at)
+
+    if format == "json":
+        return {"kind": kind, "title": title, "generated_at": generated_at, "data": data}
+    return PlainTextResponse(
+        markdown, media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="iatis_{kind}_report.md"'},
+    )
 
 
 @app.get("/provider-chains")

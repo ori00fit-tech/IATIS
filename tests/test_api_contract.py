@@ -671,6 +671,57 @@ def test_survivorship_report_shape():
 
 
 # ---------------------------------------------------------------------------
+# Reports (module 10) — on-demand snapshots, Markdown or JSON.
+# ---------------------------------------------------------------------------
+
+REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward"]
+
+
+def test_reports_requires_auth(client):
+    assert client.get("/reports/research").status_code == 401
+
+
+def test_reports_unknown_kind_404s(client):
+    r = client.get("/reports/not-a-real-kind", headers=HDR)
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("kind", REPORT_KINDS)
+def test_reports_markdown_format(client, kind):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()  # outcomes table exists in prod before "forward" is ever requested
+    r = client.get(f"/reports/{kind}", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert f'filename="iatis_{kind}_report.md"' in r.headers["content-disposition"]
+    assert r.text.startswith("#")
+
+
+@pytest.mark.parametrize("kind", REPORT_KINDS)
+def test_reports_json_format(client, kind):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()
+    r = client.get(f"/reports/{kind}", params={"format": "json"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"kind", "title", "generated_at", "data"}.issubset(body.keys())
+    assert body["kind"] == kind
+    assert isinstance(body["data"], dict)
+
+
+def test_reports_forward_json_is_strict_json(client):
+    # forward-review's rules can contain the "Infinity" sentinel — make
+    # sure wrapping it in a report doesn't reintroduce a raw Infinity token.
+    from storage.outcome_tracker import _init_db
+
+    _init_db()
+    r = client.get("/reports/forward", params={"format": "json"}, headers=HDR)
+    _assert_strict_json(r.text)
+
+
+# ---------------------------------------------------------------------------
 # Alert Center (module 14) — aggregates existing signals, never a new
 # data source of its own.
 # ---------------------------------------------------------------------------

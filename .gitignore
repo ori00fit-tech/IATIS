@@ -47,3 +47,7 @@ iatis_d1_auditor.py
 htmlcov/
 cloudflare/package-lock.json
 data/ic_symbols_backtest.json
+
+# Graphify knowledge graph — cache and intermediate files (final outputs tracked)
+graphify-out/cache/
+graphify-out/.graphify_*

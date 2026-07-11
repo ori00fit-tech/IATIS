@@ -286,7 +286,6 @@ def run_h015(symbols: list[str], step: int = 12) -> dict:
                 total_pnl += pnl
 
         wr = total_wins / max(total_trades, 1) * 100
-        gross_win = sum(1 for _ in range(total_wins))  # placeholder
         results[label] = {
             "engines": len(engines),
             "trades": total_trades,

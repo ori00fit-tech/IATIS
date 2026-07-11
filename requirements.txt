@@ -16,4 +16,16 @@ yfinance>=0.2.40,<1.0.0
 
 # System monitoring (/health/full endpoint)
 psutil>=5.9.0,<6.0.0
-ccxt
+
+# Crypto exchange data (ccxt's own cryptography>=2.6.1 bound has no upper
+# limit and will silently accept a vulnerable resolved version — floor it
+# explicitly; audit finding, 2026-07-11). NO upper bound on cryptography:
+# CI (PR #50, 2026-07-11) caught that the original <46.0.0 ceiling let pip
+# resolve 45.0.7, which itself picked up 6 new CVEs (PYSEC-2026-35/36,
+# CVE-2026-26007, GHSA-537c-gmf6-5ccf) patched only in 46.0.5+/48.0.1 —
+# an artificial ceiling on a fast-patched security library actively blocks
+# fixes. Floor-only, bumped to the version verified clean by pip-audit at
+# fix time; re-bump the floor if pip-audit flags it again, don't re-add a
+# ceiling.
+ccxt>=4.5.0,<5.0.0
+cryptography>=49.0.0

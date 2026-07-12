@@ -1919,29 +1919,41 @@ def _scheduler_status() -> dict[str, Any]:
     }
 
 
-def _systemd_service_status() -> dict[str, Any]:
+def _systemd_service_status() -> dict[str, dict[str, Any]]:
     """Real per-service systemd status via `systemctl is-active <unit>` —
     one fixed-argv call per unit (never shell=True), reusing the same
     whitelist /logs already knows about (_LOG_UNITS, defined below).
     Absent/inert on hosts with no systemd (sandboxes, dev laptops) —
     each unit reports "unavailable" rather than raising.
+
+    Each entry also carries `kind` ("daemon" | "timer") and a `healthy`
+    verdict computed for that kind — a timer-triggered oneshot
+    (watchdog/backup/d1_backup) is *expected* to read "inactive" between
+    scheduled runs, while the same status on a daemon (api/scheduler)
+    means it's actually down. Mission Control Audit flagged that showing
+    raw systemd state with no such distinction made a healthy idle timer
+    indistinguishable from a dead daemon.
     """
     import subprocess
 
-    services: dict[str, str] = {}
+    services: dict[str, dict[str, Any]] = {}
     for key, unit in _LOG_UNITS.items():
+        kind = _UNIT_KIND.get(key, "daemon")
         try:
             result = subprocess.run(
                 ["systemctl", "is-active", unit],
                 capture_output=True, text=True, timeout=5,
             )
-            services[key] = (result.stdout or "").strip() or "unknown"
+            status = (result.stdout or "").strip() or "unknown"
         except FileNotFoundError:
-            services[key] = "unavailable"
+            status = "unavailable"
         except subprocess.TimeoutExpired:
-            services[key] = "timeout"
+            status = "timeout"
         except Exception:
-            services[key] = "error"
+            status = "error"
+
+        healthy = status in ("active", "inactive") if kind == "timer" else status == "active"
+        services[key] = {"status": status, "kind": kind, "healthy": healthy}
     return services
 
 
@@ -2074,6 +2086,34 @@ async def system_health_full(
     except Exception as e:
         checks["outcome_tracker"] = {"status": "error", "error": str(e)[:80]}
 
+    # 5b. Exposure estimate — an UPPER BOUND, not the live risk-engine
+    # figure. risk/portfolio_exposure.py tracks real open-position risk
+    # in-memory inside the scheduler process (its own docstring: "Phase 1:
+    # in-memory only"); the API server is a separate process and cannot
+    # read that state. Assuming every open paper-trading signal risks
+    # risk_per_trade_max (the ceiling, not the actual per-trade size,
+    # which SHI's position_multiplier can reduce) gives a directionally
+    # honest "how close to the cap could we be" number without claiming
+    # precision this endpoint can't actually verify.
+    try:
+        from storage.outcome_tracker import get_open_signals
+        risk_cfg = _get_config().get("risk", {})
+        max_exposure = float(risk_cfg.get("max_exposure", 0.05))
+        risk_per_trade_max = float(risk_cfg.get("risk_per_trade_max", 0.01))
+        open_count = len(get_open_signals())
+        estimated_pct = open_count * risk_per_trade_max
+        checks["exposure_estimate"] = {
+            "open_positions": open_count,
+            "estimated_pct": round(estimated_pct * 100, 2),
+            "max_exposure_pct": round(max_exposure * 100, 2),
+            "utilization_pct": round(min(100.0, estimated_pct / max_exposure * 100), 1) if max_exposure > 0 else None,
+            "note": ("Upper bound — assumes every open position risks risk_per_trade_max. "
+                     "Not the live risk-engine figure; that state is in-memory in the "
+                     "scheduler process and unreachable from the API server."),
+        }
+    except Exception as e:
+        checks["exposure_estimate"] = {"status": "error", "error": str(e)[:80]}
+
     # 6. Data providers
     checks["data_providers"] = {
         "twelve_data": "configured" if os.environ.get("TWELVE_DATA_API_KEY") else "missing",
@@ -2204,6 +2244,20 @@ _LOG_UNITS: dict[str, str] = {
     "watchdog": "iatis-watchdog",
     "backup": "iatis-backup",
     "d1_backup": "iatis-d1-backup",
+}
+
+# "daemon" units run continuously — inactive means something is actually
+# down. "timer" units are triggered by a companion .timer (see the
+# iatis-*.timer files at the repo root) and sit inactive between runs by
+# design — that's normal, not a fault. Mission Control Audit flagged that
+# the dashboard showed all five with identical treatment, making a
+# healthy idle timer indistinguishable from a dead daemon.
+_UNIT_KIND: dict[str, str] = {
+    "api": "daemon",
+    "scheduler": "daemon",
+    "watchdog": "timer",
+    "backup": "timer",
+    "d1_backup": "timer",
 }
 
 

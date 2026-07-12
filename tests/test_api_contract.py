@@ -106,6 +106,34 @@ def test_health_full_reports_system_and_issues(client):
     assert body["status"] in ("ok", "degraded")
 
 
+def test_health_full_reports_exposure_estimate(client):
+    body = client.get("/health/full", headers=HDR).json()
+    assert "exposure_estimate" in body
+    est = body["exposure_estimate"]
+    assert {"open_positions", "estimated_pct", "max_exposure_pct", "utilization_pct", "note"}.issubset(est.keys())
+    assert est["max_exposure_pct"] == 5.0  # config.yaml risk.max_exposure = 0.05
+
+
+def test_health_full_exposure_estimate_scales_with_open_signals(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", tmp_path / "decisions.jsonl")
+    from storage.outcome_tracker import log_signal
+
+    report = {
+        "symbol": "EURUSD", "final_verdict": "EXECUTE",
+        "entry_price": 1.0, "stop_loss": 0.99, "take_profit": 1.02,
+        "confluence": {"score": 70.0, "vote": {"winning_bias": "BULLISH"}},
+        "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 5.0},
+        "engine_outputs": [],
+    }
+    log_signal(report)
+
+    body = client.get("/health/full", headers=HDR).json()
+    est = body["exposure_estimate"]
+    assert est["open_positions"] >= 1
+    # risk_per_trade_max = 0.01 -> 1% per open position, upper-bound estimate
+    assert est["estimated_pct"] == pytest.approx(est["open_positions"] * 1.0, abs=0.01)
+
+
 def test_health_full_reports_swap_and_load_average(client):
     body = client.get("/health/full", headers=HDR).json()
     assert {"cpu_pct", "ram_pct", "disk_pct", "swap_pct", "load_1m", "load_5m", "load_15m", "uptime_hours"}.issubset(
@@ -117,6 +145,9 @@ def test_health_full_reports_real_service_status(client):
     body = client.get("/health/full", headers=HDR).json()
     assert "services" in body
     assert set(body["services"].keys()) == {"api", "scheduler", "watchdog", "backup", "d1_backup"}
+    for entry in body["services"].values():
+        assert {"status", "kind", "healthy"}.issubset(entry.keys())
+        assert entry["kind"] in ("daemon", "timer")
 
 
 def test_systemd_service_status_uses_fixed_argv_never_shell(monkeypatch):
@@ -136,8 +167,8 @@ def test_systemd_service_status_uses_fixed_argv_never_shell(monkeypatch):
     monkeypatch.setattr("subprocess.run", fake_run)
     result = m._systemd_service_status()
 
-    assert result["api"] == "active"
-    assert result["scheduler"] == "inactive"
+    assert result["api"]["status"] == "active"
+    assert result["scheduler"]["status"] == "inactive"
     assert all(argv[0] == "systemctl" and argv[1] == "is-active" for argv in captured_argvs)
 
 
@@ -149,7 +180,45 @@ def test_systemd_service_status_handles_missing_systemctl(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", fake_run)
     result = m._systemd_service_status()
-    assert all(v == "unavailable" for v in result.values())
+    assert all(v["status"] == "unavailable" for v in result.values())
+
+
+def test_systemd_service_status_timer_inactive_is_healthy_daemon_inactive_is_not(monkeypatch):
+    # watchdog/backup/d1_backup are .timer-triggered oneshots — "inactive"
+    # between scheduled runs is normal, not a fault. api/scheduler are
+    # long-running daemons where "inactive" means actually down.
+    import execution.api_server as m
+
+    class _FakeResult:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(argv, **kwargs):
+        return _FakeResult("inactive\n")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = m._systemd_service_status()
+
+    assert result["api"]["kind"] == "daemon" and result["api"]["healthy"] is False
+    assert result["scheduler"]["kind"] == "daemon" and result["scheduler"]["healthy"] is False
+    assert result["watchdog"]["kind"] == "timer" and result["watchdog"]["healthy"] is True
+    assert result["backup"]["kind"] == "timer" and result["backup"]["healthy"] is True
+    assert result["d1_backup"]["kind"] == "timer" and result["d1_backup"]["healthy"] is True
+
+
+def test_systemd_service_status_failed_timer_is_unhealthy(monkeypatch):
+    import execution.api_server as m
+
+    class _FakeResult:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(argv, **kwargs):
+        return _FakeResult("failed\n")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = m._systemd_service_status()
+    assert result["backup"]["healthy"] is False
 
 
 def test_engine_stats_includes_attribution(client):

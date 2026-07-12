@@ -38,10 +38,23 @@ export interface HealthFull {
     error?: string
   }
   scheduler?: { last_run: string | null; last_execute_count: number; status: string }
-  services?: Record<string, string>
+  // kind: "daemon" (inactive = down) vs "timer" (inactive = normal idle
+  // state between scheduled runs) — healthy is already computed per-kind
+  // server-side, the frontend never needs to re-derive it.
+  services?: Record<string, { status: string; kind: 'daemon' | 'timer'; healthy: boolean }>
   database?: { status: string; total_decisions?: number; last_24h?: number; error?: string }
   calendar?: { status: string; fetched_at?: string; event_count?: number; note?: string }
   outcome_tracker?: { status: string; total_closed?: number; win_rate?: number; open_signals?: number }
+  // Upper-bound estimate, not the live risk-engine figure — see the
+  // `note` field and execution/api_server.py's /health/full docstring
+  // for why the real number is unreachable from this process.
+  exposure_estimate?: {
+    open_positions: number
+    estimated_pct: number
+    max_exposure_pct: number
+    utilization_pct: number | null
+    note: string
+  }
   data_providers?: Record<string, string>
   ctrader?: { configured: boolean; account_id: string; environment: string }
 }
@@ -64,6 +77,11 @@ export interface SymbolHealthEntry {
   position_multiplier: number
   last_updated: string
   reason: string
+  // false when shi_score is the neutral default (< 5 trades), not a real
+  // measurement — status/position_multiplier are unchanged either way
+  // (scheduler.py trading logic), this only tells the dashboard whether
+  // the badge is measuring something yet.
+  has_sufficient_data: boolean
 }
 
 export interface SymbolHealthResponse {

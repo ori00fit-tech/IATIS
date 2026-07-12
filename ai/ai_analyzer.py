@@ -58,6 +58,30 @@ _DEFAULT_MODELS = {
 }
 
 
+def _user_safe_error(exc: AIProviderError) -> str:
+    """A plain-language failure message for the dashboard.
+
+    Provider exceptions carry connection internals (hostname, port,
+    timeout value, the requests library's exception class name) that are
+    exactly what a server log needs and exactly what an end user doesn't
+    — every caller already logs the full `str(exc)` via logger.warning
+    before calling this, so nothing is lost, it just doesn't reach the
+    rendered page too.
+    """
+    text = str(exc).lower()
+    if "timed out" in text or "timeout" in text:
+        return "The AI provider took too long to respond. Try again in a moment."
+    if "name or service not known" in text or "failed to resolve" in text or "connection" in text:
+        return "Could not reach the AI provider — check network connectivity."
+    if "401" in text or "403" in text or "unauthorized" in text or "permission" in text:
+        return "The AI provider rejected the request — check the configured API key."
+    if "429" in text or "rate limit" in text or "quota" in text:
+        return "The AI provider is rate-limiting requests right now. Try again shortly."
+    if "response shape" in text or "no text content" in text or "non-json" in text:
+        return "The AI provider returned an unexpected response. Try again."
+    return "The AI provider request failed. See server logs for details."
+
+
 def _build_provider(provider_name: str, ai_cfg: dict) -> AIProvider | None:
     """Instantiate the configured provider, or None if disabled/misconfigured.
 
@@ -152,7 +176,7 @@ class AIAnalyzer:
             except AIProviderError as exc:
                 logger.warning(f"AIAnalyzer.explain_trade failed: {exc}")
                 return TradeExplanation(
-                    status="error", error=str(exc), provider=self.provider_name
+                    status="error", error=_user_safe_error(exc), provider=self.provider_name
                 ).to_dict()
 
         if cache_key:
@@ -231,7 +255,7 @@ class AIAnalyzer:
             except AIProviderError as exc:
                 logger.warning(f"AIAnalyzer.analyze_news failed: {exc}")
                 return NewsAnalysis(
-                    status="error", error=str(exc), provider=self.provider_name
+                    status="error", error=_user_safe_error(exc), provider=self.provider_name
                 ).to_dict()
 
         cache_key = f"news:{','.join(sorted(symbols))}:{len(news_items)}"
@@ -267,7 +291,7 @@ class AIAnalyzer:
             except AIProviderError as exc:
                 logger.warning(f"AIAnalyzer.analyze_macro failed: {exc}")
                 return MacroAnalysis(
-                    status="error", error=str(exc), provider=self.provider_name
+                    status="error", error=_user_safe_error(exc), provider=self.provider_name
                 ).to_dict()
 
         return self._cache.get_or_compute("macro", ttl, _compute)
@@ -286,7 +310,7 @@ class AIAnalyzer:
             return {"status": "ok", "provider": self._provider.name, "text": summary}
         except AIProviderError as exc:
             logger.warning(f"AIAnalyzer summarize failed: {exc}")
-            return {"status": "error", "provider": self.provider_name, "error": str(exc), "text": ""}
+            return {"status": "error", "provider": self.provider_name, "error": _user_safe_error(exc), "text": ""}
 
     def generate_daily_report(self, stats: dict) -> dict:
         """Plain-text daily summary from already-computed stats (e.g.

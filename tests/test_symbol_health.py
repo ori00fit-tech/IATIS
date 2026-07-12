@@ -26,6 +26,33 @@ def test_no_data_healthy():
     assert r.trades_count == 0
 
 
+# ---------- has_sufficient_data (dashboard-only annotation, module 1 audit fix) ----------
+# Mission Control Audit found the 70.0 default shown for symbols with < 5
+# trades was indistinguishable in the UI from a real measurement. The fix
+# must be additive only — scheduler.py reads .status/.position_multiplier
+# to decide whether to trade a symbol, so those must never change.
+
+def test_insufficient_data_flagged_but_status_unchanged():
+    r = get_symbol_health("EURUSD")
+    assert r.trades_count == 0
+    assert r.has_sufficient_data is False
+    assert r.status == "HEALTHY"          # unchanged — scheduler.py relies on this
+    assert r.position_multiplier == 1.0   # unchanged — trades normally, not paused
+
+
+def test_sufficient_data_flagged_true_at_threshold(fake_d1):
+    from storage.symbol_health import SHI_MIN_TRADES
+    _insert(fake_d1, "EURUSD", ["win"] * SHI_MIN_TRADES)
+    r = get_symbol_health("EURUSD")
+    assert r.trades_count == SHI_MIN_TRADES
+    assert r.has_sufficient_data is True
+
+
+def test_has_sufficient_data_in_to_dict():
+    d = get_symbol_health("EURUSD").to_dict()
+    assert d["has_sufficient_data"] is False
+
+
 def test_high_wr_good_score(fake_d1):
     _insert(fake_d1, "EURUSD", ["win"]*15 + ["loss"]*5)
     r = get_symbol_health("EURUSD")

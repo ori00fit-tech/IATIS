@@ -33,19 +33,29 @@ logger = get_logger(__name__)
 
 SHI_HEALTHY = 65
 SHI_CAUTION = 45
+SHI_MIN_TRADES = 5  # below this, shi_score is a neutral default, not a measurement
 
 
 @dataclass
 class SymbolHealth:
     symbol: str
     shi_score: float
-    status: str          # HEALTHY / CAUTION / PAUSED
+    status: str          # HEALTHY / CAUTION / PAUSED — trading-relevant, read by scheduler.py
     win_rate: float | None
     profit_factor: float | None
     trades_count: int
     consecutive_losses: int
     last_updated: str
     reason: str
+
+    @property
+    def has_sufficient_data(self) -> bool:
+        """True once shi_score reflects real trade history rather than the
+        neutral default below SHI_MIN_TRADES. Dashboard-only annotation —
+        does not change `status`/`position_multiplier`, which scheduler.py
+        reads to decide whether to trade a symbol; that logic is untouched.
+        """
+        return self.trades_count >= SHI_MIN_TRADES
 
     @property
     def position_multiplier(self) -> float:
@@ -69,6 +79,7 @@ class SymbolHealth:
             "position_multiplier": self.position_multiplier,
             "last_updated": self.last_updated,
             "reason": self.reason,
+            "has_sufficient_data": self.has_sufficient_data,
         }
 
 
@@ -101,12 +112,12 @@ def get_symbol_health(symbol: str, lookback: int = 20) -> SymbolHealth:
             LIMIT ?
         """, (symbol, lookback)).fetchall()
 
-    if len(rows) < 5:
+    if len(rows) < SHI_MIN_TRADES:
         return SymbolHealth(
             symbol=symbol, shi_score=70.0, status="HEALTHY",
             win_rate=None, profit_factor=None, trades_count=len(rows),
             consecutive_losses=0, last_updated=now,
-            reason=f"Insufficient data ({len(rows)}/5 minimum trades)"
+            reason=f"Insufficient data ({len(rows)}/{SHI_MIN_TRADES} minimum trades)"
         )
 
     # Win rate score (40 pts)

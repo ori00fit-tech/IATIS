@@ -121,10 +121,16 @@ function AiBriefingPanel() {
   )
 }
 
+// Below this sample size, win rate is noise (this panel's own caption says
+// so) — coloring it green/amber implies a read on performance that isn't
+// statistically there yet, so it stays neutral until n clears the bar.
+const MIN_SIGNIFICANT_N = 30
+
 function PaperTradingPanel({ outcomes }: { outcomes: OutcomesSummary | null }) {
   const s = outcomes?.summary
   const closed = s?.total_closed ?? 0
   const progress = Math.min(100, Math.round((closed / EVIDENCE_TARGET) * 100))
+  const wrColor = closed < MIN_SIGNIFICANT_N ? 'text-text' : s && s.win_rate >= 50 ? 'text-green' : 'text-amber'
   return (
     <Panel
       title="Paper Trading Evidence"
@@ -134,7 +140,12 @@ function PaperTradingPanel({ outcomes }: { outcomes: OutcomesSummary | null }) {
         <div className="p-4 flex flex-col gap-3">
           <div className="flex items-baseline gap-4 flex-wrap">
             <span className="text-[1.6em] font-extrabold text-accent">{closed}<span className="text-muted text-[0.55em] font-normal"> / {EVIDENCE_TARGET} closed</span></span>
-            <span className="text-[0.85em]">WR <b className={s.win_rate >= 50 ? 'text-green' : 'text-amber'}>{closed ? `${s.win_rate.toFixed(1)}%` : '—'}</b></span>
+            <span className="text-[0.85em]">
+              WR{' '}
+              <b className={wrColor} title={closed < MIN_SIGNIFICANT_N ? `n=${closed} — below n=${MIN_SIGNIFICANT_N}, not yet statistically meaningful` : undefined}>
+                {closed ? `${s.win_rate.toFixed(1)}%` : '—'}
+              </b>
+            </span>
             <span className="text-[0.85em]">W/L <b>{s.wins}/{s.losses}</b></span>
             <span className="text-[0.85em]">open <b className="text-accent2">{s.open_signals}</b></span>
           </div>
@@ -166,16 +177,30 @@ export function MissionControl() {
 
   const symbolColumns: Column<SymbolHealthEntry>[] = [
     { header: 'Symbol', render: (s) => <span className="font-bold text-accent">{s.symbol}</span> },
-    { header: 'SHI', render: (s) => s.shi_score, align: 'right' },
+    {
+      header: 'SHI',
+      render: (s) =>
+        s.has_sufficient_data ? (
+          s.shi_score
+        ) : (
+          <span className="text-muted" title={s.reason}>
+            —
+          </span>
+        ),
+      align: 'right',
+    },
     {
       header: 'Status',
-      render: (s) => (
-        <span
-          className={`font-bold ${s.status === 'HEALTHY' ? 'text-green' : s.status === 'CAUTION' ? 'text-amber' : 'text-red'}`}
-        >
-          {s.status}
-        </span>
-      ),
+      render: (s) =>
+        s.has_sufficient_data ? (
+          <span className={`font-bold ${s.status === 'HEALTHY' ? 'text-green' : s.status === 'CAUTION' ? 'text-amber' : 'text-red'}`}>
+            {s.status}
+          </span>
+        ) : (
+          <span className="text-muted italic" title={s.reason}>
+            no data yet
+          </span>
+        ),
     },
     { header: 'Win Rate', render: (s) => (s.win_rate != null ? `${s.win_rate.toFixed(1)}%` : '—'), align: 'right' },
     { header: 'Trades', render: (s) => <span className="text-muted">{s.trades_count}</span>, align: 'right' },
@@ -217,6 +242,31 @@ export function MissionControl() {
         />
       </div>
 
+      {hf?.exposure_estimate && (
+        <div
+          className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-border bg-surface text-[0.8em]"
+          title={hf.exposure_estimate.note}
+        >
+          <span className="text-muted uppercase text-[0.72em] tracking-[0.8px] shrink-0">Exposure (est., upper bound)</span>
+          <div className="flex-1 h-1.5 rounded-full bg-bg border border-border overflow-hidden max-w-[220px]">
+            <div
+              className={`h-full ${
+                (hf.exposure_estimate.utilization_pct ?? 0) >= 90
+                  ? 'bg-red'
+                  : (hf.exposure_estimate.utilization_pct ?? 0) >= 50
+                    ? 'bg-amber'
+                    : 'bg-green'
+              }`}
+              style={{ width: `${Math.min(100, hf.exposure_estimate.utilization_pct ?? 0)}%` }}
+            />
+          </div>
+          <span className="font-bold shrink-0">
+            {hf.exposure_estimate.estimated_pct.toFixed(1)}% / {hf.exposure_estimate.max_exposure_pct.toFixed(1)}%
+          </span>
+          <span className="text-muted shrink-0">{hf.exposure_estimate.open_positions} open</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4 max-[768px]:grid-cols-1">
         <Panel title="System Status">
           <StatusRow label="API Server" state={health.error ? 'err' : 'ok'} detail={health.data?.status} />
@@ -226,12 +276,12 @@ export function MissionControl() {
             detail={hf?.scheduler?.last_run ?? 'no run seen'}
           />
           {hf?.services &&
-            Object.entries(hf.services).map(([unit, status]) => (
+            Object.entries(hf.services).map(([unit, svc]) => (
               <StatusRow
                 key={unit}
-                label={`svc: ${unit}`}
-                state={status === 'active' ? 'ok' : status === 'failed' ? 'err' : 'warn'}
-                detail={status}
+                label={`svc: ${unit}${svc.kind === 'timer' ? ' (timer)' : ''}`}
+                state={svc.healthy ? 'ok' : svc.status === 'failed' ? 'err' : 'warn'}
+                detail={svc.kind === 'timer' && svc.status === 'inactive' ? 'idle — runs on schedule' : svc.status}
               />
             ))}
           <StatusRow

@@ -190,12 +190,45 @@ def test_ai_analyzer_explain_trade_never_touches_final_verdict(monkeypatch):
 
 
 def test_ai_analyzer_explain_trade_handles_provider_error_gracefully(monkeypatch):
+    # The raw exception ("boom") must be logged (see caplog test below) but
+    # never reach the API response — end users get a plain-language
+    # message, not a provider internals dump. See _user_safe_error.
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True))
     with patch.object(GeminiProvider, "_chat", side_effect=AIProviderError("boom")):
         result = analyzer.explain_trade({"symbol": "EURUSD"})
     assert result["status"] == "error"
-    assert "boom" in result["error"]
+    assert "boom" not in result["error"]
+    assert result["error"] == "The AI provider request failed. See server logs for details."
+
+
+def test_ai_analyzer_provider_error_full_detail_still_reaches_the_logs(monkeypatch, caplog):
+    # The sanitized message is for the API response only — an operator
+    # debugging via logs must still see the real exception.
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(GeminiProvider, "_chat", side_effect=AIProviderError("HTTPSConnectionPool(host='x', port=443): Read timed out.")):
+        with caplog.at_level("WARNING"):
+            analyzer.explain_trade({"symbol": "EURUSD"})
+    assert "Read timed out" in caplog.text
+
+
+@pytest.mark.parametrize("raw,expected_fragment", [
+    ("Gemini request failed: HTTPSConnectionPool(host='generativelanguage.googleapis.com', port=443): Read timed out. (read timeout=20.0)", "took too long"),
+    ("Connection failed: Name or service not known", "Could not reach"),
+    ("OpenAI request failed: 401 Unauthorized", "rejected the request"),
+    ("Anthropic request failed: 429 Too Many Requests — rate limit exceeded", "rate-limiting"),
+    ("Unexpected Gemini response shape: no text content", "unexpected response"),
+])
+def test_user_safe_error_never_leaks_connection_internals(raw, expected_fragment):
+    from ai.ai_analyzer import _user_safe_error
+
+    message = _user_safe_error(AIProviderError(raw))
+    assert expected_fragment.lower() in message.lower()
+    # The whole point: no hostnames, ports, or library exception names.
+    assert "generativelanguage.googleapis.com" not in message
+    assert "443" not in message
+    assert "HTTPSConnectionPool" not in message
 
 
 def test_ai_analyzer_analyze_news_disabled():

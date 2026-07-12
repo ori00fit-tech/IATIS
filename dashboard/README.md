@@ -42,7 +42,7 @@ roadmap placeholders instead of mock screens.
 
 | Module | Endpoint(s) | Notes |
 |---|---|---|
-| Mission Control | `/health`, `/health/full`, `/budget`, `/symbol-health` | system status, CPU/RAM/disk, credits |
+| Mission Control | `/health`, `/health/full` (now includes swap, load average, real per-service systemd status — module 1), `/budget`, `/symbol-health` | system status, CPU/RAM/disk/swap/load, credits |
 | Live Signals | `/decisions`, `/outcomes` | recent pipeline decisions + open paper signals |
 | Data Center | `/data-health` (new) | OHLCV cache completeness per symbol/timeframe |
 | Engine Monitor | `/engine-stats` (now includes `attribution`: approximate per-engine PF/WR, time-window-joined to closed outcomes since there's no shared foreign key — see module 8) | per-engine vote/accuracy stats, current vs. suggested weights |

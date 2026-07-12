@@ -1738,6 +1738,32 @@ def _scheduler_status() -> dict[str, Any]:
     }
 
 
+def _systemd_service_status() -> dict[str, Any]:
+    """Real per-service systemd status via `systemctl is-active <unit>` —
+    one fixed-argv call per unit (never shell=True), reusing the same
+    whitelist /logs already knows about (_LOG_UNITS, defined below).
+    Absent/inert on hosts with no systemd (sandboxes, dev laptops) —
+    each unit reports "unavailable" rather than raising.
+    """
+    import subprocess
+
+    services: dict[str, str] = {}
+    for key, unit in _LOG_UNITS.items():
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", unit],
+                capture_output=True, text=True, timeout=5,
+            )
+            services[key] = (result.stdout or "").strip() or "unknown"
+        except FileNotFoundError:
+            services[key] = "unavailable"
+        except subprocess.TimeoutExpired:
+            services[key] = "timeout"
+        except Exception:
+            services[key] = "error"
+    return services
+
+
 def _load_manifests() -> list[dict[str, Any]]:
     """Git-tracked evidence manifests — shared by /research/manifests and
     /alerts (which flags any non-reproducible or newly-generated one).
@@ -1790,14 +1816,22 @@ async def system_health_full(
     ram_warn_pct = mon_cfg.get("ram_warn_pct", 85)
     disk_warn_pct = mon_cfg.get("disk_warn_pct", 80)
     try:
+        swap = psutil.swap_memory()
+        try:
+            load1, load5, load15 = os.getloadavg()
+        except (OSError, AttributeError):
+            load1 = load5 = load15 = None  # not available on this platform
         checks["system"] = {
             "cpu_pct": psutil.cpu_percent(interval=0.5),
             "ram_pct": psutil.virtual_memory().percent,
             "disk_pct": psutil.disk_usage("/").percent,
+            "swap_pct": swap.percent,
+            "load_1m": load1, "load_5m": load5, "load_15m": load15,
             "uptime_hours": round((_time.time() - psutil.boot_time()) / 3600, 1),
         }
         if checks["system"]["ram_pct"] > ram_warn_pct: issues.append("High RAM usage")
         if checks["system"]["disk_pct"] > disk_warn_pct: issues.append("High disk usage")
+        if checks["system"]["swap_pct"] > 50: issues.append("High swap usage")
     except Exception as e:
         checks["system"] = {"error": str(e)[:80]}
 
@@ -1806,6 +1840,15 @@ async def system_health_full(
         checks["scheduler"] = _scheduler_status()
     except Exception as e:
         checks["scheduler"] = {"status": "error", "error": str(e)[:80]}
+
+    # 2b. Real per-service systemd status (module 1) — same whitelist of
+    # units /logs already knows about, one `systemctl is-active` call per
+    # unit (fixed argv, never shell=True). Absent/inert on hosts with no
+    # systemd (e.g. this sandbox, or a dev laptop) — reported, not fatal.
+    try:
+        checks["services"] = _systemd_service_status()
+    except Exception as e:
+        checks["services"] = {"error": str(e)[:80]}
 
     # 3. SQLite decisions DB
     try:

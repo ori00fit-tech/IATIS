@@ -106,6 +106,52 @@ def test_health_full_reports_system_and_issues(client):
     assert body["status"] in ("ok", "degraded")
 
 
+def test_health_full_reports_swap_and_load_average(client):
+    body = client.get("/health/full", headers=HDR).json()
+    assert {"cpu_pct", "ram_pct", "disk_pct", "swap_pct", "load_1m", "load_5m", "load_15m", "uptime_hours"}.issubset(
+        body["system"].keys()
+    )
+
+
+def test_health_full_reports_real_service_status(client):
+    body = client.get("/health/full", headers=HDR).json()
+    assert "services" in body
+    assert set(body["services"].keys()) == {"api", "scheduler", "watchdog", "backup", "d1_backup"}
+
+
+def test_systemd_service_status_uses_fixed_argv_never_shell(monkeypatch):
+    import execution.api_server as m
+
+    captured_argvs = []
+
+    class _FakeResult:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(argv, **kwargs):
+        captured_argvs.append(argv)
+        assert kwargs.get("shell", False) is False
+        return _FakeResult("active\n" if argv[-1] == "iatis-api" else "inactive\n")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = m._systemd_service_status()
+
+    assert result["api"] == "active"
+    assert result["scheduler"] == "inactive"
+    assert all(argv[0] == "systemctl" and argv[1] == "is-active" for argv in captured_argvs)
+
+
+def test_systemd_service_status_handles_missing_systemctl(monkeypatch):
+    import execution.api_server as m
+
+    def fake_run(argv, **kwargs):
+        raise FileNotFoundError("systemctl not found")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    result = m._systemd_service_status()
+    assert all(v == "unavailable" for v in result.values())
+
+
 def test_engine_stats_includes_attribution(client):
     r = client.get("/engine-stats", headers=HDR)
     assert r.status_code == 200, r.text

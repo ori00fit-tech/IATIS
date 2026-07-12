@@ -252,3 +252,22 @@ Data Quality actions (3), Data Providers telemetry (2), System Health
 completion (1), Research Center drill-down (4), Security/RBAC (15) —
 all read-only extensions of existing partial modules, same risk profile
 as the first checkpoint's work.
+
+- **2026-07-12 — Engine Analytics (module 8):** New
+  `storage.engine_tracker.engine_trade_attribution()`, wired into the
+  existing `GET /engine-stats` (no new endpoint). `engine_performance`
+  and `outcomes` have no shared foreign key, so trades are matched to
+  engine votes by time proximity (30s window — safely under the
+  scheduler's 120s re-evaluation interval, so a trade can't get
+  attributed to a later cycle's votes). Explicitly labeled APPROXIMATE
+  in the response, consistent with this project's posture of never
+  overclaiming precision. **Found and fixed a real regression risk**:
+  the new query read the `outcomes` table without ensuring it exists
+  first, which would have broken the *previously working*
+  `/engine-stats` on a fresh D1 — same failure class already fixed once
+  for `/forward-review`.
+
+At this fourth checkpoint: 680 backend tests, all green. 10 of 15
+modules real. Remaining: Data Quality actions (3), Data Providers
+telemetry (2), System Health completion (1), Research Center drill-down
+(4), Security/RBAC (15).

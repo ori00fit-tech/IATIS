@@ -684,7 +684,7 @@ def test_survivorship_report_shape():
 # Reports (module 10) — on-demand snapshots, Markdown or JSON.
 # ---------------------------------------------------------------------------
 
-REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward"]
+REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward", "data_quality"]
 
 
 def test_reports_requires_auth(client):

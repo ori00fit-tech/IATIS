@@ -7,6 +7,9 @@ export interface TimeframeStatus {
   last_bar_time: string | null
   age_minutes: number | null
   gap_count_30d: number
+  duplicate_count: number
+  timezone: string | null
+  integrity_score: number
   status: CacheStatus
 }
 

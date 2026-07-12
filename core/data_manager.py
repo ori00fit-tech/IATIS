@@ -389,8 +389,11 @@ class DataManager:
         cache_path = self._cache_path(symbol, timeframe)
         cached = self._load_cache(cache_path)
         if cached is None or cached.empty:
-            return {"status": "MISSING", "bars": 0, "last_bar_time": None,
-                     "age_minutes": None, "gap_count_30d": 0}
+            return {
+                "status": "MISSING", "bars": 0, "last_bar_time": None,
+                "age_minutes": None, "gap_count_30d": 0, "duplicate_count": 0,
+                "timezone": None, "integrity_score": 0,
+            }
 
         bar_minutes = TIMEFRAME_MINUTES.get(timeframe, 60)
         last_bar_time = cached.index[-1]
@@ -409,11 +412,29 @@ class DataManager:
         if status == "OK" and gap_count > 0:
             status = "GAPS"
 
+        # Duplicate timestamps: free to compute, the index is already in
+        # memory — a real corruption signal verify_data_integrity.py's S3
+        # check also looks for, surfaced here for the at-a-glance matrix.
+        duplicate_count = int(cached.index.duplicated().sum())
+        tz = str(cached.index.tz) if cached.index.tz is not None else None
+
+        # Heuristic 0-100 score, NOT a statistical measure — same honesty
+        # posture as the leakage guard: a single number for the at-a-glance
+        # matrix, read the underlying fields before trusting it either way.
+        integrity_score = 100
+        integrity_score -= {"OK": 0, "GAPS": 20, "STALE": 40, "MISSING": 100}.get(status, 0)
+        integrity_score -= min(30, gap_count * 2)
+        integrity_score -= min(30, duplicate_count * 5)
+        integrity_score = max(0, min(100, integrity_score))
+
         return {
             "bars": len(cached),
             "last_bar_time": last_bar_time.isoformat(),
             "age_minutes": round(age_minutes, 1),
             "gap_count_30d": gap_count,
+            "duplicate_count": duplicate_count,
+            "timezone": tz,
+            "integrity_score": integrity_score,
             "status": status,
         }
 

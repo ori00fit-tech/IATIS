@@ -12,6 +12,7 @@ export const REPORT_KINDS: ReportKind[] = [
   { id: 'system', title: 'System Health Report', description: 'Snapshot of /health/full — CPU/RAM/disk, scheduler, DB, providers.' },
   { id: 'provider', title: 'Data Provider Report', description: 'Snapshot of /provider-chains — fallback order per asset class.' },
   { id: 'forward', title: 'Forward Demo Report', description: 'D001/D002 rule progress + outcome-tracker performance summary.' },
+  { id: 'data_quality', title: 'Data Quality Report', description: 'Snapshot of /data-health — per-symbol cache completeness, gaps, duplicates, integrity score.' },
 ]
 
 export interface ReportJsonResponse {

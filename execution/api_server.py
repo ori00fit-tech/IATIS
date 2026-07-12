@@ -1280,6 +1280,7 @@ _REPORT_TITLES: dict[str, str] = {
     "system": "IATIS System Health Report",
     "provider": "IATIS Data Provider Report",
     "forward": "IATIS Forward Demo Report",
+    "data_quality": "IATIS Data Quality Report",
 }
 
 
@@ -1339,6 +1340,9 @@ async def generate_report(
         markdown = _dict_to_md(title, data, generated_at)
     elif kind == "provider":
         data = await provider_chains_endpoint(x_api_key, iatis_session)
+        markdown = _dict_to_md(title, data, generated_at)
+    elif kind == "data_quality":
+        data = _data_health_snapshot()
         markdown = _dict_to_md(title, data, generated_at)
     else:  # "forward"
         data = {

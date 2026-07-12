@@ -57,3 +57,42 @@ def test_cache_status_gaps(dm):
     status = dm.cache_status("EURUSD", "1h")
     assert status["status"] == "GAPS"
     assert status["gap_count_30d"] > 0
+
+
+# ---------- duplicate detection / timezone / integrity score (module 3) ----------
+
+def test_cache_status_missing_has_zero_integrity_score(dm):
+    status = dm.cache_status("EURUSD", "1h")
+    assert status["integrity_score"] == 0
+    assert status["duplicate_count"] == 0
+    assert status["timezone"] is None
+
+
+def test_cache_status_ok_has_perfect_integrity_score_and_utc_timezone(dm):
+    now = datetime.now(timezone.utc)
+    index = pd.date_range(end=now, periods=200, freq="1h")
+    _write_cache(dm, "EURUSD", "1h", index)
+    status = dm.cache_status("EURUSD", "1h")
+    assert status["integrity_score"] == 100
+    assert status["duplicate_count"] == 0
+    assert status["timezone"] == "UTC"
+
+
+def test_cache_status_detects_duplicate_timestamps(dm):
+    now = datetime.now(timezone.utc)
+    index = pd.date_range(end=now, periods=200, freq="1h")
+    # Duplicate a handful of timestamps — corruption S3 in verify_data_integrity.py checks for.
+    index = index.append(index[:5])
+    _write_cache(dm, "EURUSD", "1h", index.sort_values())
+    status = dm.cache_status("EURUSD", "1h")
+    assert status["duplicate_count"] == 5
+    assert status["integrity_score"] < 100
+
+
+def test_cache_status_integrity_score_never_negative(dm):
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    index = pd.date_range(end=old, periods=200, freq="1h")
+    index = index.delete(range(100, 110)).append(index[:20])
+    _write_cache(dm, "EURUSD", "1h", index.sort_values())
+    status = dm.cache_status("EURUSD", "1h")
+    assert 0 <= status["integrity_score"] <= 100

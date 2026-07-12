@@ -1,18 +1,84 @@
+import { useEffect, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
+import { Badge } from '../../components/Badge'
 import type { CacheStatus } from './api'
 import { getDataHealth } from './api'
 import { getProviderChains } from '../system-audit/api'
+import { getJobDetail, runJob, type JobDetail, type JobStatus } from '../experiment-runner/api'
+import { reportDownloadUrl } from '../reports/api'
 
 const POLL_MS = 60_000
+const JOB_POLL_MS = 3_000
 
 const CELL_CLASS: Record<CacheStatus, string> = {
   OK: 'bg-green/15 text-green',
   STALE: 'bg-amber/15 text-amber',
   GAPS: 'bg-amber/25 text-amber',
   MISSING: 'bg-red/15 text-red',
+}
+
+const JOB_BADGE: Record<JobStatus, 'exec' | 'no-trade' | 'good' | 'marginal' | 'neutral'> = {
+  queued: 'neutral',
+  running: 'marginal',
+  finished: 'exec',
+  failed: 'no-trade',
+  timeout: 'no-trade',
+}
+
+function VerifyAndExport() {
+  const [starting, setStarting] = useState(false)
+  const [detail, setDetail] = useState<JobDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!detail || detail.status === 'finished' || detail.status === 'failed' || detail.status === 'timeout') return
+    const id = setInterval(() => {
+      getJobDetail(detail.job_id)
+        .then(setDetail)
+        .catch(() => {})
+    }, JOB_POLL_MS)
+    return () => clearInterval(id)
+  }, [detail])
+
+  const verify = async () => {
+    setStarting(true)
+    setError(null)
+    try {
+      const summary = await runJob('verify_data_integrity')
+      setDetail({ ...summary, log: [] })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3 border-b border-border bg-surface/40">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={verify}
+          disabled={starting || detail?.status === 'queued' || detail?.status === 'running'}
+          className="px-3 py-1.5 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50"
+        >
+          {detail?.status === 'queued' || detail?.status === 'running' ? 'Verifying…' : 'Verify (scripts.verify_data_integrity)'}
+        </button>
+        <a href={reportDownloadUrl('data_quality')} className="text-accent hover:text-accent2 text-[0.78em] underline decoration-dotted">
+          Export report (.md)
+        </a>
+        {detail && <Badge tone={JOB_BADGE[detail.status]}>{detail.status}</Badge>}
+        {error && <span className="text-red text-[0.78em]">{error}</span>}
+      </div>
+      {detail && detail.log.length > 0 && (
+        <pre className="p-3 bg-bg/60 rounded text-[0.72em] overflow-auto max-h-[200px] whitespace-pre-wrap break-words font-mono">
+          {detail.log.join('\n')}
+        </pre>
+      )}
+    </div>
+  )
 }
 
 export function DataCenter() {
@@ -34,6 +100,7 @@ export function DataCenter() {
       </div>
 
       <Panel title="Cache Completeness" right={data ? `checked ${new Date(data.checked_at).toLocaleTimeString()}` : undefined}>
+        <VerifyAndExport />
         {error ? (
           <Empty>Could not load data health</Empty>
         ) : !data || data.symbols.length === 0 ? (
@@ -63,7 +130,13 @@ export function DataCenter() {
                         {cell ? (
                           <span
                             className={`inline-block px-2 py-1 rounded text-[0.85em] font-bold ${CELL_CLASS[cell.status]}`}
-                            title={cell.last_bar_time ? `last bar: ${cell.last_bar_time} (${cell.age_minutes}m ago), ${cell.gap_count_30d} gaps/30d` : 'no cache file'}
+                            title={
+                              cell.last_bar_time
+                                ? `last bar: ${cell.last_bar_time} (${cell.age_minutes}m ago) · tz: ${cell.timezone ?? '?'}\n` +
+                                  `${cell.gap_count_30d} gaps/30d · ${cell.duplicate_count} duplicate timestamps\n` +
+                                  `integrity score: ${cell.integrity_score}/100 (heuristic, not a statistical measure)`
+                                : 'no cache file'
+                            }
                           >
                             {cell.status}
                           </span>

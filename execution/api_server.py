@@ -1558,6 +1558,68 @@ async def ops_reload_config(
     return {"success": True, "message": "Config cache cleared — next request reloads config.yaml from disk."}
 
 
+def _provider_usage_from_decisions(limit: int = 200) -> dict[str, dict[str, Any]]:
+    """How often each provider actually served the last `limit` decisions,
+    and when it was last used. Not a live ping and not new persistence —
+    every pipeline report already logs which provider served each
+    timeframe (main.py, via df.attrs["provider"]); this only aggregates
+    what's already in storage/decisions.jsonl.
+    """
+    from storage.decision_log import read_decisions
+
+    decisions = read_decisions()[-limit:]
+    usage: dict[str, dict[str, Any]] = {}
+    for d in decisions:
+        ts = d.get("timestamp")
+        providers = (d.get("report") or {}).get("data_providers") or {}
+        for tf, provider in providers.items():
+            entry = usage.setdefault(provider, {"count": 0, "last_used_at": None, "timeframes": set()})
+            entry["count"] += 1
+            entry["timeframes"].add(tf)
+            if ts and (entry["last_used_at"] is None or ts > entry["last_used_at"]):
+                entry["last_used_at"] = ts
+    return {
+        p: {"count": v["count"], "last_used_at": v["last_used_at"], "timeframes": sorted(v["timeframes"])}
+        for p, v in usage.items()
+    }
+
+
+def _macro_source_status() -> dict[str, Any]:
+    """Status for macro/alt data sources outside the main OHLCV provider
+    chains — CBOE, FRED, CFTC are all keyless (no credentials needed);
+    Alternative.me has no fetch code anywhere in this codebase and is
+    reported as such rather than faked as "missing credentials". Checks
+    local cache freshness and env vars only — never makes a network call.
+    """
+    def _dir_freshness(path: Path) -> str | None:
+        if not path.exists():
+            return None
+        files = sorted(path.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            return None
+        return datetime.fromtimestamp(files[0].stat().st_mtime, tz=timezone.utc).isoformat()
+
+    return {
+        "cboe": {
+            "configured": True, "requires_key": False,
+            "note": "VIX daily history, keyless CSV (core/alt_data_loader.py)",
+        },
+        "fred": {
+            "configured": bool(os.environ.get("FRED_API_KEY")), "requires_key": False,
+            "note": "works keyless via the fredgraph.csv fallback even without FRED_API_KEY",
+        },
+        "cftc": {
+            "configured": True, "requires_key": False,
+            "note": "weekly Commitments-of-Traders download (scripts/download_cot.py)",
+            "last_cached": _dir_freshness(Path("data/cot")),
+        },
+        "alternative_me": {
+            "configured": False, "requires_key": None,
+            "note": "not integrated in this codebase — no fetch code exists for it",
+        },
+    }
+
+
 @app.get("/provider-chains")
 async def provider_chains_endpoint(
     x_api_key: str | None = Header(default=None),
@@ -1565,7 +1627,9 @@ async def provider_chains_endpoint(
 ) -> dict[str, Any]:
     """Data-layer transparency: the per-asset-class provider chains in
     effect, which providers are actually usable right now (credentials /
-    dependencies present), and each timeframe's native coverage."""
+    dependencies present), each timeframe's native coverage, which
+    provider actually served recent decisions, and macro/alt source
+    status (module 2)."""
     _check_auth(x_api_key, iatis_session)
     import os as _os
     from core.data_providers import DEFAULT_CHAINS, _NATIVE_TF, provider_chain_for
@@ -1583,12 +1647,18 @@ async def provider_chains_endpoint(
         "finnhub": bool(_os.getenv("FINNHUB_API_KEY")),
         "ccxt": True,
     }
+    try:
+        recent_usage = _provider_usage_from_decisions()
+    except Exception:
+        recent_usage = {}
     return {
         "chains": {cls: (overrides.get(cls) or chain)
                    for cls, chain in DEFAULT_CHAINS.items()},
         "native_timeframes": {p: sorted(tfs) for p, tfs in _NATIVE_TF.items()},
         "availability": availability,
         "per_symbol": {sym: provider_chain_for(sym, overrides) for sym in active},
+        "recent_usage": recent_usage,
+        "macro_sources": _macro_source_status(),
     }
 
 

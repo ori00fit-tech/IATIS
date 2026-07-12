@@ -173,7 +173,10 @@ export function DataCenter() {
                       title={
                         (chains.data!.availability[p] ? 'available' : 'not configured (no credentials)') +
                         ' · native: ' +
-                        (chains.data!.native_timeframes[p]?.join(' ') ?? '?')
+                        (chains.data!.native_timeframes[p]?.join(' ') ?? '?') +
+                        (chains.data!.recent_usage[p]
+                          ? ` · served ${chains.data!.recent_usage[p].count}x recently, last ${chains.data!.recent_usage[p].last_used_at?.slice(0, 19) ?? '?'}`
+                          : ' · no recent usage recorded')
                       }
                     >
                       {p}
@@ -183,9 +186,29 @@ export function DataCenter() {
               </div>
             ))}
             <div className="text-[0.7em] text-muted mt-1">
-              Greyed providers lack credentials and are skipped instantly. Hover a provider for its native timeframes —
-              a timeframe no chain member serves natively is resampled from the best fetched base.
+              Greyed providers lack credentials and are skipped instantly. Hover a provider for its native timeframes and how
+              often it actually served the last 200 logged decisions — a timeframe no chain member serves natively is
+              resampled from the best fetched base.
             </div>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Macro / Alt Data Sources" right="CBOE, FRED, CFTC — no live ping, config + local cache freshness only">
+        {!chains.data ? (
+          <Empty>{chains.loading ? 'Loading...' : 'Could not load'}</Empty>
+        ) : (
+          <div className="p-4 flex flex-col gap-2">
+            {Object.entries(chains.data.macro_sources).map(([name, status]) => (
+              <div key={name} className="flex items-center gap-3 text-[0.82em]">
+                <span
+                  className={`inline-block w-2 h-2 rounded-full shrink-0 ${status.configured ? 'bg-green' : 'bg-muted'}`}
+                />
+                <span className="font-bold text-accent w-28 shrink-0">{name}</span>
+                <span className="text-muted">{status.note}</span>
+                {status.last_cached && <span className="text-muted text-[0.85em] ml-auto shrink-0">cached {status.last_cached.slice(0, 19)}</span>}
+              </div>
+            ))}
           </div>
         )}
       </Panel>

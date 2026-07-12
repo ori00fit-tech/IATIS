@@ -979,6 +979,56 @@ def test_alerts_sorted_errors_before_warnings_before_info(client):
     assert ranks == sorted(ranks)
 
 
+# ---------------------------------------------------------------------------
+# Data Providers telemetry (module 2) — real usage from decisions.jsonl,
+# no live pings; macro/alt source status, no fabricated latency.
+# ---------------------------------------------------------------------------
+
+def test_provider_chains_includes_recent_usage_and_macro_sources(client):
+    r = client.get("/provider-chains", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "recent_usage" in body and "macro_sources" in body
+    assert {"cboe", "fred", "cftc", "alternative_me"}.issubset(body["macro_sources"].keys())
+
+
+def test_macro_source_status_alternative_me_honestly_unconfigured():
+    import execution.api_server as m
+
+    status = m._macro_source_status()
+    assert status["alternative_me"]["configured"] is False
+    assert "not integrated" in status["alternative_me"]["note"]
+
+
+def test_macro_source_status_keyless_sources_are_configured_without_env_vars(monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+    status = m._macro_source_status()
+    assert status["cboe"]["configured"] is True
+    assert status["cftc"]["configured"] is True
+    # FRED itself is keyless-capable but its "configured" flag tracks the
+    # optional API key specifically (a caveat in its own note).
+    assert status["fred"]["configured"] is False
+
+
+def test_provider_usage_aggregates_from_decision_log(tmp_path, monkeypatch):
+    import execution.api_server as m
+    from storage.decision_log import log_decision
+
+    path = tmp_path / "decisions.jsonl"
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", path)
+
+    log_decision({"symbol": "EURUSD", "final_verdict": "EXECUTE", "data_providers": {"H4": "ccxt", "D1": "ccxt"}}, path=path)
+    log_decision({"symbol": "XAUUSD", "final_verdict": "NO_TRADE", "data_providers": {"H4": "yahoo_finance"}}, path=path)
+
+    usage = m._provider_usage_from_decisions()
+    assert usage["ccxt"]["count"] == 2
+    assert usage["ccxt"]["timeframes"] == ["D1", "H4"]
+    assert usage["yahoo_finance"]["count"] == 1
+    assert usage["ccxt"]["last_used_at"] is not None
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

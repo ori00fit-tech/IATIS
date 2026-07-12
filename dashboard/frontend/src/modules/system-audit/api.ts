@@ -14,11 +14,26 @@ export interface PhilosophyAuditResponse {
   checks: AuditCheck[]
 }
 
+export interface ProviderUsage {
+  count: number
+  last_used_at: string | null
+  timeframes: string[]
+}
+
+export interface MacroSourceStatus {
+  configured: boolean
+  requires_key: boolean | null
+  note: string
+  last_cached?: string | null
+}
+
 export interface ProviderChainsResponse {
   chains: Record<string, string[]>
   native_timeframes: Record<string, string[]>
   availability: Record<string, boolean>
   per_symbol: Record<string, string[]>
+  recent_usage: Record<string, ProviderUsage>
+  macro_sources: Record<string, MacroSourceStatus>
 }
 
 // ~10-20s of D1 round-trips — call from a button, never on a poll.

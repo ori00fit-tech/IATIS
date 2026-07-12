@@ -24,8 +24,10 @@ import asyncio
 import hmac
 import os
 import re
+import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1349,6 +1351,159 @@ async def generate_report(
         markdown, media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="iatis_{kind}_report.md"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Experiment Runner (Mission Control module 5) — whitelisted job execution
+# only. No arbitrary shell, no user-supplied arguments: `job` selects a key
+# into a hardcoded argv list, exactly the pattern already used by /logs
+# (journalctl) and /files/diff (git diff) — never shell=True, never string
+# interpolation of request data into a command line.
+#
+# SCOPE, DELIBERATELY NARROW: only jobs that are fast, local, and don't
+# spend anything are whitelisted here — verify_data_integrity (reads local
+# CSVs) and forward_review (one D1 read). Genuinely long-running jobs
+# (walk_forward_validation, engine_subset_search — CPU-heavy, minutes+) and
+# anything that burns rate-limited provider API quota (cross_provider_diff)
+# are NOT included; widening this whitelist changes what a dashboard click
+# can cost on a live VPS and should be a deliberate operator decision, not
+# something inferred here. See MISSION_CONTROL_AUDIT.md's progress log.
+# ---------------------------------------------------------------------------
+_JOB_COMMANDS: dict[str, list[str]] = {
+    "verify_data_integrity": [sys.executable, "-m", "scripts.verify_data_integrity"],
+    "forward_review": [sys.executable, "-m", "scripts.forward_review"],
+}
+_JOB_DESCRIPTIONS: dict[str, str] = {
+    "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
+    "forward_review": "Evaluate registry.json's pre-registered D001/D002 forward decision rules against closed outcomes. One D1 read, no network.",
+}
+_JOB_TIMEOUT_SECONDS = 600  # generous for these two (both finish in seconds locally); kills a runaway process rather than leaking it forever
+
+_job_executor = ThreadPoolExecutor(max_workers=2)
+_jobs: dict[str, "_Job"] = {}
+_jobs_lock = threading.Lock()
+
+
+class _Job:
+    def __init__(self, job_id: str, name: str):
+        self.id = job_id
+        self.name = name
+        self.status = "queued"  # queued -> running -> finished | failed | timeout
+        self.created_at = datetime.now(timezone.utc).isoformat()
+        self.started_at: str | None = None
+        self.finished_at: str | None = None
+        self.returncode: int | None = None
+        self.log_lines: list[str] = []
+        self.lock = threading.Lock()
+
+
+def _job_summary(job: "_Job") -> dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "job": job.name,
+        "status": job.status,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "returncode": job.returncode,
+        "log_lines": len(job.log_lines),
+    }
+
+
+def _run_job(job: "_Job") -> None:
+    import subprocess
+
+    job.status = "running"
+    job.started_at = datetime.now(timezone.utc).isoformat()
+    argv = _JOB_COMMANDS[job.name]
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=_REPO_ROOT, bufsize=1,
+        )
+        start = time.monotonic()
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with job.lock:
+                job.log_lines.append(line.rstrip("\n"))
+            if time.monotonic() - start > _JOB_TIMEOUT_SECONDS:
+                proc.kill()
+                job.status = "timeout"
+                break
+        proc.wait(timeout=10)
+        if job.status != "timeout":
+            job.returncode = proc.returncode
+            job.status = "finished" if proc.returncode == 0 else "failed"
+    except Exception as exc:
+        with job.lock:
+            job.log_lines.append(f"[runner error] {exc}")
+        job.status = "failed"
+    finally:
+        job.finished_at = datetime.now(timezone.utc).isoformat()
+
+
+class _RunJobRequest(BaseModel):
+    job: str
+
+
+@app.get("/experiments/jobs")
+async def experiment_job_catalog(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """The whitelisted set of jobs /experiments/run will execute. Nothing
+    else — see the module docstring above for why this list is short."""
+    _check_auth(x_api_key, iatis_session)
+    return {"jobs": [{"id": k, "description": _JOB_DESCRIPTIONS.get(k, "")} for k in _JOB_COMMANDS]}
+
+
+@app.post("/experiments/run")
+async def experiments_run(
+    body: _RunJobRequest,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    if body.job not in _JOB_COMMANDS:
+        raise HTTPException(status_code=400, detail=f"Unknown job '{body.job}'. See /experiments/jobs.")
+
+    with _jobs_lock:
+        already_running = any(
+            j.name == body.job and j.status in ("queued", "running") for j in _jobs.values()
+        )
+        if already_running:
+            raise HTTPException(status_code=409, detail=f"'{body.job}' is already running.")
+        job_id = uuid.uuid4().hex[:12]
+        job = _Job(job_id, body.job)
+        _jobs[job_id] = job
+
+    _job_executor.submit(_run_job, job)
+    return _job_summary(job)
+
+
+@app.get("/experiments")
+async def experiments_list(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    with _jobs_lock:
+        jobs = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
+        return {"jobs": [_job_summary(j) for j in jobs]}
+
+
+@app.get("/experiments/{job_id}")
+async def experiments_status(
+    job_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    with job.lock:
+        return {**_job_summary(job), "log": list(job.log_lines)}
 
 
 @app.get("/provider-chains")

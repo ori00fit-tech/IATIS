@@ -53,6 +53,7 @@ roadmap placeholders instead of mock screens.
 | Forward Demo | `/outcomes` (extended with profit_factor/avg_r_multiple), `/forward-review`, `/shadow-book` | D001/D002 pre-registered forward decision rule progress + the shadow-book counterfactual gate ledger, see Mission Control module 6 |
 | Research Integrity | `/research/integrity` | leakage guard (static scan), survivorship checker, manifest validator — button-triggered next to the philosophy audit on the System Audit tab. Cross-provider diff deliberately excluded (burns provider API quota; belongs in the future Experiment Runner). See Mission Control module 9 |
 | Reports | `/reports/{kind}` (research, manifest_summary, system, provider, forward) | Markdown download or JSON view of a snapshot assembled from data other endpoints already compute — no PDF (no dependency for it exists), see Mission Control module 10 |
+| Experiment Runner | `/experiments/jobs`, `/experiments/run`, `/experiments`, `/experiments/{job_id}` | whitelisted subprocess jobs only (fixed argv, never shell=True). Deliberately narrow: only `verify_data_integrity` and `forward_review` (local/fast/no network) — long-running or provider-API-spending jobs are NOT wired up; widening the whitelist is an operator decision, see execution/api_server.py's module docstring and MISSION_CONTROL_AUDIT.md. See Mission Control module 5 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

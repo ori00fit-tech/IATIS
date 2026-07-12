@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 
 import pytest
 
@@ -719,6 +721,137 @@ def test_reports_forward_json_is_strict_json(client):
     _init_db()
     r = client.get("/reports/forward", params={"format": "json"}, headers=HDR)
     _assert_strict_json(r.text)
+
+
+# ---------------------------------------------------------------------------
+# Experiment Runner (module 5) — whitelisted jobs only, fixed argv, never
+# shell=True, never user-supplied arguments. Deliberately narrow scope:
+# only verify_data_integrity and forward_review are whitelisted (local/
+# fast/no network); see execution/api_server.py's module docstring for why
+# long-running or provider-API-spending jobs are NOT included.
+# ---------------------------------------------------------------------------
+
+def _wait_for_job(client, job_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    body = {}
+    while time.monotonic() < deadline:
+        body = client.get(f"/experiments/{job_id}", headers=HDR).json()
+        if body["status"] not in ("queued", "running"):
+            return body
+        time.sleep(0.05)
+    return body
+
+
+def test_experiment_job_catalog_requires_auth(client):
+    assert client.get("/experiments/jobs").status_code == 401
+
+
+def test_experiment_job_catalog_is_the_narrow_whitelist(client):
+    r = client.get("/experiments/jobs", headers=HDR)
+    assert r.status_code == 200, r.text
+    ids = {j["id"] for j in r.json()["jobs"]}
+    assert ids == {"verify_data_integrity", "forward_review"}
+
+
+def test_experiments_run_requires_auth(client):
+    assert client.post("/experiments/run", json={"job": "verify_data_integrity"}).status_code == 401
+
+
+def test_experiments_run_rejects_unknown_job(client):
+    r = client.post("/experiments/run", json={"job": "rm -rf /"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_experiments_status_unknown_job_404s(client):
+    assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
+
+
+def test_experiments_list_requires_auth(client):
+    assert client.get("/experiments").status_code == 401
+
+
+def test_run_job_uses_fixed_argv_never_shell(monkeypatch):
+    """Unit-level guarantee on the actual subprocess call, independent of
+    timing: fixed argv list, shell never True, output captured line by line."""
+    import execution.api_server as m
+
+    captured: dict = {}
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+            self.stdout = iter(["line one\n", "line two\n"])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"fake_job": ["echo", "hi"]})
+
+    job = m._Job("test-id", "fake_job")
+    m._run_job(job)
+
+    assert captured["argv"] == ["echo", "hi"]
+    assert captured["kwargs"].get("shell", False) is False
+    assert job.status == "finished"
+    assert job.log_lines == ["line one", "line two"]
+
+
+def test_experiments_run_and_poll_to_completion(client, monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"echo_job": [sys.executable, "-c", "print('hello from job')"]})
+
+    r = client.post("/experiments/run", json={"job": "echo_job"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] in ("queued", "running")
+
+    body = _wait_for_job(client, r.json()["job_id"])
+    assert body["status"] == "finished", body
+    assert body["returncode"] == 0
+    assert any("hello from job" in line for line in body["log"])
+
+
+def test_experiments_run_failed_job_reports_nonzero_returncode(client, monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"failing_job": [sys.executable, "-c", "import sys; sys.exit(1)"]})
+
+    r = client.post("/experiments/run", json={"job": "failing_job"}, headers=HDR)
+    body = _wait_for_job(client, r.json()["job_id"])
+    assert body["status"] == "failed", body
+    assert body["returncode"] == 1
+
+
+def test_experiments_run_rejects_duplicate_concurrent_run(client, monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"slow_job": [sys.executable, "-c", "import time; time.sleep(1)"]})
+
+    r1 = client.post("/experiments/run", json={"job": "slow_job"}, headers=HDR)
+    assert r1.status_code == 200, r1.text
+
+    r2 = client.post("/experiments/run", json={"job": "slow_job"}, headers=HDR)
+    assert r2.status_code == 409
+
+    _wait_for_job(client, r1.json()["job_id"])  # drain before the test ends
+
+
+def test_experiments_list_includes_started_jobs(client, monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"list_test_job": [sys.executable, "-c", "print('x')"]})
+    r = client.post("/experiments/run", json={"job": "list_test_job"}, headers=HDR)
+    job_id = r.json()["job_id"]
+
+    body = client.get("/experiments", headers=HDR).json()
+    assert any(j["job_id"] == job_id for j in body["jobs"])
+    _wait_for_job(client, job_id)  # drain before the test ends
 
 
 # ---------------------------------------------------------------------------

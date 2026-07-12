@@ -1029,6 +1029,48 @@ def test_provider_usage_aggregates_from_decision_log(tmp_path, monkeypatch):
     assert usage["ccxt"]["last_used_at"] is not None
 
 
+# ---------------------------------------------------------------------------
+# Research Center drill-down (module 4) — GET /research/{hypothesis_id}.
+# Uses the real registry.json shipped in this repo, same pattern as
+# test_research_layer.py's edge-gate tests against real hypothesis data.
+# ---------------------------------------------------------------------------
+
+def test_research_hypothesis_detail_requires_auth(client):
+    assert client.get("/research/H015").status_code == 401
+
+
+def test_research_hypothesis_detail_unknown_id_404s(client):
+    r = client.get("/research/H999_DOES_NOT_EXIST", headers=HDR)
+    assert r.status_code == 404
+
+
+def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
+    # /research/{hypothesis_id} is registered after /research/manifests
+    # and /research/integrity — both literal routes must still resolve
+    # to themselves, not be captured as hypothesis_id="manifests"/"integrity".
+    assert client.get("/research/manifests", headers=HDR).status_code == 200
+    assert client.get("/research/integrity", headers=HDR).status_code == 200
+
+
+def test_research_hypothesis_detail_finds_exact_manifest_link(client):
+    # H015's registry entry declares manifest="results/engine_subset_search_20260709_manifest.json",
+    # which really exists in research/results/ in this repo.
+    r = client.get("/research/H015", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == "H015"
+    assert body["hypothesis"]["status"] == "RESOLVED"
+    exact_files = {m["file"] for m in body["manifests"]["exact"]}
+    assert "engine_subset_search_20260709_manifest.json" in exact_files
+
+
+def test_research_hypothesis_detail_includes_result_files_with_existence_check(client):
+    r = client.get("/research/H015", headers=HDR)
+    body = r.json()
+    assert body["result_files"]
+    assert all({"path", "exists"}.issubset(rf.keys()) for rf in body["result_files"])
+
+
 def test_research_manifests_requires_auth(client):
     assert client.get("/research/manifests").status_code == 401
 

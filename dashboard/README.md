@@ -46,7 +46,7 @@ roadmap placeholders instead of mock screens.
 | Live Signals | `/decisions`, `/outcomes` | recent pipeline decisions + open paper signals |
 | Data Center | `/data-health`, `/provider-chains` (now includes `recent_usage` from decisions.jsonl and `macro_sources` for CBOE/FRED/CFTC/Alternative.me — module 2) | OHLCV cache completeness per symbol/timeframe |
 | Engine Monitor | `/engine-stats` (now includes `attribution`: approximate per-engine PF/WR, time-window-joined to closed outcomes since there's no shared foreign key — see module 8) | per-engine vote/accuracy stats, current vs. suggested weights |
-| Research & Backtests | `/research`, `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
+| Research & Backtests | `/research`, `/research/{hypothesis_id}` (drill-down — module 4), `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
 | Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
 | File Explorer | `/files/tree`, `/files/read`, `/files/download`, `/files/search`, `/files/diff` | read-only, path-confined to the repo root, secret-shaped paths denylisted server-side, see Mission Control module 11 |
 | Alert Center | `/alerts` | aggregates signals already computed by other endpoints (scheduler status, provider config, data health, manifests, forward decision rules) — no new data source, see Mission Control module 14 |

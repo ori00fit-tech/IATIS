@@ -1266,6 +1266,76 @@ async def research_integrity(
     return await loop.run_in_executor(_executor, _run)
 
 
+@app.get("/research/{hypothesis_id}")
+async def research_hypothesis_detail(
+    hypothesis_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Center drill-down (module 4) — the complete registry.json
+    entry for one hypothesis (untruncated, unlike /research's summary
+    list) plus every manifest linked to it and its declared result
+    file(s).
+
+    Manifest linking uses two sources, kept separate and labeled rather
+    than merged into one list pretending to be equally certain:
+      - "exact": the hypothesis's own `manifest` field in registry.json
+        (a real field some hypotheses declare — H008c, H015, etc. — the
+        authoritative link where it exists).
+      - "heuristic": any other manifest whose filename or `kind` contains
+        the hypothesis ID as a case-insensitive substring. A guess, not
+        a fact — many manifest kinds (crypto_volume_experiment,
+        ctrader_spread_measurement) don't embed a hypothesis ID at all.
+
+    MUST stay registered after /research/manifests and /research/integrity
+    (both literal paths) — Starlette/FastAPI match routes in registration
+    order, so a path-param route registered earlier would silently shadow
+    them (hit exactly this bug once while building this route; pinned by
+    tests/test_api_contract.py::test_research_hypothesis_detail_route_does_not_shadow_literal_routes).
+    """
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+
+    registry_path = Path("research/results/registry.json")
+    if not registry_path.exists():
+        raise HTTPException(status_code=404, detail="Registry not found.")
+    hypotheses_raw = _json.loads(registry_path.read_text()).get("hypotheses", {})
+    hyp = hypotheses_raw.get(hypothesis_id)
+    if hyp is None:
+        raise HTTPException(status_code=404, detail=f"Hypothesis '{hypothesis_id}' not found.")
+
+    manifests = _load_manifests()
+    declared_manifest = hyp.get("manifest")
+    declared_name = Path(declared_manifest).name if declared_manifest else None
+
+    exact_links, heuristic_links = [], []
+    needle = hypothesis_id.lower()
+    for m in manifests:
+        if declared_name and m["file"] == declared_name:
+            exact_links.append(m)
+        elif needle in m["file"].lower() or (m.get("kind") and needle in str(m["kind"]).lower()):
+            heuristic_links.append(m)
+
+    # Result file(s) — path + existence check only. Never dumps arbitrary
+    # file content through this endpoint; that's File Explorer's job.
+    result_paths: list[str] = []
+    if isinstance(hyp.get("result_file"), str):
+        result_paths.append(hyp["result_file"])
+    result_files_field = hyp.get("result_files")
+    if isinstance(result_files_field, dict):
+        result_paths.extend(v for v in result_files_field.values() if isinstance(v, str))
+
+    return {
+        "id": hypothesis_id,
+        "hypothesis": hyp,
+        "manifests": {"exact": exact_links, "heuristic": heuristic_links},
+        "result_files": [
+            {"path": p, "exists": (Path("research") / p).exists()}
+            for p in result_paths
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Reports (Mission Control module 10) — on-demand snapshots assembled from
 # data other endpoints already compute; never a second implementation of

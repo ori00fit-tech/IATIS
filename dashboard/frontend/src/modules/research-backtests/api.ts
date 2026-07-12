@@ -109,3 +109,14 @@ export interface ManifestsResponse {
 }
 
 export const getManifests = () => apiGet<ManifestsResponse>('/research/manifests')
+
+// Research Center drill-down (module 4) — full registry.json entry for
+// one hypothesis plus its linked manifests and result files.
+export interface HypothesisDetailResponse {
+  id: string
+  hypothesis: Record<string, unknown>
+  manifests: { exact: EvidenceManifest[]; heuristic: EvidenceManifest[] }
+  result_files: { path: string; exists: boolean }[]
+}
+
+export const getHypothesisDetail = (id: string) => apiGet<HypothesisDetailResponse>(`/research/${encodeURIComponent(id)}`)

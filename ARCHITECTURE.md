@@ -266,7 +266,7 @@ Not part of the decision pipeline. Verified: no import of `ai.ai_analyzer` anywh
 |------|---------|
 | `ai_analyzer.py` | Orchestrator: selects a provider from `config.yaml`'s `ai:` section, applies caching, always returns `status: ok\|disabled\|error` |
 | `providers/base.py` | Common `AIProvider` interface + prompt-template loading + JSON extraction |
-| `providers/perplexity.py` | Default provider (OpenAI-compatible chat completions API) |
+| `providers/gemini.py` | Default provider (Google Gemini generateContent API) |
 | `providers/openai.py` | Alternate provider |
 | `providers/anthropic.py` | Alternate provider |
 | `prompts/*.txt` | Externalized templates — explicitly forbid fabricated data and price prediction, enforce JSON-only output |
@@ -274,7 +274,7 @@ Not part of the decision pipeline. Verified: no import of `ai.ai_analyzer` anywh
 | `models.py` | `TradeExplanation` / `NewsAnalysis` / `MacroAnalysis` result dataclasses |
 | `dynamic_weights.py` | Separate, older feature — Claude-based engine-weight suggestions (`POST /ai/optimize-weights`), advisory-only and `dry_run` by default |
 
-API keys are read from the environment (`PERPLEXITY_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` for `dynamic_weights.py` too) — never stored in `config.yaml`, matching every other credential in this codebase.
+API keys are read from the environment (`GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` for `dynamic_weights.py` too) — never stored in `config.yaml`, matching every other credential in this codebase.
 
 ### 10. **dashboard/frontend/** — Command Center SPA
 
@@ -368,8 +368,8 @@ portfolio:
 
 ai:
   enabled: false            # opt-in — no external AI call unless turned on
-  provider: perplexity
-  model: sonar
+  provider: gemini
+  model: gemini-flash-latest
 
 fundamentals:
   news_filter_enabled: true
@@ -549,7 +549,7 @@ IATIS/
 │
 ├── ai/                                # Optional AI explanation layer
 │   ├── ai_analyzer.py
-│   ├── providers/ (base, perplexity, openai, anthropic)
+│   ├── providers/ (base, gemini, openai, anthropic)
 │   ├── prompts/*.txt
 │   ├── cache.py
 │   ├── models.py
@@ -652,7 +652,7 @@ Note what's deliberately **not** in `main.py`'s tree: `ai/` is reachable only fr
 - Real portfolio risk state (`risk/live_portfolio_state.py`) — replaced hardcoded zeros
 - Config control plane (`features`/`monitoring`/`portfolio`/`market_quality` as real toggles, not placeholders)
 - Command Center dashboard (React SPA, 6 tabs)
-- AI explanation layer (Perplexity/OpenAI/Anthropic), wired into 4 dashboard tabs, structurally isolated from the decision path
+- AI explanation layer (Gemini/OpenAI/Anthropic), wired into 4 dashboard tabs, structurally isolated from the decision path
 - cTrader auto-reconnect + position reconciliation
 - Engine ablation harness (vote-independence, leave-one-out), historical data integrity verifier
 - systemd sandboxing

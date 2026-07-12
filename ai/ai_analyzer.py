@@ -2,7 +2,7 @@
 ai/ai_analyzer.py
 ------------------
 AI Orchestrator — the only file the rest of IATIS talks to for AI-backed
-explanations. It selects a provider (Perplexity by default, OpenAI or
+explanations. It selects a provider (Gemini by default, OpenAI or
 Anthropic as drop-in alternatives — see ai/providers/), applies caching,
 and always returns a well-formed result even when the AI call fails or
 is disabled.
@@ -20,8 +20,8 @@ been made, for a human reading the dashboard.
 Config (config.yaml `ai:` section — no secrets):
     ai:
       enabled: false          # opt-in; false = every call below returns status="disabled"
-      provider: perplexity    # perplexity | openai | anthropic
-      model: sonar-pro
+      provider: gemini        # gemini | openai | anthropic
+      model: gemini-flash-latest
       temperature: 0.1
       max_tokens: 1200
       timeout: 20
@@ -29,7 +29,7 @@ Config (config.yaml `ai:` section — no secrets):
         news_ttl_min: 20
         macro_ttl_min: 60
 
-API keys are read from the environment (PERPLEXITY_API_KEY /
+API keys are read from the environment (GEMINI_API_KEY /
 OPENAI_API_KEY / ANTHROPIC_API_KEY), matching every other integration in
 this codebase (see .env.example) — never stored in config.yaml.
 """
@@ -46,13 +46,13 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _PROVIDER_ENV_KEYS = {
-    "perplexity": "PERPLEXITY_API_KEY",
+    "gemini": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
 
 _DEFAULT_MODELS = {
-    "perplexity": "sonar-pro",
+    "gemini": "gemini-flash-latest",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-sonnet-4-6",
 }
@@ -79,9 +79,9 @@ def _build_provider(provider_name: str, ai_cfg: dict) -> AIProvider | None:
     max_tokens = int(ai_cfg.get("max_tokens", 1200))
     timeout = float(ai_cfg.get("timeout", 20))
 
-    if provider_name == "perplexity":
-        from ai.providers.perplexity import PerplexityProvider
-        return PerplexityProvider(api_key, model, temperature, max_tokens, timeout)
+    if provider_name == "gemini":
+        from ai.providers.gemini import GeminiProvider
+        return GeminiProvider(api_key, model, temperature, max_tokens, timeout)
     if provider_name == "openai":
         from ai.providers.openai import OpenAIProvider
         return OpenAIProvider(api_key, model, temperature, max_tokens, timeout)
@@ -100,7 +100,7 @@ class AIAnalyzer:
         self.config = config
         ai_cfg = config.get("ai", {}) or {}
         self.enabled = bool(ai_cfg.get("enabled", False))
-        self.provider_name = ai_cfg.get("provider", "perplexity")
+        self.provider_name = ai_cfg.get("provider", "gemini")
         self._cache = TTLCache()
         self._cache_cfg = ai_cfg.get("cache", {}) or {}
 

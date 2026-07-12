@@ -270,12 +270,12 @@ risk:
 # never feeds final_verdict; the confluence + risk engines decide.
 # Opt-in: disabled by default so no external AI API is ever called
 # unless deliberately turned on. API key comes from the environment
-# (PERPLEXITY_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), never from
+# (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), never from
 # this file.
 ai:
   enabled: true
-  provider: perplexity   # perplexity | openai | anthropic
-  model: sonar
+  provider: gemini   # gemini | openai | anthropic
+  model: gemini-flash-latest
   temperature: 0.1
   max_tokens: 1200
   timeout: 20

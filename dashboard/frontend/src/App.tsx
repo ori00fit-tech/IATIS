@@ -13,6 +13,7 @@ import { AlertCenter } from './modules/alert-center/AlertCenter'
 import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
 import { Reports } from './modules/reports/Reports'
 import { ExperimentRunner } from './modules/experiment-runner/ExperimentRunner'
+import { VpsOperations } from './modules/vps-operations/VpsOperations'
 import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
 const TABS = [
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'alerts', label: 'Alert Center' },
   { id: 'reports', label: 'Reports' },
   { id: 'experiments', label: 'Experiment Runner' },
+  { id: 'ops', label: 'VPS Operations' },
   { id: 'roadmap', label: 'Roadmap' },
 ] as const
 
@@ -93,6 +95,7 @@ function Shell() {
         {tab === 'alerts' && <AlertCenter />}
         {tab === 'reports' && <Reports />}
         {tab === 'experiments' && <ExperimentRunner />}
+        {tab === 'ops' && <VpsOperations />}
         {tab === 'roadmap' && <RoadmapGrid />}
       </main>
     </div>

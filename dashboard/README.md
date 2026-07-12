@@ -54,6 +54,7 @@ roadmap placeholders instead of mock screens.
 | Research Integrity | `/research/integrity` | leakage guard (static scan), survivorship checker, manifest validator — button-triggered next to the philosophy audit on the System Audit tab. Cross-provider diff deliberately excluded (burns provider API quota; belongs in the future Experiment Runner). See Mission Control module 9 |
 | Reports | `/reports/{kind}` (research, manifest_summary, system, provider, forward) | Markdown download or JSON view of a snapshot assembled from data other endpoints already compute — no PDF (no dependency for it exists), see Mission Control module 10 |
 | Experiment Runner | `/experiments/jobs`, `/experiments/run`, `/experiments`, `/experiments/{job_id}` | whitelisted subprocess jobs only (fixed argv, never shell=True). Deliberately narrow: only `verify_data_integrity` and `forward_review` (local/fast/no network) — long-running or provider-API-spending jobs are NOT wired up; widening the whitelist is an operator decision, see execution/api_server.py's module docstring and MISSION_CONTROL_AUDIT.md. See Mission Control module 5 |
+| VPS Operations | `/ops/reload-config` + reuses `/health/full` (diagnostics) and the Experiment Runner's `backup_d1` job (category `ops`) | Deliberately excludes restarting iatis-api/iatis-scheduler — stays SSH-only until an operator explicitly asks for it. See Mission Control module 12 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

@@ -3,6 +3,7 @@ import { apiGet, apiPost } from '../../lib/api'
 export interface JobDescriptor {
   id: string
   description: string
+  category: 'research' | 'ops'
 }
 
 export interface JobCatalogResponse {

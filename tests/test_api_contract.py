@@ -750,7 +750,15 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     r = client.get("/experiments/jobs", headers=HDR)
     assert r.status_code == 200, r.text
     ids = {j["id"] for j in r.json()["jobs"]}
-    assert ids == {"verify_data_integrity", "forward_review"}
+    assert ids == {"verify_data_integrity", "forward_review", "backup_d1"}
+
+
+def test_experiment_job_catalog_categorizes_ops_vs_research(client):
+    r = client.get("/experiments/jobs", headers=HDR)
+    by_id = {j["id"]: j["category"] for j in r.json()["jobs"]}
+    assert by_id["verify_data_integrity"] == "research"
+    assert by_id["forward_review"] == "research"
+    assert by_id["backup_d1"] == "ops"
 
 
 def test_experiments_run_requires_auth(client):
@@ -852,6 +860,33 @@ def test_experiments_list_includes_started_jobs(client, monkeypatch):
     body = client.get("/experiments", headers=HDR).json()
     assert any(j["job_id"] == job_id for j in body["jobs"])
     _wait_for_job(client, job_id)  # drain before the test ends
+
+
+# ---------------------------------------------------------------------------
+# VPS Operations (module 12) — deliberately narrow: config-cache reload
+# only here; "diagnostics" reuses /health/full, "backup" reuses the
+# Experiment Runner's "backup_d1" job. No service-restart endpoint exists.
+# ---------------------------------------------------------------------------
+
+def test_ops_reload_config_requires_auth(client):
+    assert client.post("/ops/reload-config").status_code == 401
+
+
+def test_ops_reload_config_clears_cache(client):
+    import execution.api_server as m
+
+    m._config_cache = {"stale": True}
+    r = client.post("/ops/reload-config", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+    assert m._config_cache is None
+
+
+def test_no_service_restart_endpoint_exists(client):
+    # Explicit guard for the scoping decision: restarting the live
+    # scheduler/API is not exposed anywhere in this API.
+    for path in ("/ops/restart", "/ops/restart-api", "/ops/restart-scheduler"):
+        assert client.post(path, headers=HDR).status_code == 404
 
 
 # ---------------------------------------------------------------------------

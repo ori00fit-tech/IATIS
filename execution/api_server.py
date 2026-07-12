@@ -1372,12 +1372,23 @@ async def generate_report(
 _JOB_COMMANDS: dict[str, list[str]] = {
     "verify_data_integrity": [sys.executable, "-m", "scripts.verify_data_integrity"],
     "forward_review": [sys.executable, "-m", "scripts.forward_review"],
+    "backup_d1": [sys.executable, "-m", "scripts.backup_d1"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
     "forward_review": "Evaluate registry.json's pre-registered D001/D002 forward decision rules against closed outcomes. One D1 read, no network.",
+    "backup_d1": "Dump every D1 table + decisions.jsonl to backups/, gzip, verify row counts, rotate old backups. Writes to local disk only, no network beyond the D1 proxy already in use.",
 }
-_JOB_TIMEOUT_SECONDS = 600  # generous for these two (both finish in seconds locally); kills a runaway process rather than leaking it forever
+# Categorizes each whitelisted job for the frontend (Experiment Runner
+# shows "research", VPS Operations shows "ops") — same underlying
+# job-execution engine either way, per MISSION_CONTROL_AUDIT.md's note
+# that module 12 should reuse module 5's primitive rather than duplicate it.
+_JOB_CATEGORIES: dict[str, str] = {
+    "verify_data_integrity": "research",
+    "forward_review": "research",
+    "backup_d1": "ops",
+}
+_JOB_TIMEOUT_SECONDS = 600  # generous for these three (all finish in seconds to low-minutes locally); kills a runaway process rather than leaking it forever
 
 _job_executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, "_Job"] = {}
@@ -1454,7 +1465,12 @@ async def experiment_job_catalog(
     """The whitelisted set of jobs /experiments/run will execute. Nothing
     else — see the module docstring above for why this list is short."""
     _check_auth(x_api_key, iatis_session)
-    return {"jobs": [{"id": k, "description": _JOB_DESCRIPTIONS.get(k, "")} for k in _JOB_COMMANDS]}
+    return {
+        "jobs": [
+            {"id": k, "description": _JOB_DESCRIPTIONS.get(k, ""), "category": _JOB_CATEGORIES.get(k, "research")}
+            for k in _JOB_COMMANDS
+        ]
+    }
 
 
 @app.post("/experiments/run")
@@ -1504,6 +1520,36 @@ async def experiments_status(
         raise HTTPException(status_code=404, detail="Job not found.")
     with job.lock:
         return {**_job_summary(job), "log": list(job.log_lines)}
+
+
+# ---------------------------------------------------------------------------
+# VPS Operations (Mission Control module 12) — controlled operations only.
+# "Diagnostics"/"Health check" reuse GET /health/full directly (the
+# frontend calls it, no new endpoint needed). "Backup" reuses the
+# Experiment Runner's job engine above via the "backup_d1" whitelist entry
+# (category "ops"). This section only adds what neither of those already
+# covers: an in-process config-cache reload.
+#
+# DELIBERATELY EXCLUDED: restarting iatis-api/iatis-scheduler. Restarting
+# the live scheduler mid-cycle on what may be a production trading VPS is
+# a materially different risk than anything else in this dashboard restart
+# — it stays an explicit `systemctl restart` over SSH until an operator
+# deliberately asks for it to be wired up. See MISSION_CONTROL_AUDIT.md.
+# ---------------------------------------------------------------------------
+@app.post("/ops/reload-config")
+async def ops_reload_config(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Clear the in-process config.yaml cache so the next request reloads
+    it from disk — e.g. after editing config.yaml on the VPS. Does not
+    itself change any threshold/engine/trading value, only cache staleness.
+    """
+    _check_auth(x_api_key, iatis_session)
+    global _config_cache
+    with _config_lock:
+        _config_cache = None
+    return {"success": True, "message": "Config cache cleared — next request reloads config.yaml from disk."}
 
 
 @app.get("/provider-chains")

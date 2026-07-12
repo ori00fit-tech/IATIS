@@ -1,7 +1,7 @@
 """
 ai/providers/base.py
 ----------------------
-Common interface every AI provider (Perplexity, OpenAI, Anthropic, ...)
+Common interface every AI provider (Gemini, OpenAI, Anthropic, ...)
 implements, plus the shared plumbing (prompt loading, JSON extraction)
 so each concrete provider only has to know how to call its own HTTP API.
 

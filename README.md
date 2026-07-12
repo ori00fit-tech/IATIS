@@ -124,7 +124,7 @@ ai/
 ├── ai_analyzer.py       # Orchestrator: config -> provider -> cache -> typed result
 ├── providers/           # Provider pattern — swap without touching the orchestrator
 │   ├── base.py            # Common interface + prompt loading + JSON extraction
-│   ├── perplexity.py       # Default provider (OpenAI-compatible chat completions)
+│   ├── gemini.py            # Default provider (Google Gemini generateContent API)
 │   ├── openai.py
 │   └── anthropic.py
 ├── prompts/              # Externalized prompt templates (JSON-only output enforced)
@@ -140,12 +140,12 @@ ai/
 # config.yaml
 ai:
   enabled: true
-  provider: perplexity   # or openai / anthropic
-  model: sonar
+  provider: gemini   # or openai / anthropic
+  model: gemini-flash-latest
 ```
 ```bash
 # .env — read from the environment, never from config.yaml
-PERPLEXITY_API_KEY=...
+GEMINI_API_KEY=...
 # or OPENAI_API_KEY / ANTHROPIC_API_KEY, matching whichever provider is selected
 ```
 
@@ -351,7 +351,7 @@ IATIS/
 - **Real** portfolio risk state (drawdown/open-risk/correlated-exposure) — no longer hardcoded zeros
 - Config control plane (`features`/`monitoring`/`portfolio`/`market_quality` as real toggles)
 - Command Center dashboard (React SPA, 6 tabs)
-- AI explanation layer (Perplexity/OpenAI/Anthropic provider pattern), wired into 4 dashboard tabs
+- AI explanation layer (Gemini/OpenAI/Anthropic provider pattern), wired into 4 dashboard tabs
 - cTrader auto-reconnect + position reconciliation
 - Engine ablation harness, historical data integrity verifier
 - systemd sandboxing

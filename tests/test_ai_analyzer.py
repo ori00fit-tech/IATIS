@@ -14,7 +14,7 @@ import pytest
 
 from ai.cache import TTLCache
 from ai.providers.base import AIProviderError, extract_json, load_prompt
-from ai.providers.perplexity import PerplexityProvider
+from ai.providers.gemini import GeminiProvider
 from ai.providers.openai import OpenAIProvider
 from ai.providers.anthropic import AnthropicProvider
 from ai.ai_analyzer import AIAnalyzer
@@ -91,13 +91,15 @@ def _mock_response(json_body: dict, status_ok: bool = True) -> MagicMock:
     return resp
 
 
-def test_perplexity_provider_chat_parses_openai_style_response():
-    provider = PerplexityProvider(api_key="test-key", model="sonar-pro")
-    fake_resp = _mock_response({"choices": [{"message": {"content": "hello"}}]})
-    with patch("ai.providers.perplexity.requests.post", return_value=fake_resp) as post:
+def test_gemini_provider_chat_parses_response():
+    provider = GeminiProvider(api_key="test-key", model="gemini-flash-latest")
+    fake_resp = _mock_response(
+        {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
+    )
+    with patch("ai.providers.gemini.requests.post", return_value=fake_resp) as post:
         result = provider._chat("say hello")
     assert result == "hello"
-    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert post.call_args.kwargs["headers"]["X-goog-api-key"] == "test-key"
 
 
 def test_openai_provider_chat_parses_response():
@@ -121,9 +123,9 @@ def test_anthropic_provider_chat_parses_content_blocks_and_sends_auth_headers():
 
 def test_provider_raises_ai_provider_error_on_request_exception():
     import requests as _requests
-    provider = PerplexityProvider(api_key="test-key", model="sonar-pro")
+    provider = GeminiProvider(api_key="test-key", model="gemini-flash-latest")
     with patch(
-        "ai.providers.perplexity.requests.post",
+        "ai.providers.gemini.requests.post",
         side_effect=_requests.RequestException("boom"),
     ):
         with pytest.raises(AIProviderError):
@@ -134,8 +136,8 @@ def test_provider_raises_ai_provider_error_on_request_exception():
 # AIAnalyzer orchestrator
 # ---------------------------------------------------------------------------
 
-def _config(enabled: bool = True, provider: str = "perplexity") -> dict:
-    return {"ai": {"enabled": enabled, "provider": provider, "model": "sonar-pro",
+def _config(enabled: bool = True, provider: str = "gemini") -> dict:
+    return {"ai": {"enabled": enabled, "provider": provider, "model": "gemini-flash-latest",
                     "cache": {"news_ttl_min": 20, "macro_ttl_min": 60}}}
 
 
@@ -147,7 +149,7 @@ def test_ai_analyzer_disabled_by_default_returns_status_disabled():
 
 
 def test_ai_analyzer_without_api_key_is_unavailable(monkeypatch):
-    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     analyzer = AIAnalyzer(_config(enabled=True))
     assert analyzer.available is False
     result = analyzer.explain_trade({"symbol": "EURUSD"})
@@ -158,7 +160,7 @@ def test_ai_analyzer_explain_trade_never_touches_final_verdict(monkeypatch):
     """Explicit regression guard for the design constraint: AIAnalyzer must
     not be able to influence or overwrite final_verdict on the report it's
     given — it only reads from it and returns a separate explanation dict."""
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True))
     assert analyzer.available is True
 
@@ -178,7 +180,7 @@ def test_ai_analyzer_explain_trade_never_touches_final_verdict(monkeypatch):
         '"confidence": 80, "recommendation": "r", "market_sentiment": "Bullish", '
         '"news_risk": "Low", "explanation": "e", "warnings": []}'
     )
-    with patch.object(PerplexityProvider, "_chat", return_value=fake_reply):
+    with patch.object(GeminiProvider, "_chat", return_value=fake_reply):
         result = analyzer.explain_trade(report)
 
     assert result["status"] == "ok"
@@ -188,9 +190,9 @@ def test_ai_analyzer_explain_trade_never_touches_final_verdict(monkeypatch):
 
 
 def test_ai_analyzer_explain_trade_handles_provider_error_gracefully(monkeypatch):
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True))
-    with patch.object(PerplexityProvider, "_chat", side_effect=AIProviderError("boom")):
+    with patch.object(GeminiProvider, "_chat", side_effect=AIProviderError("boom")):
         result = analyzer.explain_trade({"symbol": "EURUSD"})
     assert result["status"] == "error"
     assert "boom" in result["error"]
@@ -203,7 +205,7 @@ def test_ai_analyzer_analyze_news_disabled():
 
 
 def test_ai_analyzer_unknown_provider_is_unavailable(monkeypatch):
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True, provider="not_a_real_provider"))
     assert analyzer.available is False
 
@@ -215,9 +217,9 @@ def test_ai_analyzer_generate_research_summary_disabled():
 
 
 def test_ai_analyzer_generate_research_summary_ok(monkeypatch):
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True))
-    with patch.object(PerplexityProvider, "_chat", return_value="13 hypotheses, 1 passed."):
+    with patch.object(GeminiProvider, "_chat", return_value="13 hypotheses, 1 passed."):
         result = analyzer.generate_research_summary(
             {"total": 13, "passed": 1, "failed": 3, "research": 9, "avg_wr": 60.5, "avg_pf": 2.72}
         )
@@ -229,9 +231,9 @@ def test_ai_analyzer_generate_daily_report_still_works_after_refactor(monkeypatc
     # Regression guard: generate_daily_report and generate_research_summary
     # now share _summarize_text() — make sure the refactor didn't change
     # generate_daily_report's own behavior.
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     analyzer = AIAnalyzer(_config(enabled=True))
-    with patch.object(PerplexityProvider, "_chat", return_value="Quiet day, 3 EXECUTE signals."):
+    with patch.object(GeminiProvider, "_chat", return_value="Quiet day, 3 EXECUTE signals."):
         result = analyzer.generate_daily_report({"total": 10, "execute": 3, "no_trade": 7})
     assert result["status"] == "ok"
     assert "Quiet day" in result["text"]

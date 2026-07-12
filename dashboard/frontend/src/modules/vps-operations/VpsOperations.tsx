@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
+import { usePolling } from '../../lib/usePolling'
+import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { StatusRow } from '../../components/StatusDot'
+import { DataTable, type Column } from '../../components/DataTable'
 import { getHealthFull, type HealthFull } from '../mission-control/api'
 import { getJobCatalog, getJobDetail, runJob, type JobDescriptor, type JobDetail, type JobStatus } from '../experiment-runner/api'
-import { reloadConfig } from './api'
+import { reloadConfig, getAuditLog, type AuditEntry } from './api'
 
 const POLL_MS = 3_000
 
@@ -200,12 +203,43 @@ function BackupPanel() {
   )
 }
 
+const AUDIT_POLL_MS = 15_000
+
+const auditColumns: Column<AuditEntry>[] = [
+  { header: 'Time', render: (e) => <span className="text-muted">{e.timestamp.slice(0, 19)}</span> },
+  { header: 'Action', render: (e) => <span className="font-bold text-accent">{e.action}</span> },
+  { header: 'Actor', render: (e) => <span className="font-mono text-[0.9em]">{e.actor}</span> },
+  { header: 'Result', render: (e) => <Badge tone={e.success ? 'exec' : 'no-trade'}>{e.success ? 'success' : 'failed'}</Badge> },
+  { header: 'Detail', render: (e) => <span className="text-muted">{e.detail ?? '—'}</span> },
+]
+
+function AuditLogPanel() {
+  const { markUnauthenticated } = useAuth()
+  const audit = usePolling(() => getAuditLog(100), AUDIT_POLL_MS, markUnauthenticated)
+
+  return (
+    <Panel title="Audit Log" right={audit.data ? `${audit.data.count} recent actions` : undefined}>
+      <p className="px-4 py-2 text-[0.75em] text-muted border-b border-border">
+        Every mutating action (login, job trigger, config reload, outcome close) — not a full access log. Actor is masked
+        (never the raw API key or full session id). Role-based access control is not implemented — this is a single-shared-key
+        system; see the Security module docs.
+      </p>
+      {audit.data && audit.data.entries.length > 0 ? (
+        <DataTable columns={auditColumns} rows={audit.data.entries} rowKey={(e) => `${e.timestamp}-${e.action}`} />
+      ) : (
+        <Empty>{audit.loading ? 'Loading...' : 'No actions recorded yet'}</Empty>
+      )}
+    </Panel>
+  )
+}
+
 export function VpsOperations() {
   return (
     <div className="flex flex-col gap-4">
       <DiagnosticsPanel />
       <ReloadConfigPanel />
       <BackupPanel />
+      <AuditLogPanel />
     </div>
   )
 }

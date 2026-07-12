@@ -944,6 +944,75 @@ def test_no_service_restart_endpoint_exists(client):
 
 
 # ---------------------------------------------------------------------------
+# Security / audit log (module 15) — real audit trail for mutating
+# actions; role-based access is a deliberately scoped-out gap (see
+# execution/api_server.py's module docstring and MISSION_CONTROL_AUDIT.md).
+# ---------------------------------------------------------------------------
+
+def test_audit_log_requires_auth(client):
+    assert client.get("/audit-log").status_code == 401
+
+
+def test_audit_log_records_login_success_and_failure(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
+    client.post("/login", json={"key": "wrong-key"})
+    client.post("/login", json={"key": "test-key-123"})
+
+    r = client.get("/audit-log", headers=HDR)
+    assert r.status_code == 200, r.text
+    actions = [(e["action"], e["success"]) for e in r.json()["entries"]]
+    assert ("login", False) in actions
+    assert ("login", True) in actions
+
+
+def test_audit_log_records_experiment_run(client, tmp_path, monkeypatch):
+    import execution.api_server as m
+
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"audit_test_job": [sys.executable, "-c", "print('x')"]})
+    r = client.post("/experiments/run", json={"job": "audit_test_job"}, headers=HDR)
+    job_id = r.json()["job_id"]
+    _wait_for_job(client, job_id)
+
+    entries = client.get("/audit-log", headers=HDR).json()["entries"]
+    assert any(e["action"] == "experiment_run" and "audit_test_job" in (e["detail"] or "") for e in entries)
+
+
+def test_audit_log_records_reload_config(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
+    client.post("/ops/reload-config", headers=HDR)
+    entries = client.get("/audit-log", headers=HDR).json()["entries"]
+    assert any(e["action"] == "reload_config" for e in entries)
+
+
+def test_audit_log_records_close_outcome(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
+    from storage.outcome_tracker import log_signal
+
+    report = {
+        "symbol": "EURUSD", "final_verdict": "EXECUTE",
+        "entry_price": 1.0, "stop_loss": 0.99, "take_profit": 1.02,
+        "confluence": {"score": 70.0, "vote": {"winning_bias": "BULLISH"}},
+        "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 5.0},
+        "engine_outputs": [],
+    }
+    sid = log_signal(report)
+    client.post(f"/outcomes/{sid}/close", params={"exit_price": 1.02, "outcome": "win"}, headers=HDR)
+
+    entries = client.get("/audit-log", headers=HDR).json()["entries"]
+    assert any(e["action"] == "close_outcome" and sid in (e["detail"] or "") for e in entries)
+
+
+def test_audit_log_never_exposes_raw_api_key(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
+    client.post("/ops/reload-config", headers=HDR)
+    entries = client.get("/audit-log", headers=HDR).json()["entries"]
+    assert entries
+    for e in entries:
+        assert "test-key-123" not in str(e)
+
+
+# ---------------------------------------------------------------------------
 # Alert Center (module 14) — aggregates existing signals, never a new
 # data source of its own.
 # ---------------------------------------------------------------------------

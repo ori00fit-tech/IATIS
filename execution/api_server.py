@@ -369,16 +369,20 @@ async def do_login(request: Request) -> Response:
     is NEVER stored in the cookie or exposed to the client.
     """
     import secrets
+    from storage.audit_log import log_action
+
     body = await request.json()
     key = body.get("key", "")
     required = os.environ.get("API_SERVER_KEY", "")
     if not required or not hmac.compare_digest(key, required):
+        log_action("login", success=False)
         raise HTTPException(status_code=401, detail="Invalid key")
 
     # Generate random session ID (NOT the raw key)
     session_id = secrets.token_urlsafe(32)
     _active_sessions[session_id] = time.time()
     _save_sessions(_active_sessions)  # persist to disk
+    log_action("login", session_id=session_id, success=True)
 
     response = JSONResponse({"ok": True})
     response.set_cookie(
@@ -1569,6 +1573,9 @@ async def experiments_run(
         job = _Job(job_id, body.job)
         _jobs[job_id] = job
 
+    from storage.audit_log import log_action
+    log_action("experiment_run", x_api_key=x_api_key, session_id=iatis_session, detail=f"{body.job} ({job_id})")
+
     _job_executor.submit(_run_job, job)
     return _job_summary(job)
 
@@ -1625,7 +1632,38 @@ async def ops_reload_config(
     global _config_cache
     with _config_lock:
         _config_cache = None
+    from storage.audit_log import log_action
+    log_action("reload_config", x_api_key=x_api_key, session_id=iatis_session)
     return {"success": True, "message": "Config cache cleared — next request reloads config.yaml from disk."}
+
+
+# ---------------------------------------------------------------------------
+# Security (Mission Control module 15) — audit log for every mutating
+# action (login, job triggers, config reload, outcome mutation). Every
+# job-execution and file-serving route in this file is already whitelist-
+# only with fixed argv, satisfying "no arbitrary command execution" and
+# "whitelisted jobs only" — see the Experiment Runner/File Explorer/Live
+# Logs module docstrings above.
+#
+# DELIBERATELY NOT INCLUDED: role-based access control. Today's auth is a
+# single shared API key (hmac.compare_digest) plus rotating session
+# cookies — one key grants full access, there is no user/role model. RBAC
+# is a real multi-user architecture change (accounts, role assignment,
+# per-endpoint permission checks) that changes how every operator
+# authenticates; it should be a deliberate, scoped decision made with the
+# operator, not inferred and built unilaterally this late in a large
+# session. Documented as an open gap in MISSION_CONTROL_AUDIT.md.
+# ---------------------------------------------------------------------------
+@app.get("/audit-log")
+async def audit_log_endpoint(
+    limit: int = Query(default=200, ge=1, le=1000),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    from storage.audit_log import read_actions
+    entries = read_actions(limit=limit)
+    return {"count": len(entries), "entries": entries}
 
 
 def _provider_usage_from_decisions(limit: int = 200) -> dict[str, dict[str, Any]]:
@@ -1831,6 +1869,9 @@ async def close_outcome(
     _check_auth(x_api_key, iatis_session)
     from storage.outcome_tracker import close_signal
     success = close_signal(signal_id, exit_price, outcome, notes=notes)
+    from storage.audit_log import log_action
+    log_action("close_outcome", x_api_key=x_api_key, session_id=iatis_session,
+               success=success, detail=f"{signal_id} -> {outcome}")
     return {"success": success, "signal_id": signal_id, "outcome": outcome}
 
 

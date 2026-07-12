@@ -271,3 +271,76 @@ At this fourth checkpoint: 680 backend tests, all green. 10 of 15
 modules real. Remaining: Data Quality actions (3), Data Providers
 telemetry (2), System Health completion (1), Research Center drill-down
 (4), Security/RBAC (15).
+
+- **2026-07-12 — Data Quality actions (3):** `DataManager.cache_status()`
+  gains `duplicate_count`, `timezone`, and a heuristic `integrity_score`
+  (0-100, explicitly labeled heuristic). "Verify" reuses the Experiment
+  Runner's `verify_data_integrity` job; "Export report" adds a
+  `data_quality` kind to `/reports/{kind}`. "Compare providers" and
+  "Rebuild" deliberately NOT wired — both spend live provider API quota,
+  same reasoning as excluding `cross_provider_diff` from module 5.
+- **2026-07-12 — System Health completion (1):** `/health/full` gains
+  `swap_pct`, `load_1m/5m/15m`, and a new `services` block running real
+  `systemctl is-active` per whitelisted unit (reuses `/logs`' unit list).
+- **2026-07-12 — Data Providers telemetry (2):** `/provider-chains` gains
+  `recent_usage` (aggregated from `storage/decisions.jsonl`'s already-
+  logged `data_providers` field — no live ping, no new persistence) and
+  `macro_sources` (CBOE/FRED/CFTC status; Alternative.me honestly
+  reported as not integrated — no fetch code exists for it anywhere).
+  Deliberately no latency field — nothing captures per-provider latency
+  anywhere in this codebase, and fabricating one would violate the
+  project's own anti-overclaiming rule.
+- **2026-07-12 — Research Center drill-down (4):** New
+  `GET /research/{hypothesis_id}` — full registry entry + manifests
+  linked via the hypothesis's own `manifest` field (real, authoritative
+  where present) plus a separately-labeled heuristic filename match.
+  **Found and fixed a real routing bug**: the new path-param route was
+  initially registered before `/research/integrity`'s definition,
+  silently shadowing it (FastAPI/Starlette match in registration order).
+  Fixed by moving it after both `/research/manifests` and
+  `/research/integrity`; pinned by a regression test that hits both
+  literal routes directly.
+- **2026-07-12 — Security / audit log (15):** New `storage/audit_log.py`
+  (append-only JSONL, same pattern as `decision_log.py`) + `GET
+  /audit-log`, logging every mutating action (login success/failure, job
+  trigger, config reload, outcome close) with a masked actor (never the
+  raw API key or full session id). **Role-based access control is
+  deliberately NOT built** — today's auth is a single shared API key with
+  no user/role model; RBAC is a real multi-user architecture change that
+  should be a deliberate operator decision, not inferred unilaterally
+  this late in a session. Documented as an open gap, not faked.
+  **Found and fixed a real test-hygiene issue** while adding this: any
+  test exercising the new audited routes without an explicit `path=`
+  override was silently writing into the real `storage/audit_log.jsonl`
+  — and this turned out to be a *pre-existing* gap for
+  `storage/decisions.jsonl` too (700KB+ accumulated in one session).
+  Fixed at the root with a new autouse fixture in `tests/conftest.py`
+  that redirects both files' defaults to a per-test tmp dir.
+
+## Final status: all 15 modules real
+
+714 backend tests, all green. Every module from the original spec is now
+wired to real data or a real (whitelisted, fixed-argv) action — nothing
+faked, nothing claimed that isn't backed by an actual endpoint. Every
+commit in this log passed: full backend test suite, frontend `tsc` +
+`vite build` + `oxlint`, and a live smoke test against this repo's real
+state before being pushed.
+
+**Deliberately scoped-out gaps** (each documented at its point of
+decision above, not silently missing):
+- Cross-provider diff, `walk_forward_validation`, `engine_subset_search`
+  — not in the Experiment Runner whitelist (live provider API cost /
+  long runtime). Widening the whitelist is a follow-up operator decision.
+- Restarting `iatis-api`/`iatis-scheduler` — not exposed anywhere;
+  stays SSH-only.
+- Per-provider latency — not tracked anywhere in the codebase; not
+  fabricated.
+- Alternative.me — no fetch code exists in this codebase for it.
+- PDF report export — no PDF dependency in `requirements.txt`.
+- Role-based access control — single-shared-key auth remains; a real
+  multi-user architecture change, scoped out rather than half-built.
+- Engine correlation matrix / weight-history-over-time (module 8) —
+  would need either a real cross-engine correlation computation or new
+  historical-weight persistence neither of which exist yet; per-engine
+  PF/WR attribution shipped instead as the higher-value, honestly
+  achievable piece of that module.

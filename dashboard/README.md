@@ -55,6 +55,7 @@ roadmap placeholders instead of mock screens.
 | Reports | `/reports/{kind}` (research, manifest_summary, system, provider, forward) | Markdown download or JSON view of a snapshot assembled from data other endpoints already compute — no PDF (no dependency for it exists), see Mission Control module 10 |
 | Experiment Runner | `/experiments/jobs`, `/experiments/run`, `/experiments`, `/experiments/{job_id}` | whitelisted subprocess jobs only (fixed argv, never shell=True). Deliberately narrow: only `verify_data_integrity` and `forward_review` (local/fast/no network) — long-running or provider-API-spending jobs are NOT wired up; widening the whitelist is an operator decision, see execution/api_server.py's module docstring and MISSION_CONTROL_AUDIT.md. See Mission Control module 5 |
 | VPS Operations | `/ops/reload-config` + reuses `/health/full` (diagnostics) and the Experiment Runner's `backup_d1` job (category `ops`) | Deliberately excludes restarting iatis-api/iatis-scheduler — stays SSH-only until an operator explicitly asks for it. See Mission Control module 12 |
+| Security / Audit Log | `/audit-log` | Real audit trail (login, job trigger, config reload, outcome close) with masked actor — never the raw API key or full session id. Role-based access control is a deliberately scoped-out gap, not built (today's auth is a single shared key). See Mission Control module 15 |
 
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture

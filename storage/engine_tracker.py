@@ -170,6 +170,119 @@ def neutral_rate_by_engine() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def engine_trade_attribution(window_seconds: int = 30) -> dict[str, Any]:
+    """Approximate per-engine win rate / profit factor by matching each
+    closed outcome to the engine votes recorded closest in time for the
+    same symbol.
+
+    There is no shared foreign key between engine_performance and
+    outcomes — both are written independently (record_engine_votes then
+    log_signal) from the same pipeline report, moments apart. This joins
+    them by proximity instead: for each closed trade, every non-neutral
+    engine vote for the same symbol within `window_seconds` of the
+    trade's entry_time is treated as "voted on this trade" and credited
+    with its win/loss and P&L. The scheduler re-evaluates every symbol on
+    a fixed interval (see iatis-scheduler.service's --interval), so the
+    window must stay well under that cadence or it risks attributing a
+    trade to a *later* cycle's votes instead — 30s default is generous
+    relative to the sub-second gap between the two writes, conservative
+    relative to a 120s scheduler interval.
+
+    Returns matched_trades (out of total_closed_trades) so a caller can
+    judge coverage — a low match rate means most trades predate this
+    tracker or fell outside the window, not that engines underperformed.
+    """
+    init_tracker()
+    from storage.outcome_tracker import _init_db as _init_outcomes_table
+    _init_outcomes_table()  # a fresh DB has no outcomes table until the first signal lands
+
+    with _conn() as con:
+        vote_rows = con.execute("""
+            SELECT ts, symbol, engine, bias FROM engine_performance
+            WHERE final_verdict = 'EXECUTE' AND bias != 'NEUTRAL'
+        """).fetchall()
+        trade_rows = con.execute("""
+            SELECT signal_id, symbol, direction, entry_time, outcome, pnl_usd
+            FROM outcomes WHERE outcome != 'open'
+        """).fetchall()
+
+    def _parse_ts(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return None
+
+    votes = [{**dict(r), "_ts": _parse_ts(dict(r)["ts"])} for r in vote_rows]
+    trades = [{**dict(r), "_ts": _parse_ts(dict(r)["entry_time"])} for r in trade_rows]
+
+    per_engine: dict[str, dict[str, Any]] = {}
+    matched_trades = 0
+    for trade in trades:
+        if trade["_ts"] is None:
+            continue
+        candidates = [
+            v for v in votes
+            if v["symbol"] == trade["symbol"] and v["_ts"] is not None
+            and abs((v["_ts"] - trade["_ts"]).total_seconds()) <= window_seconds
+        ]
+        if not candidates:
+            continue
+        matched_trades += 1
+        pnl = trade["pnl_usd"] or 0.0
+        for v in candidates:
+            stats = per_engine.setdefault(v["engine"], {
+                "engine": v["engine"], "trades": 0, "wins": 0, "losses": 0,
+                "gross_win": 0.0, "gross_loss": 0.0, "agreeing_trades": 0,
+            })
+            stats["trades"] += 1
+            if v["bias"] == trade["direction"]:
+                stats["agreeing_trades"] += 1
+            if trade["outcome"] == "win":
+                stats["wins"] += 1
+            elif trade["outcome"] == "loss":
+                stats["losses"] += 1
+            if pnl > 0:
+                stats["gross_win"] += pnl
+            elif pnl < 0:
+                stats["gross_loss"] += -pnl
+
+    engines = []
+    for s in per_engine.values():
+        n = s["trades"]
+        win_rate = round(100 * s["wins"] / n, 1) if n else None
+        if s["gross_loss"] > 0:
+            profit_factor: float | str | None = round(s["gross_win"] / s["gross_loss"], 3)
+        elif n == 0:
+            profit_factor = None
+        else:
+            profit_factor = "Infinity"  # JSON-safe sentinel — see execution/api_server.py's report builders
+        engines.append({
+            "engine": s["engine"],
+            "matched_trades": n,
+            "wins": s["wins"],
+            "losses": s["losses"],
+            "win_rate": win_rate,
+            "profit_factor": profit_factor,
+            "direction_agreement_pct": round(100 * s["agreeing_trades"] / n, 1) if n else None,
+        })
+    engines.sort(key=lambda e: e["matched_trades"], reverse=True)
+
+    return {
+        "window_seconds": window_seconds,
+        "note": ("APPROXIMATE — no shared foreign key between engine votes and outcomes, "
+                 "joined by time proximity instead. Every engine that voted on a matched "
+                 "trade is credited with its win/loss and P&L, regardless of whether its "
+                 "vote agreed with the trade's direction (see direction_agreement_pct "
+                 "separately). Treat as directional evidence, not precise per-engine P&L."),
+        "total_closed_trades": len(trades),
+        "matched_trades": matched_trades,
+        "engines": engines,
+    }
+
+
 def suggested_weights(current_weights: dict[str, float]) -> dict[str, float]:
     """Suggest adjusted weights based on engine performance data.
 

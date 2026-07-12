@@ -45,7 +45,7 @@ roadmap placeholders instead of mock screens.
 | Mission Control | `/health`, `/health/full`, `/budget`, `/symbol-health` | system status, CPU/RAM/disk, credits |
 | Live Signals | `/decisions`, `/outcomes` | recent pipeline decisions + open paper signals |
 | Data Center | `/data-health` (new) | OHLCV cache completeness per symbol/timeframe |
-| Engine Monitor | `/engine-stats` | per-engine vote/accuracy stats, current vs. suggested weights |
+| Engine Monitor | `/engine-stats` (now includes `attribution`: approximate per-engine PF/WR, time-window-joined to closed outcomes since there's no shared foreign key — see module 8) | per-engine vote/accuracy stats, current vs. suggested weights |
 | Research & Backtests | `/research`, `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
 | Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
 | File Explorer | `/files/tree`, `/files/read`, `/files/download`, `/files/search`, `/files/diff` | read-only, path-confined to the repo root, secret-shaped paths denylisted server-side, see Mission Control module 11 |

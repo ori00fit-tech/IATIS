@@ -919,19 +919,21 @@ async def engine_stats_endpoint(
     """Per-engine performance statistics and suggested weight adjustments."""
     _check_auth(x_api_key, iatis_session)
     try:
-        from storage.engine_tracker import engine_stats, neutral_rate_by_engine, suggested_weights
+        from storage.engine_tracker import engine_stats, engine_trade_attribution, neutral_rate_by_engine, suggested_weights
         config = _get_config()
         current_weights = config.get("confluence", {}).get("weights", {})
 
         stats = engine_stats(min_votes=5, symbol=symbol)
         neutral = neutral_rate_by_engine()
         suggested = suggested_weights(current_weights)
+        attribution = engine_trade_attribution()
 
         return {
             "engine_stats": stats,
             "neutral_rates": neutral,
             "current_weights": current_weights,
             "suggested_weights": suggested,
+            "attribution": attribution,
             "note": "Suggested weights need 20+ votes per engine to be reliable. Review before applying."
         }
     except Exception as exc:

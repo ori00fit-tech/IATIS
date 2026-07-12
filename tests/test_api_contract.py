@@ -106,6 +106,14 @@ def test_health_full_reports_system_and_issues(client):
     assert body["status"] in ("ok", "degraded")
 
 
+def test_engine_stats_includes_attribution(client):
+    r = client.get("/engine-stats", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "attribution" in body
+    assert {"window_seconds", "total_closed_trades", "matched_trades", "engines"}.issubset(body["attribution"].keys())
+
+
 def test_meta_analysis_contract(client):
     r = client.get("/meta-analysis", headers=HDR)
     assert r.status_code == 200, r.text

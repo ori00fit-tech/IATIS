@@ -28,14 +28,19 @@ logger = get_logger(__name__)
 DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "decisions.jsonl"
 
 
-def log_decision(report: dict, path: Path | str = DEFAULT_LOG_PATH) -> None:
+def log_decision(report: dict, path: Path | str | None = None) -> None:
     """Append one pipeline report to the decision log.
 
     Stores the full report plus a timestamp. Never raises on write
     failure beyond logging a warning — a logging failure must never
     crash or block the trading pipeline itself.
     """
-    path = Path(path)
+    # `path` defaults to None (not DEFAULT_LOG_PATH directly) so that
+    # monkeypatching the module-level DEFAULT_LOG_PATH in tests takes
+    # effect on every call that omits path=. A default parameter value
+    # is bound once at function-definition time; a name looked up in the
+    # function body is resolved at call time and sees the patched value.
+    path = Path(path) if path is not None else DEFAULT_LOG_PATH
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "final_verdict": report.get("final_verdict"),
@@ -52,9 +57,9 @@ def log_decision(report: dict, path: Path | str = DEFAULT_LOG_PATH) -> None:
         logger.warning(f"Failed to write decision log (non-fatal): {exc}")
 
 
-def read_decisions(path: Path | str = DEFAULT_LOG_PATH) -> list[dict]:
+def read_decisions(path: Path | str | None = None) -> list[dict]:
     """Read all logged decisions. Returns [] if the log doesn't exist yet."""
-    path = Path(path)
+    path = Path(path) if path is not None else DEFAULT_LOG_PATH
     if not path.exists():
         return []
 
@@ -67,11 +72,73 @@ def read_decisions(path: Path | str = DEFAULT_LOG_PATH) -> list[dict]:
     return decisions
 
 
-def summarize_decisions(path: Path | str = DEFAULT_LOG_PATH) -> dict:
+def _decision_reasons(entry: dict) -> list[str]:
+    """All human-readable reason strings attached to one decision entry.
+
+    Used by filter_decisions' `reason` search — deliberately broader than
+    summarize_decisions' mutually-exclusive reason-counting logic, since a
+    filter should match *any* reason surface, not just the primary one.
+    """
+    report = entry.get("report", {})
+    reasons: list[str] = []
+    if "reason" in report:
+        reasons.append(str(report["reason"]))
+    reasons.extend(report.get("confluence", {}).get("fail_reasons", []))
+    risk = report.get("risk", {})
+    if risk and risk.get("passed") is False:
+        reasons.extend(risk.get("reasons", []))
+    return reasons
+
+
+def filter_decisions(
+    decisions: list[dict],
+    *,
+    symbol: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    engine: str | None = None,
+    min_score: float | None = None,
+    risk_rejected: bool | None = None,
+    reason: str | None = None,
+) -> list[dict]:
+    """Apply Decision Explorer filters to an already-loaded decision list.
+
+    Every filter is optional and they AND together. Timestamps are ISO-8601
+    strings, so lexical prefix comparison is chronological comparison.
+    """
+    out = decisions
+    if symbol:
+        sym = symbol.upper()
+        out = [d for d in out if d.get("symbol") == sym]
+    if date_from:
+        out = [d for d in out if d.get("timestamp", "") >= date_from]
+    if date_to:
+        out = [d for d in out if d.get("timestamp", "") <= date_to]
+    if engine:
+        eng = engine.lower()
+        out = [
+            d for d in out
+            if any(eng == str(e.get("engine", "")).lower()
+                   for e in d.get("report", {}).get("engine_outputs", []))
+        ]
+    if min_score is not None:
+        out = [
+            d for d in out
+            if (d.get("report", {}).get("confluence", {}).get("score") or 0) >= min_score
+        ]
+    if risk_rejected:
+        out = [d for d in out if d.get("report", {}).get("risk", {}).get("passed") is False]
+    if reason:
+        needle = reason.lower()
+        out = [d for d in out if needle in " ".join(_decision_reasons(d)).lower()]
+    return out
+
+
+def summarize_decisions(path: Path | str | None = None) -> dict:
     """Quick aggregate stats: how often does the system trade vs abstain,
     and what are the most common NO_TRADE reasons?
     """
-    decisions = read_decisions(path)
+    decisions = read_decisions(path)  # path=None resolves inside read_decisions
     if not decisions:
         return {"total": 0, "execute": 0, "no_trade": 0, "no_trade_reasons": {}}
 

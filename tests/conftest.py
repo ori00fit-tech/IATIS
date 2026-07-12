@@ -65,6 +65,25 @@ def _isolate_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_local_jsonl_logs(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the append-only local JSONL logs (decision_log, audit_log)
+    to a per-test tmp directory instead of the real storage/*.jsonl files.
+
+    Root cause: any test that exercises a route calling log_decision()/
+    log_action() without its own explicit path= override was silently
+    writing into the real repo's storage/decisions.jsonl and
+    storage/audit_log.jsonl on every test run — 700KB+ accumulated in one
+    session before this fixture existed. Both files are gitignored (never
+    committed) so this was never a leak, but it grows unbounded on every
+    developer laptop and CI runner. Tests that pass their own path=
+    explicitly are unaffected — this only changes what the *default*
+    (path=None) resolves to.
+    """
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", tmp_path / "decisions.jsonl")
+    monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit_log.jsonl")
+
+
 class NetworkAccessBlockedError(RuntimeError):
     """A test attempted a real outbound network connection."""
 

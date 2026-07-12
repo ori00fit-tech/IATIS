@@ -106,3 +106,37 @@ def test_duplicate_signal_id_ignored():
     log_signal(r)
     log_signal(r)  # same timestamp+symbol → INSERT OR IGNORE
     assert len(get_open_signals()) == 1
+
+
+# ---------- profit factor / avg R-multiple (Forward Demo, module 6) ----------
+
+def test_performance_summary_empty_has_no_profit_factor():
+    summary = performance_summary()
+    assert summary["profit_factor"] is None
+    assert summary["avg_r_multiple"] is None
+
+
+def test_performance_summary_profit_factor_and_avg_r_multiple():
+    # BEARISH: entry=1.0850, stop_loss=1.0920 (sl_distance=0.0070), tp=1.0640
+    # Win at TP: diff = entry-exit = 0.0210 → r = 0.0210/0.0070 = 3.0 → pnl_usd = 300
+    sid_win = log_signal(_make_report(symbol="WIN1"))
+    close_signal(sid_win, 1.0640, "win", risk_usd=100.0)
+
+    # Loss at SL: diff = entry-exit = -0.0070 → r = -1.0 → pnl_usd = -100
+    sid_loss = log_signal(_make_report(symbol="LOSS1"))
+    close_signal(sid_loss, 1.0920, "loss", risk_usd=100.0)
+
+    summary = performance_summary()
+    assert summary["profit_factor"] == pytest.approx(3.0, abs=0.01)
+    assert summary["avg_r_multiple"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_performance_summary_profit_factor_infinite_with_only_wins():
+    # Zero losing trades → PF is mathematically infinite. Must be a JSON-safe
+    # string sentinel, not a raw float("inf") — Python's json.dumps would
+    # emit a bare `Infinity` token, which is not valid JSON and makes a
+    # browser's fetch().json() throw client-side.
+    sid = log_signal(_make_report(symbol="ALLWIN"))
+    close_signal(sid, 1.0640, "win", risk_usd=100.0)
+    summary = performance_summary()
+    assert summary["profit_factor"] == "Infinity"

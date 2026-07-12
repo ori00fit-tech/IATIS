@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from research.edge_gate import EdgeNotProvenError, check_edge_gate
-from storage.decision_log import log_decision, read_decisions, summarize_decisions
+from storage.decision_log import filter_decisions, log_decision, read_decisions, summarize_decisions
 
 
 # ---------- edge gate ----------
@@ -137,3 +137,89 @@ def test_summarize_decisions_handles_validation_failure_reason(tmp_log_path):
     log_decision({"final_verdict": "NO_TRADE", "reason": "Data validation failed: bad bars"}, path=tmp_log_path)
     summary = summarize_decisions(tmp_log_path)
     assert summary["no_trade_reasons"]["Data validation failed: bad bars"] == 1
+
+
+# ---------- filter_decisions (Decision Explorer, module 7) ----------
+
+def _entry(**overrides):
+    base = {
+        "timestamp": "2026-07-10T12:00:00+00:00",
+        "final_verdict": "NO_TRADE",
+        "symbol": "EURUSD",
+        "report": {
+            "confluence": {"score": 40.0, "fail_reasons": ["Only 1 engine(s) agree"]},
+            "engine_outputs": [{"engine": "smc", "bias": "BEARISH", "score": 40}],
+            "risk": {"passed": False, "reasons": ["RR below minimum"]},
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_filter_decisions_by_symbol():
+    decisions = [_entry(symbol="EURUSD"), _entry(symbol="XAUUSD")]
+    assert [d["symbol"] for d in filter_decisions(decisions, symbol="xauusd")] == ["XAUUSD"]
+
+
+def test_filter_decisions_by_date_range():
+    decisions = [
+        _entry(timestamp="2026-07-01T00:00:00+00:00"),
+        _entry(timestamp="2026-07-10T00:00:00+00:00"),
+        _entry(timestamp="2026-07-20T00:00:00+00:00"),
+    ]
+    out = filter_decisions(decisions, date_from="2026-07-05", date_to="2026-07-15")
+    assert [d["timestamp"] for d in out] == ["2026-07-10T00:00:00+00:00"]
+
+
+def test_filter_decisions_by_engine_case_insensitive():
+    decisions = [
+        _entry(report={"engine_outputs": [{"engine": "SMC"}]}),
+        _entry(report={"engine_outputs": [{"engine": "nnfx"}]}),
+    ]
+    out = filter_decisions(decisions, engine="smc")
+    assert len(out) == 1
+    assert out[0]["report"]["engine_outputs"][0]["engine"] == "SMC"
+
+
+def test_filter_decisions_by_min_score():
+    decisions = [
+        _entry(report={"confluence": {"score": 40.0}}),
+        _entry(report={"confluence": {"score": 70.0}}),
+    ]
+    out = filter_decisions(decisions, min_score=60)
+    assert len(out) == 1 and out[0]["report"]["confluence"]["score"] == 70.0
+
+
+def test_filter_decisions_risk_rejected_only():
+    decisions = [
+        _entry(report={"risk": {"passed": False, "reasons": ["RR below minimum"]}}),
+        _entry(report={"risk": {"passed": True, "reasons": []}}),
+    ]
+    out = filter_decisions(decisions, risk_rejected=True)
+    assert len(out) == 1 and out[0]["report"]["risk"]["passed"] is False
+
+
+def test_filter_decisions_by_reason_substring():
+    decisions = [
+        _entry(report={"confluence": {"fail_reasons": ["Only 1 engine(s) agree"]}}),
+        _entry(report={"confluence": {"fail_reasons": ["News blackout window"]}}),
+    ]
+    out = filter_decisions(decisions, reason="blackout")
+    assert len(out) == 1
+    assert "News blackout window" in out[0]["report"]["confluence"]["fail_reasons"]
+
+
+def test_filter_decisions_combines_filters_with_and():
+    decisions = [
+        _entry(symbol="EURUSD", report={"confluence": {"score": 70.0}}),
+        _entry(symbol="EURUSD", report={"confluence": {"score": 20.0}}),
+        _entry(symbol="XAUUSD", report={"confluence": {"score": 80.0}}),
+    ]
+    out = filter_decisions(decisions, symbol="EURUSD", min_score=50)
+    assert len(out) == 1
+    assert out[0]["symbol"] == "EURUSD" and out[0]["report"]["confluence"]["score"] == 70.0
+
+
+def test_filter_decisions_no_filters_returns_all():
+    decisions = [_entry(), _entry()]
+    assert filter_decisions(decisions) == decisions

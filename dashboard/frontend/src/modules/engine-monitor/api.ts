@@ -10,11 +10,30 @@ export interface EngineStat {
   avg_score_when_voting: number
 }
 
+export interface EngineAttribution {
+  engine: string
+  matched_trades: number
+  wins: number
+  losses: number
+  win_rate: number | null
+  profit_factor: number | 'Infinity' | null
+  direction_agreement_pct: number | null
+}
+
+export interface AttributionResponse {
+  window_seconds: number
+  note: string
+  total_closed_trades: number
+  matched_trades: number
+  engines: EngineAttribution[]
+}
+
 export interface EngineStatsResponse {
   engine_stats: EngineStat[]
   neutral_rates: { engine: string; total: number; neutral_pct: number }[]
   current_weights: Record<string, number>
   suggested_weights: Record<string, number>
+  attribution: AttributionResponse
   note: string
 }
 

@@ -24,8 +24,10 @@ import asyncio
 import hmac
 import os
 import re
+import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +38,7 @@ load_dotenv()
 
 try:
     from fastapi import Cookie, FastAPI, Header, HTTPException, Query, Request, Response
-    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError as exc:
@@ -291,20 +293,39 @@ async def analyze(
 async def decisions(
     limit: int = Query(default=20, ge=1, le=200),
     verdict: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="ISO date/timestamp, inclusive lower bound"),
+    date_to: str | None = Query(default=None, description="ISO date/timestamp, inclusive upper bound"),
+    engine: str | None = Query(default=None, description="Engine name that voted on this decision"),
+    min_score: float | None = Query(default=None, ge=0, le=100),
+    risk_rejected: bool = Query(default=False, description="Only decisions the risk gate rejected"),
+    reason: str | None = Query(default=None, description="Substring search over NO_TRADE/rejection reasons"),
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     _check_auth(x_api_key, iatis_session)
     try:
-        from storage.decision_log import read_decisions, summarize_decisions
+        from storage.decision_log import read_decisions, summarize_decisions, filter_decisions
         all_d = read_decisions()
+        total_in_log = len(all_d)
         if verdict:
             all_d = [d for d in all_d if d.get("final_verdict") == verdict.upper()]
+        matched = filter_decisions(
+            all_d,
+            symbol=symbol,
+            date_from=date_from,
+            date_to=date_to,
+            engine=engine,
+            min_score=min_score,
+            risk_rejected=risk_rejected or None,
+            reason=reason,
+        )
         return {
-            "total_in_log": len(all_d),
-            "returned": len(all_d[-limit:]),
+            "total_in_log": total_in_log,
+            "matched": len(matched),
+            "returned": len(matched[-limit:]),
             "summary": summarize_decisions(),
-            "decisions": list(reversed(all_d[-limit:])),
+            "decisions": list(reversed(matched[-limit:])),
         }
     except Exception as exc:
         logger.error(f"Decisions error: {exc}", exc_info=True)
@@ -348,16 +369,20 @@ async def do_login(request: Request) -> Response:
     is NEVER stored in the cookie or exposed to the client.
     """
     import secrets
+    from storage.audit_log import log_action
+
     body = await request.json()
     key = body.get("key", "")
     required = os.environ.get("API_SERVER_KEY", "")
     if not required or not hmac.compare_digest(key, required):
+        log_action("login", success=False)
         raise HTTPException(status_code=401, detail="Invalid key")
 
     # Generate random session ID (NOT the raw key)
     session_id = secrets.token_urlsafe(32)
     _active_sessions[session_id] = time.time()
     _save_sessions(_active_sessions)  # persist to disk
+    log_action("login", session_id=session_id, success=True)
 
     response = JSONResponse({"ok": True})
     response.set_cookie(
@@ -898,19 +923,21 @@ async def engine_stats_endpoint(
     """Per-engine performance statistics and suggested weight adjustments."""
     _check_auth(x_api_key, iatis_session)
     try:
-        from storage.engine_tracker import engine_stats, neutral_rate_by_engine, suggested_weights
+        from storage.engine_tracker import engine_stats, engine_trade_attribution, neutral_rate_by_engine, suggested_weights
         config = _get_config()
         current_weights = config.get("confluence", {}).get("weights", {})
 
         stats = engine_stats(min_votes=5, symbol=symbol)
         neutral = neutral_rate_by_engine()
         suggested = suggested_weights(current_weights)
+        attribution = engine_trade_attribution()
 
         return {
             "engine_stats": stats,
             "neutral_rates": neutral,
             "current_weights": current_weights,
             "suggested_weights": suggested,
+            "attribution": attribution,
             "note": "Suggested weights need 20+ votes per engine to be reliable. Review before applying."
         }
     except Exception as exc:
@@ -983,30 +1010,7 @@ async def research_manifests(
     `reproducible: false` flag for runs from a dirty working tree.
     """
     _check_auth(x_api_key, iatis_session)
-    import json as _json
-    from pathlib import Path
-
-    manifests: list[dict[str, Any]] = []
-    for f in sorted(Path("research/results").glob("*_manifest.json"), reverse=True):
-        try:
-            m = _json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        params = m.get("params") or {}
-        git = m.get("git") or {}
-        manifests.append({
-            "file": f.name,
-            "kind": m.get("kind"),
-            "generated_at": m.get("generated_at"),
-            "reproducible": m.get("reproducible"),
-            "git_commit": (git.get("commit") or "")[:8],
-            "git_dirty": git.get("dirty"),
-            "decision_timeframe": params.get("decision_timeframe"),
-            "engines_enabled": params.get("engines_enabled"),
-            "note": params.get("note"),
-            "datasets_count": len(m.get("datasets") or []),
-            "results": m.get("results"),
-        })
+    manifests = _load_manifests()
     return {"count": len(manifests), "manifests": manifests}
 
 
@@ -1165,6 +1169,565 @@ async def philosophy_audit_endpoint(
                             detail="Audit unavailable — decisions DB unreachable.")
 
 
+# ---------------------------------------------------------------------------
+# Research Integrity (Mission Control module 9) — on-demand, read-only
+# checks alongside the philosophy audit above. Deliberately excludes
+# cross-provider diff (scripts/cross_provider_diff.py): that tool makes
+# live provider API calls and burns rate-limited quota (see /budget), so
+# it belongs in the Experiment Runner (module 5) where a human explicitly
+# kicks off a job with visible cost, not a casual dashboard click.
+# ---------------------------------------------------------------------------
+def _leakage_guard_report() -> dict[str, Any]:
+    """Static leakage scan (research/guards/static_scan.py) over every
+    research/experiment script. Advisory only, by that module's own
+    design — CLEAN or WARNINGS_FOUND, never a hard FAIL; see its
+    docstring for why a heuristic AST scan must never claim proof.
+    """
+    from research.guards.static_scan import scan_paths
+
+    paths: list[Path] = []
+    for d in ("research", "scripts"):
+        paths.extend(sorted(Path(d).rglob("*.py")))
+    paths.extend(sorted(Path(".").glob("run_h*.py")))
+
+    report = scan_paths(paths)
+    return {"status": "PASS" if report["verdict"] == "CLEAN" else "WARNING", **report}
+
+
+def _survivorship_report() -> dict[str, Any]:
+    """Symbol-evidence + selection-disclosure gate
+    (research/survivorship_checker.py) — matches that module's own
+    return-code convention: an enabled symbol with zero committed
+    evidence is a FAIL, everything else advisory-only WARNING/PASS.
+    """
+    from research.survivorship_checker import check_selection_disclosure, check_symbol_evidence
+
+    config = _get_config()
+    symbol_report = check_symbol_evidence(config)
+    selection_report = check_selection_disclosure()
+    if symbol_report["enabled_no_evidence"]:
+        status = "FAIL"
+    elif (symbol_report["disabled_no_evidence"] or selection_report["undisclosed"]
+          or selection_report["invalid_label"]):
+        status = "WARNING"
+    else:
+        status = "PASS"
+    return {"status": status, "symbol_evidence": symbol_report, "selection_disclosure": selection_report}
+
+
+def _manifest_validator_report() -> dict[str, Any]:
+    """Which evidence manifests are reproducible=false — reuses
+    _load_manifests() (also backing /research/manifests and /alerts) so
+    this never drifts from what those already show.
+    """
+    manifests = _load_manifests()
+    non_reproducible = [m for m in manifests if m.get("reproducible") is False]
+    return {
+        "status": "WARNING" if non_reproducible else "PASS",
+        "total": len(manifests),
+        "reproducible_count": len(manifests) - len(non_reproducible),
+        "non_reproducible": [
+            {"file": m["file"], "kind": m.get("kind"), "git_dirty": m.get("git_dirty")}
+            for m in non_reproducible
+        ],
+    }
+
+
+@app.get("/research/integrity")
+async def research_integrity(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Integrity — leakage guard, survivorship checker, and
+    manifest validator, on demand. Read-only, no network calls, never
+    modifies research evidence. See module docstring above for what's
+    deliberately excluded and why.
+    """
+    _check_auth(x_api_key, iatis_session)
+
+    def _run() -> dict[str, Any]:
+        checks: dict[str, Any] = {}
+        for name, fn in (
+            ("leakage_guard", _leakage_guard_report),
+            ("survivorship", _survivorship_report),
+            ("manifest_validator", _manifest_validator_report),
+        ):
+            try:
+                checks[name] = fn()
+            except Exception as exc:
+                checks[name] = {"status": "ERROR", "error": str(exc)[:300]}
+
+        statuses = {c.get("status") for c in checks.values()}
+        overall = (
+            "FAIL" if "FAIL" in statuses else
+            "ERROR" if "ERROR" in statuses else
+            "WARNING" if "WARNING" in statuses else
+            "PASS"
+        )
+        return {"checked_at": datetime.now(timezone.utc).isoformat(), "overall": overall, "checks": checks}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_executor, _run)
+
+
+@app.get("/research/{hypothesis_id}")
+async def research_hypothesis_detail(
+    hypothesis_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Center drill-down (module 4) — the complete registry.json
+    entry for one hypothesis (untruncated, unlike /research's summary
+    list) plus every manifest linked to it and its declared result
+    file(s).
+
+    Manifest linking uses two sources, kept separate and labeled rather
+    than merged into one list pretending to be equally certain:
+      - "exact": the hypothesis's own `manifest` field in registry.json
+        (a real field some hypotheses declare — H008c, H015, etc. — the
+        authoritative link where it exists).
+      - "heuristic": any other manifest whose filename or `kind` contains
+        the hypothesis ID as a case-insensitive substring. A guess, not
+        a fact — many manifest kinds (crypto_volume_experiment,
+        ctrader_spread_measurement) don't embed a hypothesis ID at all.
+
+    MUST stay registered after /research/manifests and /research/integrity
+    (both literal paths) — Starlette/FastAPI match routes in registration
+    order, so a path-param route registered earlier would silently shadow
+    them (hit exactly this bug once while building this route; pinned by
+    tests/test_api_contract.py::test_research_hypothesis_detail_route_does_not_shadow_literal_routes).
+    """
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+
+    registry_path = Path("research/results/registry.json")
+    if not registry_path.exists():
+        raise HTTPException(status_code=404, detail="Registry not found.")
+    hypotheses_raw = _json.loads(registry_path.read_text()).get("hypotheses", {})
+    hyp = hypotheses_raw.get(hypothesis_id)
+    if hyp is None:
+        raise HTTPException(status_code=404, detail=f"Hypothesis '{hypothesis_id}' not found.")
+
+    manifests = _load_manifests()
+    declared_manifest = hyp.get("manifest")
+    declared_name = Path(declared_manifest).name if declared_manifest else None
+
+    exact_links, heuristic_links = [], []
+    needle = hypothesis_id.lower()
+    for m in manifests:
+        if declared_name and m["file"] == declared_name:
+            exact_links.append(m)
+        elif needle in m["file"].lower() or (m.get("kind") and needle in str(m["kind"]).lower()):
+            heuristic_links.append(m)
+
+    # Result file(s) — path + existence check only. Never dumps arbitrary
+    # file content through this endpoint; that's File Explorer's job.
+    result_paths: list[str] = []
+    if isinstance(hyp.get("result_file"), str):
+        result_paths.append(hyp["result_file"])
+    result_files_field = hyp.get("result_files")
+    if isinstance(result_files_field, dict):
+        result_paths.extend(v for v in result_files_field.values() if isinstance(v, str))
+
+    return {
+        "id": hypothesis_id,
+        "hypothesis": hyp,
+        "manifests": {"exact": exact_links, "heuristic": heuristic_links},
+        "result_files": [
+            {"path": p, "exists": (Path("research") / p).exists()}
+            for p in result_paths
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reports (Mission Control module 10) — on-demand snapshots assembled from
+# data other endpoints already compute; never a second implementation of
+# the same numbers. Markdown or JSON only — no PDF dependency exists in
+# this project's requirements.txt, and we don't claim functionality that
+# isn't real (docs/VISION_v2.md's "no future phase functionality
+# pretending to be complete" rule).
+# ---------------------------------------------------------------------------
+_REPORT_TITLES: dict[str, str] = {
+    "research": "IATIS Research Report",
+    "manifest_summary": "IATIS Manifest Summary",
+    "system": "IATIS System Health Report",
+    "provider": "IATIS Data Provider Report",
+    "forward": "IATIS Forward Demo Report",
+    "data_quality": "IATIS Data Quality Report",
+}
+
+
+def _dict_to_md(title: str, data: dict[str, Any], generated_at: str) -> str:
+    """Generic dict → Markdown for report kinds without a dedicated table
+    formatter (system/provider/forward): a titled doc with the exact data
+    as a JSON block. Honest about being a snapshot, not hand-formatted
+    prose — good enough for an operator to read or paste elsewhere."""
+    import json as _json
+
+    return "\n".join([
+        f"# {title}", "", f"Generated {generated_at}.", "",
+        "```json", _json.dumps(data, indent=2, default=str), "```", "",
+    ])
+
+
+def _build_manifest_summary_md(manifests: dict[str, dict]) -> str:
+    from scripts.generate_research_report import build_manifest_table
+
+    n_total = len(manifests)
+    n_repro = sum(1 for m in manifests.values() if m.get("reproducible"))
+    return "\n".join([
+        "# IATIS Manifest Summary", "",
+        f"Generated {datetime.now(timezone.utc).isoformat()}.", "",
+        f"{n_total} manifests, {n_repro} reproducible, {n_total - n_repro} NOT reproducible.", "",
+        build_manifest_table(manifests), "",
+    ])
+
+
+@app.get("/reports/{kind}")
+async def generate_report(
+    kind: str,
+    format: str = Query(default="md", pattern="^(md|json)$"),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> Any:
+    _check_auth(x_api_key, iatis_session)
+    if kind not in _REPORT_TITLES:
+        raise HTTPException(status_code=404, detail=f"Unknown report kind '{kind}'. Choose from: {sorted(_REPORT_TITLES)}")
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    title = _REPORT_TITLES[kind]
+
+    if kind == "research":
+        from scripts.generate_research_report import build_report, load_manifests, load_registry
+        registry = load_registry()
+        manifests = load_manifests()
+        markdown = build_report(registry, manifests)
+        data: dict[str, Any] = {"registry": registry, "manifests": manifests}
+    elif kind == "manifest_summary":
+        from scripts.generate_research_report import load_manifests
+        manifests = load_manifests()
+        data = {"manifests": manifests}
+        markdown = _build_manifest_summary_md(manifests)
+    elif kind == "system":
+        data = await system_health_full(x_api_key, iatis_session)
+        markdown = _dict_to_md(title, data, generated_at)
+    elif kind == "provider":
+        data = await provider_chains_endpoint(x_api_key, iatis_session)
+        markdown = _dict_to_md(title, data, generated_at)
+    elif kind == "data_quality":
+        data = _data_health_snapshot()
+        markdown = _dict_to_md(title, data, generated_at)
+    else:  # "forward"
+        data = {
+            "forward_review": await forward_review_endpoint(x_api_key, iatis_session),
+            "outcomes_summary": (await get_outcomes(x_api_key, iatis_session))["summary"],
+        }
+        markdown = _dict_to_md(title, data, generated_at)
+
+    if format == "json":
+        return {"kind": kind, "title": title, "generated_at": generated_at, "data": data}
+    return PlainTextResponse(
+        markdown, media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="iatis_{kind}_report.md"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Experiment Runner (Mission Control module 5) — whitelisted job execution
+# only. No arbitrary shell, no user-supplied arguments: `job` selects a key
+# into a hardcoded argv list, exactly the pattern already used by /logs
+# (journalctl) and /files/diff (git diff) — never shell=True, never string
+# interpolation of request data into a command line.
+#
+# SCOPE, DELIBERATELY NARROW: only jobs that are fast, local, and don't
+# spend anything are whitelisted here — verify_data_integrity (reads local
+# CSVs) and forward_review (one D1 read). Genuinely long-running jobs
+# (walk_forward_validation, engine_subset_search — CPU-heavy, minutes+) and
+# anything that burns rate-limited provider API quota (cross_provider_diff)
+# are NOT included; widening this whitelist changes what a dashboard click
+# can cost on a live VPS and should be a deliberate operator decision, not
+# something inferred here. See MISSION_CONTROL_AUDIT.md's progress log.
+# ---------------------------------------------------------------------------
+_JOB_COMMANDS: dict[str, list[str]] = {
+    "verify_data_integrity": [sys.executable, "-m", "scripts.verify_data_integrity"],
+    "forward_review": [sys.executable, "-m", "scripts.forward_review"],
+    "backup_d1": [sys.executable, "-m", "scripts.backup_d1"],
+}
+_JOB_DESCRIPTIONS: dict[str, str] = {
+    "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
+    "forward_review": "Evaluate registry.json's pre-registered D001/D002 forward decision rules against closed outcomes. One D1 read, no network.",
+    "backup_d1": "Dump every D1 table + decisions.jsonl to backups/, gzip, verify row counts, rotate old backups. Writes to local disk only, no network beyond the D1 proxy already in use.",
+}
+# Categorizes each whitelisted job for the frontend (Experiment Runner
+# shows "research", VPS Operations shows "ops") — same underlying
+# job-execution engine either way, per MISSION_CONTROL_AUDIT.md's note
+# that module 12 should reuse module 5's primitive rather than duplicate it.
+_JOB_CATEGORIES: dict[str, str] = {
+    "verify_data_integrity": "research",
+    "forward_review": "research",
+    "backup_d1": "ops",
+}
+_JOB_TIMEOUT_SECONDS = 600  # generous for these three (all finish in seconds to low-minutes locally); kills a runaway process rather than leaking it forever
+
+_job_executor = ThreadPoolExecutor(max_workers=2)
+_jobs: dict[str, "_Job"] = {}
+_jobs_lock = threading.Lock()
+
+
+class _Job:
+    def __init__(self, job_id: str, name: str):
+        self.id = job_id
+        self.name = name
+        self.status = "queued"  # queued -> running -> finished | failed | timeout
+        self.created_at = datetime.now(timezone.utc).isoformat()
+        self.started_at: str | None = None
+        self.finished_at: str | None = None
+        self.returncode: int | None = None
+        self.log_lines: list[str] = []
+        self.lock = threading.Lock()
+
+
+def _job_summary(job: "_Job") -> dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "job": job.name,
+        "status": job.status,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "returncode": job.returncode,
+        "log_lines": len(job.log_lines),
+    }
+
+
+def _run_job(job: "_Job") -> None:
+    import subprocess
+
+    job.status = "running"
+    job.started_at = datetime.now(timezone.utc).isoformat()
+    argv = _JOB_COMMANDS[job.name]
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=_REPO_ROOT, bufsize=1,
+        )
+        start = time.monotonic()
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            with job.lock:
+                job.log_lines.append(line.rstrip("\n"))
+            if time.monotonic() - start > _JOB_TIMEOUT_SECONDS:
+                proc.kill()
+                job.status = "timeout"
+                break
+        proc.wait(timeout=10)
+        if job.status != "timeout":
+            job.returncode = proc.returncode
+            job.status = "finished" if proc.returncode == 0 else "failed"
+    except Exception as exc:
+        with job.lock:
+            job.log_lines.append(f"[runner error] {exc}")
+        job.status = "failed"
+    finally:
+        job.finished_at = datetime.now(timezone.utc).isoformat()
+
+
+class _RunJobRequest(BaseModel):
+    job: str
+
+
+@app.get("/experiments/jobs")
+async def experiment_job_catalog(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """The whitelisted set of jobs /experiments/run will execute. Nothing
+    else — see the module docstring above for why this list is short."""
+    _check_auth(x_api_key, iatis_session)
+    return {
+        "jobs": [
+            {"id": k, "description": _JOB_DESCRIPTIONS.get(k, ""), "category": _JOB_CATEGORIES.get(k, "research")}
+            for k in _JOB_COMMANDS
+        ]
+    }
+
+
+@app.post("/experiments/run")
+async def experiments_run(
+    body: _RunJobRequest,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    if body.job not in _JOB_COMMANDS:
+        raise HTTPException(status_code=400, detail=f"Unknown job '{body.job}'. See /experiments/jobs.")
+
+    with _jobs_lock:
+        already_running = any(
+            j.name == body.job and j.status in ("queued", "running") for j in _jobs.values()
+        )
+        if already_running:
+            raise HTTPException(status_code=409, detail=f"'{body.job}' is already running.")
+        job_id = uuid.uuid4().hex[:12]
+        job = _Job(job_id, body.job)
+        _jobs[job_id] = job
+
+    from storage.audit_log import log_action
+    log_action("experiment_run", x_api_key=x_api_key, session_id=iatis_session, detail=f"{body.job} ({job_id})")
+
+    _job_executor.submit(_run_job, job)
+    return _job_summary(job)
+
+
+@app.get("/experiments")
+async def experiments_list(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    with _jobs_lock:
+        jobs = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
+        return {"jobs": [_job_summary(j) for j in jobs]}
+
+
+@app.get("/experiments/{job_id}")
+async def experiments_status(
+    job_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    with job.lock:
+        return {**_job_summary(job), "log": list(job.log_lines)}
+
+
+# ---------------------------------------------------------------------------
+# VPS Operations (Mission Control module 12) — controlled operations only.
+# "Diagnostics"/"Health check" reuse GET /health/full directly (the
+# frontend calls it, no new endpoint needed). "Backup" reuses the
+# Experiment Runner's job engine above via the "backup_d1" whitelist entry
+# (category "ops"). This section only adds what neither of those already
+# covers: an in-process config-cache reload.
+#
+# DELIBERATELY EXCLUDED: restarting iatis-api/iatis-scheduler. Restarting
+# the live scheduler mid-cycle on what may be a production trading VPS is
+# a materially different risk than anything else in this dashboard restart
+# — it stays an explicit `systemctl restart` over SSH until an operator
+# deliberately asks for it to be wired up. See MISSION_CONTROL_AUDIT.md.
+# ---------------------------------------------------------------------------
+@app.post("/ops/reload-config")
+async def ops_reload_config(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Clear the in-process config.yaml cache so the next request reloads
+    it from disk — e.g. after editing config.yaml on the VPS. Does not
+    itself change any threshold/engine/trading value, only cache staleness.
+    """
+    _check_auth(x_api_key, iatis_session)
+    global _config_cache
+    with _config_lock:
+        _config_cache = None
+    from storage.audit_log import log_action
+    log_action("reload_config", x_api_key=x_api_key, session_id=iatis_session)
+    return {"success": True, "message": "Config cache cleared — next request reloads config.yaml from disk."}
+
+
+# ---------------------------------------------------------------------------
+# Security (Mission Control module 15) — audit log for every mutating
+# action (login, job triggers, config reload, outcome mutation). Every
+# job-execution and file-serving route in this file is already whitelist-
+# only with fixed argv, satisfying "no arbitrary command execution" and
+# "whitelisted jobs only" — see the Experiment Runner/File Explorer/Live
+# Logs module docstrings above.
+#
+# DELIBERATELY NOT INCLUDED: role-based access control. Today's auth is a
+# single shared API key (hmac.compare_digest) plus rotating session
+# cookies — one key grants full access, there is no user/role model. RBAC
+# is a real multi-user architecture change (accounts, role assignment,
+# per-endpoint permission checks) that changes how every operator
+# authenticates; it should be a deliberate, scoped decision made with the
+# operator, not inferred and built unilaterally this late in a large
+# session. Documented as an open gap in MISSION_CONTROL_AUDIT.md.
+# ---------------------------------------------------------------------------
+@app.get("/audit-log")
+async def audit_log_endpoint(
+    limit: int = Query(default=200, ge=1, le=1000),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    from storage.audit_log import read_actions
+    entries = read_actions(limit=limit)
+    return {"count": len(entries), "entries": entries}
+
+
+def _provider_usage_from_decisions(limit: int = 200) -> dict[str, dict[str, Any]]:
+    """How often each provider actually served the last `limit` decisions,
+    and when it was last used. Not a live ping and not new persistence —
+    every pipeline report already logs which provider served each
+    timeframe (main.py, via df.attrs["provider"]); this only aggregates
+    what's already in storage/decisions.jsonl.
+    """
+    from storage.decision_log import read_decisions
+
+    decisions = read_decisions()[-limit:]
+    usage: dict[str, dict[str, Any]] = {}
+    for d in decisions:
+        ts = d.get("timestamp")
+        providers = (d.get("report") or {}).get("data_providers") or {}
+        for tf, provider in providers.items():
+            entry = usage.setdefault(provider, {"count": 0, "last_used_at": None, "timeframes": set()})
+            entry["count"] += 1
+            entry["timeframes"].add(tf)
+            if ts and (entry["last_used_at"] is None or ts > entry["last_used_at"]):
+                entry["last_used_at"] = ts
+    return {
+        p: {"count": v["count"], "last_used_at": v["last_used_at"], "timeframes": sorted(v["timeframes"])}
+        for p, v in usage.items()
+    }
+
+
+def _macro_source_status() -> dict[str, Any]:
+    """Status for macro/alt data sources outside the main OHLCV provider
+    chains — CBOE, FRED, CFTC are all keyless (no credentials needed);
+    Alternative.me has no fetch code anywhere in this codebase and is
+    reported as such rather than faked as "missing credentials". Checks
+    local cache freshness and env vars only — never makes a network call.
+    """
+    def _dir_freshness(path: Path) -> str | None:
+        if not path.exists():
+            return None
+        files = sorted(path.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            return None
+        return datetime.fromtimestamp(files[0].stat().st_mtime, tz=timezone.utc).isoformat()
+
+    return {
+        "cboe": {
+            "configured": True, "requires_key": False,
+            "note": "VIX daily history, keyless CSV (core/alt_data_loader.py)",
+        },
+        "fred": {
+            "configured": bool(os.environ.get("FRED_API_KEY")), "requires_key": False,
+            "note": "works keyless via the fredgraph.csv fallback even without FRED_API_KEY",
+        },
+        "cftc": {
+            "configured": True, "requires_key": False,
+            "note": "weekly Commitments-of-Traders download (scripts/download_cot.py)",
+            "last_cached": _dir_freshness(Path("data/cot")),
+        },
+        "alternative_me": {
+            "configured": False, "requires_key": None,
+            "note": "not integrated in this codebase — no fetch code exists for it",
+        },
+    }
+
+
 @app.get("/provider-chains")
 async def provider_chains_endpoint(
     x_api_key: str | None = Header(default=None),
@@ -1172,7 +1735,9 @@ async def provider_chains_endpoint(
 ) -> dict[str, Any]:
     """Data-layer transparency: the per-asset-class provider chains in
     effect, which providers are actually usable right now (credentials /
-    dependencies present), and each timeframe's native coverage."""
+    dependencies present), each timeframe's native coverage, which
+    provider actually served recent decisions, and macro/alt source
+    status (module 2)."""
     _check_auth(x_api_key, iatis_session)
     import os as _os
     from core.data_providers import DEFAULT_CHAINS, _NATIVE_TF, provider_chain_for
@@ -1190,12 +1755,18 @@ async def provider_chains_endpoint(
         "finnhub": bool(_os.getenv("FINNHUB_API_KEY")),
         "ccxt": True,
     }
+    try:
+        recent_usage = _provider_usage_from_decisions()
+    except Exception:
+        recent_usage = {}
     return {
         "chains": {cls: (overrides.get(cls) or chain)
                    for cls, chain in DEFAULT_CHAINS.items()},
         "native_timeframes": {p: sorted(tfs) for p, tfs in _NATIVE_TF.items()},
         "availability": availability,
         "per_symbol": {sym: provider_chain_for(sym, overrides) for sym in active},
+        "recent_usage": recent_usage,
+        "macro_sources": _macro_source_status(),
     }
 
 
@@ -1298,7 +1869,110 @@ async def close_outcome(
     _check_auth(x_api_key, iatis_session)
     from storage.outcome_tracker import close_signal
     success = close_signal(signal_id, exit_price, outcome, notes=notes)
+    from storage.audit_log import log_action
+    log_action("close_outcome", x_api_key=x_api_key, session_id=iatis_session,
+               success=success, detail=f"{signal_id} -> {outcome}")
     return {"success": success, "signal_id": signal_id, "outcome": outcome}
+
+
+def _scheduler_status() -> dict[str, Any]:
+    """Last scheduler run, from a local log file or journalctl.
+
+    Shared by /health/full and /alerts — extracted so both read the exact
+    same signal instead of two slightly-different implementations drifting
+    apart over time.
+    """
+    import re as _re
+    log_candidates = [
+        Path("storage/system.log"),
+        Path("/var/log/iatis-scheduler.log"),
+    ]
+    last_run = None
+    last_execute_count = 0
+    for sched_log in log_candidates:
+        if sched_log.exists():
+            lines = sched_log.read_text().splitlines()
+            for line in reversed(lines[-500:]):
+                if "Run complete" in line:
+                    last_run = line.split("|")[0].strip()
+                    m = _re.search(r"(\d+) EXECUTE", line)
+                    if m: last_execute_count = int(m.group(1))
+                    break
+            if last_run:
+                break
+    if not last_run:
+        import subprocess
+        result = subprocess.run(
+            ["journalctl", "-u", "iatis-scheduler", "-n", "100", "--no-pager", "--output=cat"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in reversed(result.stdout.splitlines()):
+            if "Run complete" in line:
+                last_run = line[:30].strip()
+                m = _re.search(r"(\d+) EXECUTE", line)
+                if m: last_execute_count = int(m.group(1))
+                break
+    return {
+        "last_run": last_run,
+        "last_execute_count": last_execute_count,
+        "status": "running" if last_run else "unknown",
+    }
+
+
+def _systemd_service_status() -> dict[str, Any]:
+    """Real per-service systemd status via `systemctl is-active <unit>` —
+    one fixed-argv call per unit (never shell=True), reusing the same
+    whitelist /logs already knows about (_LOG_UNITS, defined below).
+    Absent/inert on hosts with no systemd (sandboxes, dev laptops) —
+    each unit reports "unavailable" rather than raising.
+    """
+    import subprocess
+
+    services: dict[str, str] = {}
+    for key, unit in _LOG_UNITS.items():
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", unit],
+                capture_output=True, text=True, timeout=5,
+            )
+            services[key] = (result.stdout or "").strip() or "unknown"
+        except FileNotFoundError:
+            services[key] = "unavailable"
+        except subprocess.TimeoutExpired:
+            services[key] = "timeout"
+        except Exception:
+            services[key] = "error"
+    return services
+
+
+def _load_manifests() -> list[dict[str, Any]]:
+    """Git-tracked evidence manifests — shared by /research/manifests and
+    /alerts (which flags any non-reproducible or newly-generated one).
+    """
+    import json as _json
+
+    manifests: list[dict[str, Any]] = []
+    for f in sorted(Path("research/results").glob("*_manifest.json"), reverse=True):
+        try:
+            m = _json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        params = m.get("params") or {}
+        git = m.get("git") or {}
+        manifests.append({
+            "file": f.name,
+            "kind": m.get("kind"),
+            "generated_at": m.get("generated_at"),
+            "reproducible": m.get("reproducible"),
+            "git_commit": (git.get("commit") or "")[:8],
+            "git_dirty": git.get("dirty"),
+            "decision_timeframe": params.get("decision_timeframe"),
+            "engines_enabled": params.get("engines_enabled"),
+            "note": params.get("note"),
+            "datasets_count": len(m.get("datasets") or []),
+            "results": m.get("results"),
+        })
+    return manifests
 
 
 @app.get("/health/full")
@@ -1323,58 +1997,39 @@ async def system_health_full(
     ram_warn_pct = mon_cfg.get("ram_warn_pct", 85)
     disk_warn_pct = mon_cfg.get("disk_warn_pct", 80)
     try:
+        swap = psutil.swap_memory()
+        try:
+            load1, load5, load15 = os.getloadavg()
+        except (OSError, AttributeError):
+            load1 = load5 = load15 = None  # not available on this platform
         checks["system"] = {
             "cpu_pct": psutil.cpu_percent(interval=0.5),
             "ram_pct": psutil.virtual_memory().percent,
             "disk_pct": psutil.disk_usage("/").percent,
+            "swap_pct": swap.percent,
+            "load_1m": load1, "load_5m": load5, "load_15m": load15,
             "uptime_hours": round((_time.time() - psutil.boot_time()) / 3600, 1),
         }
         if checks["system"]["ram_pct"] > ram_warn_pct: issues.append("High RAM usage")
         if checks["system"]["disk_pct"] > disk_warn_pct: issues.append("High disk usage")
+        if checks["system"]["swap_pct"] > 50: issues.append("High swap usage")
     except Exception as e:
         checks["system"] = {"error": str(e)[:80]}
 
     # 2. Scheduler last run
     try:
-        import re as _re
-        # Try multiple log locations
-        log_candidates = [
-            Path("storage/system.log"),
-            Path("/var/log/iatis-scheduler.log"),
-        ]
-        last_run = None
-        last_execute_count = 0
-        for sched_log in log_candidates:
-            if sched_log.exists():
-                lines = sched_log.read_text().splitlines()
-                for line in reversed(lines[-500:]):
-                    if "Run complete" in line:
-                        last_run = line.split("|")[0].strip()
-                        m = _re.search(r"(\d+) EXECUTE", line)
-                        if m: last_execute_count = int(m.group(1))
-                        break
-                if last_run:
-                    break
-        # Also try journalctl
-        if not last_run:
-            import subprocess
-            result = subprocess.run(
-                ["journalctl", "-u", "iatis-scheduler", "-n", "100", "--no-pager", "--output=cat"],
-                capture_output=True, text=True, timeout=5
-            )
-            for line in reversed(result.stdout.splitlines()):
-                if "Run complete" in line:
-                    last_run = line[:30].strip()
-                    m = _re.search(r"(\d+) EXECUTE", line)
-                    if m: last_execute_count = int(m.group(1))
-                    break
-        checks["scheduler"] = {
-            "last_run": last_run,
-            "last_execute_count": last_execute_count,
-            "status": "running" if last_run else "unknown",
-        }
+        checks["scheduler"] = _scheduler_status()
     except Exception as e:
         checks["scheduler"] = {"status": "error", "error": str(e)[:80]}
+
+    # 2b. Real per-service systemd status (module 1) — same whitelist of
+    # units /logs already knows about, one `systemctl is-active` call per
+    # unit (fixed argv, never shell=True). Absent/inert on hosts with no
+    # systemd (e.g. this sandbox, or a dev laptop) — reported, not fatal.
+    try:
+        checks["services"] = _systemd_service_status()
+    except Exception as e:
+        checks["services"] = {"error": str(e)[:80]}
 
     # 3. SQLite decisions DB
     try:
@@ -1477,6 +2132,42 @@ _DH_CONFIG_TO_DM = {"M15": "15m", "H1": "1h", "H4": "4h", "D1": "1d"}
 _DH_STATUS_RANK = {"OK": 0, "GAPS": 1, "STALE": 2, "MISSING": 3}  # higher = worse
 
 
+def _data_health_snapshot() -> dict[str, Any]:
+    """Per-symbol/timeframe OHLCV cache completeness — shared by
+    /data-health and /alerts (which flags STALE/GAPS/MISSING symbols).
+    """
+    from core.data_manager import DataManager
+
+    config = _get_config()
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+    active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
+    config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
+
+    dm = DataManager()
+    results = []
+    summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
+
+    for symbol in active_symbols:
+        tf_status: dict[str, Any] = {}
+        worst = "OK"
+        for tf in config_timeframes:
+            dm_tf = _DH_CONFIG_TO_DM.get(tf)
+            if not dm_tf:
+                continue
+            status = dm.cache_status(symbol, dm_tf)
+            tf_status[tf] = status
+            if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
+                worst = status["status"]
+        results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
+        summary[worst.lower()] += 1
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "symbols": results,
+        "summary": summary,
+    }
+
+
 @app.get("/data-health")
 async def data_health(
     x_api_key: str | None = Header(default=None),
@@ -1489,39 +2180,527 @@ async def data_health(
     """
     _check_auth(x_api_key, iatis_session)
     try:
-        from core.data_manager import DataManager
-
-        config = _get_config()
-        symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
-        active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
-        config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
-
-        dm = DataManager()
-        results = []
-        summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
-
-        for symbol in active_symbols:
-            tf_status: dict[str, Any] = {}
-            worst = "OK"
-            for tf in config_timeframes:
-                dm_tf = _DH_CONFIG_TO_DM.get(tf)
-                if not dm_tf:
-                    continue
-                status = dm.cache_status(symbol, dm_tf)
-                tf_status[tf] = status
-                if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
-                    worst = status["status"]
-            results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
-            summary[worst.lower()] += 1
-
-        return {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "symbols": results,
-            "summary": summary,
-        }
+        return _data_health_snapshot()
     except Exception as exc:
         logger.error(f"Data health error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
+
+
+# ---------------------------------------------------------------------------
+# Live Logs (Mission Control module 13) — read-only, whitelisted sources only.
+#
+# Every production service ships with StandardOutput=journal /
+# StandardError=journal (see the *.service unit files), so journalctl is the
+# real source of truth, not a log file. `storage/system.log` is kept as a
+# "system" pseudo-source for local/dev use since config.yaml's logging.file
+# is empty by default in production. No arbitrary unit or path is ever
+# accepted from the caller — `source` must be a key in _LOG_UNITS or the
+# literal "system"; journalctl always runs with a fixed argv (no shell=True,
+# no string interpolation of request data into the command line).
+# ---------------------------------------------------------------------------
+_LOG_UNITS: dict[str, str] = {
+    "api": "iatis-api",
+    "scheduler": "iatis-scheduler",
+    "watchdog": "iatis-watchdog",
+    "backup": "iatis-backup",
+    "d1_backup": "iatis-d1-backup",
+}
+
+
+@app.get("/logs/sources")
+async def log_sources(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """The whitelisted set of log sources /logs will tail. Nothing else."""
+    _check_auth(x_api_key, iatis_session)
+    return {
+        "sources": [{"id": "system", "label": "System (storage/system.log)", "kind": "file"}]
+        + [{"id": key, "label": f"{key} ({unit})", "kind": "journal"} for key, unit in _LOG_UNITS.items()]
+    }
+
+
+@app.get("/logs")
+async def tail_logs(
+    source: str = Query(..., description="One of the ids returned by /logs/sources"),
+    lines: int = Query(default=200, ge=1, le=1000),
+    search: str | None = Query(default=None, max_length=200),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Tail a whitelisted log source, optionally filtered by substring."""
+    _check_auth(x_api_key, iatis_session)
+
+    if source != "system" and source not in _LOG_UNITS:
+        raise HTTPException(status_code=400, detail=f"Unknown log source '{source}'. See /logs/sources.")
+
+    entries: list[str] = []
+    error: str | None = None
+
+    if source == "system":
+        log_path = Path("storage/system.log")
+        if log_path.exists():
+            try:
+                entries = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+            except OSError as exc:
+                error = str(exc)[:200]
+        else:
+            error = "storage/system.log doesn't exist — logging.file is unset in config.yaml, or nothing has logged locally yet."
+    else:
+        import subprocess
+        unit = _LOG_UNITS[source]
+        try:
+            result = subprocess.run(
+                ["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "--output=cat"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                entries = result.stdout.splitlines()
+            else:
+                error = (result.stderr or "journalctl returned a non-zero exit code").strip()[:300]
+        except FileNotFoundError:
+            error = "journalctl is not available on this host."
+        except subprocess.TimeoutExpired:
+            error = "journalctl timed out."
+        except Exception as exc:
+            error = str(exc)[:200]
+
+    if search:
+        needle = search.lower()
+        entries = [e for e in entries if needle in e.lower()]
+
+    return {
+        "source": source,
+        "lines_requested": lines,
+        "lines_returned": len(entries),
+        "search": search,
+        "entries": entries,
+        "error": error,
+    }
+
+
+# ---------------------------------------------------------------------------
+# File Explorer (Mission Control module 11) — read-only. View, search,
+# download, diff. Never edit. Every path is confined to the repo root and
+# checked against a secret-shaped denylist before it's ever opened — this
+# repo's own CLAUDE.md notes real credentials have leaked into chat/commits
+# twice before, so path confinement here is defense-in-depth, not decoration.
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Directories excluded wholesale — .git can contain secrets from repo
+# history even if the current tree is clean; the rest are generated/noise.
+_DENY_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", ".pytest_cache"}
+
+# Exact "word" matches on a path segment's alnum-split tokens — deliberately
+# whole-word (not substring) so e.g. dashboard/frontend/src/theme/tokens.css
+# (a design-tokens stylesheet, not a secret) is never falsely denied.
+_DENY_WORDS = {"credential", "credentials", "secret", "secrets", "token", "password", "passwords"}
+_DENY_EXTENSIONS = {"pem", "key", "pfx", "p12", "crt", "cer"}
+_DENY_PREFIXES = ("storage/sessions", "storage/td_cache")
+_MAX_READ_BYTES = 512_000
+_MAX_SEARCH_FILES = 4000
+_MAX_SEARCH_FILE_BYTES = 512_000
+
+
+def _is_denied_path(posix_rel: str) -> bool:
+    parts = posix_rel.split("/")
+    if any(p in _DENY_DIR_NAMES for p in parts):
+        return True
+    if any(posix_rel.startswith(pre) for pre in _DENY_PREFIXES):
+        return True
+    basename = parts[-1]
+    if basename == ".env" or basename.startswith(".env."):
+        return True
+    stem_ext = basename.rsplit(".", 1)
+    if len(stem_ext) == 2 and stem_ext[1].lower() in _DENY_EXTENSIONS:
+        return True
+    words = {w.lower() for w in re.split(r"[^A-Za-z0-9]+", basename) if w}
+    if words & _DENY_WORDS:
+        return True
+    return False
+
+
+def _resolve_safe_path(rel_path: str) -> tuple[Path, str]:
+    """Resolve a client-supplied path against the repo root.
+
+    Always returns a path inside _REPO_ROOT and outside the denylist, or
+    raises HTTPException — callers never need to re-check.
+    """
+    rel_path = (rel_path or "").strip().lstrip("/")
+    candidate = (_REPO_ROOT / rel_path).resolve() if rel_path else _REPO_ROOT
+    try:
+        posix_rel = candidate.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes the repository root.")
+    if posix_rel == ".":
+        posix_rel = ""
+    if posix_rel and _is_denied_path(posix_rel):
+        raise HTTPException(status_code=403, detail="This path is not accessible via the File Explorer.")
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail="Path not found.")
+    return candidate, posix_rel
+
+
+@app.get("/files/tree")
+async def files_tree(
+    path: str = Query(default=""),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    target, posix_rel = _resolve_safe_path(path)
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="Not a directory — use /files/read.")
+
+    entries = []
+    for child in target.iterdir():
+        child_rel = (posix_rel + "/" + child.name) if posix_rel else child.name
+        if _is_denied_path(child_rel):
+            continue
+        try:
+            stat = child.stat()
+            entries.append({
+                "name": child.name,
+                "path": child_rel,
+                "type": "dir" if child.is_dir() else "file",
+                "size": None if child.is_dir() else stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+        except OSError:
+            continue
+
+    entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
+    return {"path": posix_rel, "entries": entries}
+
+
+@app.get("/files/read")
+async def files_read(
+    path: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    target, posix_rel = _resolve_safe_path(path)
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Not a file — use /files/tree.")
+
+    size = target.stat().st_size
+    if size > _MAX_READ_BYTES:
+        return {
+            "path": posix_rel, "size": size, "binary": False, "truncated": False,
+            "content": None,
+            "error": f"File is {size:,} bytes, over the {_MAX_READ_BYTES:,}-byte inline read limit — use /files/download.",
+        }
+
+    raw = target.read_bytes()
+    try:
+        content = raw.decode("utf-8")
+        return {"path": posix_rel, "size": size, "binary": False, "truncated": False, "content": content, "error": None}
+    except UnicodeDecodeError:
+        return {
+            "path": posix_rel, "size": size, "binary": True, "truncated": False,
+            "content": None, "error": "Binary file — use /files/download to retrieve it.",
+        }
+
+
+@app.get("/files/download")
+async def files_download(
+    path: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> FileResponse:
+    _check_auth(x_api_key, iatis_session)
+    target, posix_rel = _resolve_safe_path(path)
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Not a file.")
+    return FileResponse(target, filename=target.name, media_type="application/octet-stream")
+
+
+@app.get("/files/diff")
+async def files_diff(
+    path: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Working-tree vs HEAD diff for one file, via `git diff` with a fixed
+    argv (no shell=True, path is confined/denylisted by _resolve_safe_path
+    before it ever reaches subprocess).
+    """
+    _check_auth(x_api_key, iatis_session)
+    target, posix_rel = _resolve_safe_path(path)
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Not a file.")
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--no-color", "HEAD", "--", posix_rel],
+            capture_output=True, text=True, timeout=5, cwd=_REPO_ROOT,
+        )
+        diff_text = result.stdout
+        error = None if result.returncode == 0 else (result.stderr or "git diff failed").strip()[:300]
+    except FileNotFoundError:
+        diff_text, error = "", "git is not available on this host."
+    except subprocess.TimeoutExpired:
+        diff_text, error = "", "git diff timed out."
+
+    return {"path": posix_rel, "diff": diff_text, "has_changes": bool(diff_text.strip()), "error": error}
+
+
+@app.get("/files/search")
+async def files_search(
+    query: str = Query(..., min_length=2, max_length=200),
+    path: str = Query(default=""),
+    max_results: int = Query(default=100, ge=1, le=500),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Bounded read-only search over filenames and file contents.
+
+    Scans at most _MAX_SEARCH_FILES files under `path`, skips anything
+    denylisted or over _MAX_SEARCH_FILE_BYTES, and stops as soon as
+    max_results matches are found.
+    """
+    _check_auth(x_api_key, iatis_session)
+    root, root_rel = _resolve_safe_path(path)
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Not a directory.")
+
+    needle = query.lower()
+    results: list[dict[str, Any]] = []
+    scanned = 0
+    truncated = False
+
+    for current_dir, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _DENY_DIR_NAMES]
+        for fname in sorted(filenames):
+            if len(results) >= max_results:
+                truncated = True
+                break
+            scanned += 1
+            if scanned > _MAX_SEARCH_FILES:
+                truncated = True
+                break
+
+            fpath = Path(current_dir) / fname
+            frel = fpath.relative_to(_REPO_ROOT).as_posix()
+            if _is_denied_path(frel):
+                continue
+
+            if needle in fname.lower():
+                results.append({"path": frel, "match_type": "filename", "line": None, "snippet": fname})
+                continue
+
+            try:
+                if fpath.stat().st_size > _MAX_SEARCH_FILE_BYTES:
+                    continue
+                text = fpath.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if needle in line.lower():
+                    results.append({
+                        "path": frel, "match_type": "content", "line": lineno,
+                        "snippet": line.strip()[:200],
+                    })
+                    break
+
+        if len(results) >= max_results or scanned > _MAX_SEARCH_FILES:
+            truncated = True
+            break
+
+    return {"query": query, "path": root_rel, "results": results, "truncated": truncated}
+
+
+# ---------------------------------------------------------------------------
+# Forward decision rules (D001/D002) — shared by Forward Demo (module 6,
+# /forward-review) and Alert Center (module 14, /alerts). registry.json's
+# `_decision_rules` block is the single source of truth; this only reads
+# and evaluates it, via scripts/forward_review.py's own helpers — never
+# reinvents the rule logic.
+# ---------------------------------------------------------------------------
+def _forward_rule_progress() -> list[dict[str, Any]]:
+    """Full progress snapshot for every pre-registered rule, whether or
+    not it has triggered — the Forward Demo view. Alert Center derives
+    its (much shorter) alert list from this same data.
+    """
+    import json as _json
+    from scripts.forward_review import REGISTRY, FX, CARRIERS, _bucket_stats, _closed_outcomes
+
+    rules = _json.loads(REGISTRY.read_text()).get("_decision_rules", {})
+    rows = _closed_outcomes()
+    buckets = {"fx": _bucket_stats(rows, FX), "carriers": _bucket_stats(rows, CARRIERS)}
+
+    out: list[dict[str, Any]] = []
+    for rule_id, rule in rules.items():
+        if rule_id.startswith("_") or not isinstance(rule, dict):
+            continue
+        b = buckets.get(rule["bucket"]) or {"n": 0, "wr": None, "pf": None}
+        n, min_n = b["n"], rule["min_n"]
+        metric = b.get(rule["metric"])
+        sufficient_n = n >= min_n
+        triggered = bool(
+            sufficient_n and metric is not None
+            and ((rule["op"] == "<" and metric < rule["threshold"])
+                 or (rule["op"] == ">=" and metric >= rule["threshold"]))
+        )
+        # Sanitize AFTER the numeric comparisons above — a bare `Infinity`
+        # token (what json.dumps would emit for float("inf")) isn't valid
+        # JSON and makes a browser's fetch().json() throw. The frontend
+        # renders this string sentinel as "∞".
+        if metric == float("inf"):
+            json_safe_metric: float | str | None = "Infinity"
+        elif metric == float("-inf"):
+            json_safe_metric = "-Infinity"
+        else:
+            json_safe_metric = metric
+        out.append({
+            "rule_id": rule_id,
+            "statement": rule["statement"],
+            "bucket": rule["bucket"],
+            "metric": rule["metric"],
+            "current_value": json_safe_metric,
+            "op": rule["op"],
+            "threshold": rule["threshold"],
+            "n": n,
+            "min_n": min_n,
+            "progress_pct": round(min(100.0, 100.0 * n / min_n), 1) if min_n else None,
+            "sufficient_n": sufficient_n,
+            "triggered": triggered,
+            "action": rule.get("action"),
+        })
+    return out
+
+
+def _forward_rule_alerts() -> list[dict[str, Any]]:
+    """The subset of _forward_rule_progress() worth surfacing as an alert:
+    a triggered rule, or one that's crossed 80% of its required sample.
+    """
+    out: list[dict[str, Any]] = []
+    for p in _forward_rule_progress():
+        if p["triggered"]:
+            out.append({
+                "severity": "warning", "category": "forward_milestone",
+                "message": f"{p['rule_id']} VERDICT REACHED: {p['statement']}",
+                "detail": {"rule_id": p["rule_id"], "n": p["n"], "metric": p["metric"],
+                           "value": p["current_value"], "action": p["action"]},
+            })
+        elif not p["sufficient_n"] and p["n"] >= p["min_n"] * 0.8:
+            out.append({
+                "severity": "info", "category": "forward_milestone",
+                "message": f"{p['rule_id']} approaching evaluation: n={p['n']}/{p['min_n']} closed {p['bucket']} trades.",
+                "detail": {"rule_id": p["rule_id"], "n": p["n"], "min_n": p["min_n"]},
+            })
+    return out
+
+
+@app.get("/forward-review")
+async def forward_review_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Forward Demo (module 6) — pre-registered D001/D002 rule progress,
+    read-only. Live decisions still follow scripts/forward_review.py run
+    by a human/cron, per CLAUDE.md's "live decisions follow pre-registered
+    rules... never invented at read time" — this endpoint only displays
+    the same evaluation, it doesn't act on it.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        return {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "rules": _forward_rule_progress(),
+        }
+    except Exception as exc:
+        logger.error(f"Forward review error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+@app.get("/alerts")
+async def list_alerts(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    now = datetime.now(timezone.utc).isoformat()
+    items: list[dict[str, Any]] = []
+
+    def add(severity: str, category: str, message: str, detail: dict[str, Any] | None = None) -> None:
+        items.append({"severity": severity, "category": category, "message": message, "detail": detail})
+
+    try:
+        sched = _scheduler_status()
+        if sched["status"] != "running":
+            add("error", "service_offline", "Scheduler status unknown — no recent 'Run complete' log line found.", sched)
+    except Exception as exc:
+        add("error", "service_offline", f"Could not determine scheduler status: {exc}")
+
+    provider_env = {
+        "twelve_data": "TWELVE_DATA_API_KEY",
+        "alpha_vantage": "ALPHA_VANTAGE_API_KEY",
+        "finnhub": "FINNHUB_API_KEY",
+    }
+    for name, env_var in provider_env.items():
+        if not os.environ.get(env_var):
+            add("warning", "provider_failure", f"{name} API key not configured ({env_var}).", {"provider": name})
+    ct_token = os.environ.get("CTRADER_ACCESS_TOKEN", "")
+    if not (ct_token and ct_token != "TOKEN_HERE"):
+        add("warning", "provider_failure", "cTrader access token not configured.", {"provider": "ctrader"})
+
+    try:
+        dh = _data_health_snapshot()
+        for sym in dh["symbols"]:
+            status = sym["overall_status"]
+            if status in ("STALE", "GAPS", "MISSING"):
+                add(
+                    "error" if status == "MISSING" else "warning",
+                    "missing_data",
+                    f"{sym['symbol']} data is {status}.",
+                    {"symbol": sym["symbol"], "status": status},
+                )
+    except Exception as exc:
+        add("error", "missing_data", f"Could not check data health: {exc}")
+
+    try:
+        for m in _load_manifests():
+            if m.get("reproducible") is False:
+                add(
+                    "warning", "manifest_mismatch",
+                    f"{m['file']} is not reproducible (dirty working tree at generation time).",
+                    {"file": m["file"], "kind": m.get("kind")},
+                )
+            gen_at = m.get("generated_at")
+            if gen_at:
+                try:
+                    gen_dt = datetime.fromisoformat(gen_at)
+                    if (datetime.now(timezone.utc) - gen_dt).total_seconds() < 86400:
+                        add(
+                            "info", "research_completed",
+                            f"New manifest: {m['file']} ({m.get('kind')}).",
+                            {"file": m["file"], "kind": m.get("kind")},
+                        )
+                except ValueError:
+                    pass
+    except Exception as exc:
+        add("error", "manifest_mismatch", f"Could not load manifests: {exc}")
+
+    try:
+        for a in _forward_rule_alerts():
+            add(a["severity"], a["category"], a["message"], a["detail"])
+    except Exception as exc:
+        add("error", "forward_milestone", f"Could not evaluate forward decision rules: {exc}")
+
+    severity_order = {"error": 0, "warning": 1, "info": 2}
+    items.sort(key=lambda a: severity_order.get(a["severity"], 3))
+
+    return {
+        "checked_at": now,
+        "count": len(items),
+        "by_severity": {sev: sum(1 for a in items if a["severity"] == sev) for sev in ("error", "warning", "info")},
+        "alerts": items,
+    }
 
 
 @app.post("/ai/optimize-weights")

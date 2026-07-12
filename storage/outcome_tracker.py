@@ -280,6 +280,51 @@ def performance_summary() -> dict:
         GROUP BY regime
         """).fetchall()
 
+        # Profit factor — same gross-win/gross-loss definition as
+        # scripts/forward_review.py's _bucket_stats, applied here to the
+        # whole book rather than one symbol bucket.
+        pf_row = con.execute("""
+        SELECT
+            SUM(CASE WHEN pnl_usd > 0 THEN pnl_usd ELSE 0 END) as gross_win,
+            SUM(CASE WHEN pnl_usd < 0 THEN -pnl_usd ELSE 0 END) as gross_loss
+        FROM outcomes WHERE outcome != 'open'
+        """).fetchone()
+        gross_win = pf_row["gross_win"] or 0.0
+        gross_loss = pf_row["gross_loss"] or 0.0
+        if gross_loss > 0:
+            profit_factor: float | str | None = round(gross_win / gross_loss, 3)
+        elif total == 0:
+            profit_factor = None
+        else:
+            # Zero losing trades: PF is mathematically infinite. A bare
+            # `Infinity` token is what Python's json.dumps would emit for
+            # float("inf"), but that's not valid JSON — a browser's
+            # JSON.parse (used by fetch().json()) throws on it. Send the
+            # string sentinel instead; the frontend renders it as "∞".
+            profit_factor = "Infinity"
+
+        # Average realized R-multiple, recomputed exactly from each row's
+        # own entry/stop/exit (not approximated from pnl_usd, which bakes
+        # in a per-trade risk_usd we don't always know) — this repo's own
+        # rule is real evidence over convenient shortcuts.
+        r_rows = con.execute("""
+        SELECT entry_price, stop_loss, exit_price, direction
+        FROM outcomes
+        WHERE outcome != 'open' AND entry_price IS NOT NULL
+          AND stop_loss IS NOT NULL AND exit_price IS NOT NULL
+        """).fetchall()
+
+    r_multiples: list[float] = []
+    for row in r_rows:
+        entry, sl, exit_px = row["entry_price"], row["stop_loss"], row["exit_price"]
+        sl_distance = abs(entry - sl)
+        if sl_distance <= 0:
+            continue
+        is_buy = row["direction"] in ("BUY", "BULLISH")
+        diff = (exit_px - entry) if is_buy else (entry - exit_px)
+        r_multiples.append(diff / sl_distance)
+    avg_r_multiple = round(sum(r_multiples) / len(r_multiples), 3) if r_multiples else None
+
     win_rate = round(wins / total * 100, 1) if total > 0 else 0
     return {
         "total_closed": total,
@@ -287,6 +332,8 @@ def performance_summary() -> dict:
         "losses": losses,
         "win_rate": win_rate,
         "total_pips": round(total_pips, 1),
+        "profit_factor": profit_factor,
+        "avg_r_multiple": avg_r_multiple,
         "open_signals": open_count,
         "calibration": [dict(r) for r in calibration_rows],
         "by_regime": [dict(r) for r in regime_rows],

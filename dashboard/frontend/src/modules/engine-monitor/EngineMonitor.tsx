@@ -2,7 +2,40 @@ import { useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
-import { getEngineStats, getAiWeightSuggestions, type AiWeightSuggestion } from './api'
+import { DataTable, type Column } from '../../components/DataTable'
+import { getEngineStats, getAiWeightSuggestions, type AiWeightSuggestion, type EngineAttribution } from './api'
+
+function formatPf(value: number | 'Infinity' | null): string {
+  if (value === null) return '—'
+  if (value === 'Infinity') return '∞'
+  return value.toFixed(2)
+}
+
+function AttributionPanel({ engines, note, matched, total }: { engines: EngineAttribution[]; note: string; matched: number; total: number }) {
+  const columns: Column<EngineAttribution>[] = [
+    { header: 'Engine', render: (e) => <span className="font-bold text-accent">{e.engine}</span> },
+    { header: 'Matched trades', render: (e) => e.matched_trades, align: 'right' },
+    { header: 'W / L', render: (e) => `${e.wins} / ${e.losses}` , align: 'right'},
+    { header: 'Win rate', render: (e) => (e.win_rate != null ? `${e.win_rate.toFixed(1)}%` : '—'), align: 'right' },
+    { header: 'Profit factor', render: (e) => formatPf(e.profit_factor), align: 'right' },
+    {
+      header: 'Direction agreement',
+      render: (e) => (e.direction_agreement_pct != null ? `${e.direction_agreement_pct.toFixed(0)}%` : '—'),
+      align: 'right',
+    },
+  ]
+
+  return (
+    <Panel title="Engine Trade Attribution" right={`${matched}/${total} closed trades matched`}>
+      <p className="px-4 py-2 text-[0.75em] text-muted border-b border-border">{note}</p>
+      {engines.length > 0 ? (
+        <DataTable columns={columns} rows={engines} rowKey={(e) => e.engine} />
+      ) : (
+        <Empty>No matched trades yet — needs closed outcomes with engine votes recorded nearby in time.</Empty>
+      )}
+    </Panel>
+  )
+}
 
 const POLL_MS = 45_000
 
@@ -166,6 +199,13 @@ export function EngineMonitor() {
       )}
 
       <p className="text-[0.72em] text-muted px-1">{data.note}</p>
+
+      <AttributionPanel
+        engines={data.attribution.engines}
+        note={data.attribution.note}
+        matched={data.attribution.matched_trades}
+        total={data.attribution.total_closed_trades}
+      />
 
       <AiWeightPanel />
     </div>

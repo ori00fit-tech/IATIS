@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
@@ -12,11 +12,13 @@ import {
   getMetaAnalysis,
   getManifests,
   getAiResearchSummary,
+  getHypothesisDetail,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
   type EvidenceManifest,
   type AiResearchSummary,
+  type HypothesisDetailResponse,
 } from './api'
 
 const POLL_MS = 60_000
@@ -69,6 +71,103 @@ function ManifestCard({ m }: { m: EvidenceManifest }) {
   )
 }
 
+function HypothesisDetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: HypothesisDetailResponse | null }>({
+    loading: true,
+    error: null,
+    data: null,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: null, data: null })
+    getHypothesisDetail(id)
+      .then((data) => !cancelled && setState({ loading: false, error: null, data }))
+      .catch((err) => !cancelled && setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+
+  const hyp = state.data?.hypothesis as Record<string, unknown> | undefined
+  // Fields rendered specially below; everything else in the raw dump so
+  // nothing in registry.json is ever hidden, just de-duplicated.
+  const SPECIAL_KEYS = new Set(['status', 'title', 'last_updated', 'conclusion', 'lesson', 'manifest', 'result_file', 'result_files'])
+  const rest = hyp ? Object.fromEntries(Object.entries(hyp).filter(([k]) => !SPECIAL_KEYS.has(k))) : {}
+
+  return (
+    <Panel title={`Hypothesis ${id}`} right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+      {state.loading ? (
+        <Empty>Loading...</Empty>
+      ) : state.error ? (
+        <Empty>Failed: {state.error}</Empty>
+      ) : !hyp ? (
+        <Empty>Not found</Empty>
+      ) : (
+        <div className="p-4 flex flex-col gap-4 text-[0.85em]">
+          <div className="flex items-center gap-3 flex-wrap">
+            <Badge tone={statusTone(String(hyp.status ?? ''))}>{String(hyp.status ?? 'UNKNOWN')}</Badge>
+            <span className="font-bold">{String(hyp.title ?? '')}</span>
+            <span className="text-muted text-[0.85em] ml-auto">updated {String(hyp.last_updated ?? '?')}</span>
+          </div>
+          {typeof hyp.conclusion === 'string' && hyp.conclusion && (
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Conclusion</div>
+              <p>{hyp.conclusion}</p>
+            </div>
+          )}
+          {typeof hyp.lesson === 'string' && hyp.lesson && (
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Lesson</div>
+              <p>{hyp.lesson}</p>
+            </div>
+          )}
+
+          <div>
+            <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">
+              Linked Manifests {state.data && `(${state.data.manifests.exact.length} exact, ${state.data.manifests.heuristic.length} heuristic)`}
+            </div>
+            {state.data && (state.data.manifests.exact.length > 0 || state.data.manifests.heuristic.length > 0) ? (
+              <div className="border border-border rounded">
+                {state.data.manifests.exact.map((m) => (
+                  <ManifestCard key={m.file} m={m} />
+                ))}
+                {state.data.manifests.heuristic.map((m) => (
+                  <div key={m.file} className="opacity-70" title="Heuristic match — hypothesis ID found in filename/kind, not a declared link">
+                    <ManifestCard m={m} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted">No linked manifests found.</p>
+            )}
+          </div>
+
+          {state.data && state.data.result_files.length > 0 && (
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Result Files</div>
+              {state.data.result_files.map((rf) => (
+                <div key={rf.path} className="font-mono text-[0.85em]">
+                  <span className={rf.exists ? 'text-green' : 'text-red'}>{rf.exists ? '✓' : '✗'}</span> {rf.path}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {Object.keys(rest).length > 0 && (
+            <div>
+              <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Everything else in registry.json</div>
+              <pre className="bg-surface border border-border rounded p-2 overflow-x-auto text-[0.85em] max-h-64 overflow-y-auto">
+                {JSON.stringify(rest, null, 1)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 export function ResearchBacktests() {
   const { markUnauthenticated } = useAuth()
   const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
@@ -82,6 +181,7 @@ export function ResearchBacktests() {
     error: null,
     data: null,
   })
+  const [drilldown, setDrilldown] = useState<string | null>(null)
 
   const generateAiSummary = () => {
     if (!research.data) return
@@ -96,7 +196,14 @@ export function ResearchBacktests() {
   }
 
   const hypothesisColumns: Column<Hypothesis>[] = [
-    { header: 'ID', render: (h) => <span className="font-bold text-accent">{h.id}</span> },
+    {
+      header: 'ID',
+      render: (h) => (
+        <button onClick={() => setDrilldown(h.id)} className="font-bold text-accent hover:text-accent2 underline decoration-dotted">
+          {h.id}
+        </button>
+      ),
+    },
     { header: 'Title', render: (h) => <span title={h.conclusion || undefined}>{h.title}</span> },
     {
       header: 'Status',
@@ -201,13 +308,15 @@ export function ResearchBacktests() {
         </Panel>
       )}
 
-      <Panel title="Hypothesis Registry">
+      <Panel title="Hypothesis Registry" right="click an ID for the full drill-down">
         {research.data && research.data.hypotheses.length > 0 ? (
           <DataTable columns={hypothesisColumns} rows={research.data.hypotheses} rowKey={(h) => h.id} />
         ) : (
           <Empty>{research.loading ? 'Loading...' : 'No hypotheses registered yet'}</Empty>
         )}
       </Panel>
+
+      {drilldown && <HypothesisDetailPanel id={drilldown} onClose={() => setDrilldown(null)} />}
 
       <Panel title="Backtest Results" right={backtests.data ? `${backtests.data.count} runs` : undefined}>
         {backtests.data && backtests.data.results.length > 0 ? (

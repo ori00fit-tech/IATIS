@@ -196,6 +196,12 @@ export function MissionControl() {
         <KpiCard value={pct(hf?.system?.cpu_pct)} label="CPU" color={hf && hf.system && hf.system.cpu_pct > 80 ? 'red' : 'default'} />
         <KpiCard value={pct(hf?.system?.ram_pct)} label="RAM" color={hf && hf.system && hf.system.ram_pct > 85 ? 'red' : 'default'} />
         <KpiCard value={pct(hf?.system?.disk_pct)} label="Disk" color={hf && hf.system && hf.system.disk_pct > 80 ? 'red' : 'default'} />
+        <KpiCard value={pct(hf?.system?.swap_pct)} label="Swap" color={hf && hf.system && hf.system.swap_pct > 50 ? 'red' : 'default'} />
+        <KpiCard
+          value={hf?.system?.load_1m != null ? hf.system.load_1m.toFixed(2) : '—'}
+          label="Load (1m)"
+          color="default"
+        />
         <KpiCard value={hf?.system?.uptime_hours != null ? `${hf.system.uptime_hours}h` : '—'} label="Uptime" color="purple" />
         <KpiCard value={budget.data?.remaining_today ?? '—'} label="API Credits" color={creditsColor} />
         <KpiCard
@@ -219,6 +225,15 @@ export function MissionControl() {
             state={hf?.scheduler?.status === 'running' ? 'ok' : hf?.scheduler?.status === 'unknown' ? 'warn' : 'err'}
             detail={hf?.scheduler?.last_run ?? 'no run seen'}
           />
+          {hf?.services &&
+            Object.entries(hf.services).map(([unit, status]) => (
+              <StatusRow
+                key={unit}
+                label={`svc: ${unit}`}
+                state={status === 'active' ? 'ok' : status === 'failed' ? 'err' : 'warn'}
+                detail={status}
+              />
+            ))}
           <StatusRow
             label="Database"
             state={hf?.database?.status === 'ok' ? 'ok' : 'err'}

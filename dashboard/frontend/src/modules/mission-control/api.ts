@@ -26,8 +26,19 @@ export interface HealthFull {
   status: 'healthy' | 'degraded'
   issues: string[]
   checked_at: string
-  system?: { cpu_pct: number; ram_pct: number; disk_pct: number; uptime_hours: number; error?: string }
+  system?: {
+    cpu_pct: number
+    ram_pct: number
+    disk_pct: number
+    swap_pct: number
+    load_1m: number | null
+    load_5m: number | null
+    load_15m: number | null
+    uptime_hours: number
+    error?: string
+  }
   scheduler?: { last_run: string | null; last_execute_count: number; status: string }
+  services?: Record<string, string>
   database?: { status: string; total_decisions?: number; last_24h?: number; error?: string }
   calendar?: { status: string; fetched_at?: string; event_count?: number; note?: string }
   outcome_tracker?: { status: string; total_closed?: number; win_rate?: number; open_signals?: number }

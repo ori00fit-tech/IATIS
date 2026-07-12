@@ -220,3 +220,35 @@ real subprocess execution (long-running backtests, service restarts) on
 what may be a live trading VPS, rather than only reading existing data.
 Scope for those two should be confirmed with the operator before
 building, not assumed.
+
+- **2026-07-12 — Experiment Runner (module 5):** A scope-confirmation
+  question to the operator failed at the tool layer (not a decline), so
+  proceeded with the conservative default already flagged as
+  recommended: new `POST /experiments/run` + `GET /experiments/jobs` /
+  `/experiments` / `/experiments/{job_id}`, whitelist-only
+  (`verify_data_integrity`, `forward_review` — both local/fast/no
+  network). Jobs run via `subprocess.Popen` in a dedicated thread pool,
+  streamed into an in-memory per-job log, 10-minute kill-timeout, 409 on
+  duplicate concurrent runs of the same job. Long-running
+  (walk_forward_validation, engine_subset_search) and quota-spending
+  (cross_provider_diff) jobs are NOT whitelisted — widening this is an
+  explicit operator decision, not something to infer.
+- **2026-07-12 — VPS Operations (module 12):** Reuses existing
+  infrastructure rather than duplicating: "diagnostics" calls
+  `GET /health/full` directly from the frontend, "backup" adds
+  `backup_d1` to the Experiment Runner's job whitelist with a new
+  `category` field (`research` vs `ops`) so the same job engine renders
+  in two tabs. Only genuinely new endpoint: `POST /ops/reload-config`
+  (clears the in-process config cache). **Restarting
+  iatis-api/iatis-scheduler is deliberately NOT exposed** — a
+  different risk category (live trading service, not a read or a local
+  job) from everything else in the dashboard; stays SSH-only until an
+  operator explicitly asks for it, pinned by a test that no restart
+  endpoint exists.
+
+At this third checkpoint: 673 backend tests, all green. 9 of 15 modules
+real (5, 6, 7, 9, 10, 11, 12, 13, 14). Remaining: Engine Analytics (8),
+Data Quality actions (3), Data Providers telemetry (2), System Health
+completion (1), Research Center drill-down (4), Security/RBAC (15) —
+all read-only extensions of existing partial modules, same risk profile
+as the first checkpoint's work.

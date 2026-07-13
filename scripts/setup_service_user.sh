@@ -20,6 +20,9 @@
 # Usage (on the VPS, as root):
 #   cd /root/IATIS && bash scripts/setup_service_user.sh
 #
+# SRC is overridable so a fresh box never has to clone into /root at all:
+#   SRC=/home/ubuntu/IATIS bash scripts/setup_service_user.sh
+#
 # NOT done automatically (decide separately):
 #   - binding the API to 127.0.0.1 instead of 0.0.0.0: correct hardening
 #     IF cloudflared/nginx proxies from localhost — verify your tunnel's
@@ -29,7 +32,7 @@
 
 set -euo pipefail
 
-SRC=/root/IATIS
+SRC="${SRC:-/root/IATIS}"
 DST=/opt/iatis
 SVC_USER=iatis
 UNITS=(iatis-api.service iatis-scheduler.service
@@ -59,6 +62,10 @@ if [[ ! -x $DST/venv/bin/python3 ]]; then
 fi
 $DST/venv/bin/pip install -q --upgrade pip
 $DST/venv/bin/pip install -q -r $DST/requirements.txt
+# pytest isn't in requirements.txt (prod deps only) but step 6/7 below
+# needs it in THIS freshly-rebuilt venv — it never inherits it from
+# whatever venv existed at $SRC.
+$DST/venv/bin/pip install -q pytest
 
 say "4/7 ownership + permissions"
 mkdir -p $DST/storage $DST/backups
@@ -77,6 +84,13 @@ done
 systemctl daemon-reload
 
 say "6/7 hermetic test run as $SVC_USER (quick subset)"
+# cd into $DST first: pytest records the invocation cwd as session.startpath
+# and os.chdir()s back to it during teardown even after a passing run. If
+# invoked from wherever this script itself was launched (e.g. a non-root
+# clone under /home/<user>, mode 750), $SVC_USER can't re-enter that
+# directory and the whole step fails on teardown despite every test
+# passing. $DST is chown'd to $SVC_USER above, so it's always enterable.
+cd "$DST"
 sudo -u $SVC_USER "$DST/venv/bin/python3" -m pytest "$DST/tests/test_phase1.py" -q \
   --rootdir="$DST" -p no:cacheprovider \
   || fail "tests failed under $SVC_USER — fix before switching services"

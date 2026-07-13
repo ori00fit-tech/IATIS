@@ -62,6 +62,10 @@ if [[ ! -x $DST/venv/bin/python3 ]]; then
 fi
 $DST/venv/bin/pip install -q --upgrade pip
 $DST/venv/bin/pip install -q -r $DST/requirements.txt
+# pytest isn't in requirements.txt (prod deps only) but step 6/7 below
+# needs it in THIS freshly-rebuilt venv — it never inherits it from
+# whatever venv existed at $SRC.
+$DST/venv/bin/pip install -q pytest
 
 say "4/7 ownership + permissions"
 mkdir -p $DST/storage $DST/backups

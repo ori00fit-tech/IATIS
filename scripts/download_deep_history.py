@@ -11,16 +11,25 @@ symbol — measured, not assumed (probed 2026-07-05):
   Plan-gated on TD (XAGUSD, USOIL, US30, NAS100, SPX500) → Yahoo:
       1d   : 10+ years ("max")
       4h   : resampled from 1h, limited to Yahoo's 730-day window
-  Crypto (BTCUSD, ETHUSD) → ccxt/Binance directly, NOT Twelve Data:
-      1day / 4h : full exchange history, free, unrated (since 2017) —
-      routed here instead of TD because ccxt's own floor is real
-      exchange history, not an arbitrary free-plan gate (2026-07-13,
-      added when a 10-year backtest data pull asked for the deepest
-      history achievable per symbol).
+  Crypto (BTCUSD, ETHUSD) — split by timeframe, measured 2026-07-13:
+      4h   : ccxt/Binance (~8.9y, since the BTC/USDT & ETH/USDT pairs
+             were listed) — clearly deeper than TD's free-plan H4
+             floor (~5y) for both symbols. Routed to ccxt.
+      1day : Twelve Data, NOT ccxt — TD's D1 series for BTC apparently
+             tracks an older composite price index (11.8y) that
+             predates Binance's own 2017 founding, i.e. genuinely
+             deeper than ccxt/Binance can ever serve for that symbol
+             (8.9y, bounded by the exchange's real listing date). For
+             ETH the two sources are close (TD 8.5y vs ccxt 8.9y); TD
+             is kept for both symbols on D1 for consistency and because
+             switching would regress BTC. ccxt remains strictly better
+             for H4 on both symbols — that half of the split is real.
 
-So the ">=10 years" goal is met on D1 for ALL symbols, and on H4 for
-crypto too; FX/metals/indices H4 gets the maximum each source allows —
-a hard external plan limit, not something more code can fix. Output:
+So the ">=10 years" goal is met on D1 for FX/metals/indices (Yahoo
+"max" or TD up to ~19y) and on BTCUSD D1 specifically (TD, 11.8y);
+crypto D1 otherwise and all crypto/FX/metals/indices H4 get the
+maximum each source *actually* serves — a hard external limit per
+provider, not something more code can fix. Output:
 data/{SYMBOL}_{TF}_deep.csv plus a research/results manifest with
 SHA256 fingerprints per file.
 
@@ -56,10 +65,12 @@ YAHOO_ONLY = {
     "SPX500": "^GSPC",
 }
 
-# Crypto: route to ccxt/Binance instead of Twelve Data. Binance's own
-# history (free, since listing ~2017) is deeper than any TD free-plan
-# floor and isn't subject to TD's rate/output-size gating.
-CCXT_DEEP = {"BTCUSD", "ETHUSD"}
+# Crypto H4 only: route to ccxt/Binance instead of Twelve Data — measured
+# deeper for both symbols (~8.9y vs TD's ~5y H4 floor). D1 deliberately
+# stays on Twelve Data (see module docstring): TD's BTC D1 series is
+# genuinely deeper than ccxt/Binance can ever serve, since it predates
+# Binance's 2017 founding.
+CCXT_DEEP_H4 = {"BTCUSD", "ETHUSD"}
 _INTERVAL_TO_CCXT_TF = {"4h": "4h", "1day": "1d"}
 
 TD_RATE_SLEEP = 8.5   # free plan: 8 req/min
@@ -187,7 +198,7 @@ def main() -> None:
                 continue
             print(f"{sym} {interval}:")
             try:
-                if sym in CCXT_DEEP:
+                if sym in CCXT_DEEP_H4 and interval == "4h":
                     df = fetch_ccxt_deep(sym, interval)
                 elif sym in YAHOO_ONLY:
                     df = fetch_yahoo_deep(YAHOO_ONLY[sym], interval)
@@ -215,7 +226,7 @@ def main() -> None:
             params={"timeframes": args.timeframes,
                     "td_4h_floor": "2020-01-30 (plan limit, probed 2026-07-05)",
                     "yahoo_only": sorted(YAHOO_ONLY),
-                    "ccxt_deep": sorted(CCXT_DEEP)},
+                    "ccxt_deep_h4_only": sorted(CCXT_DEEP_H4)},
             datasets=fps,
             results={"files": len(collected)},
         )

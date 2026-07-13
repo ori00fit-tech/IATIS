@@ -1,8 +1,11 @@
 """tests/test_download_deep_history.py
 
 Regression coverage for the ccxt/Binance crypto routing added to
-scripts/download_deep_history.py — BTCUSD/ETHUSD must go through ccxt
-(real, unrated exchange history) instead of Twelve Data (free-plan gated).
+scripts/download_deep_history.py — BTCUSD/ETHUSD H4 goes through ccxt
+(measured ~8.9y, deeper than TD's free-plan H4 floor). D1 deliberately
+stays on Twelve Data: TD's BTC D1 series (11.8y) predates Binance's own
+2017 founding and is genuinely deeper than ccxt can ever serve for that
+symbol (measured 2026-07-13) — see the module docstring.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from download_deep_history import CCXT_DEEP, fetch_ccxt_deep
+from download_deep_history import CCXT_DEEP_H4, fetch_ccxt_deep
 
 
 def _fake_df() -> pd.DataFrame:
@@ -28,8 +31,8 @@ def _fake_df() -> pd.DataFrame:
     )
 
 
-def test_crypto_symbols_are_ccxt_routed():
-    assert CCXT_DEEP == {"BTCUSD", "ETHUSD"}
+def test_crypto_symbols_are_ccxt_routed_for_h4_only():
+    assert CCXT_DEEP_H4 == {"BTCUSD", "ETHUSD"}
 
 
 def test_fetch_ccxt_deep_maps_interval_and_requests_deep_window():

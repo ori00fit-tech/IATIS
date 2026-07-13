@@ -29,3 +29,12 @@ psutil>=5.9.0,<6.0.0
 # ceiling.
 ccxt>=4.5.0,<5.0.0
 cryptography>=49.0.0
+
+# cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/indices
+# primary provider per config.yaml provider_chains). Never pinned here
+# before; it was only ever installed by hand on the original VPS, so a
+# from-scratch venv (e.g. scripts/setup_service_user.sh's rebuild, or any
+# fresh clone) silently lost cTrader entirely and fell back to Yahoo for
+# every affected symbol — no ModuleNotFoundError surfaced until the first
+# real migration (2026-07-13).
+ctrader-open-api>=0.9.2

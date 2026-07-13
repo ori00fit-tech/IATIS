@@ -24,8 +24,16 @@ echo ""
 # Step 1: Install cloudflared
 if ! command -v cloudflared &> /dev/null; then
     echo "Installing cloudflared..."
+    # Arch-aware: the previous hardcoded amd64 .deb silently produced an
+    # unrunnable binary ("exec format error") on arm64 hosts (e.g. Oracle
+    # Cloud Ampere / any aarch64 VPS).
+    case "$(dpkg --print-architecture)" in
+        amd64) CF_ARCH=amd64 ;;
+        arm64) CF_ARCH=arm64 ;;
+        *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;;
+    esac
     curl -L --output /tmp/cloudflared.deb \
-        https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}.deb"
     sudo dpkg -i /tmp/cloudflared.deb
     rm /tmp/cloudflared.deb
     echo "cloudflared installed: $(cloudflared --version)"

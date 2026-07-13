@@ -61,6 +61,32 @@ def test_build_manifest_binds_git_config_and_data(tmp_path):
     )
 
 
+def test_build_manifest_config_hash_covers_split_governance_files(tmp_path, monkeypatch):
+    """config.yaml's engines/risk/ai/symbols blocks moved into
+    config/*.yaml (2026-07-12) — the manifest's config sha256 must still
+    change when one of those split files changes, or a manifest would
+    silently stop detecting drift in exactly the blocks it exists to
+    protect (CLAUDE.md: negative/positive results committed with
+    reproducible manifests)."""
+    monkeypatch.setattr(m, "PROJECT_ROOT", tmp_path)
+    (tmp_path / "config.yaml").write_text("confluence:\n  min_score_to_trade: 58\n")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "risk.yaml").write_text("risk_per_trade_max: 0.01\n")
+
+    p = _tiny_csv(tmp_path)
+    first = m.build_manifest(
+        kind="walk_forward", config={}, params={}, datasets=[m.dataset_fingerprint(p)], results={},
+    )
+    assert "config/risk.yaml" in first["config"]["files"]
+
+    (config_dir / "risk.yaml").write_text("risk_per_trade_max: 0.02\n")
+    second = m.build_manifest(
+        kind="walk_forward", config={}, params={}, datasets=[m.dataset_fingerprint(p)], results={},
+    )
+    assert first["config"]["sha256"] != second["config"]["sha256"]
+
+
 def test_write_manifest_lands_in_tracked_results_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "RESULTS_DIR", tmp_path / "results")
     out = m.write_manifest({"kind": "walk_forward", "x": 1}, "walk_forward_20260705")

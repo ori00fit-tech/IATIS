@@ -17,10 +17,15 @@ and risk engine (risk/risk_engine.py) remain the sole authority for
 final_verdict — this module only explains a decision that has already
 been made, for a human reading the dashboard.
 
-Config (config.yaml `ai:` section — no secrets):
+Config (config/ai.yaml, merged into `ai:` by utils/helpers.py::load_config
+— no secrets):
     ai:
       enabled: false          # opt-in; false = every call below returns status="disabled"
-      provider: gemini        # gemini | openai | anthropic
+      providers:               # first enabled name in fallback_order wins
+        gemini: {enabled: true}
+        openai: {enabled: false}
+        anthropic: {enabled: false}
+      fallback_order: [gemini, openai, anthropic]
       model: gemini-flash-latest
       temperature: 0.1
       max_tokens: 1200
@@ -82,6 +87,25 @@ def _user_safe_error(exc: AIProviderError) -> str:
     return "The AI provider request failed. See server logs for details."
 
 
+def _resolve_provider_name(ai_cfg: dict) -> str:
+    """Pick the active provider name from config.
+
+    Prefers the `providers: {name: {enabled: bool}}` + `fallback_order`
+    structure (config/ai.yaml, 2026-07-12) — the first name in
+    fallback_order whose providers[name].enabled is true. Falls back to
+    the legacy single `provider: <name>` string when the new keys are
+    absent, so anything constructing an ai_cfg dict directly (tests,
+    older callers) keeps working unchanged.
+    """
+    providers = ai_cfg.get("providers")
+    fallback_order = ai_cfg.get("fallback_order")
+    if providers and fallback_order:
+        for name in fallback_order:
+            if (providers.get(name) or {}).get("enabled"):
+                return name
+    return ai_cfg.get("provider", "gemini")
+
+
 def _build_provider(provider_name: str, ai_cfg: dict) -> AIProvider | None:
     """Instantiate the configured provider, or None if disabled/misconfigured.
 
@@ -124,7 +148,7 @@ class AIAnalyzer:
         self.config = config
         ai_cfg = config.get("ai", {}) or {}
         self.enabled = bool(ai_cfg.get("enabled", False))
-        self.provider_name = ai_cfg.get("provider", "gemini")
+        self.provider_name = _resolve_provider_name(ai_cfg)
         self._cache = TTLCache()
         self._cache_cfg = ai_cfg.get("cache", {}) or {}
 

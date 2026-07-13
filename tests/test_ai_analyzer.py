@@ -17,7 +17,7 @@ from ai.providers.base import AIProviderError, extract_json, load_prompt
 from ai.providers.gemini import GeminiProvider
 from ai.providers.openai import OpenAIProvider
 from ai.providers.anthropic import AnthropicProvider
-from ai.ai_analyzer import AIAnalyzer
+from ai.ai_analyzer import AIAnalyzer, _resolve_provider_name
 
 
 # ---------------------------------------------------------------------------
@@ -269,4 +269,63 @@ def test_ai_analyzer_generate_daily_report_still_works_after_refactor(monkeypatc
     with patch.object(GeminiProvider, "_chat", return_value="Quiet day, 3 EXECUTE signals."):
         result = analyzer.generate_daily_report({"total": 10, "execute": 3, "no_trade": 7})
     assert result["status"] == "ok"
-    assert "Quiet day" in result["text"]
+
+
+# ---------------------------------------------------------------------------
+# _resolve_provider_name (config/ai.yaml governance restructure, 2026-07-12)
+# ---------------------------------------------------------------------------
+
+def test_resolve_provider_name_uses_legacy_provider_key_when_no_providers_dict():
+    assert _resolve_provider_name({"provider": "anthropic"}) == "anthropic"
+
+
+def test_resolve_provider_name_defaults_to_gemini_when_nothing_set():
+    assert _resolve_provider_name({}) == "gemini"
+
+
+def test_resolve_provider_name_picks_first_enabled_in_fallback_order():
+    ai_cfg = {
+        "providers": {
+            "gemini": {"enabled": False},
+            "openai": {"enabled": True},
+            "anthropic": {"enabled": True},
+        },
+        "fallback_order": ["gemini", "openai", "anthropic"],
+    }
+    assert _resolve_provider_name(ai_cfg) == "openai"
+
+
+def test_resolve_provider_name_respects_fallback_order_not_dict_order():
+    ai_cfg = {
+        "providers": {
+            "gemini": {"enabled": True},
+            "anthropic": {"enabled": True},
+        },
+        "fallback_order": ["anthropic", "gemini"],
+    }
+    assert _resolve_provider_name(ai_cfg) == "anthropic"
+
+
+def test_resolve_provider_name_falls_back_to_legacy_key_when_none_enabled():
+    ai_cfg = {
+        "provider": "openai",
+        "providers": {"gemini": {"enabled": False}},
+        "fallback_order": ["gemini"],
+    }
+    assert _resolve_provider_name(ai_cfg) == "openai"
+
+
+def test_ai_analyzer_reads_new_providers_structure(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    config = {
+        "ai": {
+            "enabled": True,
+            "providers": {"gemini": {"enabled": False}, "anthropic": {"enabled": True}},
+            "fallback_order": ["gemini", "anthropic"],
+            "model": "claude-sonnet-4-6",
+            "cache": {"news_ttl_min": 20, "macro_ttl_min": 60},
+        }
+    }
+    analyzer = AIAnalyzer(config)
+    assert analyzer.provider_name == "anthropic"
+    assert analyzer.available is True

@@ -1,0 +1,46 @@
+# config/engines.yaml — Engine Activation & Version Metadata
+# -----------------------------------------------------------------------
+# Split out of config.yaml (2026-07-12). Loaded and merged into the
+# top-level `engines` key by utils/helpers.py::load_config().
+#
+# CODE READS ONLY: engines.smc_full_spec, engines.enabled.<name> (bool).
+# `versions` below is metadata for humans only — nothing in main.py,
+# confluence/, or the individual engine modules reads it. It exists so
+# engine iterations can be compared over time without guessing which
+# code version produced which research/results manifest.
+#
+# Frozen per CLAUDE.md: engines enabled = smc, price_action, nnfx,
+# wyckoff (prod4), kept by burden-of-proof (H015 closed: no robust
+# alternative exists). Do NOT enable another engine without a new
+# pre-registered hypothesis — "Enabling more engines (any)" is on the
+# dead list (H015, run twice): every addition diluted, and subset
+# selection was shown to be universe-dependent noise.
+
+smc_full_spec: false   # H017 FAILED — detectors stay in the codebase for future re-tests only.
+
+enabled:
+  divergence: false
+  ict: false
+  macro: false
+  market_structure: false
+  nnfx: true
+  price_action: true
+  quant: false
+  sentiment: false
+  smc: true
+  wyckoff: true
+
+# Metadata only (see file header) — bump when an engine's internal logic
+# changes materially, so research manifests can be cross-referenced to a
+# specific engine version rather than just a git commit.
+versions:
+  divergence: "1.0"
+  ict: "1.0"
+  macro: "1.0"
+  market_structure: "1.0"
+  nnfx: "1.0"
+  price_action: "1.0"
+  quant: "1.0"
+  sentiment: "1.0"
+  smc: "1.0"
+  wyckoff: "1.0"

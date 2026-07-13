@@ -104,7 +104,7 @@
   "H009": {
    "title": "IATIS 6-engine confluence as systematic trading signal (already validated)",
    "status": "PASSED",
-   "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF≥1.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4.",
+   "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF≥1.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4. STILL fails research/edge_gate.py PROMOTION_CRITERIA (oos_trades/oos_pf/walk_forward/monte_carlo missing from `evidence`) — the addendum below is IN-SAMPLE stability data, not OOS, and does not change that. Status stays PASSED-but-flagged; see research/edge_gate.py audit_passed_hypotheses.",
    "result": {
     "symbols": 6,
     "windows": 18,
@@ -112,7 +112,31 @@
     "min_pf": 1.5,
     "avg_pf": 3.08
    },
-   "last_updated": "2026-06-25"
+   "last_updated": "2026-06-25",
+   "addendum_2026-07-13": {
+    "kind": "h4_yearly_stability_deep re-run on scripts/download_deep_history.py's deeper data",
+    "manifest": "research/results/h4_yearly_stability_deep_20260713_manifest.json",
+    "in_sample": true,
+    "note": "NOT out-of-sample evidence — does not satisfy PROMOTION_CRITERIA. Frozen production config (smc, price_action, nnfx, wyckoff; H4 decision TF; D1 MTF gate), unmodified.",
+    "carriers_confirmed": {
+     "BTCUSD": {"n": 345, "pf": 1.468, "wr": 44.1, "span": "2017-08-17 -> 2026-07-13 (8.9y)"},
+     "ETHUSD": {"n": 347, "pf": 1.435, "wr": 43.2, "span": "2017-08-17 -> 2026-07-13 (8.9y)"},
+     "XAUUSD": {"n": 290, "pf": 1.308, "wr": 40.0, "span": "2020-01-24 -> 2026-07-14 (6.5y)"}
+    },
+    "fx_regression_flagged": {
+     "note": "All 7 tested FX pairs now show PF 0.907-1.008 (at/below breakeven) under the CURRENT config — worse than the ~1.03-1.10 range published in docs/STRATEGY_EVIDENCE_2026-07.md. Root cause identified by config diff against research/results/h4_yearly_stability_20260705_manifest.json: confluence.min_informative_weight_share was ABSENT on 2026-07-05 and is now 0.6 (Axis-8 'SPEAKING panel' gate) — the only behavior_blocks difference between the two manifests. This is a real, previously-unmeasured consequence of that gate on the FX book specifically, not a bug in the re-run. Needs its own OOS/walk-forward check before treating the published 1.03-1.10 figures as current.",
+     "pairs": {
+      "EURUSD": {"n": 241, "pf": 0.974}, "GBPUSD": {"n": 223, "pf": 0.952},
+      "USDJPY": {"n": 218, "pf": 1.008}, "USDCHF": {"n": 231, "pf": 0.907},
+      "EURJPY": {"n": 225, "pf": 0.976}, "GBPJPY": {"n": 226, "pf": 0.951},
+      "AUDJPY": {"n": 239, "pf": 0.961}
+     }
+    },
+    "insufficient_sample": {
+     "note": "XAGUSD/USOIL/US30/NAS100/SPX500 show PF 1.07-1.46 but n=35-93 (Yahoo H4 cap ~2.4-2.9y) — well below the 300-trade bar, inconclusive either way.",
+     "symbols": ["XAGUSD", "USOIL", "US30", "NAS100", "SPX500"]
+    }
+   }
   },
   "H010": {
    "title": "RSI/MACD Divergence Engine",

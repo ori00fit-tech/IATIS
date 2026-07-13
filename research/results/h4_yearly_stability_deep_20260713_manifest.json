@@ -1,0 +1,1095 @@
+{
+  "kind": "h4_yearly_stability_deep",
+  "generated_at": "2026-07-13T21:51:19.985219+00:00",
+  "git": {
+    "commit": "09a1eb4bf1665de15356bc3f96ea05d6cfd4ce6f",
+    "dirty": false
+  },
+  "reproducible": true,
+  "config": {
+    "sha256": "7bdf6f5eedb53ce76db5ebd4d84f1b97dd7bc3daab6d506f2a436befabfabed3",
+    "files": [
+      "config.yaml",
+      "config/ai.yaml",
+      "config/engines.yaml",
+      "config/risk.yaml",
+      "config/symbols.yaml"
+    ],
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "min_informative_weight_share": 0.6,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "smc_full_spec": false,
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        },
+        "versions": {
+          "divergence": "1.0",
+          "ict": "1.0",
+          "macro": "1.0",
+          "market_structure": "1.0",
+          "nnfx": "1.0",
+          "price_action": "1.0",
+          "quant": "1.0",
+          "sentiment": "1.0",
+          "smc": "1.0",
+          "wyckoff": "1.0"
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 3000,
+        "provider_chains": {
+          "crypto": [
+            "ccxt",
+            "twelve_data",
+            "yahoo_finance",
+            "finnhub"
+          ],
+          "metals": [
+            "ctrader",
+            "twelve_data",
+            "yahoo_finance",
+            "finnhub"
+          ],
+          "energy": [
+            "ctrader",
+            "yahoo_finance",
+            "finnhub"
+          ],
+          "indices": [
+            "ctrader",
+            "yahoo_finance",
+            "finnhub"
+          ],
+          "fx": [
+            "ctrader",
+            "twelve_data",
+            "yahoo_finance",
+            "alpha_vantage",
+            "finnhub"
+          ]
+        },
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "FX book overall is statistically indistinguishable from breakeven (three independent confirmations, see CLAUDE.md); this pair has no individual disqualifying measurement \u2014 kept per D001 (cut only triggers on aggregate forward FX PF < 1.0 @ n>=40).",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/JPY",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CHF",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.938, maxDD 29% (n=273) \u2014 below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.954, maxDD 28% (n=282) \u2014 below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.985 (n=286) \u2014 at breakeven, no measured edge, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "EURJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPJPY",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "GBP/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "AUDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "AUD/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/GBP",
+            "asset_class": "fx_minor",
+            "status": "RETIRED",
+            "status_reason": "PF 0.635, WR 25.8%, maxDD 51% (n=248) \u2014 structurally broken, not merely marginal. Would need a new pre-registered hypothesis to revisit.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/CHF",
+            "asset_class": "fx_minor",
+            "status": "PAUSED",
+            "status_reason": "PF 0.951 (n=188) \u2014 at/below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD",
+            "asset_class": "metals",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD",
+            "asset_class": "metals",
+            "status": "ACTIVE",
+            "status_reason": "Carrier-adjacent metal, same H4/D1 trend-capture logic as XAUUSD.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USOIL",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "WTI/USD",
+            "asset_class": "energy",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "US30",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "DJI",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD",
+            "asset_class": "crypto",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD",
+            "asset_class": "crypto",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "engine": "backtesting/backtest_engine.run_backtest",
+    "method": "One continuous full-history backtest per symbol with the frozen production config, using the deepest H4 history scripts/download_deep_history.py serves; closed trades bucketed by exit year. Frozen config = no training = a stability read across regimes, not walk-forward optimization.",
+    "engines_enabled": {
+      "divergence": false,
+      "ict": false,
+      "macro": false,
+      "market_structure": false,
+      "nnfx": true,
+      "price_action": true,
+      "quant": false,
+      "sentiment": false,
+      "smc": true,
+      "wyckoff": true
+    },
+    "decision_timeframe": "H4",
+    "note": "IN-SAMPLE relative to system development; forward paper trading remains the only prospective evidence (CLAUDE.md). Supersedes h4_yearly_stability_20260705 with a deeper H4 window per symbol (see per-symbol 'period')."
+  },
+  "datasets": [
+    {
+      "symbol": "EURUSD",
+      "file": "/opt/iatis/data/EURUSD_H4_deep.csv",
+      "sha256": "a463bad36cc2d643e96669ae9ac63a80d4c995b167d1b5429994b29c4f10dc49",
+      "size_bytes": 637965
+    },
+    {
+      "symbol": "GBPUSD",
+      "file": "/opt/iatis/data/GBPUSD_H4_deep.csv",
+      "sha256": "466b12fb28004c8f3fae55c2ede76cc18a6744df714bc5147a42298e709fa2c0",
+      "size_bytes": 634244
+    },
+    {
+      "symbol": "USDJPY",
+      "file": "/opt/iatis/data/USDJPY_H4_deep.csv",
+      "sha256": "dfd940f57ccfaf8d4c0d3dc213c7d42b1dec2bef8f9d62269a662a8f454bd9d2",
+      "size_bytes": 679225
+    },
+    {
+      "symbol": "USDCHF",
+      "file": "/opt/iatis/data/USDCHF_H4_deep.csv",
+      "sha256": "fddf4730a34320a8be92c84fe645fb5b8f9e20927bb390f1f6ac174c7a4cbb2a",
+      "size_bytes": 744169
+    },
+    {
+      "symbol": "EURJPY",
+      "file": "/opt/iatis/data/EURJPY_H4_deep.csv",
+      "sha256": "7dd1697c73ff391c67d427848550ba63baa51d03523c40734ee395aa5489b67c",
+      "size_bytes": 678575
+    },
+    {
+      "symbol": "GBPJPY",
+      "file": "/opt/iatis/data/GBPJPY_H4_deep.csv",
+      "sha256": "a489c3ac33a8ce5ef7a49038209d080e173eeac53b2c3694711cc59637f01768",
+      "size_bytes": 687129
+    },
+    {
+      "symbol": "AUDJPY",
+      "file": "/opt/iatis/data/AUDJPY_H4_deep.csv",
+      "sha256": "aad38fc402dcec4e50bdf4b22f2f3c71ccaddda4ef43a9a0edec7faa8b7df1fb",
+      "size_bytes": 623762
+    },
+    {
+      "symbol": "XAUUSD",
+      "file": "/opt/iatis/data/XAUUSD_H4_deep.csv",
+      "sha256": "b7610af6f571dd3754cd853cd846009148e231eff214df95c4d548cb87628bea",
+      "size_bytes": 768033
+    },
+    {
+      "symbol": "XAGUSD",
+      "file": "/opt/iatis/data/XAGUSD_H4_deep.csv",
+      "sha256": "18865baa0f072c8be5ba1e43a48511dce85b1b5e1ded0266c45f04d22a8a546b",
+      "size_bytes": 382200
+    },
+    {
+      "symbol": "USOIL",
+      "file": "/opt/iatis/data/USOIL_H4_deep.csv",
+      "sha256": "2680470710734b276f0aa7c8e1e87ac9a1e011e3603a2b3e834e5b3e5b74f3cb",
+      "size_bytes": 373423
+    },
+    {
+      "symbol": "US30",
+      "file": "/opt/iatis/data/US30_H4_deep.csv",
+      "sha256": "38fa65441f564ae1f2553e05880d67ff632c9cecb087eab4c3ec747ff13ecafc",
+      "size_bytes": 155888
+    },
+    {
+      "symbol": "NAS100",
+      "file": "/opt/iatis/data/NAS100_H4_deep.csv",
+      "sha256": "aafcbd2ef48e4279951d7a071a10eae0751055b47e7a42bbccc0ccf1e47a9c83",
+      "size_bytes": 164612
+    },
+    {
+      "symbol": "SPX500",
+      "file": "/opt/iatis/data/SPX500_H4_deep.csv",
+      "sha256": "af4305697f82e47d2052a9ca18c498d5ba9b9fe1d8537d58e59e617908a56836",
+      "size_bytes": 169614
+    },
+    {
+      "symbol": "BTCUSD",
+      "file": "/opt/iatis/data/BTCUSD_H4_deep.csv",
+      "sha256": "bc7aabf9d89b20d46501a17130e56d50886110599fe8aa04dd43a2de3bf4cadb",
+      "size_bytes": 1396026
+    },
+    {
+      "symbol": "ETHUSD",
+      "file": "/opt/iatis/data/ETHUSD_H4_deep.csv",
+      "sha256": "410aa929ec4802ceb935f61abc557eb7bca5c9be93e06b9e8e52354035847ef5",
+      "size_bytes": 1311409
+    }
+  ],
+  "results": {
+    "per_symbol": {
+      "EURUSD": {
+        "bars": 10616,
+        "period": "2020-01-30 -> 2026-07-14",
+        "trades": 241,
+        "win_rate": 33.6,
+        "profit_factor": 0.974,
+        "max_dd_pct": 15.2,
+        "yearly": {
+          "2020": {
+            "trades": 32,
+            "wr": 37.5,
+            "pf": 1.17
+          },
+          "2021": {
+            "trades": 33,
+            "wr": 30.3,
+            "pf": 0.82
+          },
+          "2022": {
+            "trades": 44,
+            "wr": 31.8,
+            "pf": 0.9
+          },
+          "2023": {
+            "trades": 34,
+            "wr": 38.2,
+            "pf": 1.2
+          },
+          "2024": {
+            "trades": 30,
+            "wr": 33.3,
+            "pf": 0.96
+          },
+          "2025": {
+            "trades": 37,
+            "wr": 32.4,
+            "pf": 0.93
+          },
+          "2026": {
+            "trades": 31,
+            "wr": 32.3,
+            "pf": 0.89
+          }
+        },
+        "runtime_s": 32.6
+      },
+      "GBPUSD": {
+        "bars": 10633,
+        "period": "2020-01-30 -> 2026-07-14",
+        "trades": 223,
+        "win_rate": 33.2,
+        "profit_factor": 0.952,
+        "max_dd_pct": 18.6,
+        "yearly": {
+          "2020": {
+            "trades": 24,
+            "wr": 25.0,
+            "pf": 0.65
+          },
+          "2021": {
+            "trades": 36,
+            "wr": 22.2,
+            "pf": 0.54
+          },
+          "2022": {
+            "trades": 35,
+            "wr": 40.0,
+            "pf": 1.31
+          },
+          "2023": {
+            "trades": 28,
+            "wr": 35.7,
+            "pf": 1.07
+          },
+          "2024": {
+            "trades": 36,
+            "wr": 38.9,
+            "pf": 1.22
+          },
+          "2025": {
+            "trades": 36,
+            "wr": 36.1,
+            "pf": 1.08
+          },
+          "2026": {
+            "trades": 28,
+            "wr": 32.1,
+            "pf": 0.91
+          }
+        },
+        "runtime_s": 31.8
+      },
+      "USDJPY": {
+        "bars": 10594,
+        "period": "2020-01-29 -> 2026-07-14",
+        "trades": 218,
+        "win_rate": 36.2,
+        "profit_factor": 1.008,
+        "max_dd_pct": 13.8,
+        "yearly": {
+          "2020": {
+            "trades": 26,
+            "wr": 23.1,
+            "pf": 0.57
+          },
+          "2021": {
+            "trades": 43,
+            "wr": 34.9,
+            "pf": 1.02
+          },
+          "2022": {
+            "trades": 43,
+            "wr": 44.2,
+            "pf": 1.17
+          },
+          "2023": {
+            "trades": 30,
+            "wr": 43.3,
+            "pf": 1.41
+          },
+          "2024": {
+            "trades": 36,
+            "wr": 41.7,
+            "pf": 1.37
+          },
+          "2025": {
+            "trades": 24,
+            "wr": 20.8,
+            "pf": 0.49
+          },
+          "2026": {
+            "trades": 16,
+            "wr": 37.5,
+            "pf": 0.92
+          }
+        },
+        "runtime_s": 29.9
+      },
+      "USDCHF": {
+        "bars": 10598,
+        "period": "2020-01-29 -> 2026-07-14",
+        "trades": 231,
+        "win_rate": 32.0,
+        "profit_factor": 0.907,
+        "max_dd_pct": 19.5,
+        "yearly": {
+          "2020": {
+            "trades": 26,
+            "wr": 34.6,
+            "pf": 1.03
+          },
+          "2021": {
+            "trades": 37,
+            "wr": 24.3,
+            "pf": 0.63
+          },
+          "2022": {
+            "trades": 34,
+            "wr": 41.2,
+            "pf": 1.35
+          },
+          "2023": {
+            "trades": 35,
+            "wr": 34.3,
+            "pf": 1.01
+          },
+          "2024": {
+            "trades": 37,
+            "wr": 32.4,
+            "pf": 0.93
+          },
+          "2025": {
+            "trades": 40,
+            "wr": 32.5,
+            "pf": 0.94
+          },
+          "2026": {
+            "trades": 22,
+            "wr": 22.7,
+            "pf": 0.51
+          }
+        },
+        "runtime_s": 28.4
+      },
+      "EURJPY": {
+        "bars": 10619,
+        "period": "2020-01-29 -> 2026-07-14",
+        "trades": 225,
+        "win_rate": 33.3,
+        "profit_factor": 0.976,
+        "max_dd_pct": 15.4,
+        "yearly": {
+          "2020": {
+            "trades": 26,
+            "wr": 30.8,
+            "pf": 0.88
+          },
+          "2021": {
+            "trades": 37,
+            "wr": 40.5,
+            "pf": 1.32
+          },
+          "2022": {
+            "trades": 37,
+            "wr": 32.4,
+            "pf": 0.92
+          },
+          "2023": {
+            "trades": 40,
+            "wr": 32.5,
+            "pf": 0.95
+          },
+          "2024": {
+            "trades": 38,
+            "wr": 31.6,
+            "pf": 0.89
+          },
+          "2025": {
+            "trades": 23,
+            "wr": 52.2,
+            "pf": 2.16
+          },
+          "2026": {
+            "trades": 24,
+            "wr": 12.5,
+            "pf": 0.29
+          }
+        },
+        "runtime_s": 28.9
+      },
+      "GBPJPY": {
+        "bars": 10627,
+        "period": "2020-01-29 -> 2026-07-14",
+        "trades": 226,
+        "win_rate": 33.6,
+        "profit_factor": 0.951,
+        "max_dd_pct": 21.3,
+        "yearly": {
+          "2020": {
+            "trades": 28,
+            "wr": 35.7,
+            "pf": 1.06
+          },
+          "2021": {
+            "trades": 37,
+            "wr": 40.5,
+            "pf": 1.31
+          },
+          "2022": {
+            "trades": 39,
+            "wr": 25.6,
+            "pf": 0.67
+          },
+          "2023": {
+            "trades": 24,
+            "wr": 33.3,
+            "pf": 0.98
+          },
+          "2024": {
+            "trades": 41,
+            "wr": 41.5,
+            "pf": 1.26
+          },
+          "2025": {
+            "trades": 33,
+            "wr": 27.3,
+            "pf": 0.69
+          },
+          "2026": {
+            "trades": 24,
+            "wr": 29.2,
+            "pf": 0.7
+          }
+        },
+        "runtime_s": 24.7
+      },
+      "AUDJPY": {
+        "bars": 10621,
+        "period": "2020-01-30 -> 2026-07-14",
+        "trades": 239,
+        "win_rate": 33.1,
+        "profit_factor": 0.961,
+        "max_dd_pct": 23.8,
+        "yearly": {
+          "2020": {
+            "trades": 29,
+            "wr": 37.9,
+            "pf": 1.19
+          },
+          "2021": {
+            "trades": 38,
+            "wr": 36.8,
+            "pf": 1.08
+          },
+          "2022": {
+            "trades": 40,
+            "wr": 35.0,
+            "pf": 1.06
+          },
+          "2023": {
+            "trades": 42,
+            "wr": 19.0,
+            "pf": 0.46
+          },
+          "2024": {
+            "trades": 36,
+            "wr": 41.7,
+            "pf": 1.37
+          },
+          "2025": {
+            "trades": 36,
+            "wr": 30.6,
+            "pf": 0.87
+          },
+          "2026": {
+            "trades": 18,
+            "wr": 33.3,
+            "pf": 1.05
+          }
+        },
+        "runtime_s": 29.3
+      },
+      "XAUUSD": {
+        "bars": 10673,
+        "period": "2020-01-24 -> 2026-07-14",
+        "trades": 290,
+        "win_rate": 40.0,
+        "profit_factor": 1.308,
+        "max_dd_pct": 14.2,
+        "yearly": {
+          "2020": {
+            "trades": 26,
+            "wr": 38.5,
+            "pf": 1.23
+          },
+          "2021": {
+            "trades": 43,
+            "wr": 27.9,
+            "pf": 0.77
+          },
+          "2022": {
+            "trades": 40,
+            "wr": 40.0,
+            "pf": 1.25
+          },
+          "2023": {
+            "trades": 39,
+            "wr": 38.5,
+            "pf": 1.23
+          },
+          "2024": {
+            "trades": 50,
+            "wr": 34.0,
+            "pf": 1.02
+          },
+          "2025": {
+            "trades": 55,
+            "wr": 52.7,
+            "pf": 2.16
+          },
+          "2026": {
+            "trades": 37,
+            "wr": 45.9,
+            "pf": 1.41
+          }
+        },
+        "runtime_s": 34.7
+      },
+      "XAGUSD": {
+        "bars": 3723,
+        "period": "2024-02-18 -> 2026-07-13",
+        "trades": 93,
+        "win_rate": 35.5,
+        "profit_factor": 1.07,
+        "max_dd_pct": 13.9,
+        "yearly": {
+          "2024": {
+            "trades": 31,
+            "wr": 25.8,
+            "pf": 0.69
+          },
+          "2025": {
+            "trades": 43,
+            "wr": 37.2,
+            "pf": 1.17
+          },
+          "2026": {
+            "trades": 19,
+            "wr": 47.4,
+            "pf": 1.68
+          }
+        },
+        "runtime_s": 7.7
+      },
+      "USOIL": {
+        "bars": 3677,
+        "period": "2024-02-18 -> 2026-07-13",
+        "trades": 58,
+        "win_rate": 36.2,
+        "profit_factor": 1.116,
+        "max_dd_pct": 5.2,
+        "yearly": {
+          "2024": {
+            "trades": 16,
+            "wr": 31.2,
+            "pf": 0.89
+          },
+          "2025": {
+            "trades": 32,
+            "wr": 37.5,
+            "pf": 1.18
+          },
+          "2026": {
+            "trades": 10,
+            "wr": 40.0,
+            "pf": 1.31
+          }
+        },
+        "runtime_s": 5.7
+      },
+      "US30": {
+        "bars": 1707,
+        "period": "2023-08-14 -> 2026-07-13",
+        "trades": 39,
+        "win_rate": 43.6,
+        "profit_factor": 1.46,
+        "max_dd_pct": 4.0,
+        "yearly": {
+          "2023": {
+            "trades": 1,
+            "wr": 0.0,
+            "pf": 0.0
+          },
+          "2024": {
+            "trades": 17,
+            "wr": 47.1,
+            "pf": 1.72
+          },
+          "2025": {
+            "trades": 15,
+            "wr": 40.0,
+            "pf": 1.31
+          },
+          "2026": {
+            "trades": 6,
+            "wr": 50.0,
+            "pf": 1.66
+          }
+        },
+        "runtime_s": 2.7
+      },
+      "NAS100": {
+        "bars": 1707,
+        "period": "2023-08-14 -> 2026-07-13",
+        "trades": 48,
+        "win_rate": 39.6,
+        "profit_factor": 1.224,
+        "max_dd_pct": 5.1,
+        "yearly": {
+          "2023": {
+            "trades": 1,
+            "wr": 0.0,
+            "pf": 0.0
+          },
+          "2024": {
+            "trades": 21,
+            "wr": 38.1,
+            "pf": 1.13
+          },
+          "2025": {
+            "trades": 16,
+            "wr": 37.5,
+            "pf": 1.08
+          },
+          "2026": {
+            "trades": 10,
+            "wr": 50.0,
+            "pf": 2.12
+          }
+        },
+        "runtime_s": 2.9
+      },
+      "SPX500": {
+        "bars": 1707,
+        "period": "2023-08-14 -> 2026-07-13",
+        "trades": 35,
+        "win_rate": 40.0,
+        "profit_factor": 1.201,
+        "max_dd_pct": 7.2,
+        "yearly": {
+          "2023": {
+            "trades": 1,
+            "wr": 0.0,
+            "pf": 0.0
+          },
+          "2024": {
+            "trades": 15,
+            "wr": 40.0,
+            "pf": 1.27
+          },
+          "2025": {
+            "trades": 13,
+            "wr": 38.5,
+            "pf": 1.23
+          },
+          "2026": {
+            "trades": 6,
+            "wr": 50.0,
+            "pf": 1.39
+          }
+        },
+        "runtime_s": 2.5
+      },
+      "BTCUSD": {
+        "bars": 19501,
+        "period": "2017-08-17 -> 2026-07-13",
+        "trades": 345,
+        "win_rate": 44.1,
+        "profit_factor": 1.468,
+        "max_dd_pct": 9.8,
+        "yearly": {
+          "2017": {
+            "trades": 18,
+            "wr": 66.7,
+            "pf": 3.53
+          },
+          "2018": {
+            "trades": 34,
+            "wr": 35.3,
+            "pf": 1.02
+          },
+          "2019": {
+            "trades": 35,
+            "wr": 48.6,
+            "pf": 1.83
+          },
+          "2020": {
+            "trades": 49,
+            "wr": 49.0,
+            "pf": 1.94
+          },
+          "2021": {
+            "trades": 39,
+            "wr": 46.2,
+            "pf": 1.69
+          },
+          "2022": {
+            "trades": 32,
+            "wr": 34.4,
+            "pf": 1.03
+          },
+          "2023": {
+            "trades": 39,
+            "wr": 48.7,
+            "pf": 1.82
+          },
+          "2024": {
+            "trades": 35,
+            "wr": 45.7,
+            "pf": 1.65
+          },
+          "2025": {
+            "trades": 39,
+            "wr": 33.3,
+            "pf": 0.98
+          },
+          "2026": {
+            "trades": 25,
+            "wr": 40.0,
+            "pf": 1.21
+          }
+        },
+        "runtime_s": 55.2
+      },
+      "ETHUSD": {
+        "bars": 19501,
+        "period": "2017-08-17 -> 2026-07-13",
+        "trades": 347,
+        "win_rate": 43.2,
+        "profit_factor": 1.435,
+        "max_dd_pct": 8.7,
+        "yearly": {
+          "2017": {
+            "trades": 12,
+            "wr": 33.3,
+            "pf": 0.98
+          },
+          "2018": {
+            "trades": 40,
+            "wr": 55.0,
+            "pf": 2.39
+          },
+          "2019": {
+            "trades": 33,
+            "wr": 42.4,
+            "pf": 1.56
+          },
+          "2020": {
+            "trades": 40,
+            "wr": 45.0,
+            "pf": 1.67
+          },
+          "2021": {
+            "trades": 46,
+            "wr": 45.7,
+            "pf": 1.62
+          },
+          "2022": {
+            "trades": 33,
+            "wr": 39.4,
+            "pf": 1.25
+          },
+          "2023": {
+            "trades": 40,
+            "wr": 35.0,
+            "pf": 1.06
+          },
+          "2024": {
+            "trades": 48,
+            "wr": 41.7,
+            "pf": 1.32
+          },
+          "2025": {
+            "trades": 40,
+            "wr": 42.5,
+            "pf": 1.44
+          },
+          "2026": {
+            "trades": 15,
+            "wr": 46.7,
+            "pf": 1.49
+          }
+        },
+        "runtime_s": 58.3
+      }
+    }
+  }
+}

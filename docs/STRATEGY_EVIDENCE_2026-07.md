@@ -18,12 +18,14 @@ spreads** (measured live via cTrader):
 
 | carrier | real-cost PF | note |
 |---|---|---|
-| ETHUSD | ~1.40–1.56 | strongest |
-| BTCUSD | ~1.5 | $12 spread negligible vs the asset's range |
+| ETHUSD | ~1.40–1.56 | strongest — now confirmed over 8.9y, n=347 (see 2026-07-13 addendum) |
+| BTCUSD | ~1.5 | $12 spread negligible vs the asset's range — now confirmed over 8.9y, n=345 |
 | XAUUSD | ~1.21–1.34 | modest haircut from real 12-pip spread |
-| FX majors (7 kept) | ~1.03–1.10 | real spread 0.0–0.4 pip, BELOW the backtest assumption → conservative |
+| FX majors (7 kept) | ~1.03–1.10 (⚠ stale, see below) | measured before `confluence.min_informative_weight_share` (Axis-8) existed; the 2026-07-13 re-run under the CURRENT config shows all 7 pairs at 0.907–1.008 — see addendum |
 
-Portfolio PF by year never fell below 1.0 (2020→2026). The edge is: **4
+Portfolio PF by year never fell below 1.0 (2020→2026, on the config as of
+that measurement — see the 2026-07-13 addendum for the current-config
+re-read). The edge is: **4
 confluence engines (SMC, Price Action, NNFX, Wyckoff) on a curated
 symbol set, H4 decision timeframe with D1 confirmation.**
 
@@ -226,3 +228,67 @@ Sobering side-reading the operator should keep: on the held-out TEST year
 BTCUSD 1.37) stay positive. Third independent confirmation of the audit's
 core verdict: the edge lives in the carriers; FX pays for the privilege of
 diversification it doesn't deliver.
+
+---
+
+## Deep-history stability re-run (2026-07-13) — carriers strengthen, FX gets a FOURTH confirmation
+
+Server migration (new VPS) motivated pulling the deepest H4/D1 history
+each provider actually serves (`scripts/download_deep_history.py`,
+extended that day to route crypto H4 through ccxt/Binance — measured
+deeper than Twelve Data's floor for BTCUSD/ETHUSD specifically, D1 stays
+on Twelve Data since its BTC series predates Binance's 2017 founding).
+Re-ran the frozen production system — **engines/thresholds completely
+unmodified** — against that deeper data per symbol
+(`scripts/run_h4_yearly_backtest.py`), bucketed by exit year. **IN-SAMPLE
+relative to system development, same as every backtest in this
+document — does not satisfy `research/edge_gate.py` PROMOTION_CRITERIA
+(no OOS split, no walk-forward, no Monte Carlo in this run).** Manifest:
+`research/results/h4_yearly_stability_deep_20260713_manifest.json`.
+
+**Carriers — same verdict, now on a much longer window:**
+
+| carrier | n | PF | WR | window |
+|---|---|---|---|---|
+| BTCUSD | 345 | **1.468** | 44.1% | 2017-08-17 → 2026-07-13 (8.9y — ccxt/Binance's real listing history) |
+| ETHUSD | 347 | **1.435** | 43.2% | 2017-08-17 → 2026-07-13 (8.9y) |
+| XAUUSD | 290 | **1.308** | 40.0% | 2020-01-24 → 2026-07-14 (6.5y — Twelve Data's free-plan H4 floor) |
+
+BTCUSD and ETHUSD now individually clear the `PROMOTION_CRITERIA` sample
+bar (≥300 trades) AND the PF bar (≥1.2) **in-sample** — walk-forward and
+Monte Carlo are still required before that means anything for promotion,
+but it is the strongest single-symbol in-sample reading yet, on the
+longest window yet.
+
+**FX — a fourth independent confirmation, and a root cause found for why
+it now looks worse than the headline table above:** all 7 tested FX
+pairs (EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) came back
+at PF 0.907–1.008 over the SAME ~6.4y window Twelve Data has always
+served (unchanged by this migration) — worse than the ~1.03–1.10 this
+document has published since. Diffing this run's config fingerprint
+against `research/results/h4_yearly_stability_20260705_manifest.json`
+(the source of the original 1.03–1.10 figures) found exactly one
+`behavior_blocks` difference: **`confluence.min_informative_weight_share`
+did not exist on 2026-07-05 and is `0.6` now** (the Axis-8 "SPEAKING
+panel" gate) — every other engine/risk/regime/market-quality parameter is
+byte-identical between the two manifests. This is a real, previously
+unmeasured effect of that gate on the FX book specifically, not a data or
+migration artifact. It lines up with, and is now a fourth confirmation
+of, the same pattern H015's held-out TEST year and the IC Markets sweep
+already found: **the FX book does not clear breakeven under the current
+system; the carriers do.** Open item: re-verify with a proper
+chronological OOS split whether `min_informative_weight_share` is net
+neutral-to-positive for the carriers while being the marginal factor that
+tips FX below breakeven — a controlled A/B, not a config change, and out
+of scope for this pass.
+
+**Inconclusive (sample too small to read either way):** XAGUSD, USOIL,
+US30, NAS100, SPX500 showed PF 1.07–1.46 but n=35–93 — Yahoo's ~2.4–2.9y
+H4 window (their Twelve Data plan-gate fallback) is nowhere near the
+300-trade bar. Not evidence for or against; just short.
+
+Registry: `research/results/registry.json`'s H009 entry carries the full
+per-symbol breakdown under `addendum_2026-07-13`, explicitly marked
+`in_sample: true` — H009's `status` is unchanged (still PASSED-but-flagged
+by the edge_gate trust audit; this addendum does not and should not
+change that).

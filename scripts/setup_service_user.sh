@@ -84,6 +84,13 @@ done
 systemctl daemon-reload
 
 say "6/7 hermetic test run as $SVC_USER (quick subset)"
+# cd into $DST first: pytest records the invocation cwd as session.startpath
+# and os.chdir()s back to it during teardown even after a passing run. If
+# invoked from wherever this script itself was launched (e.g. a non-root
+# clone under /home/<user>, mode 750), $SVC_USER can't re-enter that
+# directory and the whole step fails on teardown despite every test
+# passing. $DST is chown'd to $SVC_USER above, so it's always enterable.
+cd "$DST"
 sudo -u $SVC_USER "$DST/venv/bin/python3" -m pytest "$DST/tests/test_phase1.py" -q \
   --rootdir="$DST" -p no:cacheprovider \
   || fail "tests failed under $SVC_USER — fix before switching services"

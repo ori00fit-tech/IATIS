@@ -5,16 +5,24 @@ scripts/download_deep_history.py
 Deepest history the free data plans actually serve, for every enabled
 symbol — measured, not assumed (probed 2026-07-05):
 
-  Twelve Data Free (12 FX + XAUUSD + BTCUSD + ETHUSD):
+  Twelve Data Free (12 FX + XAUUSD):
       1day : up to ~19 years (outputsize 5000)
       4h   : back to ~2020-01-30 (~6.5 years) — the plan's hard floor
   Plan-gated on TD (XAGUSD, USOIL, US30, NAS100, SPX500) → Yahoo:
       1d   : 10+ years ("max")
       4h   : resampled from 1h, limited to Yahoo's 730-day window
+  Crypto (BTCUSD, ETHUSD) → ccxt/Binance directly, NOT Twelve Data:
+      1day / 4h : full exchange history, free, unrated (since 2017) —
+      routed here instead of TD because ccxt's own floor is real
+      exchange history, not an arbitrary free-plan gate (2026-07-13,
+      added when a 10-year backtest data pull asked for the deepest
+      history achievable per symbol).
 
-So the ">=10 years" goal is met on D1 for ALL symbols; H4 gets the
-maximum each source allows. Output: data/{SYMBOL}_{TF}_deep.csv plus a
-research/results manifest with SHA256 fingerprints per file.
+So the ">=10 years" goal is met on D1 for ALL symbols, and on H4 for
+crypto too; FX/metals/indices H4 gets the maximum each source allows —
+a hard external plan limit, not something more code can fix. Output:
+data/{SYMBOL}_{TF}_deep.csv plus a research/results manifest with
+SHA256 fingerprints per file.
 
 Run on the VPS (Yahoo is blocked from some sandboxes):
     python3 scripts/download_deep_history.py               # everything
@@ -47,6 +55,12 @@ YAHOO_ONLY = {
     "NAS100": "^NDX",
     "SPX500": "^GSPC",
 }
+
+# Crypto: route to ccxt/Binance instead of Twelve Data. Binance's own
+# history (free, since listing ~2017) is deeper than any TD free-plan
+# floor and isn't subject to TD's rate/output-size gating.
+CCXT_DEEP = {"BTCUSD", "ETHUSD"}
+_INTERVAL_TO_CCXT_TF = {"4h": "4h", "1day": "1d"}
 
 TD_RATE_SLEEP = 8.5   # free plan: 8 req/min
 _OHLCV = ["open", "high", "low", "close", "volume"]
@@ -124,6 +138,19 @@ def fetch_yahoo_deep(yf_symbol: str, interval: str) -> pd.DataFrame:
     return raw.sort_index()
 
 
+def fetch_ccxt_deep(symbol: str, interval: str) -> pd.DataFrame:
+    """Full ccxt/Binance history for a crypto symbol — paginates via
+    core.ccxt_provider.fetch_ccxt until the exchange's own listing date,
+    not an artificial plan floor."""
+    from core.ccxt_provider import fetch_ccxt
+
+    tf = _INTERVAL_TO_CCXT_TF.get(interval, interval)
+    df = fetch_ccxt(symbol, timeframe=tf, days=3650)  # 10y ask; pagination stops at listing
+    if df is None or df.empty:
+        raise RuntimeError(f"ccxt returned no data for {symbol} {tf}")
+    return df
+
+
 def _integrity(df: pd.DataFrame) -> str:
     dups = int(df.index.duplicated().sum())
     bad = int((df["high"] < df["low"]).sum())
@@ -160,7 +187,9 @@ def main() -> None:
                 continue
             print(f"{sym} {interval}:")
             try:
-                if sym in YAHOO_ONLY:
+                if sym in CCXT_DEEP:
+                    df = fetch_ccxt_deep(sym, interval)
+                elif sym in YAHOO_ONLY:
                     df = fetch_yahoo_deep(YAHOO_ONLY[sym], interval)
                 else:
                     df = fetch_td_deep(s["symbol"], interval, api_key)
@@ -185,7 +214,8 @@ def main() -> None:
             config=cfg,
             params={"timeframes": args.timeframes,
                     "td_4h_floor": "2020-01-30 (plan limit, probed 2026-07-05)",
-                    "yahoo_only": sorted(YAHOO_ONLY)},
+                    "yahoo_only": sorted(YAHOO_ONLY),
+                    "ccxt_deep": sorted(CCXT_DEEP)},
             datasets=fps,
             results={"files": len(collected)},
         )

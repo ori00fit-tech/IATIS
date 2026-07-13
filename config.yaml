@@ -1,3 +1,26 @@
+# config.yaml — IATIS Governance Layer (core)
+# -----------------------------------------------------------------------
+# Symbol universe, engine activation/versions, risk limits, and the AI
+# provider layer live in config/symbols.yaml, config/engines.yaml,
+# config/risk.yaml, config/ai.yaml (split 2026-07-12 — see each file's
+# header comment). utils/helpers.py::load_config() merges them all into
+# one effective dict identical in shape to the pre-split monolithic
+# file; every module that calls load_config() is unaffected.
+#
+# THREE SCORE THRESHOLDS — do not confuse these, and do not collapse
+# them into one formula without a new pre-registered hypothesis (doing
+# so would change every symbol's effective trigger point mid-sample,
+# which CLAUDE.md forbids while the forward-evidence counter is open):
+#   1. confluence.min_score_to_trade (below, system-wide) — the
+#      confluence engine's own floor for calling a setup tradeable at
+#      all, evaluated first, inside confluence scoring.
+#   2. data.twelve_data_symbols[i].min_score (config/symbols.yaml) —
+#      a PER-SYMBOL floor, evaluated next; some symbols require more
+#      conviction than the system-wide floor (e.g. NAS100/ETHUSD at 60
+#      vs the 58 default), reflecting measured per-symbol noise.
+#   3. execution.min_score_to_execute (below) — the final gate right
+#      before an order is placed, independent of confluence scoring.
+#      A signal must clear ALL THREE, in this order, to become a trade.
 confluence:
   min_engines_agreeing: 2
   min_score_to_trade: 58
@@ -63,131 +86,19 @@ data:
   - H4
   - D1
   - H1
-  twelve_data_symbols:
-  - enabled: true
-    internal: EURUSD
-    min_score: 60
-    rr: 2.0
-    symbol: EUR/USD
-  - enabled: true
-    internal: GBPUSD
-    min_score: 58
-    rr: 2.0
-    symbol: GBP/USD
-  - enabled: true
-    internal: USDJPY
-    min_score: 58
-    rr: 2.0
-    symbol: USD/JPY
-  - enabled: true
-    internal: USDCHF
-    min_score: 58
-    rr: 2.0
-    symbol: USD/CHF
-  # Disabled 2026-07-06: PF < 1.0 over 6.4y H4 with the frozen config
-  # (research/results/h4_yearly_stability_20260705_manifest.json). A book
-  # with PF<1 mechanically drags portfolio PF down, so removing it raises
-  # the aggregate. Re-enable if forward paper trading proves otherwise.
-  - enabled: false            # AUDUSD PF 0.938, maxDD 29% (n=273)
-    internal: AUDUSD
-    min_score: 55
-    rr: 2.0
-    symbol: AUD/USD
-  - enabled: false            # USDCAD PF 0.954, maxDD 28% (n=282)
-    internal: USDCAD
-    min_score: 58
-    rr: 2.0
-    symbol: USD/CAD
-  - enabled: false            # NZDUSD PF 0.985 (n=286)
-    internal: NZDUSD
-    min_score: 60
-    rr: 2.0
-    symbol: NZD/USD
-  - enabled: true
-    internal: EURJPY
-    min_score: 58
-    rr: 2.0
-    symbol: EUR/JPY
-  - enabled: true
-    internal: GBPJPY
-    min_score: 60
-    rr: 2.0
-    symbol: GBP/JPY
-  - enabled: true
-    internal: AUDJPY
-    min_score: 58
-    rr: 2.0
-    symbol: AUD/JPY
-  - enabled: false            # EURGBP PF 0.635, WR 25.8%, maxDD 51% — structurally broken (n=248)
-    internal: EURGBP
-    min_score: 58
-    rr: 2.0
-    symbol: EUR/GBP
-  - enabled: false            # EURCHF PF 0.951 (n=188)
-    internal: EURCHF
-    min_score: 58
-    rr: 2.0
-    symbol: EUR/CHF
-  - enabled: true
-    internal: XAUUSD
-    min_score: 55
-    rr: 2.5
-    symbol: XAU/USD
-  - enabled: true
-    internal: XAGUSD
-    min_score: 55
-    rr: 2.5
-    symbol: XAG/USD
-  # XAGUSD/USOIL/US30/NAS100/SPX500 are NOT served by Twelve Data Free
-  # (404, plan-gated — verified 2026-07-05); the provider failover fetches
-  # them from Yahoo Finance automatically (H4 resampled from 1h there).
-  - enabled: true
-    internal: USOIL
-    min_score: 55
-    rr: 2.5
-    symbol: WTI/USD
-  - enabled: true
-    internal: US30
-    min_score: 55
-    rr: 2.5
-    symbol: DJI
-  - enabled: true
-    internal: NAS100
-    min_score: 60
-    rr: 2.5
-    symbol: NDX
-  - enabled: true
-    internal: SPX500
-    min_score: 55
-    rr: 2.5
-    symbol: SPX
-  - enabled: true
-    internal: BTCUSD
-    min_score: 55
-    rr: 2.5
-    symbol: BTC/USD
-  - enabled: true
-    internal: ETHUSD
-    min_score: 60
-    rr: 2.0
-    symbol: ETH/USD
-engines:
-  # H017 — SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH
-  # modulating SMC's structural score; implemented causally, never entries).
-  # OFF until scripts/smc_fullspec_ab.py shows an OOS improvement — flipping
-  # this changes live voting behavior. See registry H017.
-  smc_full_spec: false
-  enabled:
-    divergence: false
-    ict: false
-    macro: false
-    market_structure: false
-    nnfx: true
-    price_action: true
-    quant: false
-    sentiment: false
-    smc: true
-    wyckoff: true
+  # twelve_data_symbols moved to config/symbols.yaml (2026-07-12) — the
+  # per-symbol governance record (asset_class, status, status_reason,
+  # status_since) plus the fields code actually reads (enabled, internal,
+  # min_score, rr, symbol). Merged back into data.twelve_data_symbols by
+  # utils/helpers.py::load_config(); XAGUSD/USOIL/US30/NAS100/SPX500 are
+  # NOT served by Twelve Data Free (404, plan-gated — verified
+  # 2026-07-05), the provider failover fetches them from Yahoo Finance
+  # automatically (H4 resampled from 1h there).
+# engines: moved to config/engines.yaml (2026-07-12) — activation
+# (smc_full_spec, enabled.<name>) plus version metadata. Merged back into
+# the top-level `engines` key by load_config(). H017 (SMC full-spec) is
+# OFF until scripts/smc_fullspec_ab.py shows an OOS improvement —
+# flipping it changes live voting behavior; see registry H017.
 # Order execution. Defaults are SAFE — nothing is placed until you opt in.
 #   Layer-2 forward evidence (real orders on the cTrader DEMO account):
 #     set ctrader_enabled: true  AND  dry_run: false   (leave the two flags
@@ -256,32 +167,12 @@ portfolio:
 regime:
   atr_period: 14
   lookback: 100
-risk:
-  starting_balance: 10000.0   # base equity for realized equity curve / drawdown calc
-  max_drawdown_reduce: 0.1
-  max_drawdown_stop: 0.15
-  max_exposure: 0.05
-  min_risk_reward: 2.0
-  risk_per_trade_max: 0.01
-  risk_per_trade_min: 0.0025
-  sl_atr_multiplier: 2.5
-
-# AI explanation/reporting layer (ai/ai_analyzer.py). Explanation-only —
-# never feeds final_verdict; the confluence + risk engines decide.
-# Opt-in: disabled by default so no external AI API is ever called
-# unless deliberately turned on. API key comes from the environment
-# (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY), never from
-# this file.
-ai:
-  enabled: true
-  provider: gemini   # gemini | openai | anthropic
-  model: gemini-flash-latest
-  temperature: 0.1
-  max_tokens: 1200
-  timeout: 20
-  cache:
-    news_ttl_min: 20
-    macro_ttl_min: 60
+# risk: moved to config/risk.yaml (2026-07-12) — FROZEN until the shadow
+# book reaches n~=50/gate, see that file's header. Merged back into the
+# top-level `risk` key by load_config().
+# ai: moved to config/ai.yaml (2026-07-12) — explanation/reporting layer
+# only (ai/ai_analyzer.py), never feeds final_verdict. Merged back into
+# the top-level `ai` key by load_config().
 system:
   mode: live
   name: IATIS

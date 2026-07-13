@@ -46,6 +46,31 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _sha256_files(paths: list[Path]) -> str:
+    """Combined SHA256 across multiple files, in a stable (sorted-by-name)
+    order, with each file's name mixed in so boundary content can't
+    collide between files. Used because config.yaml's `engines` / `risk`
+    / `ai` / symbol universe blocks moved into config/*.yaml (2026-07-12)
+    — a single-file hash of config.yaml alone would silently stop
+    detecting drift in those blocks."""
+    h = hashlib.sha256()
+    for p in sorted(paths, key=lambda x: str(x)):
+        h.update(p.name.encode("utf-8"))
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    return h.hexdigest()
+
+
+def _governance_config_files() -> list[Path]:
+    """config.yaml plus every split-out config/*.yaml file that exists."""
+    files = [PROJECT_ROOT / "config.yaml"]
+    split_dir = PROJECT_ROOT / "config"
+    if split_dir.is_dir():
+        files.extend(sorted(split_dir.glob("*.yaml")))
+    return [p for p in files if p.exists()]
+
+
 def _git_state() -> dict[str, Any]:
     """Current commit + dirty flag; never raises (git may be absent)."""
     try:
@@ -101,7 +126,7 @@ def build_manifest(
         results: the run's full results payload.
     """
     git = _git_state()
-    config_path = PROJECT_ROOT / "config.yaml"
+    config_files = _governance_config_files()
     return {
         "kind": kind,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -109,7 +134,10 @@ def build_manifest(
         # An unverifiable run must say so on its face.
         "reproducible": git["commit"] != "unknown" and not git["dirty"],
         "config": {
-            "sha256": _sha256_file(config_path) if config_path.exists() else None,
+            "sha256": _sha256_files(config_files) if config_files else None,
+            # config.yaml plus config/*.yaml (symbols/engines/risk/ai
+            # split, 2026-07-12) — every file that fed the sha256 above.
+            "files": [str(p.relative_to(PROJECT_ROOT)) for p in sorted(config_files, key=lambda x: str(x))],
             "behavior_blocks": {k: config.get(k) for k in _BEHAVIOR_BLOCKS if k in config},
         },
         "params": params,

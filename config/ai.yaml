@@ -1,0 +1,38 @@
+# config/ai.yaml — AI Explanation Layer
+# -----------------------------------------------------------------------
+# Split out of config.yaml (2026-07-12). Loaded and merged into the
+# top-level `ai` key by utils/helpers.py::load_config().
+#
+# AIAnalyzer NEVER produces a BUY/SELL/EXECUTE decision (see
+# ai/ai_analyzer.py docstring) — this section only controls the
+# explanation/reporting layer, so it carries none of the "changing
+# thresholds mid-sample" risk that risk.yaml / symbols.yaml do.
+#
+# `providers` + `fallback_order` replace the old single `provider:`
+# string so adding a new provider (e.g. DeepSeek) is a config-only
+# change: implement ai/providers/<name>.py, add an entry here, done —
+# no ai_analyzer.py edit needed to just enable/disable/reorder.
+# ai/ai_analyzer.py picks the first entry in fallback_order whose
+# providers[<name>].enabled is true; if `providers`/`fallback_order` are
+# both absent it falls back to the legacy single `provider:` key for
+# backward compatibility with anything constructing this dict directly
+# (e.g. tests).
+enabled: true
+
+providers:
+  gemini:
+    enabled: true
+  openai:
+    enabled: false
+  anthropic:
+    enabled: false
+
+fallback_order: [gemini, openai, anthropic]
+
+model: gemini-flash-latest
+temperature: 0.1
+max_tokens: 1200
+timeout: 20
+cache:
+  news_ttl_min: 20
+  macro_ttl_min: 60

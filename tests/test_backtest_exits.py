@@ -94,13 +94,14 @@ def test_zero_slippage_supported():
 
 def test_backtest_defaults_match_production_config():
     """Guards against silent drift between the validated system and the
-    production system (previous drift: min_rr 3.0 vs 2.0, SL mult 1.5 vs 2.5)."""
-    import yaml
-    from pathlib import Path
+    production system (previous drift: min_rr 3.0 vs 2.0, SL mult 1.5 vs 2.5).
 
-    cfg = yaml.safe_load(
-        (Path(__file__).resolve().parents[1] / "config.yaml").read_text()
-    )
+    Uses load_config() (not a raw yaml.safe_load of config.yaml) since
+    `risk:` lives in config/risk.yaml and is merged in at load time —
+    see utils/helpers.py::load_config."""
+    from utils.helpers import load_config
+
+    cfg = load_config()
     bt = BacktestConfig()
     assert bt.min_rr == cfg["risk"]["min_risk_reward"]
     assert bt.sl_atr_multiplier == cfg["risk"]["sl_atr_multiplier"]

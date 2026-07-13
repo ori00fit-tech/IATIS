@@ -1,0 +1,21 @@
+# config/risk.yaml — Risk Governance
+# -----------------------------------------------------------------------
+# Split out of config.yaml (2026-07-12). Loaded and merged into the
+# top-level `risk` key by utils/helpers.py::load_config(). Values below
+# are byte-identical to what config.yaml carried before the split.
+#
+# FROZEN until the shadow book (GET /shadow-book, storage/shadow_book.py)
+# reaches n~=50 per gate — then calibrate from its ledger, not from
+# opinion (CLAUDE.md "Current frozen state"). In particular
+# risk_per_trade_max is NOT adaptive to live SHI/regime scores; that was
+# proposed and explicitly deferred pending a pre-registered hypothesis —
+# changing it now would reset the forward-evidence counter mid-sample.
+
+starting_balance: 10000.0   # base equity for realized equity curve / drawdown calc
+max_drawdown_reduce: 0.1
+max_drawdown_stop: 0.15
+max_exposure: 0.05
+min_risk_reward: 2.0
+risk_per_trade_max: 0.01
+risk_per_trade_min: 0.0025
+sl_atr_multiplier: 2.5

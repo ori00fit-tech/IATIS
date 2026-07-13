@@ -49,6 +49,7 @@ from main import run_pipeline
 from risk.correlation_engine import (
     check_correlation, portfolio_exposure_summary, MAX_PER_GROUP, CorrelationCheckResult,
 )
+from utils.config_validator import validate_config
 from utils.helpers import load_config
 from utils.logger import get_logger
 
@@ -349,6 +350,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     config = load_config()
+    for warning in validate_config(config):
+        logger.warning(f"config consistency: {warning}")
     if args.source:
         config["data"]["source"] = args.source
     elif os.environ.get("TWELVE_DATA_API_KEY") and config["data"].get("source") == "synthetic":

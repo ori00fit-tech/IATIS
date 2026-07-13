@@ -4,7 +4,7 @@
 # Non-root migration (production-audit item H4 / tier-1 gap #5):
 # move the deploy from /root/IATIS to /opt/iatis, run every IATIS unit as
 # a dedicated `iatis` system user, and install path-corrected units for
-# all four services (api, scheduler, watchdog timer, backup timer).
+# all services (api, scheduler, watchdog timer, backup timer, D1 backup timer).
 #
 # Why a move is required (not just User=iatis): /root is mode 700 — a
 # non-root user cannot even traverse it, and the venv's absolute shebangs
@@ -34,7 +34,8 @@ DST=/opt/iatis
 SVC_USER=iatis
 UNITS=(iatis-api.service iatis-scheduler.service
        iatis-watchdog.service iatis-watchdog.timer
-       iatis-backup.service iatis-backup.timer)
+       iatis-backup.service iatis-backup.timer
+       iatis-d1-backup.service iatis-d1-backup.timer)
 
 say()  { echo -e "\033[1;36m==> $*\033[0m"; }
 fail() { echo -e "\033[1;31m✗ $*\033[0m" >&2; exit 1; }
@@ -83,7 +84,7 @@ sudo -u $SVC_USER "$DST/venv/bin/python3" -m pytest "$DST/tests/test_phase1.py" 
 say "7/7 switch services"
 systemctl stop iatis-api iatis-scheduler 2>/dev/null || true
 systemctl enable --now iatis-api iatis-scheduler
-systemctl enable --now iatis-watchdog.timer iatis-backup.timer
+systemctl enable --now iatis-watchdog.timer iatis-backup.timer iatis-d1-backup.timer
 sleep 8
 if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
   echo -e "\033[1;32m✓ API healthy under $SVC_USER at $DST\033[0m"

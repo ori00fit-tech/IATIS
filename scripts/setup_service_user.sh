@@ -20,6 +20,9 @@
 # Usage (on the VPS, as root):
 #   cd /root/IATIS && bash scripts/setup_service_user.sh
 #
+# SRC is overridable so a fresh box never has to clone into /root at all:
+#   SRC=/home/ubuntu/IATIS bash scripts/setup_service_user.sh
+#
 # NOT done automatically (decide separately):
 #   - binding the API to 127.0.0.1 instead of 0.0.0.0: correct hardening
 #     IF cloudflared/nginx proxies from localhost — verify your tunnel's
@@ -29,7 +32,7 @@
 
 set -euo pipefail
 
-SRC=/root/IATIS
+SRC="${SRC:-/root/IATIS}"
 DST=/opt/iatis
 SVC_USER=iatis
 UNITS=(iatis-api.service iatis-scheduler.service

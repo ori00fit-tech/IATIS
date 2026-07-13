@@ -57,14 +57,22 @@ def calibration_from_db() -> list[dict[str, Any]]:
 
     Requires 'outcome' column (win/loss) to be populated.
     Only available after live/paper trading with actual results.
+
+    Reads from the ``outcomes`` table (storage/outcome_tracker.py), which
+    is the only table that carries ``cf_score`` alongside a real
+    win/loss/breakeven ``outcome`` for EXECUTE signals — the ``decisions``
+    table (storage/decision_db.py) logs every verdict including NO_TRADE
+    but has no ``outcome`` column at all. Querying ``decisions`` for
+    ``outcome``/``final_verdict`` (neither of which exists there) used to
+    fail every call and get swallowed by the except below, silently
+    reporting "no data" instead of the real schema mismatch.
     """
     try:
         with _conn() as con:
             rows = con.execute("""
                 SELECT cf_score, outcome
-                FROM decisions
-                WHERE final_verdict='EXECUTE'
-                  AND outcome IS NOT NULL
+                FROM outcomes
+                WHERE outcome NOT IN ('open')
                   AND cf_score IS NOT NULL
             """).fetchall()
     except Exception as exc:
@@ -148,51 +156,93 @@ def regime_performance_matrix() -> list[dict[str, Any]]:
     This is the Phase 4.3 'most important dashboard panel':
     Shows whether TRENDING regime actually produces better results
     than RANGING/VOLATILE — validating the regime-aware weight logic.
+
+    Two tables, joined in Python by ``regime`` (no shared key exists to
+    JOIN in SQL — ``decisions`` has no signal_id):
+    - ``decisions`` (every verdict, EXECUTE + NO_TRADE) for
+      total_decisions / executes / execute_rate. Column is ``verdict``,
+      not ``final_verdict`` — the previous query used a column name
+      that doesn't exist on this table and failed every call.
+    - ``outcomes`` (EXECUTE signals only, with realized outcome) for
+      wins / losses / PF / expectancy / avg score. The previous query
+      read these off ``decisions``, which has no ``outcome`` column at
+      all — that also failed every call. Both failures were swallowed
+      by the except below and reported as an empty (not erroring)
+      matrix.
     """
     try:
         with _conn() as con:
-            rows = con.execute("""
+            decision_rows = con.execute("""
                 SELECT
                     regime,
                     COUNT(*) as total,
-                    SUM(CASE WHEN final_verdict='EXECUTE' THEN 1 ELSE 0 END) as executes,
-                    SUM(CASE WHEN final_verdict='EXECUTE' AND outcome='win' THEN 1 ELSE 0 END) as wins,
-                    SUM(CASE WHEN final_verdict='EXECUTE' AND outcome='loss' THEN 1 ELSE 0 END) as losses,
-                    AVG(CASE WHEN final_verdict='EXECUTE' THEN cf_score ELSE NULL END) as avg_score,
-                    SUM(CASE WHEN outcome='win' THEN pnl_usd ELSE 0 END) as gross_profit,
-                    SUM(CASE WHEN outcome='loss' THEN ABS(pnl_usd) ELSE 0 END) as gross_loss
+                    SUM(CASE WHEN verdict='EXECUTE' THEN 1 ELSE 0 END) as executes
                 FROM decisions
                 WHERE regime IS NOT NULL
                 GROUP BY regime
-                ORDER BY executes DESC
+            """).fetchall()
+            outcome_rows = con.execute("""
+                SELECT
+                    regime,
+                    COUNT(*) as trades,
+                    SUM(CASE WHEN outcome='win' THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN outcome='loss' THEN 1 ELSE 0 END) as losses,
+                    AVG(cf_score) as avg_score,
+                    SUM(CASE WHEN outcome='win' THEN pnl_usd ELSE 0 END) as gross_profit,
+                    SUM(CASE WHEN outcome='loss' THEN ABS(pnl_usd) ELSE 0 END) as gross_loss
+                FROM outcomes
+                WHERE regime IS NOT NULL AND outcome NOT IN ('open')
+                GROUP BY regime
             """).fetchall()
     except Exception as exc:
         logger.warning(f"Regime matrix DB query failed: {exc}")
         return []
 
-    results = []
-    for row in rows:
-        executes = row["executes"] or 0
-        wins = row["wins"] or 0
-        losses = row["losses"] or 0
-        gross_profit = row["gross_profit"] or 0
-        gross_loss = row["gross_loss"] or 0
-
-        wr = round(wins / executes * 100, 1) if executes > 0 else None
-        pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
-        expectancy = round((gross_profit - gross_loss) / executes, 2) if executes > 0 else None
-
-        results.append({
+    by_regime: dict[str, dict[str, Any]] = {}
+    for row in decision_rows:
+        by_regime[row["regime"]] = {
             "regime": row["regime"],
             "total_decisions": row["total"],
-            "executes": executes,
-            "execute_rate": round(executes / (row["total"] or 1) * 100, 1),
+            "executes": row["executes"] or 0,
+        }
+    for row in outcome_rows:
+        entry = by_regime.setdefault(row["regime"], {
+            "regime": row["regime"], "total_decisions": 0, "executes": 0,
+        })
+        entry.update({
+            "trades": row["trades"] or 0,
+            "wins": row["wins"] or 0,
+            "losses": row["losses"] or 0,
+            "avg_score": row["avg_score"] or 0,
+            "gross_profit": row["gross_profit"] or 0,
+            "gross_loss": row["gross_loss"] or 0,
+        })
+
+    results = []
+    for regime, entry in sorted(by_regime.items(), key=lambda kv: kv[1]["executes"], reverse=True):
+        trades = entry.get("trades", 0)
+        wins = entry.get("wins", 0)
+        losses = entry.get("losses", 0)
+        gross_profit = entry.get("gross_profit", 0)
+        gross_loss = entry.get("gross_loss", 0)
+
+        wr = round(wins / trades * 100, 1) if trades > 0 else None
+        pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else None
+        expectancy = round((gross_profit - gross_loss) / trades, 2) if trades > 0 else None
+        total = entry["total_decisions"] or 1
+
+        results.append({
+            "regime": regime,
+            "total_decisions": entry["total_decisions"],
+            "executes": entry["executes"],
+            "execute_rate": round(entry["executes"] / total * 100, 1),
+            "trades": trades,
             "wins": wins,
             "losses": losses,
             "win_rate": wr,
             "profit_factor": pf,
             "expectancy_usd": expectancy,
-            "avg_confluence_score": round(row["avg_score"] or 0, 1),
+            "avg_confluence_score": round(entry.get("avg_score", 0), 1),
         })
 
     return results

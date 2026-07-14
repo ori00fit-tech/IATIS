@@ -66,6 +66,21 @@ def _validate_symbol(symbol: str) -> str:
         raise HTTPException(status_code=400, detail="Symbol too long.")
     return clean
 
+# Letters-only above rejects real active symbols with digits (US30, NAS100,
+# SPX500 — config/symbols.yaml) — fine for /analyze's own td_symbol slash
+# heuristic (which mis-splits those names anyway), but /candles resolves
+# indices correctly via the symbols table and must accept their names.
+_CANDLE_SYMBOL_RE = re.compile(r'^[A-Z0-9]{2,6}(/[A-Z0-9]{2,6})?$')
+
+def _validate_candle_symbol(symbol: str) -> str:
+    clean = symbol.upper().strip()
+    if not _CANDLE_SYMBOL_RE.match(clean) or len(clean) > 14:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid symbol format. Use EURUSD, EUR/USD, or US30 (letters/digits, 2-6 chars each)."
+        )
+    return clean
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -329,6 +344,89 @@ async def decisions(
         }
     except Exception as exc:
         logger.error(f"Decisions error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+_CANDLE_INTERVALS = ("M15", "H1", "H4", "D1")
+
+
+def _fetch_symbol_for_internal(internal: str, config: dict) -> str:
+    """internal name (EURUSD, US30) -> the fetch-symbol form the provider
+    chain expects (EUR/USD, DJI). Uses config/symbols.yaml's own
+    internal<->symbol pairing (merged into config["data"]["twelve_data_symbols"]
+    by utils.helpers.load_config()) rather than guessing from string shape —
+    the naive "insert a slash at position 3" heuristic used by /analyze
+    silently mis-splits indices (NAS100 -> "NAS/100", not "NDX")."""
+    for entry in config.get("data", {}).get("twelve_data_symbols", []):
+        entry_internal = entry.get("internal") or str(entry.get("symbol", "")).replace("/", "")
+        if entry_internal.upper() == internal:
+            return entry["symbol"]
+    return internal
+
+
+@app.get("/candles/{symbol}")
+async def candles(
+    symbol: str,
+    interval: str = Query(default="H4"),
+    outputsize: int = Query(default=300, ge=10, le=1000),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """OHLCV bars for the price chart, plus the latest logged decision's
+    entry/SL/TP for the same symbol so the frontend can overlay IATIS's
+    own signal on the bars it was computed from."""
+    _check_auth(x_api_key, iatis_session)
+    clean_symbol = _validate_candle_symbol(symbol)
+    internal = clean_symbol.replace("/", "")
+    interval = interval.upper()
+    if interval not in _CANDLE_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"interval must be one of {_CANDLE_INTERVALS}")
+
+    try:
+        from core.data_providers import fetch_with_failover, provider_chain_for, DataFetchError
+
+        fetch_symbol = _fetch_symbol_for_internal(internal, _get_config())
+        chain = provider_chain_for(fetch_symbol, _get_config().get("data", {}).get("provider_chains"))
+        try:
+            df, provider = fetch_with_failover(fetch_symbol, interval, outputsize=outputsize, providers=chain)
+        except DataFetchError as exc:
+            raise HTTPException(status_code=502, detail=f"No provider could deliver candles: {str(exc)[:200]}")
+
+        bars = [
+            {
+                "time": int(ts.timestamp()),
+                "open": float(row.open),
+                "high": float(row.high),
+                "low": float(row.low),
+                "close": float(row.close),
+            }
+            for ts, row in df.iterrows()
+        ]
+
+        from storage.decision_log import read_decisions
+        matching = [d for d in read_decisions() if d.get("symbol") == internal]
+        signal = None
+        if matching:
+            latest = matching[-1]["report"]
+            signal = {
+                "timestamp": matching[-1].get("timestamp"),
+                "verdict": matching[-1].get("final_verdict"),
+                "entry_price": latest.get("entry_price"),
+                "stop_loss": latest.get("stop_loss"),
+                "take_profit": latest.get("take_profit"),
+            }
+
+        return {
+            "symbol": internal,
+            "interval": interval,
+            "provider": provider,
+            "bars": bars,
+            "signal": signal,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Candles error for {internal}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
 
 

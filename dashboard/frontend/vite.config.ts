@@ -18,6 +18,7 @@ const API_PATHS = [
   '/research',
   '/meta-analysis',
   '/outcomes',
+  '/candles',
   '/symbol-health',
   '/data-health',
   '/ai',

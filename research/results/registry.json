@@ -161,7 +161,8 @@
   },
   "H013": {
    "title": "Reversal Engine Group Agreement as Counter-Signal",
-   "status": "RESEARCH",
+   "status": "PASSED",
+   "status_caveat": "Registry hygiene fix (2026-07-14): this has been LIVE in production since 2026-06-27 (confluence/reversal_veto.py, main.py, use_reversal_veto=True in BacktestConfig) but was still labeled RESEARCH here — corrected to reflect reality. Marked PASSED rather than a stronger label deliberately: the only evidence is ONE observed case (2026-06-26), not an OOS-tested rule. Per research/edge_gate.py's audit_passed_hypotheses, a PASSED entry with no evidence block (oos_trades/oos_pf/walk_forward/monte_carlo) gets flagged at every boot as failing PROMOTION_CRITERIA — intentional here, since n=1 genuinely does not justify a live veto and this should stay flagged until properly measured.",
    "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines — market reversed BULLISH confirming reversal engines.",
    "hypothesis": "If Divergence+Wyckoff+Sentiment all agree on direction X, and trend engines agree on -X, lower confidence or block the trade.",
    "evidence": {
@@ -191,7 +192,7 @@
   },
   "H014": {
    "title": "Engine Orthogonality Test",
-   "status": "RESEARCH",
+   "status": "RESOLVED",
    "description": "Measure pairwise correlation between engine vote directions. If SMC↔ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
    "implementation": {
     "file": "scripts/engine_research.py",
@@ -215,7 +216,7 @@
   },
   "H016": {
    "title": "Engine Pair Synergy Analysis",
-   "status": "RESEARCH",
+   "status": "RESOLVED",
    "description": "Evaluate WR when engine pairs AGREE vs DISAGREE. If Wyckoff+Divergence agreement gives 45% WR vs 28% when they disagree, this pair has high synergy lift.",
    "implementation": {
     "file": "scripts/engine_research.py",

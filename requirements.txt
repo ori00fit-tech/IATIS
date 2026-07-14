@@ -13,6 +13,13 @@ PyYAML>=6.0,<7.0
 python-dotenv>=1.0.0,<2.0.0
 requests>=2.31.0,<3.0.0
 
+# setuptools was never declared here — a transitive/pre-installed
+# dependency, so pip was free to resolve whatever version the environment
+# happened to already have. CI's pip-audit (2026-07-14) caught 68.1.2 as
+# vulnerable (PYSEC-2026-3447). Floor-only, no ceiling, same policy as the
+# cryptography floor below: bump the floor if pip-audit flags it again.
+setuptools>=83.0.0
+
 # Phase 2: API server
 fastapi>=0.110.0,<1.0.0
 uvicorn>=0.29.0,<1.0.0

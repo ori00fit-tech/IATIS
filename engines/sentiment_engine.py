@@ -23,6 +23,15 @@ Note: Real COT is wired: scripts/download_cot.py (weekly cron) writes
       signal; the price-based retail proxy remains the explicit fallback
       when no fresh COT cache exists. Engine stays disabled pending H012
       evidence — real data enables EVALUATION, not activation.
+
+MarketAux news sentiment (H021 — PLANNED, research/results/registry.json):
+      fundamentals/marketaux_client.py's per-symbol mean sentiment is
+      folded in as an additional signal — primary when COT is unavailable,
+      confirmation-only when COT is available (same role the retail proxy
+      already plays). This is infrastructure for H021's controlled A/B
+      test, not a live-behavior change: the Sentiment engine itself stays
+      disabled (config/engines.yaml) until H021's pre-registered decision
+      rule is applied to that test's result.
 """
 
 from __future__ import annotations
@@ -130,6 +139,27 @@ def _retail_sentiment_proxy(
     }
 
 
+def _marketaux_sentiment_signal(symbol: str) -> dict | None:
+    """MarketAux news sentiment as a signal input (H021).
+
+    Returns None when unavailable — no MARKETAUX_API_KEY, unmapped symbol,
+    or no recent articles — never a synthetic neutral reading, so callers
+    can tell "no signal" apart from a genuinely neutral one.
+    """
+    from fundamentals.marketaux_client import get_news_sentiment
+    result = get_news_sentiment(symbol)
+    if not result or result["article_count"] == 0:
+        return None
+    mean = result["mean_sentiment"]
+    if mean > 0.1:
+        direction = "bullish"
+    elif mean < -0.1:
+        direction = "bearish"
+    else:
+        direction = "neutral"
+    return {"direction": direction, "mean_sentiment": mean, "article_count": result["article_count"]}
+
+
 class SentimentEngine(BaseEngine):
     """Market sentiment analysis using COT data and retail positioning proxy.
 
@@ -193,6 +223,9 @@ class SentimentEngine(BaseEngine):
         # --- Fallback / Supplement: Retail Proxy ---
         retail = _retail_sentiment_proxy(df, lookback=min(200, len(df)))
 
+        # --- H021 (PLANNED): MarketAux news sentiment ---
+        marketaux = _marketaux_sentiment_signal(symbol)
+
         if not cot_available:
             # Use retail proxy as primary signal
             if retail["contrarian_signal"] == "bearish" and retail["strength"] > 10:
@@ -213,11 +246,27 @@ class SentimentEngine(BaseEngine):
                 reasons.append(
                     f"Retail proxy: price at {retail['pct_from_low']:.0f}% of range — neutral zone"
                 )
+
+            # MarketAux as a secondary primary signal when both COT and the
+            # retail proxy are silent (bias still NEUTRAL at this point).
+            if bias == Bias.NEUTRAL and marketaux and marketaux["direction"] != "neutral":
+                bias = Bias.BULLISH if marketaux["direction"] == "bullish" else Bias.BEARISH
+                score = min(30 + abs(marketaux["mean_sentiment"]) * 40, 70)
+                reasons.append(
+                    f"MarketAux: mean sentiment {marketaux['mean_sentiment']:+.2f} "
+                    f"over {marketaux['article_count']} articles"
+                )
         else:
             # COT available — use retail as confirmation only
             if retail["contrarian_signal"] == ("bearish" if bias == Bias.BEARISH else "bullish"):
                 score = min(score + 10, 80)
                 reasons.append(f"Retail proxy confirms: {retail['contrarian_signal']}")
+
+            if marketaux and marketaux["direction"] == ("bullish" if bias == Bias.BULLISH else "bearish"):
+                score = min(score + 8, 85)
+                reasons.append(
+                    f"MarketAux confirms: {marketaux['direction']} ({marketaux['mean_sentiment']:+.2f})"
+                )
 
         if bias == Bias.NEUTRAL:
             reasons.append("No clear sentiment signal")
@@ -233,5 +282,8 @@ class SentimentEngine(BaseEngine):
                 "retail_pct_from_low": retail["pct_from_low"],
                 "retail_contrarian": retail["contrarian_signal"],
                 "retail_strength": retail["strength"],
+                "marketaux_available": marketaux is not None,
+                "marketaux_mean_sentiment": marketaux["mean_sentiment"] if marketaux else None,
+                "marketaux_article_count": marketaux["article_count"] if marketaux else None,
             },
         )

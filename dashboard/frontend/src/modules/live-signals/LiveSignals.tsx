@@ -6,9 +6,66 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
-import { getDecisions, getOutcomes, explainTrade, type DecisionEntry, type DecisionFilters, type OpenSignal, type TradeExplanation } from './api'
+import { PriceChart } from '../../components/PriceChart'
+import { getDecisions, getOutcomes, getCandles, explainTrade, type DecisionEntry, type DecisionFilters, type OpenSignal, type TradeExplanation } from './api'
 
 const POLL_MS = 18_000
+const CHART_POLL_MS = 30_000
+
+// config/symbols.yaml's internal names — the 20 symbols IATIS actually
+// trades. Kept as a small static list rather than a new API round-trip;
+// this changes about as often as the symbols table itself does.
+const CHART_SYMBOLS = [
+  'XAUUSD', 'BTCUSD', 'ETHUSD', 'XAGUSD', 'USOIL',
+  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
+  'EURJPY', 'GBPJPY', 'AUDJPY', 'EURGBP', 'EURCHF',
+  'US30', 'NAS100', 'SPX500',
+]
+const CHART_INTERVALS = ['M15', 'H1', 'H4', 'D1'] as const
+
+function ChartPanel() {
+  const { markUnauthenticated } = useAuth()
+  const [symbol, setSymbol] = useState('XAUUSD')
+  const [interval, setInterval] = useState<(typeof CHART_INTERVALS)[number]>('H4')
+  const candles = usePolling(() => getCandles(symbol, interval), CHART_POLL_MS, markUnauthenticated)
+
+  useEffect(() => {
+    candles.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, interval])
+
+  const select = 'bg-surface border border-border rounded px-2 py-1.5 text-[0.82em] text-text'
+
+  return (
+    <Panel
+      title="Price Chart"
+      right={candles.data ? `via ${candles.data.provider} · ${candles.data.bars.length} bars` : undefined}
+    >
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface/40">
+        <select className={select} value={symbol} onChange={(e) => setSymbol(e.target.value)}>
+          {CHART_SYMBOLS.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <select className={select} value={interval} onChange={(e) => setInterval(e.target.value as (typeof CHART_INTERVALS)[number])}>
+          {CHART_INTERVALS.map((i) => (
+            <option key={i} value={i}>{i}</option>
+          ))}
+        </select>
+        {candles.data?.signal && (
+          <Badge tone={candles.data.signal.verdict === 'EXECUTE' ? 'exec' : 'no-trade'}>
+            {`Last: ${candles.data.signal.verdict}`}
+          </Badge>
+        )}
+      </div>
+      {candles.data && candles.data.bars.length > 0 ? (
+        <PriceChart bars={candles.data.bars} signal={candles.data.signal} />
+      ) : (
+        <Empty>{candles.loading ? 'Loading candles...' : candles.error ? `Error: ${candles.error.message}` : 'No candle data'}</Empty>
+      )}
+    </Panel>
+  )
+}
 
 function scoreColor(score: number) {
   return score >= 65 ? 'text-green' : score >= 55 ? 'text-amber' : 'text-red'
@@ -282,6 +339,8 @@ export function LiveSignals() {
         <KpiCard value={outcomes.data?.summary.open_signals ?? '—'} label="Open Signals" color="amber" />
         <KpiCard value={outcomes.data?.summary.win_rate != null ? `${outcomes.data.summary.win_rate.toFixed(1)}%` : '—'} label="Win Rate" color="green" />
       </div>
+
+      <ChartPanel />
 
       <Panel
         title="Decision Explorer"

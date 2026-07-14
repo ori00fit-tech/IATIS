@@ -76,6 +76,33 @@ export const getDecisions = (limit = 20, filters: DecisionFilters = {}) =>
   apiGet<DecisionsResponse>('/decisions', { limit, ...filters })
 export const getOutcomes = (limit = 20) => apiGet<OutcomesResponse>('/outcomes', { limit })
 
+export interface CandleBar {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export interface ChartSignal {
+  timestamp: string
+  verdict: string
+  entry_price: number | null
+  stop_loss: number | null
+  take_profit: number | null
+}
+
+export interface CandlesResponse {
+  symbol: string
+  interval: string
+  provider: string
+  bars: CandleBar[]
+  signal: ChartSignal | null
+}
+
+export const getCandles = (symbol: string, interval: string, outputsize = 300) =>
+  apiGet<CandlesResponse>(`/candles/${symbol}`, { interval, outputsize })
+
 // AI explanation layer (ai/ai_analyzer.py) — read-only, explanation only.
 // The decision itself was already made by confluence+risk; this never
 // changes final_verdict, it only asks a provider to phrase it in plain

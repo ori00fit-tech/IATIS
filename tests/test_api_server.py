@@ -97,6 +97,92 @@ def test_decisions(client, tmp_path, monkeypatch):
     assert "decisions" in r.json()
 
 
+def _fake_candles_df(n=5):
+    import pandas as pd
+    idx = pd.date_range("2026-01-01", periods=n, freq="4h", tz="UTC")
+    return pd.DataFrame({
+        "open": [1.10] * n, "high": [1.11] * n,
+        "low": [1.09] * n, "close": [1.105] * n, "volume": [0.0] * n,
+    }, index=idx)
+
+
+def test_candles_returns_bars_and_signal(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", tmp_path / "d.jsonl")
+    from storage.decision_log import log_decision
+    log_decision({
+        "final_verdict": "EXECUTE", "symbol": "EURUSD",
+        "entry_price": 1.105, "stop_loss": 1.10, "take_profit": 1.12,
+    })
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "twelve_data")):
+        r = client.get("/candles/EURUSD", headers=HDR)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["symbol"] == "EURUSD"
+    assert data["interval"] == "H4"
+    assert len(data["bars"]) == 5
+    assert data["bars"][0]["open"] == 1.10
+    assert data["signal"]["entry_price"] == 1.105
+    assert data["signal"]["verdict"] == "EXECUTE"
+
+
+def test_candles_no_signal_when_no_decisions_logged(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("storage.decision_log.DEFAULT_LOG_PATH", tmp_path / "empty.jsonl")
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "yahoo_finance")):
+        r = client.get("/candles/EURUSD", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["signal"] is None
+
+
+def test_candles_invalid_interval(client):
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "twelve_data")):
+        r = client.get("/candles/EURUSD", params={"interval": "W1"}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_candles_invalid_symbol(client):
+    r = client.get("/candles/INVALID@SYM!", headers=HDR)
+    assert r.status_code in (400, 422)
+
+
+def test_candles_requires_auth(client):
+    import execution.api_server as m; m._ENV = "production"
+    r = client.get("/candles/EURUSD")
+    m._ENV = "development"
+    assert r.status_code == 401
+
+
+def test_candles_maps_index_symbol_to_fetch_name(client):
+    """US30's internal name is 'US30' but its fetch-symbol (config/symbols.yaml)
+    is 'DJI' — the naive /analyze-style slash-insertion heuristic would mangle
+    this, so /candles resolves it via the symbols table instead."""
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "ctrader")) as mock_fetch:
+        r = client.get("/candles/US30", headers=HDR)
+    assert r.status_code == 200
+    called_symbol = mock_fetch.call_args[0][0]
+    assert called_symbol == "DJI"
+
+
+def test_candles_502_when_all_providers_fail(client):
+    from core.data_providers import DataFetchError
+    with patch("core.data_providers.fetch_with_failover", side_effect=DataFetchError("all failed")):
+        r = client.get("/candles/EURUSD", headers=HDR)
+    assert r.status_code == 502
+
+
+def test_candles_uses_asset_class_provider_chain(client):
+    """Regression: /candles must route through provider_chain_for (ccxt
+    first for crypto, ctrader first for fx/metals/indices) — not
+    fetch_with_failover's own generic default chain, which has no ccxt
+    entry at all and would never even try Binance for BTC/ETH."""
+    from core.data_providers import provider_chain_for
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "ccxt")) as mock_fetch:
+        r = client.get("/candles/BTCUSD", headers=HDR)
+    assert r.status_code == 200
+    used_chain = mock_fetch.call_args.kwargs.get("providers")
+    assert used_chain == provider_chain_for("BTC/USD")
+    assert used_chain[0] == "ccxt"
+
+
 def test_ai_explain_trade_disabled_by_default(client):
     # ai.enabled defaults to false in config.yaml — must degrade cleanly,
     # never 500, and never require a real provider/API key in tests.

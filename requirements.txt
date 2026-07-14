@@ -1,5 +1,12 @@
 # Core — pinned for reproducibility (issue #13)
-pandas>=2.0.0,<4.0.0
+# pandas capped at <3.0.0 (was <4.0.0): a pandas 3.x line now exists on
+# PyPI and the code here has never been run against it — that ceiling
+# was silently allowing pip to resolve a major version the project isn't
+# tested on. It was also the largest single contributor to CI's
+# "resolution-too-deep" (2026-07-14): <4.0.0 doubled the candidate set
+# pip had to search (every 2.x release AND every 3.x release) on top of
+# ccxt's and ctrader-open-api's own heavily pinned trees.
+pandas>=2.0.0,<3.0.0
 numpy>=1.24.0,<3.0.0
 pydantic>=2.0.0,<3.0.0
 PyYAML>=6.0,<7.0

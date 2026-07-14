@@ -35,7 +35,16 @@ psutil>=5.9.0,<6.0.0
 # release on ccxt's end, not a version we can satisfy by loosening our
 # own requests range. Capped below it; bump back to <5.0.0 once a fixed
 # ccxt patch release supersedes 4.5.65.
-ccxt>=4.5.0,<4.5.65
+#
+# Exact-pinned, not a range (CI, 2026-07-14): a range still left pip 65
+# candidate ccxt releases (4.5.0-4.5.64) to multiply against every other
+# loosely-bound package, which alone was enough to hit
+# "resolution-too-deep" even after floor-constraining idna/urllib3/
+# charset-normalizer/httpcore/h11. Exact-pinning the one package with by
+# far the largest candidate set collapses that axis of the search
+# entirely. Bump the exact version deliberately (not the range) when a
+# fixed release supersedes 4.5.65.
+ccxt==4.5.64
 cryptography>=49.0.0
 
 # cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/indices

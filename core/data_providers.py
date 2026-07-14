@@ -524,12 +524,22 @@ _ctrader_feed_client = None
 _ctrader_feed_lock = None
 
 
-def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
-    """Broker bars via the existing cTrader client (lazy, shared connection).
+def get_shared_ctrader_client():
+    """Return the one process-wide cTrader session (lazy-connect, shared).
 
-    Guarded: raises DataFetchError immediately when credentials are absent,
-    so the chain falls through with zero side effects on machines without
-    a broker session (tests, CI, local dev)."""
+    Both this module's data fetching AND execution.trade_executor's order
+    placement MUST go through this single client. cTrader's Open API
+    allows only ONE authenticated session per account+app — two
+    independently-connecting CTraderClient instances in the same process
+    fight over that slot forever, each kicking the other's session out
+    with ALREADY_LOGGED_IN and endlessly reconnecting (diagnosed 2026-07-14
+    from live scheduler logs: trade_executor.py used to open a second,
+    separate client on every EXECUTE-verdict symbol).
+
+    Raises DataFetchError when credentials are absent or the connect
+    attempt fails, so callers fall through cleanly (tests, CI, local dev,
+    and TradeExecutor's own dry_run/no-broker paths never reach this).
+    """
     if not (os.getenv("CTRADER_CLIENT_ID") and os.getenv("CTRADER_ACCESS_TOKEN")):
         raise DataFetchError("cTrader feed not configured (no credentials in env)")
 
@@ -544,9 +554,14 @@ def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
             if not client.connect(timeout=30):
                 raise DataFetchError("cTrader feed: connect failed")
             _ctrader_feed_client = client
+    return _ctrader_feed_client
+
+
+def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Broker bars via the shared cTrader client (see get_shared_ctrader_client)."""
+    client = get_shared_ctrader_client()
     internal = _internal_symbol(symbol)
-    bars = _ctrader_feed_client.get_trendbars(internal, period=interval,
-                                              count=outputsize)
+    bars = client.get_trendbars(internal, period=interval, count=outputsize)
     if not bars:
         raise DataFetchError(f"cTrader feed: no trendbars for {internal} @ {interval}")
     df = pd.DataFrame(bars)

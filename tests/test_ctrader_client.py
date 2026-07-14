@@ -144,3 +144,17 @@ def test_executor_ctrader_blocks_news():
     result = executor.execute_from_report(report)
     assert result.executed is False
     assert "blackout" in result.skip_reason.lower()
+
+
+def test_executor_ctrader_reuses_shared_data_provider_client(monkeypatch):
+    """Regression (2026-07-14): TradeExecutor used to open its own
+    independent CTraderClient in _get_client(), separate from
+    core.data_providers's module-level singleton used for data fetching.
+    Two live sessions against the same cTrader account+app collide
+    (ALREADY_LOGGED_IN, permanent reconnect storm) — both call sites
+    must share exactly one client."""
+    import core.data_providers as dp
+    sentinel = object()
+    monkeypatch.setattr(dp, "get_shared_ctrader_client", lambda: sentinel)
+    executor = TradeExecutor(dry_run=False, broker="ctrader")
+    assert executor._get_client() is sentinel

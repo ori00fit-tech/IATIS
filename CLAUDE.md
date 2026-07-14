@@ -111,8 +111,12 @@ the OOS split do the refusing.
 ## Data layer (asset-class chains, native-timeframe aware)
 
 crypto → ccxt/Binance (native H4/D1) · fx/metals/energy/indices → cTrader
-broker feed when credentials exist → Twelve Data → Yahoo → AV → Finnhub.
-Macro: CBOE (VIX) / FRED (dollar, yields) / CFTC (COT). Chains:
+broker feed when credentials exist → Twelve Data → FCS API (fx/metals/
+indices only) → AV (fx only) → Finnhub → Yahoo. Yahoo is deliberately last
+in every chain (2026-07-14): least reliable of this set — no rate-limit
+contract, throttles under heavy use, and its "H4" is a resample of 1h
+bars rather than a native candle. Macro: CBOE (VIX) / FRED (dollar,
+yields) / CFTC (COT). Chains:
 `config.yaml data.provider_chains`; per-decision provenance in every
 report's `data_providers`. NNFX needs ≥210 decision-TF bars and the MTF
 gate ≥50 D1 bars — `main.py` logs `DATA STARVATION` loudly if violated;

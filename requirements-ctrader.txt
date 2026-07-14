@@ -1,0 +1,27 @@
+# requirements-ctrader.txt
+# --------------------------
+# cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/
+# indices primary provider per config.yaml provider_chains), split out of
+# requirements.txt on 2026-07-14.
+#
+# Why separate: ctrader-open-api==0.9.2 hard-pins pyOpenSSL==24.1.0,
+# which in turn requires an older cryptography line than this project's
+# security-mandated cryptography>=49.0.0 floor (requirements.txt — NO
+# ceiling there deliberately, see that file's comment) can satisfy. In
+# the same install, pip cannot reconcile the two and burns its entire
+# search budget backtracking through idna/urllib3/charset-normalizer/
+# httpcore before giving up with "resolution-too-deep" — installing them
+# separately sidesteps the conflict instead of trying to out-constrain it.
+#
+# Safe to omit entirely for CI/tests: execution/ctrader_client.py imports
+# ctrader_open_api lazily inside connect(), never at module scope, and
+# the provider-chain fallback already handles ModuleNotFoundError from a
+# missing cTrader install gracefully (falls through to the next
+# configured provider) — this is exercised live already whenever
+# CTRADER_ACCESS_TOKEN is unset.
+#
+# Required on the live VPS for the real cTrader feed. Install AFTER
+# requirements.txt:
+#   pip install -r requirements.txt
+#   pip install -r requirements-ctrader.txt
+ctrader-open-api>=0.9.2

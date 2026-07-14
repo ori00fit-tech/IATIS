@@ -62,6 +62,10 @@ if [[ ! -x $DST/venv/bin/python3 ]]; then
 fi
 $DST/venv/bin/pip install -q --upgrade pip
 $DST/venv/bin/pip install -q -r $DST/requirements.txt
+# Separate from requirements.txt (2026-07-14): ctrader-open-api's pinned
+# pyOpenSSL conflicts with our cryptography floor if resolved together —
+# see requirements-ctrader.txt. Required for the live cTrader feed.
+$DST/venv/bin/pip install -q -r $DST/requirements-ctrader.txt
 # pytest isn't in requirements.txt (prod deps only) but step 6/7 below
 # needs it in THIS freshly-rebuilt venv — it never inherits it from
 # whatever venv existed at $SRC.

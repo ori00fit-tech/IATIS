@@ -1,5 +1,12 @@
 # Core — pinned for reproducibility (issue #13)
-pandas>=2.0.0,<4.0.0
+# pandas capped at <3.0.0 (was <4.0.0): a pandas 3.x line now exists on
+# PyPI and the code here has never been run against it — that ceiling
+# was silently allowing pip to resolve a major version the project isn't
+# tested on. It was also the largest single contributor to CI's
+# "resolution-too-deep" (2026-07-14): <4.0.0 doubled the candidate set
+# pip had to search (every 2.x release AND every 3.x release) on top of
+# ccxt's and ctrader-open-api's own heavily pinned trees.
+pandas>=2.0.0,<3.0.0
 numpy>=1.24.0,<3.0.0
 pydantic>=2.0.0,<3.0.0
 PyYAML>=6.0,<7.0
@@ -27,14 +34,45 @@ psutil>=5.9.0,<6.0.0
 # fixes. Floor-only, bumped to the version verified clean by pip-audit at
 # fix time; re-bump the floor if pip-audit flags it again, don't re-add a
 # ceiling.
-ccxt>=4.5.0,<5.0.0
+#
+# EXCEPT the top of the 4.5.x line right now: ccxt 4.5.65 hard-pins
+# requests==2.34.2, which has no installable distribution for this
+# environment (CI, 2026-07-14: "ResolutionImpossible... no matching
+# distributions available for your environment: requests") — a broken
+# release on ccxt's end, not a version we can satisfy by loosening our
+# own requests range. Capped below it; bump back to <5.0.0 once a fixed
+# ccxt patch release supersedes 4.5.65.
+#
+# Exact-pinned, not a range (CI, 2026-07-14): a range still left pip 65
+# candidate ccxt releases (4.5.0-4.5.64) to multiply against every other
+# loosely-bound package, which alone was enough to hit
+# "resolution-too-deep" even after floor-constraining idna/urllib3/
+# charset-normalizer/httpcore/h11. Exact-pinning the one package with by
+# far the largest candidate set collapses that axis of the search
+# entirely. Bump the exact version deliberately (not the range) when a
+# fixed release supersedes 4.5.65.
+ccxt==4.5.64
 cryptography>=49.0.0
 
-# cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/indices
-# primary provider per config.yaml provider_chains). Never pinned here
-# before; it was only ever installed by hand on the original VPS, so a
-# from-scratch venv (e.g. scripts/setup_service_user.sh's rebuild, or any
-# fresh clone) silently lost cTrader entirely and fell back to Yahoo for
-# every affected symbol — no ModuleNotFoundError surfaced until the first
-# real migration (2026-07-13).
-ctrader-open-api>=0.9.2
+# cTrader (execution/ctrader_client.py) moved to requirements-ctrader.txt
+# on 2026-07-14: ctrader-open-api's hard pin on pyOpenSSL==24.1.0 needs
+# an older cryptography line than our security floor above allows, and
+# resolving both in one pip invocation is what caused CI's
+# "resolution-too-deep" (see requirements-ctrader.txt for the full
+# explanation). Install it separately — required on the live VPS, safely
+# omittable for CI/tests (the provider chain already falls back
+# gracefully when it's absent).
+
+# requests and httpx share these underneath (idna, urllib3/httpcore,
+# charset-normalizer, h11) but neither is declared directly here, so pip
+# had no floor to anchor on for any of them. Combined with ccxt's and
+# ctrader-open-api's own heavily-pinned trees, that gave the resolver too
+# large a combinatorial space and it hit "resolution-too-deep" (CI,
+# 2026-07-14) before finding a solution — pip's own suggested fix is
+# exactly this: add explicit lower bounds. Recent, permissive floors
+# only, no ceiling beyond the next major.
+idna>=3.7,<4.0
+urllib3>=2.0.0,<3.0.0
+charset-normalizer>=3.3.0,<4.0.0
+httpcore>=1.0.0,<2.0.0
+h11>=0.14.0,<1.0.0

@@ -66,12 +66,16 @@ data:
   # fcs_api added 2026-07-14 (fx/metals/indices only): sits right after
   # twelve_data, or right after ctrader for indices (no twelve_data entry
   # there). Needs FCS_API_KEY in .env; falls through cleanly without it.
+  # yahoo_finance demoted to last in every chain (2026-07-14, operator
+  # request): least reliable of this set (no rate-limit contract, throttles
+  # under heavy use, H4 is a resample not a native candle) — kept as a
+  # fallback, not removed.
   provider_chains:
-    crypto:  [ccxt, twelve_data, yahoo_finance, finnhub]
-    metals:  [ctrader, twelve_data, fcs_api, yahoo_finance, finnhub]
-    energy:  [ctrader, yahoo_finance, finnhub]
-    indices: [ctrader, fcs_api, yahoo_finance, finnhub]
-    fx:      [ctrader, twelve_data, fcs_api, yahoo_finance, alpha_vantage, finnhub]
+    crypto:  [ccxt, twelve_data, finnhub, yahoo_finance]
+    metals:  [ctrader, twelve_data, fcs_api, finnhub, yahoo_finance]
+    energy:  [ctrader, finnhub, yahoo_finance]
+    indices: [ctrader, fcs_api, finnhub, yahoo_finance]
+    fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub, yahoo_finance]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

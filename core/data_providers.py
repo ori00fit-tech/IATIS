@@ -458,12 +458,18 @@ _NATIVE_TF: dict[str, set] = {
 # FCS API added 2026-07-14 (fx/metals/indices only — no crypto endpoint used
 # here): placed right after twelve_data (fx/metals) or right after ctrader
 # where there is no twelve_data entry (indices), per operator request.
+#
+# yahoo_finance demoted to last in every chain (2026-07-14, operator
+# request): it's the least reliable source here — throttles under heavy
+# use with no official rate limit contract, and its "H4" is a resample of
+# 1h bars rather than a native candle. Kept as a fallback, not removed —
+# every other provider in each chain is tried first.
 DEFAULT_CHAINS: dict[str, list[str]] = {
-    "crypto":  ["ccxt", "twelve_data", "yahoo_finance", "finnhub"],
-    "metals":  ["ctrader", "twelve_data", "fcs_api", "yahoo_finance", "finnhub"],
-    "energy":  ["ctrader", "yahoo_finance", "finnhub"],
-    "indices": ["ctrader", "fcs_api", "yahoo_finance", "finnhub"],
-    "fx":      ["ctrader", "twelve_data", "fcs_api", "yahoo_finance", "alpha_vantage", "finnhub"],
+    "crypto":  ["ccxt", "twelve_data", "finnhub", "yahoo_finance"],
+    "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub", "yahoo_finance"],
+    "energy":  ["ctrader", "finnhub", "yahoo_finance"],
+    "indices": ["ctrader", "fcs_api", "finnhub", "yahoo_finance"],
+    "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub", "yahoo_finance"],
 }
 
 _CRYPTO = {"BTCUSD", "ETHUSD"}
@@ -562,7 +568,8 @@ def fetch_with_failover(
         interval:   "M15", "H1", "H4", "D1"
         outputsize: number of bars requested
         use_cache:  use Twelve Data cache if available
-        providers:  override provider order (default: twelve_data, yahoo, alpha_vantage)
+        providers:  override provider order (default: twelve_data, alpha_vantage,
+                    finnhub, yahoo — yahoo last, least reliable of this set)
 
     Returns:
         (DataFrame, provider_name) — which provider actually delivered the data
@@ -571,7 +578,7 @@ def fetch_with_failover(
         DataFetchError: all providers failed
     """
     if providers is None:
-        providers = ["twelve_data", "yahoo_finance", "alpha_vantage", "finnhub"]
+        providers = ["twelve_data", "alpha_vantage", "finnhub", "yahoo_finance"]
 
     attempts: list[FetchAttempt] = []
 

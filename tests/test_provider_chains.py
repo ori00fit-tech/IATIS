@@ -57,6 +57,16 @@ def test_fcs_api_placement():
     assert "fcs_api" not in dp.provider_chain_for("WTI/USD")
 
 
+def test_yahoo_finance_is_last_in_every_chain():
+    """Operator request (2026-07-14): yahoo is the least reliable source
+    here (no rate-limit contract, throttles under heavy use, H4 is a
+    resample not a native candle) — demoted to last resort everywhere,
+    not removed."""
+    for symbol in ("BTC/USD", "XAU/USD", "WTI/USD", "DJI", "EUR/USD"):
+        chain = dp.provider_chain_for(symbol)
+        assert chain[-1] == "yahoo_finance", f"{symbol}: {chain}"
+
+
 # ── Native-timeframe awareness ───────────────────────────────────────────
 
 def test_crypto_h4_comes_native_from_ccxt(monkeypatch):

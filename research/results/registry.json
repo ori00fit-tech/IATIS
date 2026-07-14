@@ -124,7 +124,7 @@
      "XAUUSD": {"n": 290, "pf": 1.308, "wr": 40.0, "span": "2020-01-24 -> 2026-07-14 (6.5y)"}
     },
     "fx_regression_flagged": {
-     "note": "All 7 tested FX pairs now show PF 0.907-1.008 (at/below breakeven) under the CURRENT config — worse than the ~1.03-1.10 range published in docs/STRATEGY_EVIDENCE_2026-07.md. Root cause identified by config diff against research/results/h4_yearly_stability_20260705_manifest.json: confluence.min_informative_weight_share was ABSENT on 2026-07-05 and is now 0.6 (Axis-8 'SPEAKING panel' gate) — the only behavior_blocks difference between the two manifests. This is a real, previously-unmeasured consequence of that gate on the FX book specifically, not a bug in the re-run. Needs its own OOS/walk-forward check before treating the published 1.03-1.10 figures as current.",
+     "note": "All 7 tested FX pairs now show PF 0.907-1.008 (at/below breakeven) under the CURRENT config — worse than the ~1.03-1.10 range published in docs/STRATEGY_EVIDENCE_2026-07.md. CORRECTED 2026-07-13 (post-H020): the config-fingerprint diff against research/results/h4_yearly_stability_20260705_manifest.json (confluence.min_informative_weight_share absent then, 0.6 now) only MOTIVATED a hypothesis — H020's controlled A/B REFUTED it as the cause (TEST FX mean dPF=+0.005, need >=0.03; carriers swung MORE than FX, the opposite pattern). The actual cause of the FX PF discrepancy between the two manifest dates remains OPEN and unexplained; do not attribute it to this gate.",
      "pairs": {
       "EURUSD": {"n": 241, "pf": 0.974}, "GBPUSD": {"n": 223, "pf": 0.952},
       "USDJPY": {"n": 218, "pf": 1.008}, "USDCHF": {"n": 231, "pf": 0.907},
@@ -264,8 +264,15 @@
   },
   "H020": {
    "title": "Is confluence.min_informative_weight_share (Axis-8 'SPEAKING panel' gate, currently 0.6) net-negative for the FX book specifically, while neutral-to-positive for carriers?",
-   "status": "PLANNED",
-   "notes": "PRE-REGISTERED ONLY — no code runs yet, no result exists. Motivated by the 2026-07-13 deep-history re-run (see H009's addendum_2026-07-13 and docs/STRATEGY_EVIDENCE_2026-07.md): a config-fingerprint diff against the 2026-07-05 baseline manifest found min_informative_weight_share is the ONLY behavior_blocks difference between a run where FX PF was ~1.03-1.10 and one where it is 0.907-1.008. That comparison was NOT controlled (different git commits, different data depth) — it only motivates this hypothesis, it is not itself evidence for or against. This hypothesis isolates the ONE variable properly.",
+   "status": "FAILED",
+   "notes": "REFUTED by the pre-registered controlled A/B (2026-07-13). None of the three required conditions held: TEST-slice FX mean dPF=+0.005 (need >=0.03), FX losing pairs=3/7 (need <=1), carrier mean |dPF|=0.056 (need <=0.02) — the gate actually swings the CARRIERS more than the FX book (BTCUSD alone: -0.095), the opposite of the hypothesis. Per-symbol dPF is a mixed bag with no asset-class pattern (FX: -0.042 to +0.049; carriers: -0.095 to +0.063). CORRECTION to H009's addendum_2026-07-13 and docs/STRATEGY_EVIDENCE_2026-07.md: the config-fingerprint diff that motivated this hypothesis (min_informative_weight_share as the sole behavior_blocks difference between the 2026-07-05 and 2026-07-13 manifests) does NOT explain the FX PF discrepancy under a controlled test — that discrepancy's actual cause remains OPEN/unexplained. VERDICT: NO ACTION — no config change, no follow-up asset-class-scoping work.",
+   "result": {
+    "manifest": "research/results/h020_ab.json",
+    "fx_test_mean_delta_pf": 0.005,
+    "fx_losing_pairs": "3/7",
+    "carrier_test_mean_abs_delta_pf": 0.056,
+    "decision": "NO ACTION"
+   },
    "method": "Controlled A/B, same bars/config, chronological TRAIN(65%)/TEST(35%) split — H017's method (scripts/smc_fullspec_ab.py pattern) with confluence.min_informative_weight_share as the single flipped variable: 0.0 (pre-2026-07-05 baseline, effectively disabled) vs 0.6 (current). Symbols: the 7 currently-enabled FX pairs (EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) plus the 3 carriers (XAUUSD, BTCUSD, ETHUSD) as the control group — the gate must not be judged on FX alone, since a change would currently apply globally (there is no per-asset-class scoping of this parameter in the codebase today).",
    "decision_rule": "Written before any result exists. Let dPF = PF(gate=0.0) minus PF(gate=0.6), TEST slice only, per symbol. VERDICT 'FX-NEGATIVE — WORTH ASSET-CLASS SCOPING' only if ALL THREE hold: (1) mean dPF across the 7 FX pairs >= +0.03, (2) at most 1 of 7 FX pairs shows dPF < 0, (3) mean |dPF| across the 3 carriers <= 0.02 (gate is roughly neutral for carriers, so removing it for FX would not sacrifice carrier performance if the parameter were ever made asset-class-specific). Otherwise VERDICT 'NO ACTION' — either the gate is not clearly FX-negative, or it also matters for carriers, and a scoped change would not obviously be safe. This hypothesis authorizes ONLY a verdict + optional follow-up hypothesis for an asset-class-scoped config change — it does NOT itself change config.yaml, and no config change may be made off the back of this result alone without its own pre-registration and forward-demo-safe rollout (CLAUDE.md: never change entries/exits/thresholds mid-sample).",
    "last_updated": "2026-07-13"

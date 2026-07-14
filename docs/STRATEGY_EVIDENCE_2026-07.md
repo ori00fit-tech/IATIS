@@ -45,6 +45,7 @@ measured. Each failed or proved to be an artifact.
 | **Advanced trade management** (partial TP + breakeven + ATR trail) | re-simulate same entries with managed exits | **No improvement** once intrabar look-ahead was removed and OOS-split: ΔPF −0.008 / −0.011 / −0.125. The naive version showed +100% PF — a pure methodology artifact (a caution worth remembering). |
 | **Currency index strength** (relative value) | per-currency strength z-score, fade & follow, OOS | **Losing.** Portfolio PF 0.90 (fade) / 0.49 (follow). |
 | **Engine-set change** (H015 rigorous subset search) | greedy bidirectional add/drop from prod4 on TRAIN, validated on a held-out TEST slice (EURUSD/XAUUSD/BTCUSD H4) | **Production-4 is OOS-optimal.** In-sample the greedy climbed to PF 1.26 by adding market_structure+ict — but that 6-set *loses* OOS (TEST 1.219 vs prod4 1.239); all-9 is worse (1.156); dropping any single prod engine also fails OOS (drop smc −0.071, price_action −0.362, nnfx −0.073, wyckoff +0.012 within noise). The old single-LOO "SMC dilutes / market_structure adds" was an in-sample mirage. |
+| **H020 — `min_informative_weight_share` blamed for the FX regression** | controlled A/B (H017 method), gate 0.0 vs 0.6, chronological TEST slice, 7 FX pairs + 3 carriers as control | **Refuted.** TEST FX mean ΔPF +0.005 (needed ≥0.03), 3/7 FX pairs worse with the gate OFF, and carriers swung MORE than FX (mean \|ΔPF\| 0.056 vs 0.005). The gate is not why FX looks worse now than the 2026-07-05 baseline — that cause is still open. |
 
 **Conclusion: the system is at the edge frontier available on free
 data.** Every sophisticated addition tested either dilutes the existing
@@ -260,27 +261,36 @@ Monte Carlo are still required before that means anything for promotion,
 but it is the strongest single-symbol in-sample reading yet, on the
 longest window yet.
 
-**FX — a fourth independent confirmation, and a root cause found for why
-it now looks worse than the headline table above:** all 7 tested FX
-pairs (EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) came back
-at PF 0.907–1.008 over the SAME ~6.4y window Twelve Data has always
-served (unchanged by this migration) — worse than the ~1.03–1.10 this
-document has published since. Diffing this run's config fingerprint
-against `research/results/h4_yearly_stability_20260705_manifest.json`
-(the source of the original 1.03–1.10 figures) found exactly one
-`behavior_blocks` difference: **`confluence.min_informative_weight_share`
-did not exist on 2026-07-05 and is `0.6` now** (the Axis-8 "SPEAKING
-panel" gate) — every other engine/risk/regime/market-quality parameter is
-byte-identical between the two manifests. This is a real, previously
-unmeasured effect of that gate on the FX book specifically, not a data or
-migration artifact. It lines up with, and is now a fourth confirmation
+**FX — a fourth independent confirmation, and an initial "root cause"
+theory that did NOT survive a controlled test:** all 7 tested FX pairs
+(EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) came back at PF
+0.907–1.008 over the SAME ~6.4y window Twelve Data has always served
+(unchanged by this migration) — worse than the ~1.03–1.10 this document
+has published since. This lines up with, and is a fourth confirmation
 of, the same pattern H015's held-out TEST year and the IC Markets sweep
 already found: **the FX book does not clear breakeven under the current
-system; the carriers do.** Open item: re-verify with a proper
-chronological OOS split whether `min_informative_weight_share` is net
-neutral-to-positive for the carriers while being the marginal factor that
-tips FX below breakeven — a controlled A/B, not a config change, and out
-of scope for this pass.
+system; the carriers do.**
+
+Diffing this run's config fingerprint against
+`research/results/h4_yearly_stability_20260705_manifest.json` (the
+source of the original 1.03–1.10 figures) found exactly one
+`behavior_blocks` difference — `confluence.min_informative_weight_share`
+did not exist on 2026-07-05 and is `0.6` now (the Axis-8 "SPEAKING
+panel" gate) — and this document originally floated that as the likely
+cause of the discrepancy. **That theory was wrong.** H020 (pre-registered
+same day, `research/results/registry.json`) tested it as a controlled A/B
+— same bars/config, chronological TRAIN/TEST split, gate 0.0 vs 0.6,
+across the 7 FX pairs AND the 3 carriers as a control group — and it was
+refuted outright: TEST-slice FX mean ΔPF = +0.005 (needed ≥ +0.03 to
+implicate the gate), 3 of 7 FX pairs actually got WORSE with the gate
+disabled, and the carriers swung MORE than FX did (mean |ΔPF| 0.056 vs
+0.005 — BTCUSD alone moved −0.095). The gate is not the explanation.
+**The actual cause of the FX PF discrepancy between the two manifest
+dates is unexplained and open** — worth keeping in mind (different git
+commit, different code between 07-05 and 07-13, so something else
+changed) but not worth chasing further without a fresh, narrower
+hypothesis. Full result: `research/results/h020_ab.json`; verdict logic
+and per-symbol breakdown in H020's registry entry.
 
 **Inconclusive (sample too small to read either way):** XAGUSD, USOIL,
 US30, NAS100, SPX500 showed PF 1.07–1.46 but n=35–93 — Yahoo's ~2.4–2.9y

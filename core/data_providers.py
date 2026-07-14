@@ -344,6 +344,89 @@ def _fetch_finnhub(
     return df
 
 
+_FCS_INDEX_SYMBOL_MAP = {
+    # fetch-symbol (main._YF_ONLY values) -> FCS stock/history symbol code
+    "DJI": "DJ:DJI",
+    "NDX": "NASDAQ:NDX",
+    "SPX": "SP:SPX",
+}
+
+_FCS_PERIOD_MAP = {
+    "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m",
+    "H1": "1h", "H4": "4h", "D1": "1d",
+}
+
+
+def _fetch_fcs_api(
+    symbol: str,
+    interval: str,
+    outputsize: int,
+) -> pd.DataFrame:
+    """FX/metals via FCS API's forex/history, indices via its stock/history.
+
+    Requires FCS_API_KEY in .env. Free tier caps at 300 candles/request
+    (docs: "1 credit count for each 300 candles returned") — length is
+    clamped rather than silently truncated server-side without our knowledge.
+    """
+    api_key = os.environ.get("FCS_API_KEY", "")
+    if not api_key:
+        raise DataFetchError("FCS_API_KEY not set — skipping FCS API")
+
+    try:
+        import requests
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    period = _FCS_PERIOD_MAP.get(interval)
+    if period is None:
+        raise DataFetchError(f"FCS API: unsupported interval {interval}")
+
+    if symbol in _FCS_INDEX_SYMBOL_MAP:
+        url = "https://api-v4.fcsapi.com/stock/history"
+        fcs_symbol = _FCS_INDEX_SYMBOL_MAP[symbol]
+    else:
+        url = "https://api-v4.fcsapi.com/forex/history"
+        fcs_symbol = symbol.replace("/", "")
+
+    params = {
+        "symbol": fcs_symbol,
+        "period": period,
+        "length": min(outputsize, 300),
+        "access_key": api_key,
+    }
+
+    logger.info(f"FCS API: fetching {symbol} ({fcs_symbol}) @ {period}")
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"FCS API request failed: {exc}")
+
+    if not data.get("status"):
+        raise DataFetchError(f"FCS API error: {str(data.get('msg', data))[:100]}")
+
+    candles = data.get("response")
+    if not candles:
+        raise DataFetchError(f"FCS API: empty response for {fcs_symbol}")
+
+    records = []
+    for c in candles.values():
+        records.append({
+            "datetime": pd.Timestamp(int(c["t"]), unit="s", tz="UTC"),
+            "open":   float(c["o"]),
+            "high":   float(c["h"]),
+            "low":    float(c["l"]),
+            "close":  float(c["c"]),
+            "volume": float(c.get("v", 0) or 0),
+        })
+
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
+    df = df.tail(outputsize)
+    logger.info(f"FCS API: {len(df)} bars for {symbol}")
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Main failover fetch function
 # ---------------------------------------------------------------------------
@@ -369,14 +452,18 @@ _NATIVE_TF: dict[str, set] = {
     "yahoo_finance": {"H1", "D1"},
     "alpha_vantage": {"M1", "M5", "M15", "M30", "H1"},
     "finnhub":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    "fcs_api":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
 }
 
+# FCS API added 2026-07-14 (fx/metals/indices only — no crypto endpoint used
+# here): placed right after twelve_data (fx/metals) or right after ctrader
+# where there is no twelve_data entry (indices), per operator request.
 DEFAULT_CHAINS: dict[str, list[str]] = {
     "crypto":  ["ccxt", "twelve_data", "yahoo_finance", "finnhub"],
-    "metals":  ["ctrader", "twelve_data", "yahoo_finance", "finnhub"],
+    "metals":  ["ctrader", "twelve_data", "fcs_api", "yahoo_finance", "finnhub"],
     "energy":  ["ctrader", "yahoo_finance", "finnhub"],
-    "indices": ["ctrader", "yahoo_finance", "finnhub"],
-    "fx":      ["ctrader", "twelve_data", "yahoo_finance", "alpha_vantage", "finnhub"],
+    "indices": ["ctrader", "fcs_api", "yahoo_finance", "finnhub"],
+    "fx":      ["ctrader", "twelve_data", "fcs_api", "yahoo_finance", "alpha_vantage", "finnhub"],
 }
 
 _CRYPTO = {"BTCUSD", "ETHUSD"}
@@ -499,6 +586,8 @@ def fetch_with_failover(
                 df = _fetch_alpha_vantage(symbol, interval, outputsize)
             elif provider == "finnhub":
                 df = _fetch_finnhub(symbol, interval, outputsize)
+            elif provider == "fcs_api":
+                df = _fetch_fcs_api(symbol, interval, outputsize)
             elif provider == "ccxt":
                 df = _fetch_ccxt_provider(symbol, interval, outputsize)
             elif provider == "ctrader":

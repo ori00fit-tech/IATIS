@@ -63,12 +63,15 @@ data:
   # eliminates data-source/backtest divergence like the documented NZDUSD
   # broker-vs-TwelveData discrepancy). ccxt = Binance, free, unlimited,
   # native H4/D1 for crypto. Omit this block to use the same defaults.
+  # fcs_api added 2026-07-14 (fx/metals/indices only): sits right after
+  # twelve_data, or right after ctrader for indices (no twelve_data entry
+  # there). Needs FCS_API_KEY in .env; falls through cleanly without it.
   provider_chains:
     crypto:  [ccxt, twelve_data, yahoo_finance, finnhub]
-    metals:  [ctrader, twelve_data, yahoo_finance, finnhub]
+    metals:  [ctrader, twelve_data, fcs_api, yahoo_finance, finnhub]
     energy:  [ctrader, yahoo_finance, finnhub]
-    indices: [ctrader, yahoo_finance, finnhub]
-    fx:      [ctrader, twelve_data, yahoo_finance, alpha_vantage, finnhub]
+    indices: [ctrader, fcs_api, yahoo_finance, finnhub]
+    fx:      [ctrader, twelve_data, fcs_api, yahoo_finance, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

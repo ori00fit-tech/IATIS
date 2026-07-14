@@ -40,6 +40,23 @@ def test_provider_chain_defaults_and_overrides():
     assert dp.provider_chain_for("EUR/USD", {"fx": ["twelve_data"]}) == ["twelve_data"]
 
 
+def test_fcs_api_placement():
+    """fcs_api sits right after twelve_data (fx/metals) or right after
+    ctrader where there's no twelve_data entry (indices) — no crypto/energy
+    route was requested."""
+    fx_chain = dp.provider_chain_for("EUR/USD")
+    assert fx_chain[fx_chain.index("twelve_data") + 1] == "fcs_api"
+
+    metals_chain = dp.provider_chain_for("XAU/USD")
+    assert metals_chain[metals_chain.index("twelve_data") + 1] == "fcs_api"
+
+    indices_chain = dp.provider_chain_for("DJI")
+    assert indices_chain[indices_chain.index("ctrader") + 1] == "fcs_api"
+
+    assert "fcs_api" not in dp.provider_chain_for("BTC/USD")
+    assert "fcs_api" not in dp.provider_chain_for("WTI/USD")
+
+
 # ── Native-timeframe awareness ───────────────────────────────────────────
 
 def test_crypto_h4_comes_native_from_ccxt(monkeypatch):

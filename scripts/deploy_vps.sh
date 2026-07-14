@@ -57,6 +57,10 @@ fi
 say "Installing dependencies"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -r "$REPO_DIR/requirements.txt"
+# Separate from requirements.txt (2026-07-14): ctrader-open-api's pinned
+# pyOpenSSL conflicts with our cryptography floor if resolved together —
+# see requirements-ctrader.txt. Required for the live cTrader feed.
+"$VENV/bin/pip" install --quiet -r "$REPO_DIR/requirements-ctrader.txt"
 
 # 2. Sanity checks before touching services
 say "Byte-compiling sources"

@@ -54,14 +54,14 @@ psutil>=5.9.0,<6.0.0
 ccxt==4.5.64
 cryptography>=49.0.0
 
-# cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/indices
-# primary provider per config.yaml provider_chains). Never pinned here
-# before; it was only ever installed by hand on the original VPS, so a
-# from-scratch venv (e.g. scripts/setup_service_user.sh's rebuild, or any
-# fresh clone) silently lost cTrader entirely and fell back to Yahoo for
-# every affected symbol — no ModuleNotFoundError surfaced until the first
-# real migration (2026-07-13).
-ctrader-open-api>=0.9.2
+# cTrader (execution/ctrader_client.py) moved to requirements-ctrader.txt
+# on 2026-07-14: ctrader-open-api's hard pin on pyOpenSSL==24.1.0 needs
+# an older cryptography line than our security floor above allows, and
+# resolving both in one pip invocation is what caused CI's
+# "resolution-too-deep" (see requirements-ctrader.txt for the full
+# explanation). Install it separately — required on the live VPS, safely
+# omittable for CI/tests (the provider chain already falls back
+# gracefully when it's absent).
 
 # requests and httpx share these underneath (idna, urllib3/httpcore,
 # charset-normalizer, h11) but neither is declared directly here, so pip

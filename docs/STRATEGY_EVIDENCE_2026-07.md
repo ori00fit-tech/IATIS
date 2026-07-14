@@ -97,6 +97,20 @@ decision, not a code tweak.
    order-flow engine. Large build, unproven payoff — start only on an
    explicit decision.
 
+5. **H021 (PLANNED, 2026-07-14):** MarketAux news sentiment as an
+   additional input to the (disabled) Sentiment engine, alongside its
+   existing COT + retail-proxy logic. Pre-registered before any code was
+   wired — decision rule requires a carrier-group (XAUUSD/BTCUSD/ETHUSD)
+   TEST-slice mean ΔPF ≥ +0.05 with no single-symbol regression >0.03 and
+   no >20% drop in EXECUTE-signal count, or the verdict is REJECT/NO
+   ACTION. Client (`fundamentals/marketaux_client.py`) and engine wiring
+   exist in the codebase, config-gated — `engines.enabled.sentiment`
+   stays `false` until this hypothesis resolves. Known constraint:
+   MarketAux's free tier serves recent articles, not a historical
+   sentiment time series, so the TRAIN/TEST window will be far shorter
+   than H020's and the honest verdict may be "INSUFFICIENT DATA" rather
+   than a forced ADOPT/REJECT call.
+
 **What NOT to do:** keep inventing entry-signal experiments. Everything
 tried has been measured and rejected; more of the same is flailing, not
 research.

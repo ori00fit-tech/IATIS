@@ -9,6 +9,7 @@ from core.data_providers import (
     DataFetchError,
     _fetch_twelve_data,
     _fetch_yahoo_finance,
+    _fetch_fcs_api,
     _to_yfinance_symbol,
 )
 
@@ -101,6 +102,80 @@ def test_failover_direct_yahoo_when_no_twelve_key(monkeypatch):
             providers=["twelve_data", "yahoo_finance"]
         )
     assert provider == "yahoo_finance"
+
+
+# --- FCS API ---
+
+def _fcs_response(n=3):
+    resp = {}
+    base_ts = 1748815200
+    for i in range(n):
+        ts = base_ts + i * 3600
+        resp[str(ts)] = {
+            "o": 1.10 + i * 0.001, "h": 1.11 + i * 0.001,
+            "l": 1.09 + i * 0.001, "c": 1.105 + i * 0.001,
+            "v": 1000 + i, "t": ts, "tm": "2025-06-01 22:00:00",
+        }
+    return {"status": True, "code": 200, "msg": "Successfully", "response": resp}
+
+
+def test_fcs_api_raises_without_key(monkeypatch):
+    monkeypatch.delenv("FCS_API_KEY", raising=False)
+    with pytest.raises(DataFetchError, match="FCS_API_KEY not set"):
+        _fetch_fcs_api("EUR/USD", "H1", 100)
+
+
+def test_fcs_api_parses_forex_response(monkeypatch):
+    monkeypatch.setenv("FCS_API_KEY", "test_key")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _fcs_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        df = _fetch_fcs_api("EUR/USD", "H1", 100)
+    assert len(df) == 3
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    called_url, called_params = mock_get.call_args[0][0], mock_get.call_args[1]["params"]
+    assert called_url == "https://api-v4.fcsapi.com/forex/history"
+    assert called_params["symbol"] == "EURUSD"
+    assert called_params["period"] == "1h"
+
+
+def test_fcs_api_uses_stock_endpoint_for_indices(monkeypatch):
+    monkeypatch.setenv("FCS_API_KEY", "test_key")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _fcs_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        _fetch_fcs_api("DJI", "D1", 100)
+    called_url, called_params = mock_get.call_args[0][0], mock_get.call_args[1]["params"]
+    assert called_url == "https://api-v4.fcsapi.com/stock/history"
+    assert called_params["symbol"] == "DJ:DJI"
+
+
+def test_fcs_api_raises_on_status_false(monkeypatch):
+    monkeypatch.setenv("FCS_API_KEY", "test_key")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"status": False, "msg": "Invalid access_key"}
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(DataFetchError, match="Invalid access_key"):
+            _fetch_fcs_api("EUR/USD", "H1", 100)
+
+
+def test_fcs_api_raises_on_empty_response(monkeypatch):
+    monkeypatch.setenv("FCS_API_KEY", "test_key")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"status": True, "response": {}}
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(DataFetchError, match="empty response"):
+            _fetch_fcs_api("EUR/USD", "H1", 100)
+
+
+def test_fcs_api_raises_on_unsupported_interval(monkeypatch):
+    monkeypatch.setenv("FCS_API_KEY", "test_key")
+    with pytest.raises(DataFetchError, match="unsupported interval"):
+        _fetch_fcs_api("EUR/USD", "M2", 100)
 
 
 def test_provider_logs_warning_on_fallback(caplog):

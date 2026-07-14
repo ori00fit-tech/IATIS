@@ -27,7 +27,15 @@ psutil>=5.9.0,<6.0.0
 # fixes. Floor-only, bumped to the version verified clean by pip-audit at
 # fix time; re-bump the floor if pip-audit flags it again, don't re-add a
 # ceiling.
-ccxt>=4.5.0,<5.0.0
+#
+# EXCEPT the top of the 4.5.x line right now: ccxt 4.5.65 hard-pins
+# requests==2.34.2, which has no installable distribution for this
+# environment (CI, 2026-07-14: "ResolutionImpossible... no matching
+# distributions available for your environment: requests") — a broken
+# release on ccxt's end, not a version we can satisfy by loosening our
+# own requests range. Capped below it; bump back to <5.0.0 once a fixed
+# ccxt patch release supersedes 4.5.65.
+ccxt>=4.5.0,<4.5.65
 cryptography>=49.0.0
 
 # cTrader broker feed (execution/ctrader_client.py — fx/metals/energy/indices

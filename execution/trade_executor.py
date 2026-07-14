@@ -101,12 +101,20 @@ class TradeExecutor:
         )
 
     def _get_client(self):
-        """Lazy-load broker client."""
+        """Lazy-load broker client.
+
+        ctrader: reuses the process-wide shared session from
+        core.data_providers.get_shared_ctrader_client() instead of opening
+        a second, independent connection. cTrader's Open API allows only
+        one authenticated session per account+app — two live clients in
+        one process (this executor's own + the data-fetch singleton)
+        fight over that slot in a permanent ALREADY_LOGGED_IN reconnect
+        storm (diagnosed 2026-07-14 from live scheduler logs).
+        """
         if self._client is None:
             if self.broker == "ctrader":
-                from execution.ctrader_client import CTraderClient
-                self._client = CTraderClient()
-                self._client.connect()
+                from core.data_providers import get_shared_ctrader_client
+                self._client = get_shared_ctrader_client()
             else:
                 from execution.oanda_client import OandaClient
                 self._client = OandaClient()

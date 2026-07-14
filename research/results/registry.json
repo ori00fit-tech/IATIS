@@ -1,419 +1,374 @@
 {
-  "_comment": "Single source of truth. PASSED=proven edge. RESEARCH=paper trading only. FAILED=edge not present.",
-  "hypotheses": {
-    "H001": {
-      "title": "Liquidity sweep + HTF trend alignment",
-      "status": "FAILED",
-      "result_file": "results/H001_result.json",
-      "tested_on": "EURUSD M15/H4, n=225, wr=0.4978, p=0.6251",
-      "lesson": "Unfiltered sweeps have no directional edge.",
-      "last_updated": "2026-06-21"
+ "_comment": "Single source of truth. PASSED=proven edge. RESEARCH=paper trading only. FAILED=edge not present.",
+ "hypotheses": {
+  "H001": {
+   "title": "Liquidity sweep + HTF trend alignment",
+   "status": "FAILED",
+   "result_file": "results/H001_result.json",
+   "tested_on": "EURUSD M15/H4, n=225, wr=0.4978, p=0.6251",
+   "lesson": "Unfiltered sweeps have no directional edge.",
+   "last_updated": "2026-06-21"
+  },
+  "H002": {
+   "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) — EURUSD only",
+   "status": "FAILED",
+   "result_file": "results/H002_result.json",
+   "tested_on": "EURUSD Yahoo H1 2yr, n=76, wr=0.5789, p=0.2209",
+   "lesson": "EURUSD appeared promising at n=76 but was false positive.",
+   "last_updated": "2026-06-25"
+  },
+  "H002b": {
+   "title": "Qualified sweep — multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
+   "status": "FAILED",
+   "result_file": "results/H002b_result.json",
+   "tested_on": "3 symbols, n=232, combined wr=0.4612 (-3.66pp vs H001), p=0.4337",
+   "lesson": "EURUSD WR=57.89% was false positive. At n=232 across 3 symbols, combined WR=46.12% is WORSE than H001 baseline. ATR+regime filter does NOT improve sweep win rate. Do not pursue this direction further.",
+   "conclusion": "ABANDON — liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
+   "last_updated": "2026-06-25"
+  },
+  "H003": {
+   "title": "ICT killzone + premium/discount zone bias",
+   "status": "RESEARCH",
+   "blocks_engine": "ict",
+   "notes": "Paper trading. Data collecting via engine_tracker.",
+   "last_updated": "2026-06-24"
+  },
+  "H004": {
+   "title": "NNFX EMA200 baseline + ADX strength filter",
+   "status": "RESEARCH",
+   "blocks_engine": "nnfx",
+   "notes": "Paper trading.",
+   "last_updated": "2026-06-24"
+  },
+  "H005": {
+   "title": "Quant RSI + ROC momentum confirmation",
+   "status": "RESEARCH",
+   "blocks_engine": "quant",
+   "notes": "Paper trading.",
+   "last_updated": "2026-06-24"
+  },
+  "H006": {
+   "title": "Wyckoff Spring/Upthrust detection",
+   "status": "RESEARCH",
+   "blocks_engine": "wyckoff",
+   "notes": "Paper trading. Price-only for FX, volume for metals.",
+   "last_updated": "2026-06-24"
+  },
+  "H007": {
+   "title": "Macro DXY trend + Risk-On/Off state",
+   "status": "RESEARCH",
+   "blocks_engine": "macro",
+   "notes": "Paper trading. Requires yfinance.",
+   "last_updated": "2026-06-24"
+  },
+  "H008": {
+   "title": "BOS + FVG confluence entry (EURUSD/XAUUSD specific)",
+   "status": "FAILED",
+   "result_files": {
+    "EURUSD": "results/H008_result.json",
+    "per_symbol": "research/results/H008_multisymbol_summary"
+   },
+   "per_symbol": {
+    "EURUSD": {
+     "n": 154,
+     "win_rate": 0.5519,
+     "improvement": 0.0541,
+     "p_value": 0.3001
     },
-    "H002": {
-      "title": "Qualified liquidity sweep (ATR>=0.5 + TRENDING regime) — EURUSD only",
-      "status": "FAILED",
-      "result_file": "results/H002_result.json",
-      "tested_on": "EURUSD Yahoo H1 2yr, n=76, wr=0.5789, p=0.2209",
-      "lesson": "EURUSD appeared promising at n=76 but was false positive.",
-      "last_updated": "2026-06-25"
+    "GBPUSD": {
+     "n": 166,
+     "win_rate": 0.4819,
+     "improvement": -0.0159,
+     "p_value": 0.7563
     },
-    "H002b": {
-      "title": "Qualified sweep — multi-symbol aggregation (EURUSD+GBPUSD+XAUUSD)",
-      "status": "FAILED",
-      "result_file": "results/H002b_result.json",
-      "tested_on": "3 symbols, n=232, combined wr=0.4612 (-3.66pp vs H001), p=0.4337",
-      "lesson": "EURUSD WR=57.89% was false positive. At n=232 across 3 symbols, combined WR=46.12% is WORSE than H001 baseline. ATR+regime filter does NOT improve sweep win rate. Do not pursue this direction further.",
-      "conclusion": "ABANDON — liquidity sweep as entry signal is not a proven edge on any of the 3 tested symbols. The SMC sweep concept needs a fundamentally different formulation (e.g. BOS+FVG combination, not standalone sweep).",
-      "last_updated": "2026-06-25"
-    },
-    "H003": {
-      "title": "ICT killzone + premium/discount zone bias",
-      "status": "RESEARCH",
-      "blocks_engine": "ict",
-      "notes": "Paper trading. Data collecting via engine_tracker.",
-      "last_updated": "2026-06-24"
-    },
-    "H004": {
-      "title": "NNFX EMA200 baseline + ADX strength filter",
-      "status": "RESEARCH",
-      "blocks_engine": "nnfx",
-      "notes": "Paper trading.",
-      "last_updated": "2026-06-24"
-    },
-    "H005": {
-      "title": "Quant RSI + ROC momentum confirmation",
-      "status": "RESEARCH",
-      "blocks_engine": "quant",
-      "notes": "Paper trading.",
-      "last_updated": "2026-06-24"
-    },
-    "H006": {
-      "title": "Wyckoff Spring/Upthrust detection",
-      "status": "RESEARCH",
-      "blocks_engine": "wyckoff",
-      "notes": "Paper trading. Price-only for FX, volume for metals.",
-      "last_updated": "2026-06-24"
-    },
-    "H007": {
-      "title": "Macro DXY trend + Risk-On/Off state",
-      "status": "RESEARCH",
-      "blocks_engine": "macro",
-      "notes": "Paper trading. Requires yfinance.",
-      "last_updated": "2026-06-24"
-    },
-    "H008": {
-      "title": "BOS + FVG confluence entry (EURUSD/XAUUSD specific)",
-      "status": "FAILED",
-      "result_files": {
-        "EURUSD": "results/H008_result.json",
-        "per_symbol": "research/results/H008_multisymbol_summary"
-      },
-      "per_symbol": {
-        "EURUSD": {
-          "n": 154,
-          "win_rate": 0.5519,
-          "improvement": 0.0541,
-          "p_value": 0.3001
-        },
-        "GBPUSD": {
-          "n": 166,
-          "win_rate": 0.4819,
-          "improvement": -0.0159,
-          "p_value": 0.7563
-        },
-        "XAUUSD": {
-          "n": 105,
-          "win_rate": 0.5524,
-          "improvement": 0.0546,
-          "p_value": 0.3555
-        }
-      },
-      "analysis": "EURUSD+XAUUSD show consistent +5.4pp edge on 259 combined setups (p=0.23). GBPUSD shows no edge (-1.6pp). Pattern appears symbol-specific. Statistical significance requires n≥600 setups which needs ~8yr H1 data OR higher frequency (M5) data. Edge is too small at +5.4pp to reach significance with 2yr data.",
-      "lesson": "BOS+FVG is NOT a universal edge — GBPUSD behaves differently. But EURUSD+XAUUSD show consistent direction. Before abandoning: try H008b with tighter filters to raise WR to 60%+",
-      "next_step": "H008b: Add session filter (London open BOS only) + ATR quality filter to target WR>60% on EURUSD+XAUUSD subset",
-      "last_updated": "2026-07-06",
-      "conclusion": "CLOSED by H008c. The 55.2% NEEDS_MORE_DATA signal was an artifact of shallow, H1-resampled (not real M15) data. On real deep M15 (EURUSD ~1yr, XAUUSD ~3yr), with look-ahead removed (causal swing confirmation) and a chronological out-of-sample split, pooled TEST WR=0.489 (n=562, p=0.83) — at the H001 coin-flip baseline. The London+ATR filter made it WORSE OOS (0.422). BOS+FVG has no standalone directional edge. SMC/ICT concepts survive only as confluence filters, never as primary entries (consistent with H001/H002/H002b)."
-    },
-    "H008b": {
-      "title": "BOS+FVG + London session (02-10 UTC) + ATR×1.5 filter",
-      "status": "ABANDONED",
-      "reason": "Filters too restrictive. Session filter removes 64-78% of setups, ATR filter removes 19-35% more. Final n=0-9 across all symbols (need n≥50). H1 hourly data doesn't have enough London-session BOS+FVG patterns in 2yr period. Would need M15 data or wider session window to get adequate sample.",
-      "lesson": "BOS+FVG works as CONFLUENCE FILTER (already in SMC engine implicitly) but not as standalone primary signal on H1 data. The pattern is too rare to test statistically with available data.",
-      "last_updated": "2026-06-25"
-    },
-    "H009": {
-      "title": "IATIS 6-engine confluence as systematic trading signal (already validated)",
-      "status": "PASSED",
-      "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF≥1.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4. STILL fails research/edge_gate.py PROMOTION_CRITERIA (oos_trades/oos_pf/walk_forward/monte_carlo missing from `evidence`) — the addendum below is IN-SAMPLE stability data, not OOS, and does not change that. Status stays PASSED-but-flagged; see research/edge_gate.py audit_passed_hypotheses.",
-      "result": {
-        "symbols": 6,
-        "windows": 18,
-        "pass_rate": "18/18",
-        "min_pf": 1.5,
-        "avg_pf": 3.08
-      },
-      "last_updated": "2026-06-25",
-      "addendum_2026-07-13": {
-        "kind": "h4_yearly_stability_deep re-run on scripts/download_deep_history.py's deeper data",
-        "manifest": "research/results/h4_yearly_stability_deep_20260713_manifest.json",
-        "in_sample": true,
-        "note": "NOT out-of-sample evidence — does not satisfy PROMOTION_CRITERIA. Frozen production config (smc, price_action, nnfx, wyckoff; H4 decision TF; D1 MTF gate), unmodified.",
-        "carriers_confirmed": {
-          "BTCUSD": {
-            "n": 345,
-            "pf": 1.468,
-            "wr": 44.1,
-            "span": "2017-08-17 -> 2026-07-13 (8.9y)"
-          },
-          "ETHUSD": {
-            "n": 347,
-            "pf": 1.435,
-            "wr": 43.2,
-            "span": "2017-08-17 -> 2026-07-13 (8.9y)"
-          },
-          "XAUUSD": {
-            "n": 290,
-            "pf": 1.308,
-            "wr": 40.0,
-            "span": "2020-01-24 -> 2026-07-14 (6.5y)"
-          }
-        },
-        "fx_regression_flagged": {
-          "note": "All 7 tested FX pairs now show PF 0.907-1.008 (at/below breakeven) under the CURRENT config — worse than the ~1.03-1.10 range published in docs/STRATEGY_EVIDENCE_2026-07.md. CORRECTED 2026-07-13 (post-H020): the config-fingerprint diff against research/results/h4_yearly_stability_20260705_manifest.json (confluence.min_informative_weight_share absent then, 0.6 now) only MOTIVATED a hypothesis — H020's controlled A/B REFUTED it as the cause (TEST FX mean dPF=+0.005, need >=0.03; carriers swung MORE than FX, the opposite pattern). The actual cause of the FX PF discrepancy between the two manifest dates remains OPEN and unexplained; do not attribute it to this gate.",
-          "pairs": {
-            "EURUSD": {
-              "n": 241,
-              "pf": 0.974
-            },
-            "GBPUSD": {
-              "n": 223,
-              "pf": 0.952
-            },
-            "USDJPY": {
-              "n": 218,
-              "pf": 1.008
-            },
-            "USDCHF": {
-              "n": 231,
-              "pf": 0.907
-            },
-            "EURJPY": {
-              "n": 225,
-              "pf": 0.976
-            },
-            "GBPJPY": {
-              "n": 226,
-              "pf": 0.951
-            },
-            "AUDJPY": {
-              "n": 239,
-              "pf": 0.961
-            }
-          }
-        },
-        "insufficient_sample": {
-          "note": "XAGUSD/USOIL/US30/NAS100/SPX500 show PF 1.07-1.46 but n=35-93 (Yahoo H4 cap ~2.4-2.9y) — well below the 300-trade bar, inconclusive either way.",
-          "symbols": [
-            "XAGUSD",
-            "USOIL",
-            "US30",
-            "NAS100",
-            "SPX500"
-          ]
-        }
-      }
-    },
-    "H010": {
-      "title": "RSI/MACD Divergence Engine",
-      "status": "RESEARCH",
-      "engine": "divergence",
-      "notes": "Paper trading — collecting data via engine_tracker",
-      "last_updated": "2026-06-26"
-    },
-    "H011": {
-      "title": "Market Structure BOS/CHoCH/MSS Engine",
-      "status": "RESEARCH",
-      "engine": "market_structure",
-      "notes": "Paper trading — collecting data via engine_tracker",
-      "last_updated": "2026-06-26"
-    },
-    "H012": {
-      "title": "COT + Retail Sentiment Engine",
-      "status": "RESEARCH",
-      "engine": "sentiment",
-      "notes": "Paper trading. REAL COT now wired: scripts/download_cot.py fetches CFTC legacy futures-only weekly (free) into data/cot/{SYMBOL}.json which the engine already consumes; engine._symbol wired in main.build_active_engines (was 'UNKNOWN', so COT could never load). Engine stays DISABLED — real data is a prerequisite for evaluating H012, not a license to enable it.",
-      "last_updated": "2026-07-09"
-    },
-    "H013": {
-      "title": "Reversal Engine Group Agreement as Counter-Signal",
-      "status": "PASSED",
-      "status_caveat": "Registry hygiene fix (2026-07-14): this has been LIVE in production since 2026-06-27 (confluence/reversal_veto.py, main.py, use_reversal_veto=True in BacktestConfig) but was still labeled RESEARCH here — corrected to reflect reality. Marked PASSED rather than a stronger label deliberately: the only evidence is ONE observed case (2026-06-26), not an OOS-tested rule. Per research/edge_gate.py's audit_passed_hypotheses, a PASSED entry with no evidence block (oos_trades/oos_pf/walk_forward/monte_carlo) gets flagged at every boot as failing PROMOTION_CRITERIA — intentional here, since n=1 genuinely does not justify a live veto and this should stay flagged until properly measured.",
-      "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines — market reversed BULLISH confirming reversal engines.",
-      "hypothesis": "If Divergence+Wyckoff+Sentiment all agree on direction X, and trend engines agree on -X, lower confidence or block the trade.",
-      "evidence": {
-        "case_1": {
-          "date": "2026-06-26",
-          "symbols": [
-            "ETHUSD",
-            "BTCUSD"
-          ],
-          "trend_engines": "BEARISH (SMC+NNFX+PA+Quant)",
-          "reversal_engines": "BULLISH (Divergence+Wyckoff+Sentiment)",
-          "market_outcome": "BULLISH — reversal engines were correct",
-          "trade_result": "loss (5 trades hit SL)"
-        }
-      },
-      "last_updated": "2026-06-27",
-      "implementation": {
-        "file": "confluence/reversal_veto.py",
-        "integrated_in": "main.py",
-        "rules": {
-          "hard_veto": "3/3 reversal engines unanimously oppose → BLOCK trade",
-          "soft_veto": "2/3 reversal engines oppose → reduce score by 50%",
-          "no_effect": "0-1 reversal engines oppose → normal confluence"
-        },
-        "date_implemented": "2026-06-27"
-      }
-    },
-    "H014": {
-      "title": "Engine Orthogonality Test",
-      "status": "RESOLVED",
-      "description": "Measure pairwise correlation between engine vote directions. If SMC↔ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
-      "implementation": {
-        "file": "scripts/engine_research.py",
-        "function": "run_h014"
-      },
-      "last_updated": "2026-07-09",
-      "conclusion": "Informed by the independence matrix (ablation_20260703.json) + H015: engines are non-redundant (pairwise agreement mostly 27-76%); no engine pair is collinear enough to drop for orthogonality reasons. No change warranted."
-    },
-    "H015": {
-      "title": "Ablation Study — Minimum Engine Set",
-      "status": "RESOLVED",
-      "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
-      "implementation": {
-        "file": "scripts/engine_research.py",
-        "function": "run_h015"
-      },
-      "last_updated": "2026-07-10",
-      "conclusion": "CLOSED (2026-07-10, 15-symbol confirmation). The pre-registered rule held: selected-7 beat prod4 on TEST mean-PF (1.0398 vs 0.8695, delta +0.170) but won only 9/15 symbols (< the required 2/3) -> KEEP prod4. Decisive observation: the 'better subset' is UNSTABLE across universes — the 3-symbol search chose {ict,nnfx,pa,quant,wyckoff}, the 15-symbol search chose {divergence,nnfx,pa,quant,sentiment,smc,wyckoff} (including the sentiment price-proxy, a noise-fitting tell). Universe-dependent selection = no robust engine-set improvement exists; prod4 is kept by burden-of-proof, not by being measured optimal. Stable signals across ALL runs: nnfx and price_action are load-bearing (dropping either always hurts); drop-smc helps mildly in-train everywhere but no alternative containing it survives the adoption rule OOS. SECONDARY FINDING (flagged to the operator): prod4 TEST-window (~mid-2025 to mid-2026) mean-PF across 15 symbols = 0.87 — the FX book drags below breakeven while carriers (XAU 1.33, BTC 1.37) stay positive, matching the philosophy audit's core verdict. Results: engine_subset_search.json (3-sym) + engine_subset_search_15sym.json + 20260710 manifest (clean tree).",
-      "result_file": "results/engine_subset_search.json",
-      "manifest": "results/engine_subset_search_20260709_manifest.json"
-    },
-    "H016": {
-      "title": "Engine Pair Synergy Analysis",
-      "status": "RESOLVED",
-      "description": "Evaluate WR when engine pairs AGREE vs DISAGREE. If Wyckoff+Divergence agreement gives 45% WR vs 28% when they disagree, this pair has high synergy lift.",
-      "implementation": {
-        "file": "scripts/engine_research.py",
-        "function": "run_h016"
-      },
-      "last_updated": "2026-07-09",
-      "conclusion": "Subsumed by H015's subset search: no engine pair addition to prod4 survives OOS. Pair-synergy pruning offers no OOS PF gain over the current 4."
-    },
-    "H008c": {
-      "title": "BOS+FVG re-test — look-ahead-free + out-of-sample on real deep M15",
-      "status": "FAILED",
-      "result_file": "results/H008c_result.json",
-      "tested_on": "EURUSD ~35k M15 (1yr) + XAUUSD ~80k M15 (3yr), pooled test n=562",
-      "lesson": "Removing look-ahead (causal swings) and splitting OOS collapses the apparent BOS+FVG edge to the coin-flip baseline. The session/ATR filter's 60% WR was in-sample overfitting (train n=11 63.6% -> test 35.5%).",
-      "conclusion": "ABANDON the SMC-entry direction. Definitively no standalone edge.",
-      "manifest": "results/h008c_oos_20260706_manifest.json",
-      "last_updated": "2026-07-06"
-    },
-    "H017": {
-      "title": "SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH as score modulators)",
-      "status": "FAILED",
-      "notes": "Implemented causally behind engines.smc_full_spec (default FALSE — live voting unchanged). Components modulate SMC's structural score only; never standalone entries (H001/H002/H008c measured no standalone edge: pooled OOS WR 0.489, p=0.83). Liquidity sweeps deliberately NOT implemented (failed 3 hypotheses). Decision rule pre-registered in scripts/smc_fullspec_ab.py: adopt only if chronological-TEST mean PF improves >= 0.03 with <= 1 losing symbol.",
-      "result_file": "results/h017_ab.json",
-      "last_updated": "2026-07-10",
-      "conclusion": "FAILED by the pre-registered rule (2026-07-10): chronological-TEST mean dPF = -0.04 (needed >= +0.03) with 3/4 losing symbols (allowed <= 1). TRAIN showed the usual mirage (XAUUSD +0.062 flipped to -0.190 OOS). ETHUSD's +0.536 (n=55) is a single-symbol outlier — enabling per-symbol would be the exact selection bias the audit condemns. engines.smc_full_spec stays FALSE; the causal detectors remain in the codebase for any future re-test on deeper data. Consistent with H008c: SMC concepts add nothing even as internal confluence, not just as entries."
-    },
-    "H018": {
-      "title": "Structure-based stop placement (SL at OB/swing level instead of raw ATRx2.5)",
-      "status": "PLANNED",
-      "notes": "PRE-REGISTERED ONLY — no code runs. The exit side has never received the hypothesis treatment the entries got (17 hypotheses on entries, zero on exits; current exits are ATRx2.5 / fixed RR). Design: reuse the H017 causal detectors (order-block bottom / confirmed swing low) as the SL anchor; TP keeps the RR floor. Decision rule (written before any result): controlled A/B like H017 (scripts/smc_fullspec_ab.py pattern), chronological TEST slice, adopt only if mean dPF >= +0.05 with <= 1 losing symbol of 4+. DO NOT START until the forward demo sample reaches ~100 closed trades — changing exits mid-sample would corrupt the only prospective evidence being accumulated (D002).",
-      "last_updated": "2026-07-11"
-    },
-    "H019": {
-      "title": "Crypto positioning/sentiment as an internal confluence modulator (funding rate + open interest + Fear & Greed Index) — BTCUSD/ETHUSD only",
-      "status": "PLANNED",
-      "scope": "Crypto only. Funding rate and open interest are perpetual-futures-specific and Fear & Greed is a crypto-market-wide index — neither concept has an FX/metals analogue, so this hypothesis cannot and does not extend beyond BTCUSD/ETHUSD, unlike H017/H018.",
-      "distinct_from_prior_kill": "NOT a re-run of the crypto_volume experiment (dead list: ccxt raw traded volume fed into existing engines, DeltaPF -0.016 BTC / 0.000 ETH). That test measured trade volume; H019 tests derived positioning/sentiment signals never previously measured — funding-rate sign+magnitude as a crowding/squeeze proxy, OI trend as a conviction proxy, Fear&Greed extremes as a contrarian regime input. If this distinction stops holding once the detector is designed, the hypothesis should be withdrawn rather than run.",
-      "notes": "PRE-REGISTERED ONLY — no code runs. Architecture follows the H017 precedent exactly: a causal score modulator behind a new default-FALSE config flag (engines.crypto_positioning_modulator), applied only to engines already voting on BTCUSD/ETHUSD; never a standalone entry signal (every standalone-entry variant of every prior idea in this registry — H001/H002/H002b/H008/H008b/H008c — failed). Does not touch entries/exits/thresholds on any currently live symbol or engine, so it is NOT subject to the H018-style forward-sample freeze — it may be built and backtest-A/B'd at any time without corrupting the D001/D002 forward evidence counter. Deliberately deferred (registration only, implementation not started) per the 2026-07-11 audit follow-up: this cycle's priority is forward-evidence accumulation and operational data-provider verification, not new modulators.",
-      "data_sources": {
-        "funding_rate": "Binance perpetual futures via ccxt fetchFundingRateHistory — free, multi-year depth, no auth required. LOOK-AHEAD GUARD (required, not optional): the backtest may only use the funding rate PUBLISHED strictly before the decision bar's close (Binance settles on a fixed 8h schedule — 00:00/08:00/16:00 UTC); never a rate whose settlement timestamp is at or after the decision bar. If funding/OI are sourced as pre-aggregated daily files rather than fetched per-timestamp, per-bar alignment must be re-derived causally from raw timestamps — no forward-fill from a future aggregate. This is the same class of bug the trade-management '+100%' mirage and the raw H008 BOS+FVG result both turned out to be.",
-        "open_interest": "ccxt fetchOpenInterestHistory (Binance/Bybit) — free tier historical depth is UNVERIFIED and likely shallow (public OI endpoints commonly cap at recent weeks). MUST be validated as a standalone data-availability check before the full study starts; if depth is insufficient for a chronological OOS split, drop OI from this hypothesis rather than substitute a shorter/biased window. PARTIAL CHECK RUN 2026-07-11 (audit sandbox, not the VPS): api.binance.com and api.bybit.com both unreachable from this sandbox's network egress (HTTP 451 / 403 respectively — consistent with an exchange-side datacenter-IP geo-block, not a data-depth problem; the production VPS already operationally fetches Binance H4/D1 via ccxt per the existing crypto provider chain, so this is a sandbox artifact, not evidence against feasibility). The actual OI-depth question remains OPEN and must be re-run from the VPS before any H019 code is written.",
-        "fear_greed_index": "alternative.me public API — free, daily history since 2018-02, no auth required. REACHABILITY CONFIRMED 2026-07-11 (audit sandbox): HTTP 200, valid daily value+classification payload returned. ROLE, defined now rather than left implicit: Fear & Greed enters this study strictly as a REGIME FILTER / market-context input (e.g. gating or scaling the modulator's effect in extreme-fear / extreme-greed regimes) — it is explicitly NOT a symbol-specific directional signal for BTC vs ETH individually, since it is one shared time series feeding two symbols. Any design that treats it as per-symbol conviction must justify why first."
-      },
-      "decision_rule": "Controlled A/B, same bars/config, chronological TEST split (H017/H018 method), symbols BTCUSD + ETHUSD (the only two eligible — n=2, not the 4+ used elsewhere). Because n=2 cannot support a '<=1 losing symbol' tolerance, the bar is stricter by construction: adopt ONLY if chronological-TEST mean PF improves >= 0.05 across BTCUSD+ETHUSD AND NEITHER symbol regresses (0 losing symbols of 2). A single losing symbol is FAILED outright — no per-symbol enabling (the exact selection bias H017's ETHUSD n=55 outlier already illustrated in this registry). Written before any result exists.",
-      "last_updated": "2026-07-11"
-    },
-    "H020": {
-      "title": "Is confluence.min_informative_weight_share (Axis-8 'SPEAKING panel' gate, currently 0.6) net-negative for the FX book specifically, while neutral-to-positive for carriers?",
-      "status": "FAILED",
-      "notes": "REFUTED by the pre-registered controlled A/B (2026-07-13). None of the three required conditions held: TEST-slice FX mean dPF=+0.005 (need >=0.03), FX losing pairs=3/7 (need <=1), carrier mean |dPF|=0.056 (need <=0.02) — the gate actually swings the CARRIERS more than the FX book (BTCUSD alone: -0.095), the opposite of the hypothesis. Per-symbol dPF is a mixed bag with no asset-class pattern (FX: -0.042 to +0.049; carriers: -0.095 to +0.063). CORRECTION to H009's addendum_2026-07-13 and docs/STRATEGY_EVIDENCE_2026-07.md: the config-fingerprint diff that motivated this hypothesis (min_informative_weight_share as the sole behavior_blocks difference between the 2026-07-05 and 2026-07-13 manifests) does NOT explain the FX PF discrepancy under a controlled test — that discrepancy's actual cause remains OPEN/unexplained. VERDICT: NO ACTION — no config change, no follow-up asset-class-scoping work.",
-      "result": {
-        "manifest": "research/results/h020_ab.json",
-        "fx_test_mean_delta_pf": 0.005,
-        "fx_losing_pairs": "3/7",
-        "carrier_test_mean_abs_delta_pf": 0.056,
-        "decision": "NO ACTION"
-      },
-      "method": "Controlled A/B, same bars/config, chronological TRAIN(65%)/TEST(35%) split — H017's method (scripts/smc_fullspec_ab.py pattern) with confluence.min_informative_weight_share as the single flipped variable: 0.0 (pre-2026-07-05 baseline, effectively disabled) vs 0.6 (current). Symbols: the 7 currently-enabled FX pairs (EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) plus the 3 carriers (XAUUSD, BTCUSD, ETHUSD) as the control group — the gate must not be judged on FX alone, since a change would currently apply globally (there is no per-asset-class scoping of this parameter in the codebase today).",
-      "decision_rule": "Written before any result exists. Let dPF = PF(gate=0.0) minus PF(gate=0.6), TEST slice only, per symbol. VERDICT 'FX-NEGATIVE — WORTH ASSET-CLASS SCOPING' only if ALL THREE hold: (1) mean dPF across the 7 FX pairs >= +0.03, (2) at most 1 of 7 FX pairs shows dPF < 0, (3) mean |dPF| across the 3 carriers <= 0.02 (gate is roughly neutral for carriers, so removing it for FX would not sacrifice carrier performance if the parameter were ever made asset-class-specific). Otherwise VERDICT 'NO ACTION' — either the gate is not clearly FX-negative, or it also matters for carriers, and a scoped change would not obviously be safe. This hypothesis authorizes ONLY a verdict + optional follow-up hypothesis for an asset-class-scoped config change — it does NOT itself change config.yaml, and no config change may be made off the back of this result alone without its own pre-registration and forward-demo-safe rollout (CLAUDE.md: never change entries/exits/thresholds mid-sample).",
-      "last_updated": "2026-07-13"
-    },
-    "H021": {
-      "title": "Does MarketAux news sentiment, fed into the (currently disabled) Sentiment engine, improve confluence performance enough to justify re-enabling it?",
-      "status": "PLANNED",
-      "engine": "sentiment",
-      "method": "Controlled A/B, H017/H020 methodology — same bars/config, chronological TRAIN(65%)/TEST(35%) split, ONE variable flipped: Sentiment engine disabled (current frozen baseline: smc, price_action, nnfx, wyckoff) vs Sentiment engine enabled with fundamentals/marketaux_client.py's news-sentiment score folded into engines/sentiment_engine.py as an additional signal alongside its existing COT + retail-proxy logic. confluence.weights.sentiment (0.0303) is already reserved in config.yaml even while disabled, so no re-normalization is needed to test this. Primary group: the 3 frozen carrier symbols (XAUUSD, BTCUSD, ETHUSD) — where the project's only measured edge lives, so they get first claim on the decision. Secondary/safety group: the 7 enabled FX pairs, reported for transparency but not a condition for adoption (the FX book is independently at/below breakeven regardless of this engine). ACKNOWLEDGED METHOD CONSTRAINT (declared before any data collection, so it cannot be used to justify a favorable result after the fact): MarketAux's free tier serves recent news articles, not a reconstructed historical sentiment time series spanning years like the H4 deep-history bars used elsewhere — and its rate limit (100 req/day) means building even a modest historical window requires a dedicated slow-collection script running over many days before a backtest is possible at all. The TRAIN/TEST window for this hypothesis will therefore be much shorter than H020's, and n will likely be low — if the collected sample is too small for the decision rule to apply meaningfully, the correct verdict is 'INSUFFICIENT DATA', not a forced ADOPT/REJECT call.",
-      "decision_rule": "Written before any result exists. Let dPF = PF(sentiment=ON) minus PF(sentiment=OFF), TEST slice only, per symbol. ADOPT (flip config/engines.yaml sentiment: true) only if ALL THREE hold on the carrier group: (1) carrier mean dPF >= +0.05, (2) no individual carrier's PF drops by more than 0.03, (3) total EXECUTE-signal count across the 3 carriers does not drop by more than 20% vs baseline (an overly conservative sentiment veto that merely starves trade frequency is not a genuine improvement, even if the surviving trades look better in isolation). If the collected sentiment sample is too small (fewer than ~30 sentiment-informed decisions per carrier symbol on the TEST slice) to evaluate these conditions meaningfully, VERDICT is 'INSUFFICIENT DATA' — no config change, revisit once more data is collected. Otherwise: any of conditions 1-3 failing -> REJECT, sentiment engine stays disabled, negative result documented with the same care as a positive one (CLAUDE.md rule 4). An ADOPT verdict from this backtest alone does not constitute full validation — per CLAUDE.md, a config change affecting live trading still needs forward-demo-safe rollout, same as H018 staying FROZEN pending forward evidence.",
-      "notes": "Pre-registered 2026-07-14 at operator request, before fundamentals/marketaux_client.py's output was wired into any scoring logic. Distinct from H012 (COT + retail-proxy sentiment, same engine, different data source, already RESEARCH status) — this hypothesis is scoped ONLY to the incremental question of adding MarketAux news sentiment on top. Client + engine wiring may exist in the codebase (config-gated, off by default) before this hypothesis resolves; existence of the code is not evidence and does not change engines.yaml's sentiment: false default.",
-      "last_updated": "2026-07-14"
+    "XAUUSD": {
+     "n": 105,
+     "win_rate": 0.5524,
+     "improvement": 0.0546,
+     "p_value": 0.3555
     }
+   },
+   "analysis": "EURUSD+XAUUSD show consistent +5.4pp edge on 259 combined setups (p=0.23). GBPUSD shows no edge (-1.6pp). Pattern appears symbol-specific. Statistical significance requires n≥600 setups which needs ~8yr H1 data OR higher frequency (M5) data. Edge is too small at +5.4pp to reach significance with 2yr data.",
+   "lesson": "BOS+FVG is NOT a universal edge — GBPUSD behaves differently. But EURUSD+XAUUSD show consistent direction. Before abandoning: try H008b with tighter filters to raise WR to 60%+",
+   "next_step": "H008b: Add session filter (London open BOS only) + ATR quality filter to target WR>60% on EURUSD+XAUUSD subset",
+   "last_updated": "2026-07-06",
+   "conclusion": "CLOSED by H008c. The 55.2% NEEDS_MORE_DATA signal was an artifact of shallow, H1-resampled (not real M15) data. On real deep M15 (EURUSD ~1yr, XAUUSD ~3yr), with look-ahead removed (causal swing confirmation) and a chronological out-of-sample split, pooled TEST WR=0.489 (n=562, p=0.83) — at the H001 coin-flip baseline. The London+ATR filter made it WORSE OOS (0.422). BOS+FVG has no standalone directional edge. SMC/ICT concepts survive only as confluence filters, never as primary entries (consistent with H001/H002/H002b)."
   },
-  "walk_forward_validation": {
-    "status": "PASSED",
-    "date": "2026-06-25",
-    "symbols_tested": [
-      "EURUSD",
-      "GBPUSD",
-      "USDJPY",
-      "AUDUSD",
-      "BTCUSD",
-      "USOIL"
-    ],
-    "windows": 3,
-    "total_test_windows": 18,
-    "pass_rate": "18/18 (100%)",
-    "min_test_pf": 1.5,
-    "avg_test_pf": 3.08,
-    "results": {
-      "EURUSD": {
-        "W1": 3.15,
-        "W2": 2.14,
-        "W3": 5.81,
-        "grade": "CONSISTENT"
-      },
-      "GBPUSD": {
-        "W1": 3.24,
-        "W2": 2.15,
-        "W3": 2.55,
-        "grade": "CONSISTENT"
-      },
-      "USDJPY": {
-        "W1": 2.83,
-        "W2": 2.44,
-        "W3": 3.36,
-        "grade": "CONSISTENT"
-      },
-      "AUDUSD": {
-        "W1": 6.39,
-        "W2": 1.5,
-        "W3": 5.05,
-        "grade": "CONSISTENT"
-      },
-      "BTCUSD": {
-        "W1": 3.03,
-        "W2": 2.89,
-        "W3": 2.54,
-        "grade": "CONSISTENT"
-      },
-      "USOIL": {
-        "W1": 2.28,
-        "W2": 2.3,
-        "W3": 1.82,
-        "grade": "CONSISTENT"
-      }
-    },
-    "conclusion": "Edge is real and generalizes to unseen data. 18/18 test windows above PF=1.5. This is statistically significant (p<0.0001). IATIS has a provable edge on FX majors, crypto, and energy.",
-    "warnings": [
-      "AUDUSD W2=1.50 (borderline) — monitor for degradation",
-      "USOIL W3 WR=44.8% in 2026 — possible weakening",
-      "Data limited to 2yr H1 — longer history would strengthen conclusion",
-      "No slippage modeled — real results will be lower"
-    ]
+  "H008b": {
+   "title": "BOS+FVG + London session (02-10 UTC) + ATR×1.5 filter",
+   "status": "ABANDONED",
+   "reason": "Filters too restrictive. Session filter removes 64-78% of setups, ATR filter removes 19-35% more. Final n=0-9 across all symbols (need n≥50). H1 hourly data doesn't have enough London-session BOS+FVG patterns in 2yr period. Would need M15 data or wider session window to get adequate sample.",
+   "lesson": "BOS+FVG works as CONFLUENCE FILTER (already in SMC engine implicitly) but not as standalone primary signal on H1 data. The pattern is too rare to test statistically with available data.",
+   "last_updated": "2026-06-25"
   },
-  "_decision_rules": {
-    "D001_fx_cut": {
-      "statement": "If the forward (demo, real-fill) FX book shows no edge after an adequate sample, cut FX and run carriers-only. Pre-registered 2026-07-11 — three independent in-sample confirmations already point this way (audit FX-12 p=0.078; H4 stability FX ~1.0; H015 15-sym TEST FX below breakeven).",
-      "bucket": "fx",
-      "metric": "pf",
-      "op": "<",
-      "threshold": 1.0,
-      "min_n": 40,
-      "action": "disable all FX symbols in config.yaml (enabled: false), keep carriers; re-admit FX only via a new hypothesis"
+  "H009": {
+   "title": "IATIS 6-engine confluence as systematic trading signal (already validated)",
+   "status": "PASSED",
+   "notes": "Walk-forward validation (2026-06-25) confirmed edge across 6 symbols, 18 test windows, 100% GOOD (PF≥1.5). Min PF=1.50, Avg PF=3.08. The 6-engine confluence IS the proven edge. No additional hypothesis needed for Phase 4. STILL fails research/edge_gate.py PROMOTION_CRITERIA (oos_trades/oos_pf/walk_forward/monte_carlo missing from `evidence`) — the addendum below is IN-SAMPLE stability data, not OOS, and does not change that. Status stays PASSED-but-flagged; see research/edge_gate.py audit_passed_hypotheses.",
+   "result": {
+    "symbols": 6,
+    "windows": 18,
+    "pass_rate": "18/18",
+    "min_pf": 1.5,
+    "avg_pf": 3.08
+   },
+   "last_updated": "2026-06-25",
+   "addendum_2026-07-13": {
+    "kind": "h4_yearly_stability_deep re-run on scripts/download_deep_history.py's deeper data",
+    "manifest": "research/results/h4_yearly_stability_deep_20260713_manifest.json",
+    "in_sample": true,
+    "note": "NOT out-of-sample evidence — does not satisfy PROMOTION_CRITERIA. Frozen production config (smc, price_action, nnfx, wyckoff; H4 decision TF; D1 MTF gate), unmodified.",
+    "carriers_confirmed": {
+     "BTCUSD": {"n": 345, "pf": 1.468, "wr": 44.1, "span": "2017-08-17 -> 2026-07-13 (8.9y)"},
+     "ETHUSD": {"n": 347, "pf": 1.435, "wr": 43.2, "span": "2017-08-17 -> 2026-07-13 (8.9y)"},
+     "XAUUSD": {"n": 290, "pf": 1.308, "wr": 40.0, "span": "2020-01-24 -> 2026-07-14 (6.5y)"}
     },
-    "D002_carrier_confirmation": {
-      "statement": "The carrier edge (XAU/XAG/BTC/ETH) is confirmed forward when PF >= 1.2 at n >= 100 closed demo trades — the promotion bar applied to the live book. Only then may any live-capital discussion begin.",
-      "bucket": "carriers",
-      "metric": "pf",
-      "op": ">=",
-      "threshold": 1.2,
-      "min_n": 100,
-      "action": "carriers edge CONFIRMED forward — live-capital discussion may open (allow_live_trading stays false until explicitly decided)"
+    "fx_regression_flagged": {
+     "note": "All 7 tested FX pairs now show PF 0.907-1.008 (at/below breakeven) under the CURRENT config — worse than the ~1.03-1.10 range published in docs/STRATEGY_EVIDENCE_2026-07.md. CORRECTED 2026-07-13 (post-H020): the config-fingerprint diff against research/results/h4_yearly_stability_20260705_manifest.json (confluence.min_informative_weight_share absent then, 0.6 now) only MOTIVATED a hypothesis — H020's controlled A/B REFUTED it as the cause (TEST FX mean dPF=+0.005, need >=0.03; carriers swung MORE than FX, the opposite pattern). The actual cause of the FX PF discrepancy between the two manifest dates remains OPEN and unexplained; do not attribute it to this gate.",
+     "pairs": {
+      "EURUSD": {"n": 241, "pf": 0.974}, "GBPUSD": {"n": 223, "pf": 0.952},
+      "USDJPY": {"n": 218, "pf": 1.008}, "USDCHF": {"n": 231, "pf": 0.907},
+      "EURJPY": {"n": 225, "pf": 0.976}, "GBPJPY": {"n": 226, "pf": 0.951},
+      "AUDJPY": {"n": 239, "pf": 0.961}
+     }
     },
-    "_evaluator": "scripts/forward_review.py — applies these rules, never invents thresholds at read time"
+    "insufficient_sample": {
+     "note": "XAGUSD/USOIL/US30/NAS100/SPX500 show PF 1.07-1.46 but n=35-93 (Yahoo H4 cap ~2.4-2.9y) — well below the 300-trade bar, inconclusive either way.",
+     "symbols": ["XAGUSD", "USOIL", "US30", "NAS100", "SPX500"]
+    }
+   }
+  },
+  "H010": {
+   "title": "RSI/MACD Divergence Engine",
+   "status": "RESEARCH",
+   "engine": "divergence",
+   "notes": "Paper trading — collecting data via engine_tracker",
+   "last_updated": "2026-06-26"
+  },
+  "H011": {
+   "title": "Market Structure BOS/CHoCH/MSS Engine",
+   "status": "RESEARCH",
+   "engine": "market_structure",
+   "notes": "Paper trading — collecting data via engine_tracker",
+   "last_updated": "2026-06-26"
+  },
+  "H012": {
+   "title": "COT + Retail Sentiment Engine",
+   "status": "RESEARCH",
+   "engine": "sentiment",
+   "notes": "Paper trading. REAL COT now wired: scripts/download_cot.py fetches CFTC legacy futures-only weekly (free) into data/cot/{SYMBOL}.json which the engine already consumes; engine._symbol wired in main.build_active_engines (was 'UNKNOWN', so COT could never load). Engine stays DISABLED — real data is a prerequisite for evaluating H012, not a license to enable it.",
+   "last_updated": "2026-07-09"
+  },
+  "H013": {
+   "title": "Reversal Engine Group Agreement as Counter-Signal",
+   "status": "PASSED",
+   "status_caveat": "Registry hygiene fix (2026-07-14): this has been LIVE in production since 2026-06-27 (confluence/reversal_veto.py, main.py, use_reversal_veto=True in BacktestConfig) but was still labeled RESEARCH here — corrected to reflect reality. Marked PASSED rather than a stronger label deliberately: the only evidence is ONE observed case (2026-06-26), not an OOS-tested rule. Per research/edge_gate.py's audit_passed_hypotheses, a PASSED entry with no evidence block (oos_trades/oos_pf/walk_forward/monte_carlo) gets flagged at every boot as failing PROMOTION_CRITERIA — intentional here, since n=1 genuinely does not justify a live veto and this should stay flagged until properly measured.",
+   "description": "When 3+ reversal engines (Divergence, Wyckoff, Sentiment) all agree on opposite direction to trend engines, this may indicate imminent reversal. First observed 2026-06-26: 4 BEARISH trend engines vs 3 BULLISH reversal engines — market reversed BULLISH confirming reversal engines.",
+   "hypothesis": "If Divergence+Wyckoff+Sentiment all agree on direction X, and trend engines agree on -X, lower confidence or block the trade.",
+   "evidence": {
+    "case_1": {
+     "date": "2026-06-26",
+     "symbols": [
+      "ETHUSD",
+      "BTCUSD"
+     ],
+     "trend_engines": "BEARISH (SMC+NNFX+PA+Quant)",
+     "reversal_engines": "BULLISH (Divergence+Wyckoff+Sentiment)",
+     "market_outcome": "BULLISH — reversal engines were correct",
+     "trade_result": "loss (5 trades hit SL)"
+    }
+   },
+   "last_updated": "2026-06-27",
+   "implementation": {
+    "file": "confluence/reversal_veto.py",
+    "integrated_in": "main.py",
+    "rules": {
+     "hard_veto": "3/3 reversal engines unanimously oppose → BLOCK trade",
+     "soft_veto": "2/3 reversal engines oppose → reduce score by 50%",
+     "no_effect": "0-1 reversal engines oppose → normal confluence"
+    },
+    "date_implemented": "2026-06-27"
+   }
+  },
+  "H014": {
+   "title": "Engine Orthogonality Test",
+   "status": "RESOLVED",
+   "description": "Measure pairwise correlation between engine vote directions. If SMC↔ICT correlation > 0.85, one is redundant. The goal is not more engines but more INDEPENDENT engines.",
+   "implementation": {
+    "file": "scripts/engine_research.py",
+    "function": "run_h014"
+   },
+   "last_updated": "2026-07-09",
+   "conclusion": "Informed by the independence matrix (ablation_20260703.json) + H015: engines are non-redundant (pairwise agreement mostly 27-76%); no engine pair is collinear enough to drop for orthogonality reasons. No change warranted."
+  },
+  "H015": {
+   "title": "Ablation Study — Minimum Engine Set",
+   "status": "RESOLVED",
+   "description": "What is the smallest set of engines that maintains PF >= 1.15? If 5 engines give PF=1.17 and 9 engines give PF=1.15, the extra 4 engines add noise not signal.",
+   "implementation": {
+    "file": "scripts/engine_research.py",
+    "function": "run_h015"
+   },
+   "last_updated": "2026-07-10",
+   "conclusion": "CLOSED (2026-07-10, 15-symbol confirmation). The pre-registered rule held: selected-7 beat prod4 on TEST mean-PF (1.0398 vs 0.8695, delta +0.170) but won only 9/15 symbols (< the required 2/3) -> KEEP prod4. Decisive observation: the 'better subset' is UNSTABLE across universes — the 3-symbol search chose {ict,nnfx,pa,quant,wyckoff}, the 15-symbol search chose {divergence,nnfx,pa,quant,sentiment,smc,wyckoff} (including the sentiment price-proxy, a noise-fitting tell). Universe-dependent selection = no robust engine-set improvement exists; prod4 is kept by burden-of-proof, not by being measured optimal. Stable signals across ALL runs: nnfx and price_action are load-bearing (dropping either always hurts); drop-smc helps mildly in-train everywhere but no alternative containing it survives the adoption rule OOS. SECONDARY FINDING (flagged to the operator): prod4 TEST-window (~mid-2025 to mid-2026) mean-PF across 15 symbols = 0.87 — the FX book drags below breakeven while carriers (XAU 1.33, BTC 1.37) stay positive, matching the philosophy audit's core verdict. Results: engine_subset_search.json (3-sym) + engine_subset_search_15sym.json + 20260710 manifest (clean tree).",
+   "result_file": "results/engine_subset_search.json",
+   "manifest": "results/engine_subset_search_20260709_manifest.json"
+  },
+  "H016": {
+   "title": "Engine Pair Synergy Analysis",
+   "status": "RESOLVED",
+   "description": "Evaluate WR when engine pairs AGREE vs DISAGREE. If Wyckoff+Divergence agreement gives 45% WR vs 28% when they disagree, this pair has high synergy lift.",
+   "implementation": {
+    "file": "scripts/engine_research.py",
+    "function": "run_h016"
+   },
+   "last_updated": "2026-07-09",
+   "conclusion": "Subsumed by H015's subset search: no engine pair addition to prod4 survives OOS. Pair-synergy pruning offers no OOS PF gain over the current 4."
+  },
+  "H008c": {
+   "title": "BOS+FVG re-test — look-ahead-free + out-of-sample on real deep M15",
+   "status": "FAILED",
+   "result_file": "results/H008c_result.json",
+   "tested_on": "EURUSD ~35k M15 (1yr) + XAUUSD ~80k M15 (3yr), pooled test n=562",
+   "lesson": "Removing look-ahead (causal swings) and splitting OOS collapses the apparent BOS+FVG edge to the coin-flip baseline. The session/ATR filter's 60% WR was in-sample overfitting (train n=11 63.6% -> test 35.5%).",
+   "conclusion": "ABANDON the SMC-entry direction. Definitively no standalone edge.",
+   "manifest": "results/h008c_oos_20260706_manifest.json",
+   "last_updated": "2026-07-06"
+  },
+  "H017": {
+   "title": "SMC full-spec internal confluence (order blocks + FVG + BOS/CHoCH as score modulators)",
+   "status": "FAILED",
+   "notes": "Implemented causally behind engines.smc_full_spec (default FALSE — live voting unchanged). Components modulate SMC's structural score only; never standalone entries (H001/H002/H008c measured no standalone edge: pooled OOS WR 0.489, p=0.83). Liquidity sweeps deliberately NOT implemented (failed 3 hypotheses). Decision rule pre-registered in scripts/smc_fullspec_ab.py: adopt only if chronological-TEST mean PF improves >= 0.03 with <= 1 losing symbol.",
+   "result_file": "results/h017_ab.json",
+   "last_updated": "2026-07-10",
+   "conclusion": "FAILED by the pre-registered rule (2026-07-10): chronological-TEST mean dPF = -0.04 (needed >= +0.03) with 3/4 losing symbols (allowed <= 1). TRAIN showed the usual mirage (XAUUSD +0.062 flipped to -0.190 OOS). ETHUSD's +0.536 (n=55) is a single-symbol outlier — enabling per-symbol would be the exact selection bias the audit condemns. engines.smc_full_spec stays FALSE; the causal detectors remain in the codebase for any future re-test on deeper data. Consistent with H008c: SMC concepts add nothing even as internal confluence, not just as entries."
+  },
+  "H018": {
+   "title": "Structure-based stop placement (SL at OB/swing level instead of raw ATRx2.5)",
+   "status": "PLANNED",
+   "notes": "PRE-REGISTERED ONLY — no code runs. The exit side has never received the hypothesis treatment the entries got (17 hypotheses on entries, zero on exits; current exits are ATRx2.5 / fixed RR). Design: reuse the H017 causal detectors (order-block bottom / confirmed swing low) as the SL anchor; TP keeps the RR floor. Decision rule (written before any result): controlled A/B like H017 (scripts/smc_fullspec_ab.py pattern), chronological TEST slice, adopt only if mean dPF >= +0.05 with <= 1 losing symbol of 4+. DO NOT START until the forward demo sample reaches ~100 closed trades — changing exits mid-sample would corrupt the only prospective evidence being accumulated (D002).",
+   "last_updated": "2026-07-11"
+  },
+  "H019": {
+   "title": "Crypto positioning/sentiment as an internal confluence modulator (funding rate + open interest + Fear & Greed Index) — BTCUSD/ETHUSD only",
+   "status": "PLANNED",
+   "scope": "Crypto only. Funding rate and open interest are perpetual-futures-specific and Fear & Greed is a crypto-market-wide index — neither concept has an FX/metals analogue, so this hypothesis cannot and does not extend beyond BTCUSD/ETHUSD, unlike H017/H018.",
+   "distinct_from_prior_kill": "NOT a re-run of the crypto_volume experiment (dead list: ccxt raw traded volume fed into existing engines, DeltaPF -0.016 BTC / 0.000 ETH). That test measured trade volume; H019 tests derived positioning/sentiment signals never previously measured — funding-rate sign+magnitude as a crowding/squeeze proxy, OI trend as a conviction proxy, Fear&Greed extremes as a contrarian regime input. If this distinction stops holding once the detector is designed, the hypothesis should be withdrawn rather than run.",
+   "notes": "PRE-REGISTERED ONLY — no code runs. Architecture follows the H017 precedent exactly: a causal score modulator behind a new default-FALSE config flag (engines.crypto_positioning_modulator), applied only to engines already voting on BTCUSD/ETHUSD; never a standalone entry signal (every standalone-entry variant of every prior idea in this registry — H001/H002/H002b/H008/H008b/H008c — failed). Does not touch entries/exits/thresholds on any currently live symbol or engine, so it is NOT subject to the H018-style forward-sample freeze — it may be built and backtest-A/B'd at any time without corrupting the D001/D002 forward evidence counter. Deliberately deferred (registration only, implementation not started) per the 2026-07-11 audit follow-up: this cycle's priority is forward-evidence accumulation and operational data-provider verification, not new modulators.",
+   "data_sources": {
+    "funding_rate": "Binance perpetual futures via ccxt fetchFundingRateHistory — free, multi-year depth, no auth required. LOOK-AHEAD GUARD (required, not optional): the backtest may only use the funding rate PUBLISHED strictly before the decision bar's close (Binance settles on a fixed 8h schedule — 00:00/08:00/16:00 UTC); never a rate whose settlement timestamp is at or after the decision bar. If funding/OI are sourced as pre-aggregated daily files rather than fetched per-timestamp, per-bar alignment must be re-derived causally from raw timestamps — no forward-fill from a future aggregate. This is the same class of bug the trade-management '+100%' mirage and the raw H008 BOS+FVG result both turned out to be.",
+    "open_interest": "ccxt fetchOpenInterestHistory (Binance/Bybit) — free tier historical depth is UNVERIFIED and likely shallow (public OI endpoints commonly cap at recent weeks). MUST be validated as a standalone data-availability check before the full study starts; if depth is insufficient for a chronological OOS split, drop OI from this hypothesis rather than substitute a shorter/biased window. PARTIAL CHECK RUN 2026-07-11 (audit sandbox, not the VPS): api.binance.com and api.bybit.com both unreachable from this sandbox's network egress (HTTP 451 / 403 respectively — consistent with an exchange-side datacenter-IP geo-block, not a data-depth problem; the production VPS already operationally fetches Binance H4/D1 via ccxt per the existing crypto provider chain, so this is a sandbox artifact, not evidence against feasibility). The actual OI-depth question remains OPEN and must be re-run from the VPS before any H019 code is written.",
+    "fear_greed_index": "alternative.me public API — free, daily history since 2018-02, no auth required. REACHABILITY CONFIRMED 2026-07-11 (audit sandbox): HTTP 200, valid daily value+classification payload returned. ROLE, defined now rather than left implicit: Fear & Greed enters this study strictly as a REGIME FILTER / market-context input (e.g. gating or scaling the modulator's effect in extreme-fear / extreme-greed regimes) — it is explicitly NOT a symbol-specific directional signal for BTC vs ETH individually, since it is one shared time series feeding two symbols. Any design that treats it as per-symbol conviction must justify why first."
+   },
+   "decision_rule": "Controlled A/B, same bars/config, chronological TEST split (H017/H018 method), symbols BTCUSD + ETHUSD (the only two eligible — n=2, not the 4+ used elsewhere). Because n=2 cannot support a '<=1 losing symbol' tolerance, the bar is stricter by construction: adopt ONLY if chronological-TEST mean PF improves >= 0.05 across BTCUSD+ETHUSD AND NEITHER symbol regresses (0 losing symbols of 2). A single losing symbol is FAILED outright — no per-symbol enabling (the exact selection bias H017's ETHUSD n=55 outlier already illustrated in this registry). Written before any result exists.",
+   "last_updated": "2026-07-11"
+  },
+  "H020": {
+   "title": "Is confluence.min_informative_weight_share (Axis-8 'SPEAKING panel' gate, currently 0.6) net-negative for the FX book specifically, while neutral-to-positive for carriers?",
+   "status": "FAILED",
+   "notes": "REFUTED by the pre-registered controlled A/B (2026-07-13). None of the three required conditions held: TEST-slice FX mean dPF=+0.005 (need >=0.03), FX losing pairs=3/7 (need <=1), carrier mean |dPF|=0.056 (need <=0.02) — the gate actually swings the CARRIERS more than the FX book (BTCUSD alone: -0.095), the opposite of the hypothesis. Per-symbol dPF is a mixed bag with no asset-class pattern (FX: -0.042 to +0.049; carriers: -0.095 to +0.063). CORRECTION to H009's addendum_2026-07-13 and docs/STRATEGY_EVIDENCE_2026-07.md: the config-fingerprint diff that motivated this hypothesis (min_informative_weight_share as the sole behavior_blocks difference between the 2026-07-05 and 2026-07-13 manifests) does NOT explain the FX PF discrepancy under a controlled test — that discrepancy's actual cause remains OPEN/unexplained. VERDICT: NO ACTION — no config change, no follow-up asset-class-scoping work.",
+   "result": {
+    "manifest": "research/results/h020_ab.json",
+    "fx_test_mean_delta_pf": 0.005,
+    "fx_losing_pairs": "3/7",
+    "carrier_test_mean_abs_delta_pf": 0.056,
+    "decision": "NO ACTION"
+   },
+   "method": "Controlled A/B, same bars/config, chronological TRAIN(65%)/TEST(35%) split — H017's method (scripts/smc_fullspec_ab.py pattern) with confluence.min_informative_weight_share as the single flipped variable: 0.0 (pre-2026-07-05 baseline, effectively disabled) vs 0.6 (current). Symbols: the 7 currently-enabled FX pairs (EURUSD, GBPUSD, USDJPY, USDCHF, EURJPY, GBPJPY, AUDJPY) plus the 3 carriers (XAUUSD, BTCUSD, ETHUSD) as the control group — the gate must not be judged on FX alone, since a change would currently apply globally (there is no per-asset-class scoping of this parameter in the codebase today).",
+   "decision_rule": "Written before any result exists. Let dPF = PF(gate=0.0) minus PF(gate=0.6), TEST slice only, per symbol. VERDICT 'FX-NEGATIVE — WORTH ASSET-CLASS SCOPING' only if ALL THREE hold: (1) mean dPF across the 7 FX pairs >= +0.03, (2) at most 1 of 7 FX pairs shows dPF < 0, (3) mean |dPF| across the 3 carriers <= 0.02 (gate is roughly neutral for carriers, so removing it for FX would not sacrifice carrier performance if the parameter were ever made asset-class-specific). Otherwise VERDICT 'NO ACTION' — either the gate is not clearly FX-negative, or it also matters for carriers, and a scoped change would not obviously be safe. This hypothesis authorizes ONLY a verdict + optional follow-up hypothesis for an asset-class-scoped config change — it does NOT itself change config.yaml, and no config change may be made off the back of this result alone without its own pre-registration and forward-demo-safe rollout (CLAUDE.md: never change entries/exits/thresholds mid-sample).",
+   "last_updated": "2026-07-13"
+  },
+  "H021": {
+   "title": "Does MarketAux news sentiment, fed into the (currently disabled) Sentiment engine, improve confluence performance enough to justify re-enabling it?",
+   "status": "PLANNED",
+   "engine": "sentiment",
+   "method": "Controlled A/B, H017/H020 methodology — same bars/config, chronological TRAIN(65%)/TEST(35%) split, ONE variable flipped: Sentiment engine disabled (current frozen baseline: smc, price_action, nnfx, wyckoff) vs Sentiment engine enabled with fundamentals/marketaux_client.py's news-sentiment score folded into engines/sentiment_engine.py as an additional signal alongside its existing COT + retail-proxy logic. confluence.weights.sentiment (0.0303) is already reserved in config.yaml even while disabled, so no re-normalization is needed to test this. Primary group: the 3 frozen carrier symbols (XAUUSD, BTCUSD, ETHUSD) — where the project's only measured edge lives, so they get first claim on the decision. Secondary/safety group: the 7 enabled FX pairs, reported for transparency but not a condition for adoption (the FX book is independently at/below breakeven regardless of this engine). ACKNOWLEDGED METHOD CONSTRAINT (declared before any data collection, so it cannot be used to justify a favorable result after the fact): MarketAux's free tier serves recent news articles, not a reconstructed historical sentiment time series spanning years like the H4 deep-history bars used elsewhere — and its rate limit (100 req/day) means building even a modest historical window requires a dedicated slow-collection script running over many days before a backtest is possible at all. The TRAIN/TEST window for this hypothesis will therefore be much shorter than H020's, and n will likely be low — if the collected sample is too small for the decision rule to apply meaningfully, the correct verdict is 'INSUFFICIENT DATA', not a forced ADOPT/REJECT call.",
+   "decision_rule": "Written before any result exists. Let dPF = PF(sentiment=ON) minus PF(sentiment=OFF), TEST slice only, per symbol. ADOPT (flip config/engines.yaml sentiment: true) only if ALL THREE hold on the carrier group: (1) carrier mean dPF >= +0.05, (2) no individual carrier's PF drops by more than 0.03, (3) total EXECUTE-signal count across the 3 carriers does not drop by more than 20% vs baseline (an overly conservative sentiment veto that merely starves trade frequency is not a genuine improvement, even if the surviving trades look better in isolation). If the collected sentiment sample is too small (fewer than ~30 sentiment-informed decisions per carrier symbol on the TEST slice) to evaluate these conditions meaningfully, VERDICT is 'INSUFFICIENT DATA' — no config change, revisit once more data is collected. Otherwise: any of conditions 1-3 failing -> REJECT, sentiment engine stays disabled, negative result documented with the same care as a positive one (CLAUDE.md rule 4). An ADOPT verdict from this backtest alone does not constitute full validation — per CLAUDE.md, a config change affecting live trading still needs forward-demo-safe rollout, same as H018 staying FROZEN pending forward evidence.",
+   "notes": "Pre-registered 2026-07-14 at operator request, before fundamentals/marketaux_client.py's output was wired into any scoring logic. Distinct from H012 (COT + retail-proxy sentiment, same engine, different data source, already RESEARCH status) — this hypothesis is scoped ONLY to the incremental question of adding MarketAux news sentiment on top. Client + engine wiring may exist in the codebase (config-gated, off by default) before this hypothesis resolves; existence of the code is not evidence and does not change engines.yaml's sentiment: false default.",
+   "last_updated": "2026-07-14"
   }
+ },
+ "walk_forward_validation": {
+  "status": "PASSED",
+  "date": "2026-06-25",
+  "symbols_tested": [
+   "EURUSD",
+   "GBPUSD",
+   "USDJPY",
+   "AUDUSD",
+   "BTCUSD",
+   "USOIL"
+  ],
+  "windows": 3,
+  "total_test_windows": 18,
+  "pass_rate": "18/18 (100%)",
+  "min_test_pf": 1.5,
+  "avg_test_pf": 3.08,
+  "results": {
+   "EURUSD": {
+    "W1": 3.15,
+    "W2": 2.14,
+    "W3": 5.81,
+    "grade": "CONSISTENT"
+   },
+   "GBPUSD": {
+    "W1": 3.24,
+    "W2": 2.15,
+    "W3": 2.55,
+    "grade": "CONSISTENT"
+   },
+   "USDJPY": {
+    "W1": 2.83,
+    "W2": 2.44,
+    "W3": 3.36,
+    "grade": "CONSISTENT"
+   },
+   "AUDUSD": {
+    "W1": 6.39,
+    "W2": 1.5,
+    "W3": 5.05,
+    "grade": "CONSISTENT"
+   },
+   "BTCUSD": {
+    "W1": 3.03,
+    "W2": 2.89,
+    "W3": 2.54,
+    "grade": "CONSISTENT"
+   },
+   "USOIL": {
+    "W1": 2.28,
+    "W2": 2.3,
+    "W3": 1.82,
+    "grade": "CONSISTENT"
+   }
+  },
+  "conclusion": "Edge is real and generalizes to unseen data. 18/18 test windows above PF=1.5. This is statistically significant (p<0.0001). IATIS has a provable edge on FX majors, crypto, and energy.",
+  "warnings": [
+   "AUDUSD W2=1.50 (borderline) — monitor for degradation",
+   "USOIL W3 WR=44.8% in 2026 — possible weakening",
+   "Data limited to 2yr H1 — longer history would strengthen conclusion",
+   "No slippage modeled — real results will be lower"
+  ]
+ },
+ "_decision_rules": {
+  "D001_fx_cut": {
+   "statement": "If the forward (demo, real-fill) FX book shows no edge after an adequate sample, cut FX and run carriers-only. Pre-registered 2026-07-11 — three independent in-sample confirmations already point this way (audit FX-12 p=0.078; H4 stability FX ~1.0; H015 15-sym TEST FX below breakeven).",
+   "bucket": "fx",
+   "metric": "pf",
+   "op": "<",
+   "threshold": 1.0,
+   "min_n": 40,
+   "action": "disable all FX symbols in config.yaml (enabled: false), keep carriers; re-admit FX only via a new hypothesis"
+  },
+  "D002_carrier_confirmation": {
+   "statement": "The carrier edge (XAU/XAG/BTC/ETH) is confirmed forward when PF >= 1.2 at n >= 100 closed demo trades — the promotion bar applied to the live book. Only then may any live-capital discussion begin.",
+   "bucket": "carriers",
+   "metric": "pf",
+   "op": ">=",
+   "threshold": 1.2,
+   "min_n": 100,
+   "action": "carriers edge CONFIRMED forward — live-capital discussion may open (allow_live_trading stays false until explicitly decided)"
+  },
+  "_evaluator": "scripts/forward_review.py — applies these rules, never invents thresholds at read time"
+ }
 }

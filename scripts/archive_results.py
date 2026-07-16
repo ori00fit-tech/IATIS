@@ -80,9 +80,16 @@ def _archive_file(path: Path, archive_dir: Path,
         "status": "archived",
     }
     if expected_sha and sha != expected_sha:
+        # The file's bytes no longer match what the manifest recorded —
+        # the dataset evolved after the run (e.g. a later re-download
+        # appended bars). The old claim's bytes cannot be produced, so the
+        # mismatch stays flagged; but TODAY's bytes are still archived
+        # under their OWN content address (observed live 2026-07-16: 13
+        # deep-D1 files drifted — refusing to store anything would have
+        # lost the current state too, and a content-addressed store
+        # cannot forge the old claim by construction).
         entry["status"] = "SHA_MISMATCH"
         entry["expected_sha256"] = expected_sha
-        return entry  # never archive drifted bytes under an old claim
 
     dest = _store_path(archive_dir, sha, path.name)
     if not dest.exists():
@@ -154,9 +161,12 @@ def write_index(entries: list[dict[str, Any]], index_path: Path = INDEX_PATH,
     problems = [e for e in entries if e["status"] != "archived"]
     if problems:
         lines += ["", f"**{len(problems)} artifact(s) need attention** "
-                      "(SHA_MISMATCH = dataset drifted since the run; "
-                      "MISSING_LOCALLY = bytes only exist on the machine "
-                      "that ran the experiment)."]
+                      "(SHA_MISMATCH = dataset drifted since its manifest was "
+                      "written — today's bytes are archived under their own "
+                      "hash, but the original run's bytes are not recoverable "
+                      "from this tree and that run is no longer byte-"
+                      "reproducible; MISSING_LOCALLY = bytes only exist on "
+                      "the machine that ran the experiment)."]
     index_path.write_text("\n".join(lines) + "\n")
 
 
@@ -179,7 +189,24 @@ def upload(archive_dir: Path = ARCHIVE_DIR) -> int:
         print("  " + " ".join(cmd))
         return 0
     print(f"Uploading to {remote} ...")
-    return subprocess.run(cmd, check=False).returncode
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except FileNotFoundError:
+        # Observed live 2026-07-16: rclone was never installed on the VPS
+        # (backup_d1.sh treats it as optional too) — fail with instructions,
+        # not a traceback. The staging + index above already succeeded.
+        print(
+            "rclone is not installed — the local archive and index are done, "
+            "only the off-site sync was skipped.\n"
+            "Install and configure once (as the service user):\n"
+            "  sudo apt install rclone        # from a sudoer shell\n"
+            "  rclone config                  # new remote 'r2', type 's3',\n"
+            "                                 # provider 'Cloudflare', keys from an\n"
+            "                                 # R2 API token, endpoint\n"
+            "                                 # https://<account_id>.r2.cloudflarestorage.com\n"
+            "then re-run this command."
+        )
+        return 1
 
 
 def main() -> int:

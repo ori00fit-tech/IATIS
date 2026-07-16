@@ -19,14 +19,22 @@ the provider chain, and that is what this plan governs.
 
 | Asset class | Chain (first = primary) | Why this order |
 |---|---|---|
-| crypto (BTC, ETH) | **ccxt/Binance → alpaca → twelve_data → finnhub → yahoo** | Binance: native H4/D1, free, unlimited, the venue with the deepest crypto liquidity. **Alpaca (added 2026-07-16): a genuinely independent second venue** — first fallback AND the cross-check partner for `core/data_confidence.py`. |
-| metals (XAU, XAG) | ctrader → twelve_data → fcs_api → finnhub → yahoo | The broker we execute on is the truth we trade against — its bars ARE the tradeable price. Everything after is failover. |
-| fx majors/crosses | ctrader → twelve_data → fcs_api → alpha_vantage → finnhub → yahoo | Same broker-first logic. |
-| energy (USOIL) | ctrader → finnhub → yahoo | Thin free coverage; futures-based sources carry roll gaps (documented in the integrity verifier). |
-| indices | ctrader → fcs_api → finnhub → yahoo | Yahoo cash indices have no overnight session (28% bar coverage — measured 2026-07-16) and ^IXIC ≠ NDX; broker CFDs first. |
+| crypto (BTC, ETH) | **ccxt/Binance → alpaca → twelve_data → finnhub** | Binance: native H4/D1, free, unlimited, the venue with the deepest crypto liquidity. **Alpaca (added 2026-07-16): a genuinely independent second venue** — first fallback AND the cross-check partner for `core/data_confidence.py`. |
+| metals (XAU, XAG) | ctrader → twelve_data → fcs_api → finnhub | The broker we execute on is the truth we trade against — its bars ARE the tradeable price. Everything after is failover. |
+| fx majors/crosses | ctrader → twelve_data → fcs_api → alpha_vantage → finnhub | Same broker-first logic. |
+| energy (USOIL) | ctrader → finnhub | Thin free coverage; futures-based sources carry roll gaps (documented in the integrity verifier). |
+| indices | ctrader → fcs_api → finnhub | Broker CFDs are the tradeable instrument; free "index" feeds mostly are not (see Yahoo note). |
 
-Yahoo is deliberately last everywhere (2026-07-14 decision): no rate-limit
-contract, throttles, and its "H4" is a resample of 1h bars.
+**Yahoo is removed from every price chain (2026-07-16;** demoted to last on
+07-14 as a first step). Measured grounds from the 2026-07-16 integrity run:
+its index symbols are the wrong instruments (^IXIC composite ≠ NDX; cash
+sessions = 28% H1 bar coverage), its metals are futures with a basis to
+spot (GC=F ≠ XAU/USD), its "H4" is a 1h resample, and it throttles with no
+rate-limit contract. Principle: a missing bar is recoverable — the run
+skips and the next one retries; a plausible-but-wrong bar silently poisons
+decisions. The fetcher stays in the codebase for deliberate offline
+comparisons (`cross_provider_diff`) and the macro series in
+`alt_data_loader` keep their own CBOE/FRED-first chains untouched.
 
 ## What Alpaca does and does NOT add (honesty first)
 

@@ -57,14 +57,15 @@ def test_fcs_api_placement():
     assert "fcs_api" not in dp.provider_chain_for("WTI/USD")
 
 
-def test_yahoo_finance_is_last_in_every_chain():
-    """Operator request (2026-07-14): yahoo is the least reliable source
-    here (no rate-limit contract, throttles under heavy use, H4 is a
-    resample not a native candle) — demoted to last resort everywhere,
-    not removed."""
+def test_yahoo_finance_is_excluded_from_every_chain():
+    """Operator request (2026-07-16, after the 2026-07-14 demotion):
+    yahoo is REMOVED from all live price chains — measured wrong
+    instruments (^IXIC composite ≠ NDX, futures-basis metals, cash
+    sessions = 28% H1 coverage, H4 as a 1h resample). The fetcher stays
+    in the codebase for deliberate offline comparisons only."""
     for symbol in ("BTC/USD", "XAU/USD", "WTI/USD", "DJI", "EUR/USD"):
         chain = dp.provider_chain_for(symbol)
-        assert chain[-1] == "yahoo_finance", f"{symbol}: {chain}"
+        assert "yahoo_finance" not in chain, f"{symbol}: {chain}"
 
 
 # ── Native-timeframe awareness ───────────────────────────────────────────

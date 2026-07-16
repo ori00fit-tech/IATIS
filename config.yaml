@@ -74,11 +74,15 @@ data:
     # alpaca (2026-07-16): crypto ONLY — US stocks + crypto venue, no
     # FX/metals/index CFDs. First fallback after ccxt AND the independent
     # cross-check partner for core/data_confidence.py on the carriers.
-    crypto:  [ccxt, alpaca, twelve_data, finnhub, yahoo_finance]
-    metals:  [ctrader, twelve_data, fcs_api, finnhub, yahoo_finance]
-    energy:  [ctrader, finnhub, yahoo_finance]
-    indices: [ctrader, fcs_api, finnhub, yahoo_finance]
-    fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub, yahoo_finance]
+    # yahoo_finance REMOVED from all chains (2026-07-16): measured wrong
+    # instruments (^IXIC≠NDX, futures≠spot metals, cash sessions, H4 as a
+    # 1h resample) — a missing bar is recoverable, a plausible-but-wrong
+    # bar poisons decisions silently. Fetcher kept for offline diffs only.
+    crypto:  [ccxt, alpaca, twelve_data, finnhub]
+    metals:  [ctrader, twelve_data, fcs_api, finnhub]
+    energy:  [ctrader, finnhub]
+    indices: [ctrader, fcs_api, finnhub]
+    fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

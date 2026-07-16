@@ -460,22 +460,28 @@ _NATIVE_TF: dict[str, set] = {
 # here): placed right after twelve_data (fx/metals) or right after ctrader
 # where there is no twelve_data entry (indices), per operator request.
 #
-# yahoo_finance demoted to last in every chain (2026-07-14, operator
-# request): it's the least reliable source here — throttles under heavy
-# use with no official rate limit contract, and its "H4" is a resample of
-# 1h bars rather than a native candle. Kept as a fallback, not removed —
-# every other provider in each chain is tried first.
 # alpaca added 2026-07-16 (operator request): crypto ONLY — Alpaca serves
 # US stocks + crypto, no FX/metals/index CFDs. Placed right after ccxt as
 # the first fallback AND as the independent cross-check partner for
 # core/data_confidence.py's top-2 comparison on the carrier pairs
 # (ccxt/Binance vs Alpaca are genuinely different venues).
+#
+# yahoo_finance REMOVED from every price chain (2026-07-16, operator
+# request; demoted to last on 2026-07-14 as a first step). Measured
+# grounds, not opinion (scripts/verify_data_integrity.py run 2026-07-16):
+# its index symbols are the WRONG instruments (^IXIC composite ≠ NDX,
+# cash sessions = 28% bar coverage), its metals are futures with a basis
+# to spot (GC=F ≠ XAU/USD), its "H4" is a 1h resample, and it throttles
+# with no rate-limit contract. A missing bar is recoverable; a plausible
+# but wrong bar silently poisons decisions. The fetcher stays in the
+# codebase for deliberate offline use (cross_provider_diff, downloads) —
+# it is simply never consulted for live decisions anymore.
 DEFAULT_CHAINS: dict[str, list[str]] = {
-    "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub", "yahoo_finance"],
-    "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub", "yahoo_finance"],
-    "energy":  ["ctrader", "finnhub", "yahoo_finance"],
-    "indices": ["ctrader", "fcs_api", "finnhub", "yahoo_finance"],
-    "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub", "yahoo_finance"],
+    "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub"],
+    "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub"],
+    "energy":  ["ctrader", "finnhub"],
+    "indices": ["ctrader", "fcs_api", "finnhub"],
+    "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
 }
 
 _CRYPTO = {"BTCUSD", "ETHUSD"}
@@ -662,8 +668,10 @@ def fetch_with_failover(
         interval:   "M15", "H1", "H4", "D1"
         outputsize: number of bars requested
         use_cache:  use Twelve Data cache if available
-        providers:  override provider order (default: twelve_data, alpha_vantage,
-                    finnhub, yahoo — yahoo last, least reliable of this set)
+        providers:  override provider order (default: twelve_data,
+                    alpha_vantage, finnhub — yahoo removed 2026-07-16, see
+                    the DEFAULT_CHAINS note; pass it explicitly for
+                    deliberate offline comparisons only)
 
     Returns:
         (DataFrame, provider_name) — which provider actually delivered the data
@@ -672,7 +680,7 @@ def fetch_with_failover(
         DataFetchError: all providers failed
     """
     if providers is None:
-        providers = ["twelve_data", "alpha_vantage", "finnhub", "yahoo_finance"]
+        providers = ["twelve_data", "alpha_vantage", "finnhub"]
 
     attempts: list[FetchAttempt] = []
 

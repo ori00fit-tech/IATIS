@@ -1918,6 +1918,25 @@ async def data_confidence_endpoint(
         raise HTTPException(status_code=503, detail="Data-confidence history unavailable.")
 
 
+@app.get("/reconciliation")
+async def reconciliation_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Last stored broker-vs-internal reconciliation result. Read-only by
+    design: this process must NEVER run reconcile() itself — that would
+    open a second cTrader session and evict the scheduler's (single
+    session slot per account). The scheduler stores after every tick."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from execution.reconciliation import last_result
+        result = last_result()
+        return result or {"status": "none", "reason": "no reconciliation stored yet"}
+    except Exception as exc:
+        logger.error(f"reconciliation read failed: {exc}")
+        raise HTTPException(status_code=503, detail="Reconciliation history unavailable.")
+
+
 @app.get("/execution-quality")
 async def execution_quality_endpoint(
     x_api_key: str | None = Header(default=None),

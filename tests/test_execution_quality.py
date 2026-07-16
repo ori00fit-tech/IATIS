@@ -171,3 +171,12 @@ def test_summary_empty_ledger(fake_d1):
     s = summary()
     assert s["overall"] == {"n": 0}
     assert s["by_symbol"] == {}
+
+
+def test_summary_includes_recent_fills(fake_d1):
+    log_fill(_report(), FakeExecResult(entry_price=1.10020, trade_id="P9"))
+    s = summary()
+    assert len(s["recent"]) == 1
+    r = s["recent"][0]
+    assert r["symbol"] == "EURUSD" and r["trade_id"] == "P9"
+    assert r["slippage_pips"] == pytest.approx(2.0)

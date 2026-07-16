@@ -4,7 +4,7 @@ import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
-import { fmtPips, getExecutionQuality, type SlippageBucket } from './api'
+import { fmtPips, getExecutionQuality, type RecentFill, type SlippageBucket } from './api'
 
 const POLL_MS = 30_000
 
@@ -93,7 +93,38 @@ export function ExecutionQuality() {
         )}
       </Panel>
 
+      <Panel title="Recent Fills" right={d?.recent?.length ? `last ${d.recent.length}` : undefined}>
+        {d && d.recent && d.recent.length > 0 ? (
+          <DataTable columns={fillColumns} rows={d.recent} rowKey={(f) => `${f.ts}-${f.trade_id ?? f.symbol}`} />
+        ) : (
+          <Empty>{report.loading ? 'Loading...' : 'Every real broker fill lands here with its intended-vs-fill shortfall.'}</Empty>
+        )}
+      </Panel>
+
       {d?.note && <p className="text-[0.75em] text-muted px-1">{d.note}</p>}
     </div>
   )
 }
+
+const fillColumns: Column<RecentFill>[] = [
+  { header: 'When (UTC)', render: (f) => f.ts.slice(0, 19).replace('T', ' ') },
+  { header: 'Symbol', render: (f) => <span className="text-accent font-bold">{f.symbol}</span> },
+  {
+    header: 'Side',
+    render: (f) => <Badge tone={f.direction === 'BUY' ? 'good' : 'marginal'}>{f.direction}</Badge>,
+  },
+  { header: 'Session', render: (f) => f.session ?? '—' },
+  { header: 'Intended', render: (f) => f.intended_price, align: 'right' },
+  { header: 'Fill', render: (f) => f.fill_price, align: 'right' },
+  {
+    header: 'Slippage (pips)',
+    render: (f) => (
+      <span className={f.slippage_pips > 0 ? 'text-red' : f.slippage_pips < 0 ? 'text-green' : 'text-muted'}>
+        {fmtPips(f.slippage_pips)}
+      </span>
+    ),
+    align: 'right',
+  },
+  { header: 'R cost', render: (f) => (f.slippage_r != null ? f.slippage_r.toFixed(4) : '—'), align: 'right' },
+  { header: 'Trade', render: (f) => f.trade_id ?? '—' },
+]

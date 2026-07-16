@@ -169,11 +169,32 @@ function DecisionFilterBar({
 }
 
 function DecisionJsonPanel({ decision, onClose }: { decision: DecisionEntry; onClose: () => void }) {
+  const prov = decision.report.provenance
   return (
     <Panel
       title={`Decision JSON — ${decision.symbol} @ ${decision.timestamp}`}
       right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}
     >
+      {prov && (
+        <div className="px-4 py-2.5 border-b border-border text-[0.75em] flex flex-wrap gap-x-5 gap-y-1">
+          <span>
+            <span className="text-muted">code </span>
+            <span className="text-accent font-mono">{prov.git_commit}</span>
+          </span>
+          <span>
+            <span className="text-muted">config </span>
+            <span className="text-accent font-mono">{prov.config_hash}</span>
+          </span>
+          {Object.entries(prov.data_versions).map(([tf, v]) => (
+            <span key={tf} title={v.sha256 ? `sha256 ${v.sha256} · ${v.first_ts ?? '?'} → ${v.last_ts ?? '?'}` : v.error}>
+              <span className="text-muted">{tf} </span>
+              <span className={v.error ? 'text-red' : ''}>
+                {v.error ? 'error' : `${v.provider ?? '?'}·${v.row_count ?? '?'} bars`}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
       <pre className="p-4 text-[0.78em] overflow-auto max-h-[480px] whitespace-pre-wrap break-words">
         {JSON.stringify(decision, null, 2)}
       </pre>

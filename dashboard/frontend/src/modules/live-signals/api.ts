@@ -15,6 +15,16 @@ export interface PipelineReport {
   stop_loss: number | null
   take_profit: number | null
   risk_reward: string | null
+  // Provenance fingerprints (utils/provenance.py, gap analysis M2) —
+  // present on every decision made after the 2026-07-16 deploy.
+  provenance?: {
+    git_commit: string
+    config_hash: string
+    data_versions: Record<
+      string,
+      { provider?: string; first_ts?: string; last_ts?: string; row_count?: number; sha256?: string; error?: string }
+    >
+  }
 }
 
 export interface DecisionEntry {

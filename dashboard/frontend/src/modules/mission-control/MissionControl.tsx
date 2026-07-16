@@ -17,7 +17,9 @@ import {
   getAiMacroAnalysis,
   getAiDailyReport,
   getMarketHealth,
+  getReconciliation,
   type MarketHealth,
+  type ReconciliationResult,
   type SymbolHealthEntry,
   type OutcomesSummary,
   type AiNewsAnalysis,
@@ -176,11 +178,22 @@ function ageLabel(seconds: number | null): string {
   return `${(seconds / 3600).toFixed(1)}h`
 }
 
-function MarketHealthStrip({ mh }: { mh: MarketHealth | null }) {
+function reconcileCard(rec: ReconciliationResult | null): { value: string; color: 'green' | 'red' | 'default' | 'amber' } {
+  if (!rec || rec.status === 'none') return { value: '—', color: 'default' }
+  if (rec.status === 'match') return { value: 'MATCH', color: 'green' }
+  if (rec.status === 'mismatch') {
+    const n = (rec.broker_only?.length ?? 0) + (rec.internal_only?.length ?? 0)
+    return { value: `MISMATCH ×${n}`, color: 'red' }
+  }
+  return { value: 'PAPER MODE', color: 'amber' } // skipped — no broker book to reconcile
+}
+
+function MarketHealthStrip({ mh, rec }: { mh: MarketHealth | null; rec: ReconciliationResult | null }) {
   // Scheduler heartbeat proxy: the interval is 120min — alert color at 2x.
   const ageTone =
     mh?.lastDecisionAgeSeconds == null ? 'default' : mh.lastDecisionAgeSeconds > 2 * 120 * 60 ? 'red' : 'green'
   const schemaOk = mh != null && mh.schemaVersion != null && mh.schemaVersion === mh.schemaLatest
+  const rc = reconcileCard(rec)
   return (
     <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
       <KpiCard value={mh ? (mh.d1Up ? 'UP' : 'DOWN') : '—'} label="Storage (D1)" color={mh ? (mh.d1Up ? 'green' : 'red') : 'default'} />
@@ -198,6 +211,7 @@ function MarketHealthStrip({ mh }: { mh: MarketHealth | null }) {
         label="Schema Version"
         color={mh?.schemaVersion == null ? 'default' : schemaOk ? 'green' : 'red'}
       />
+      <KpiCard value={rc.value} label="Position Reconcile" color={rc.color} />
     </div>
   )
 }
@@ -210,6 +224,7 @@ export function MissionControl() {
   const symbolHealth = usePolling(getSymbolHealth, POLL_MS, markUnauthenticated)
   const outcomes = usePolling(getOutcomes, POLL_MS, markUnauthenticated)
   const marketHealth = usePolling(getMarketHealth, POLL_MS * 2, markUnauthenticated)
+  const reconciliation = usePolling(getReconciliation, POLL_MS * 2, markUnauthenticated)
 
   const hf = healthFull.data
   const creditsColor = (budget.data?.remaining_today ?? 0) > 400 ? 'green' : (budget.data?.remaining_today ?? 0) > 100 ? 'amber' : 'red'
@@ -256,7 +271,7 @@ export function MissionControl() {
         </span>
       </div>
 
-      <MarketHealthStrip mh={marketHealth.data} />
+      <MarketHealthStrip mh={marketHealth.data} rec={reconciliation.data} />
 
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
         <KpiCard value={pct(hf?.system?.cpu_pct)} label="CPU" color={hf && hf.system && hf.system.cpu_pct > 80 ? 'red' : 'default'} />

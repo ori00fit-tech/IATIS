@@ -345,9 +345,10 @@ into one effective dict by `utils/helpers.py::load_config()`.
 | `config/risk.yaml` | RR floor, exposure caps, drawdown thresholds, `starting_balance` (**frozen**) |
 | `config/ai.yaml` | AI provider order, model, cache TTLs |
 
-> **Note (v0.5.9):** `config.yaml` still carries `system.version: 0.4.5`. The
-> version string is documentation only and is not read by the pipeline; this
-> README supersedes it as the release marker.
+> **Version marker (v0.5.9):** the release version is unified across
+> `config.yaml` (`system.version`), `cloudflare/package.json`, and
+> `dashboard/frontend/package.json` (+ its lockfile). The string is
+> documentation only — it is not read by the pipeline.
 
 ---
 
@@ -647,7 +648,6 @@ fixed PF/WR numbers, and treats stale ones as misleading.
 - **root systemd units.** Service-user migration not yet executed.
 - **cTrader reconnect** has not had a real-network soak test.
 - **No Docker / no packaging** (`pyproject.toml` absent).
-- **`config.yaml` version string is stale** (0.4.5) relative to this release.
 - **Backups stay on-box by default** unless an rclone remote is configured.
 - **H009 `PASSED` is under-evidenced** and flagged as such at every boot.
 
@@ -664,8 +664,8 @@ Prioritized, evidence-gated:
 3. **cTrader reconnect + reconciliation soak test** under real conditions.
 4. **H018** (structure-based stops) once the sample threshold is reached.
 5. **Off-site backups by default** (documented rclone/R2 remote).
-6. **Reconcile the version marker** across `config.yaml`, README, and any
-   release tag.
+6. **Add a git release tag + `CHANGELOG.md`** to anchor the now-unified
+   version marker.
 7. **Optional containerization / `pyproject.toml`** for reproducible installs.
 8. **Tighten CI ruff scope** as the style backlog is paid down.
 

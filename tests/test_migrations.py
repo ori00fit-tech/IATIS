@@ -37,9 +37,9 @@ def test_duplicate_column_is_tolerated(fake_d1):
     """A table that already carries a migration's column (fresh install
     where the module DDL included it) must not break the migration."""
     from storage import decision_db
+    # A fresh-install table created from decision_db's DDL already carries
+    # ALL of migration 2's columns — the migration must tolerate every one.
     fake_d1.execute(decision_db._CREATE_DECISIONS)
-    # Simulate a fresh-install table that already has one of the columns.
-    fake_d1.execute("ALTER TABLE decisions ADD COLUMN git_commit TEXT")
     fake_d1.commit()
 
     applied = migrations.apply_migrations()

@@ -55,6 +55,7 @@ from fundamentals.news_risk import assess_news_risk, risk_level_icon
 from execution.telegram_bot import send_signal as telegram_send
 from utils.helpers import load_config
 from utils.logger import get_logger
+from utils.provenance import build_provenance
 
 logger = get_logger(__name__)
 
@@ -569,6 +570,11 @@ def _build_report(
         # transparency for the dashboard and per-decision auditability.
         "data_providers": {tf: str(df.attrs.get("provider", "unknown"))
                            for tf, df in (mtf_data or {}).items()},
+        # Provenance fingerprints (utils/provenance.py): the exact code
+        # version, config hash, and per-TF data version this decision was
+        # made under. What makes rule 6 ("never change mid-sample")
+        # verifiable instead of promised — persisted by decision_db.
+        "provenance": build_provenance(config, mtf_data),
         # Latest close — populated on EVERY report (EXECUTE and NO_TRADE)
         # so the scheduler's auto-close can evaluate open outcomes even
         # when this run produced no trade.

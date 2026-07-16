@@ -53,9 +53,16 @@ CREATE TABLE IF NOT EXISTS decisions (
     risk_passed INTEGER,                       -- 1 | 0 | NULL
     fail_reason TEXT,                         -- primary fail reason
     summary     TEXT,
-    raw_json    TEXT                          -- full report for drill-down
+    raw_json    TEXT,                         -- full report for drill-down
+    git_commit  TEXT,                          -- provenance: code version (M2)
+    config_hash TEXT,                          -- provenance: config fingerprint
+    data_versions TEXT                         -- provenance: per-TF data version JSON
 );
 """
+# NOTE: the three provenance columns exist here for FRESH installs only —
+# existing production tables get them from storage/migrations.py
+# (migration 2, "decision_provenance"): CREATE TABLE IF NOT EXISTS never
+# alters a table that already exists.
 
 _CREATE_ENGINE_VOTES = """
 CREATE TABLE IF NOT EXISTS engine_votes (
@@ -148,6 +155,15 @@ def log_decision_db(report: dict) -> None:
         report.get("summary"),
         json.dumps(report, default=str),
     )
+    # Provenance fingerprints (utils/provenance.py via main._build_report).
+    # Tolerated absent: reports from older code paths / tests simply write
+    # NULLs — the columns are nullable and every reader treats them so.
+    prov = report.get("provenance") or {}
+    provenance_values = (
+        prov.get("git_commit"),
+        prov.get("config_hash"),
+        json.dumps(prov["data_versions"], default=str) if prov.get("data_versions") else None,
+    )
     engine_outputs = report.get("engine_outputs", [])
 
     try:
@@ -169,13 +185,33 @@ def log_decision_db(report: dict) -> None:
         # atomic as a group but no longer atomic with the decision row
         # itself — see cloudflare/README.md's "Known limitation" section.
         with d1_client.d1_connection() as con:
-            cur = con.execute(
-                """INSERT INTO decisions
-                   (ts, symbol, verdict, regime, volatility, trend_str,
-                    cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                decision_values,
-            )
+            try:
+                cur = con.execute(
+                    """INSERT INTO decisions
+                       (ts, symbol, verdict, regime, volatility, trend_str,
+                        cf_score, cf_engines, risk_passed, fail_reason, summary,
+                        raw_json, git_commit, config_hash, data_versions)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    decision_values + provenance_values,
+                )
+            except D1Error as exc:
+                # Production table not yet migrated (storage/migrations.py
+                # runs at scheduler boot; the API server process may write
+                # first after a deploy). Fall back to the legacy shape so
+                # the decision itself is never lost over its fingerprints.
+                if "no column" not in str(exc).lower():
+                    raise
+                logger.warning(
+                    "decisions table lacks provenance columns (migration 2 "
+                    "pending) — writing decision without fingerprints"
+                )
+                cur = con.execute(
+                    """INSERT INTO decisions
+                       (ts, symbol, verdict, regime, volatility, trend_str,
+                        cf_score, cf_engines, risk_passed, fail_reason, summary, raw_json)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    decision_values,
+                )
             decision_id = cur.lastrowid
         if engine_outputs and decision_id:
             d1_client.d1_batch([

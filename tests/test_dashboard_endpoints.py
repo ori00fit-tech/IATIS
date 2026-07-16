@@ -40,7 +40,7 @@ def test_philosophy_audit_runs_all_axes(client):
     body = r.json()
     assert body["summary"]["total"] >= 20
     axes = {c["axis"] for c in body["checks"]}
-    assert axes == {1, 2, 3, 4, 5, 6, 7, 8}
+    assert axes == {1, 2, 3, 4, 5, 6, 7, 8, 9}
     for c in body["checks"]:
         assert c["status"] in ("PASS", "FAIL", "WARN", "INFO")
 

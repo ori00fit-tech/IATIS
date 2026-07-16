@@ -52,8 +52,10 @@ def _identify_trading_range(
     low = float(window["low"].min())
     close = float(df["close"].iloc[-1])
 
-    # ATR-normalized spread (works for any price level)
-    atr = float((df["high"] - df["low"]).tail(14).mean())
+    # ATR-normalized spread (works for any price level).
+    # range_atr, NOT true ATR — deliberate variant, see utils/indicators.py.
+    from utils.indicators import range_atr
+    atr = range_atr(df, 14)
     price_range = high - low
     spread_in_atr = price_range / atr if atr > 0 else 99
 

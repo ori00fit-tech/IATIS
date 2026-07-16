@@ -1885,6 +1885,56 @@ async def shadow_book_endpoint(
         raise HTTPException(status_code=503, detail="Shadow book unavailable.")
 
 
+@app.get("/metrics")
+async def metrics_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+):
+    """Prometheus-text metrics (execution/metrics.py): scheduler heartbeat
+    age, D1 up/latency, decision/fill counters, schema version. Auth-gated
+    like every other data endpoint — point the scraper at it with the
+    X-API-Key header. render_metrics() never raises: a D1 outage yields
+    iatis_d1_up 0, not a 500."""
+    _check_auth(x_api_key, iatis_session)
+    from fastapi.responses import PlainTextResponse
+    from execution.metrics import render_metrics
+    return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
+
+
+@app.get("/data-confidence")
+async def data_confidence_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Cross-provider data-confidence history (core/data_confidence.py).
+    Reads the stored check table — never triggers provider fetches, so
+    the dashboard can poll it freely. Monitoring only, never a gate."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from core.data_confidence import recent_checks
+        return recent_checks()
+    except Exception as exc:
+        logger.error(f"data-confidence failed: {exc}")
+        raise HTTPException(status_code=503, detail="Data-confidence history unavailable.")
+
+
+@app.get("/execution-quality")
+async def execution_quality_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """TCA report (storage/execution_quality.py): realized slippage per
+    symbol/session vs the backtest's slippage_pips assumption. Adverse-
+    positive, in backtest pip units. Real broker fills only."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.execution_quality import summary
+        return summary()
+    except Exception as exc:
+        logger.error(f"execution-quality failed: {exc}")
+        raise HTTPException(status_code=503, detail="Execution-quality ledger unavailable.")
+
+
 @app.get("/meta-analysis")
 async def meta_analysis(
     x_api_key: str | None = Header(default=None),

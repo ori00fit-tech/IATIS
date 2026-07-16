@@ -131,8 +131,10 @@ def structural_bias(df: pd.DataFrame, window: int = 3, lookback: int = 6) -> tup
 # ---------------------------------------------------------------------------
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:
-    hl = (df["high"] - df["low"]).tail(period)
-    val = float(hl.mean())
+    # range_atr, NOT true ATR — deliberate simplified variant, see
+    # utils/indicators.py. The floor fallback is SMC-specific.
+    from utils.indicators import range_atr
+    val = range_atr(df, period)
     return val if val > 0 else float(df["close"].iloc[-1]) * 0.001
 
 

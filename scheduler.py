@@ -190,6 +190,11 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                     f"✅ TRADE EXECUTED: {exec_result.direction} "
                                     f"{exec_result.symbol} trade_id={exec_result.trade_id}"
                                 )
+                                # TCA: record intended-vs-fill for every real
+                                # broker fill (storage/execution_quality.py).
+                                # Never raises; dry-run is excluded inside.
+                                from storage.execution_quality import log_fill
+                                log_fill(report, exec_result, broker=broker)
                         except Exception as exc:
                             logger.warning(f"Trade execution skipped for {internal}: {exc}")
             except Exception as exc:
@@ -202,6 +207,30 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                         f"<code>{type(exc).__name__}: {str(exc)[:200]}</code>"
                     )
                 )
+
+        # Data-confidence rotation (core/data_confidence.py, gap analysis
+        # S1): ONE symbol per run, cross-checked between its top two
+        # providers. Monitoring only — never gates a decision. Off by
+        # default: it costs ~1-2 extra provider calls per run.
+        if config.get("features", {}).get("data_confidence_check", False):
+            try:
+                from core.data_confidence import check_and_record, pick_symbol
+                dc_sym = pick_symbol([s.replace("/", "") for s in active_symbols])
+                if dc_sym:
+                    dc = check_and_record(dc_sym, config)
+                    if dc and str(dc.get("verdict", "")).startswith("MATERIAL"):
+                        _send_error_once(
+                            key=f"data_confidence_{dc_sym}",
+                            message=(
+                                f"⚠️ <b>Data confidence: MATERIAL disagreement</b> — {dc_sym}\n"
+                                f"{dc['provider_a']} vs {dc['provider_b']}: "
+                                f"mean {dc['mean_diff_pct']}%, max {dc['max_diff_pct']}% "
+                                f"({dc['bars_common']} bars). At least one provider is "
+                                f"wrong — investigate before trusting either."
+                            ),
+                        )
+            except Exception as exc:
+                logger.debug(f"data-confidence rotation skipped: {exc}")
 
         # Log portfolio exposure summary
         if execute_signals:
@@ -266,6 +295,19 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         except Exception as exc:
             logger.warning(f"Auto-close outcomes failed (non-fatal): {exc}")
 
+        # Broker-vs-internal position reconciliation (gap analysis M3):
+        # runs every tick, acts only when the cTrader path is live
+        # (reconcile() self-gates on ctrader_enabled + dry_run). Alert
+        # with the standard per-key cooldown on any mismatch.
+        if config.get("features", {}).get("broker_reconciliation", True):
+            try:
+                from execution.reconciliation import format_alert, reconcile
+                rec = reconcile(config)
+                if rec.get("status") == "mismatch":
+                    _send_error_once(key="reconciliation", message=format_alert(rec))
+            except Exception as exc:
+                logger.warning(f"Reconciliation failed (non-fatal): {exc}")
+
     finally:
         _lock.release()
 
@@ -292,6 +334,14 @@ def _get_symbols(config: dict) -> list[str]:
 def run_loop(config: dict, interval_minutes: int, symbols: list[str] | None) -> None:
     """Main scheduling loop. Runs indefinitely until SIGINT/SIGTERM."""
     interval_sec = interval_minutes * 60
+
+    # Bring the D1 schema up to the current version before the first run
+    # (storage/migrations.py). Non-fatal: a failure logs loudly and the
+    # pipeline keeps running on the old schema.
+    from storage.migrations import apply_migrations_safe
+    applied = apply_migrations_safe()
+    if applied:
+        logger.info(f"Schema migrations applied at boot: {applied}")
 
     # startup Telegram ping
     sym_list = symbols or _get_symbols(config)

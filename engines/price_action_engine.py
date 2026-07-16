@@ -159,7 +159,9 @@ class PriceActionEngine(BaseEngine):
         # ── 4. Short-term momentum (20 points max) ───────────────────
         mom_bars = min(5, len(df) - 1)
         mom = float(close.iloc[-1]) - float(close.iloc[-1 - mom_bars])
-        atr = float((df["high"] - df["low"]).tail(14).mean())
+        # range_atr, NOT true ATR — deliberate variant, see utils/indicators.py.
+        from utils.indicators import range_atr
+        atr = range_atr(df, 14)
         mom_r = mom / atr if atr > 0 else 0
 
         if mom_r > 0.5:

@@ -1,7 +1,7 @@
 """
 scripts/philosophy_audit.py
 ---------------------------
-System Philosophy Audit — 8 axes, ~27 automated checks against the live
+System Philosophy Audit — 9 axes, ~29 automated checks against the live
 decisions database (Cloudflare D1 via storage.d1_client).
 
 Run on the VPS (needs D1_WORKER_URL / D1_PROXY_TOKEN in .env):
@@ -18,6 +18,7 @@ Axes (see docs/PHILOSOPHY_AUDIT_2026-07_ADDENDUM_LIVE.md for rationale):
   6. Discontinuity  — score jumps near thresholds / vote-vs-score side flips
   7. Selectivity    — is the EXECUTE rate philosophy or bug?
   8. No-information confluence — quorum met only because half the panel is mute
+  9. Provenance — fingerprints prove the forward sample ran on an unchanged system
 
 Every check prints PASS / FAIL / WARN / INFO plus the evidence rows.
 Exit code 1 if any FAIL.
@@ -352,10 +353,59 @@ def axis8_no_information(con):
         "those two is ~50%, i.e. a coin-flip co-signature, not confluence.")
 
 
+# ──────────────── Axis 9 — Provenance (gap analysis M2) ───────────────
+
+def axis9_provenance(con):
+    """The forward sample is only evidence if it can PROVE the system was
+    unchanged while it accumulated. Fingerprints (utils/provenance.py)
+    make rule 6 checkable: a config_hash change mid-sample without a
+    pre-registered decision entry is a live invariant violation."""
+    try:
+        rows = _rows(con,
+                     "SELECT git_commit, config_hash, MIN(ts), MAX(ts), COUNT(*) "
+                     "FROM decisions WHERE config_hash IS NOT NULL "
+                     "GROUP BY git_commit, config_hash ORDER BY MIN(ts)")
+    except Exception:
+        add(9, "Provenance columns present", "INFO",
+            "decisions table has no provenance columns yet — migration 2 "
+            "(storage/migrations.py) pending. Fingerprint checks skipped.")
+        return
+
+    # 9.1 — once fingerprinting started, every decision must carry it.
+    since = _rows(con, "SELECT MIN(ts) FROM decisions WHERE config_hash IS NOT NULL")
+    first_ts = since[0][0] if since and since[0][0] else None
+    if first_ts is None:
+        add(9, "Fingerprinted decisions exist", "INFO",
+            "No decision carries provenance yet (columns exist, writer not "
+            "deployed or no runs since). Expected exactly once, right after "
+            "the M2 deploy.")
+        return
+    unstamped = _rows(con, "SELECT COUNT(*) FROM decisions "
+                           "WHERE ts >= ? AND config_hash IS NULL", (first_ts,))
+    n_unstamped = unstamped[0][0] if unstamped else 0
+    add(9, "Every decision fingerprinted since provenance began",
+        "WARN" if n_unstamped else "PASS",
+        f"{n_unstamped} decision(s) after {first_ts} lack a config_hash — "
+        "a writer bypassing utils/provenance.py (or a pre-migration API "
+        "process) is recording unattributable decisions." if n_unstamped
+        else f"All decisions since {first_ts} carry fingerprints.")
+
+    # 9.2 — distinct (code, config) pairs over the sample: each transition
+    # must correspond to a deliberate, documented change.
+    add(9, "Distinct code+config fingerprints in the sample",
+        "WARN" if len(rows) > 1 else "PASS",
+        f"{len(rows)} distinct (git_commit, config_hash) pair(s). More than "
+        "one means the system changed mid-sample — verify each transition "
+        "has a matching registry/decision entry; an unexplained one voids "
+        "the forward counter (rule 6)." if len(rows) > 1
+        else "One fingerprint pair — the sample is provably homogeneous.",
+        [tuple(r) for r in rows[:12]])
+
+
 # ────────────────────────────── main ──────────────────────────────────
 
 def run_all(con) -> list[Check]:
-    """Run all 8 axes against an open decisions-DB connection and return
+    """Run all 9 axes against an open decisions-DB connection and return
     the checks. Used by the CLI below and by GET /philosophy-audit
     (execution/api_server.py) so the dashboard runs the same audit."""
     RESULTS.clear()
@@ -367,6 +417,7 @@ def run_all(con) -> list[Check]:
     axis6_discontinuity(con)
     axis7_selectivity(con)
     axis8_no_information(con)
+    axis9_provenance(con)
     return list(RESULTS)
 
 

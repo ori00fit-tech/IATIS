@@ -80,6 +80,10 @@ claims; make what already runs measurable, observable, and operable.
 - **Dashboard reporting** — live statistics plus scheduled **daily and weekly**
   reports (decisions, rejections-by-reason, engine attribution, forward-demo
   progress).
+- **Command Center → Operations Center** — reorganize the 15 tabs around three
+  operator spines (system operation · data quality · decision quality) under an
+  **Executive Overview** of composite health scores, plus a diagnostic error
+  taxonomy. Full spec: [`COMMAND_CENTER_v0.6.md`](COMMAND_CENTER_v0.6.md).
 - **Ops closure** — execute the service-user migration (off `root`) and make
   off-site backups the default.
 

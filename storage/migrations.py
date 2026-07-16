@@ -189,6 +189,16 @@ def _print_sql() -> None:
 def main() -> int:
     import sys
 
+    # CLI runs outside systemd (which is where the services get their
+    # environment) — load .env exactly like scheduler.py does, so
+    # `python -m storage.migrations --status` works from a plain shell
+    # on the VPS without a manual `set -a; source .env` dance.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # --sql needs no environment at all
+
     if "--sql" in sys.argv:
         _print_sql()
         return 0

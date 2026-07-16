@@ -1410,6 +1410,16 @@ class CTraderClient:
         with self._lock:
             return symbol in self._positions
 
+    def get_open_positions(self) -> list[OpenPosition]:
+        """Snapshot of broker-side open positions as this client knows them.
+
+        The map is rebuilt from ProtoOAReconcileRes on every (re)connect
+        and kept current by execution events while connected — so this is
+        broker truth modulo connection health, without issuing a new
+        request. Used by execution/reconciliation.py's per-tick diff."""
+        with self._lock:
+            return list(self._positions.values())
+
     def test_connection(self) -> bool:
         """Verify credentials/connectivity without placing any order."""
         try:

@@ -295,6 +295,19 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         except Exception as exc:
             logger.warning(f"Auto-close outcomes failed (non-fatal): {exc}")
 
+        # Broker-vs-internal position reconciliation (gap analysis M3):
+        # runs every tick, acts only when the cTrader path is live
+        # (reconcile() self-gates on ctrader_enabled + dry_run). Alert
+        # with the standard per-key cooldown on any mismatch.
+        if config.get("features", {}).get("broker_reconciliation", True):
+            try:
+                from execution.reconciliation import format_alert, reconcile
+                rec = reconcile(config)
+                if rec.get("status") == "mismatch":
+                    _send_error_once(key="reconciliation", message=format_alert(rec))
+            except Exception as exc:
+                logger.warning(f"Reconciliation failed (non-fatal): {exc}")
+
     finally:
         _lock.release()
 

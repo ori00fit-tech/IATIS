@@ -150,6 +150,10 @@ features:
   data_confidence_interval: H1   # timeframe compared
   data_confidence_bars: 48       # bars compared per check
   data_confidence_tolerance_pct: 0.05  # per-bar close divergence tolerance
+  # execution/reconciliation.py — per-tick broker-vs-internal open-position
+  # diff. Self-gates: only acts when ctrader_enabled and dry_run:false
+  # (paper mode has no broker book to reconcile). Mismatch → Telegram.
+  broker_reconciliation: true
 fundamentals:
   blackout_look_ahead_min: 60
   news_filter_enabled: true

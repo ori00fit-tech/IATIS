@@ -19,8 +19,9 @@ each, or rotate now if any was missed:
 - [ ] `API_SERVER_KEY`
 - [ ] `TELEGRAM_BOT_TOKEN` (@BotFather /revoke)
 - [ ] cTrader `ACCESS/REFRESH_TOKEN` + client secret
-- [ ] Data/AI keys: Twelve Data, Alpha Vantage, Finnhub, JBlanked, Perplexity,
+- [ ] Data/AI keys: Twelve Data, Alpha Vantage, Finnhub, Perplexity,
       FCS API, MarketAux, TAAPI (any added since the audit)
+      (economic calendar is keyless — Forex Factory; JBlanked removed 2026-07-16)
 - [ ] VPS SSH surface: `PasswordAuthentication no`, review `authorized_keys`,
       check `last` / auth logs since 2026-07-05
 

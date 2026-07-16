@@ -1,32 +1,31 @@
 """
 fundamentals/news_calendar.py
 -------------------------------
-Economic calendar client using jblanked.com News API.
+Economic calendar client for the pre-news blackout gate.
 
-API: https://www.jblanked.com/news/api/docs/calendar/
-Free tier: 1 request/second, API key required
-Register: https://www.jblanked.com/
+Source of truth: the **Forex Factory** public calendar JSON — the trusted,
+key-free economic-calendar provider already wired into this system. It is the
+industry-standard retail event calendar (scheduled events with times, needed to
+blackout N minutes *before* release), unlike news/sentiment providers such as
+MarketAux which only report articles after the fact.
 
-Endpoints used:
-  GET /news/api/calendar/today/     — today's events (all currencies)
-  GET /news/api/calendar/week/      — this week's events
+JBlanked was removed (2026-07-16): its API returned persistent 401s and it was
+never load-bearing — the system already ran on Forex Factory + the local cache.
 
-Response fields:
-  name, currency, date, actual, forecast, previous, impact, outcome
-  strength (Strong/Weak), quality (Good/Bad)
-
-Fallback: Forex Factory public JSON (no key needed, limited data)
+Resolution order (most reliable first, since the VPS may be rate-limited by
+live calendar hosts):
+  1. Local cache  — storage/calendar_cache.json, refreshed daily by
+                    scripts/cache_calendar.py (which itself pulls Forex Factory).
+  2. Forex Factory live JSON  — nfs/cdn faireconomy.media feeds.
+  3. Minimal hardcoded US schedule  — last-resort so the blackout gate never
+                    fails open during a known high-impact window.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import time
 from datetime import datetime, timezone, timedelta
-from functools import lru_cache
 from pathlib import Path
-import json
 
 import requests
 
@@ -74,34 +73,6 @@ CURRENCY_SYMBOLS = {
     "CAD": ["USDCAD"],
     "NZD": ["NZDUSD"],
 }
-
-
-@lru_cache(maxsize=1)
-def _get_api_key() -> str:
-    return os.environ.get("JBLANKED_API_KEY", "")
-
-
-def _jblanked_request(endpoint: str) -> list[dict] | None:
-    """Make authenticated request to jblanked News API."""
-    api_key = _get_api_key()
-    if not api_key:
-        return None
-
-    # New endpoint structure (updated Feb 2026):
-    # /news/api/ is deprecated → use /news/api/mql5/ or /news/api/forex-factory/
-    url = f"https://www.jblanked.com/news/api/mql5/{endpoint}"
-    headers = {
-        "Authorization": f"Api-Key {api_key}",
-        "Content-Type": "application/json",
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, list) else data.get("results", [])
-    except Exception as exc:
-        logger.warning(f"JBlanked API error: {type(exc).__name__}: {str(exc)[:100]}")
-        return None
 
 
 def _forex_factory_fallback() -> list[dict]:
@@ -180,7 +151,6 @@ def _read_cache() -> list[dict]:
         fetched_at = data.get("fetched_at", "")
         # Only use cache if less than 25 hours old
         if fetched_at:
-            from datetime import datetime, timezone, timedelta
             age = datetime.now(timezone.utc) - datetime.fromisoformat(fetched_at)
             if age.total_seconds() > 25 * 3600:
                 logger.warning("Calendar cache is stale (>25h) — ignoring")
@@ -194,24 +164,20 @@ def _read_cache() -> list[dict]:
 
 
 def get_calendar_today() -> list[dict]:
-    """Get today's economic events. Uses jblanked API with FF fallback."""
-    # Try jblanked first
-    events = _jblanked_request("calendar/today/")
-    if events:
-        logger.info(f"JBlanked calendar: {len(events)} events today")
-        return events
+    """Get today's economic events (local cache → Forex Factory → minimal)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Try local cache (updated by scripts/cache_calendar.py)
+    # Prefer the daily-refreshed local cache: the VPS can be rate-limited by
+    # live calendar hosts, so the cron-populated cache is the reliable path.
     cached = _read_cache()
     if cached:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         today_events = [e for e in cached if e.get("date", "").startswith(today)]
         if today_events:
             logger.info(f"Calendar cache (today): {len(today_events)} events")
             return today_events
 
-    # Fallback: Forex Factory public JSON
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Live Forex Factory public JSON (ends in a minimal hardcoded schedule if
+    # even that is unreachable, so the blackout gate never fails open).
     all_week = _forex_factory_fallback()
     today_events = [e for e in all_week if e.get("date", "").startswith(today)]
     logger.info(f"Forex Factory today: {len(today_events)} events")
@@ -219,12 +185,7 @@ def get_calendar_today() -> list[dict]:
 
 
 def get_calendar_week() -> list[dict]:
-    """Get this week's economic events."""
-    events = _jblanked_request("calendar/week/")
-    if events:
-        logger.info(f"JBlanked calendar: {len(events)} events this week")
-        return events
-
+    """Get this week's economic events (local cache → Forex Factory)."""
     cached = _read_cache()
     if cached:
         return cached

@@ -15,29 +15,12 @@ Cron example (run at 00:05 UTC daily):
 Or add to .env: CALENDAR_CACHE_ENABLED=true
 """
 from __future__ import annotations
-import json, os, sys, time
+import json, sys
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 CACHE_PATH = Path("storage/calendar_cache.json")
-
-
-def fetch_from_jblanked(api_key: str) -> list[dict]:
-    import requests
-    headers = {"Authorization": f"Api-Key {api_key}", "Content-Type": "application/json"}
-    for source in ["mql5", "forex-factory"]:
-        url = f"https://www.jblanked.com/news/api/{source}/calendar/week/"
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                if data:
-                    print(f"  JBlanked ({source}): {len(data)} events")
-                    return data
-        except Exception as e:
-            print(f"  JBlanked ({source}) failed: {e}")
-    return []
 
 
 def fetch_from_forex_factory() -> list[dict]:
@@ -64,19 +47,9 @@ def fetch_from_forex_factory() -> list[dict]:
 
 
 def main():
-    from dotenv import load_dotenv
-    load_dotenv()
-
     print(f"Calendar cache update: {datetime.now(timezone.utc).isoformat()}")
 
-    api_key = os.environ.get("JBLANKED_API_KEY", "")
-    events = []
-
-    if api_key:
-        events = fetch_from_jblanked(api_key)
-
-    if not events:
-        events = fetch_from_forex_factory()
+    events = fetch_from_forex_factory()
 
     if events:
         cache_data = {

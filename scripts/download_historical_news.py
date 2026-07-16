@@ -3,10 +3,8 @@ scripts/download_historical_news.py
 --------------------------------------
 Download historical economic calendar data for backtesting.
 
-Sources:
-  1. JBlanked API — /news/api/mql5/calendar/history/?year=2024
-  2. Forex Factory JSON (weekly archives)
-  3. Investing.com scraper (fallback)
+Source: Forex Factory JSON weekly archives (keyless). JBlanked was removed
+2026-07-16; the economic calendar is served entirely by Forex Factory now.
 
 Stores: storage/news_history/YYYY-MM.json per month
 
@@ -30,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -83,20 +80,6 @@ def _classify_surprise(actual: str, forecast: str) -> str:
     if abs(a - f) < 0.01 * max(abs(f), 1):
         return "inline"
     return "positive" if a > f else "negative"
-
-
-def fetch_jblanked_history(year: int, month: int, api_key: str) -> list[dict]:
-    """Fetch one month of historical calendar from JBlanked."""
-    url = f"https://www.jblanked.com/news/api/mql5/calendar/history/"
-    headers = {"Authorization": f"Api-Key {api_key}"}
-    params = {"year": year, "month": month}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
-        if resp.status_code == 200:
-            return resp.json() if isinstance(resp.json(), list) else []
-    except Exception as e:
-        print(f"    JBlanked error: {e}")
-    return []
 
 
 def fetch_forex_factory_archive(year: int, month: int) -> list[dict]:
@@ -177,22 +160,10 @@ def normalize_event(raw: dict, source: str) -> dict | None:
     }
 
 
-def download_month(year: int, month: int, api_key: str) -> list[dict]:
-    """Download events for one month."""
+def download_month(year: int, month: int) -> list[dict]:
+    """Download events for one month from the Forex Factory weekly archives."""
     events = []
 
-    # Try JBlanked first
-    if api_key:
-        raw = fetch_jblanked_history(year, month, api_key)
-        if raw:
-            for e in raw:
-                n = normalize_event(e, "jblanked")
-                if n:
-                    events.append(n)
-            print(f"    JBlanked: {len(events)} events")
-            return events
-
-    # Fallback: Forex Factory archives
     raw = fetch_forex_factory_archive(year, month)
     if raw:
         for e in raw:
@@ -275,10 +246,6 @@ def main():
     parser.add_argument("--year", type=int, default=None)
     args = parser.parse_args()
 
-    from dotenv import load_dotenv
-    load_dotenv()
-    api_key = os.environ.get("JBLANKED_API_KEY", "")
-
     now = datetime.now()
 
     if args.year:
@@ -294,7 +261,7 @@ def main():
     print(f"\nDownloading historical news calendar")
     print(f"Period: {months[0]} → {months[-1]}")
     print(f"Months: {len(months)}")
-    print(f"API key: {'✅' if api_key else '❌ (FF fallback)'}")
+    print(f"Source: Forex Factory weekly archives (keyless)")
     print()
 
     total_events = 0
@@ -307,7 +274,7 @@ def main():
             continue
 
         print(f"  {year}-{month:02d}: downloading...", end=" ", flush=True)
-        events = download_month(year, month, api_key)
+        events = download_month(year, month)
         if events:
             save_month(year, month, events)
             total_events += len(events)

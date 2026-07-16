@@ -293,6 +293,14 @@ def run_loop(config: dict, interval_minutes: int, symbols: list[str] | None) -> 
     """Main scheduling loop. Runs indefinitely until SIGINT/SIGTERM."""
     interval_sec = interval_minutes * 60
 
+    # Bring the D1 schema up to the current version before the first run
+    # (storage/migrations.py). Non-fatal: a failure logs loudly and the
+    # pipeline keeps running on the old schema.
+    from storage.migrations import apply_migrations_safe
+    applied = apply_migrations_safe()
+    if applied:
+        logger.info(f"Schema migrations applied at boot: {applied}")
+
     # startup Telegram ping
     sym_list = symbols or _get_symbols(config)
     source = config.get("data", {}).get("source", "synthetic")

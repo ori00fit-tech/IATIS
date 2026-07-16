@@ -20,6 +20,7 @@ import {
   type AiResearchSummary,
   type HypothesisDetailResponse,
 } from './api'
+import { getJobDetail, runJob, type JobDetail } from '../experiment-runner/api'
 
 const POLL_MS = 60_000
 
@@ -168,6 +169,99 @@ function HypothesisDetailPanel({ id, onClose }: { id: string; onClose: () => voi
   )
 }
 
+// Run the real cost-inclusive backtest engine from the dashboard
+// (operator request 2026-07-16). Server-side, symbols are validated
+// against the configured universe — the argv is never user-shaped.
+// IMPORTANT epistemics (the registry's own rule): results are IN-SAMPLE
+// scans, not evidence — no decision flows from a dashboard backtest;
+// D001/D002 come from forward_review only.
+const BT_PRESETS: { label: string; symbols: string[] }[] = [
+  { label: 'Carriers', symbols: ['XAUUSD', 'BTCUSD', 'ETHUSD'] },
+  { label: 'FX majors', symbols: ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD'] },
+]
+
+const BT_BADGE: Record<string, 'exec' | 'no-trade' | 'good' | 'marginal' | 'neutral'> = {
+  queued: 'neutral',
+  running: 'marginal',
+  finished: 'exec',
+  failed: 'no-trade',
+  timeout: 'no-trade',
+}
+
+function BacktestRunner() {
+  const [symbolsText, setSymbolsText] = useState('XAUUSD BTCUSD ETHUSD')
+  const [starting, setStarting] = useState(false)
+  const [job, setJob] = useState<JobDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!job || job.status === 'finished' || job.status === 'failed' || job.status === 'timeout') return
+    const id = setInterval(() => {
+      getJobDetail(job.job_id).then(setJob).catch(() => {})
+    }, 3000)
+    return () => clearInterval(id)
+  }, [job])
+
+  const run = async () => {
+    const symbols = symbolsText.toUpperCase().split(/[\s,]+/).filter(Boolean)
+    setStarting(true)
+    setError(null)
+    try {
+      const summary = await runJob('backtest', symbols)
+      setJob({ ...summary, log: [] })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const busy = starting || job?.status === 'queued' || job?.status === 'running'
+
+  return (
+    <Panel title="Run Backtest" right="in-sample scan — never evidence; decisions come from forward_review only">
+      <div className="flex flex-col gap-2.5 p-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            value={symbolsText}
+            onChange={(e) => setSymbolsText(e.target.value)}
+            placeholder="XAUUSD BTCUSD ETHUSD"
+            className="flex-1 min-w-[240px] px-3 py-1.5 text-[0.82em] rounded border border-border bg-bg text-text font-mono"
+          />
+          {BT_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              onClick={() => setSymbolsText(p.symbols.join(' '))}
+              className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent"
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            onClick={run}
+            disabled={busy}
+            className="px-4 py-1.5 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
+          >
+            {busy ? 'Running…' : 'Run backtest'}
+          </button>
+          {job && <Badge tone={BT_BADGE[job.status] ?? 'neutral'}>{job.status}</Badge>}
+          {error && <span className="text-red text-[0.78em]">{error}</span>}
+        </div>
+        <p className="text-[0.72em] text-muted">
+          Real engine, real measured spreads, gap-aware exits — on local H1 datasets, symbols validated
+          server-side against the configured universe. CPU-minutes on the VPS; one backtest at a time.
+          Reports land in reports/ (Reports tab).
+        </p>
+        {job && job.log.length > 0 && (
+          <pre className="p-3 bg-bg/60 rounded text-[0.72em] overflow-auto max-h-[280px] whitespace-pre-wrap break-words font-mono">
+            {job.log.slice(-120).join('\n')}
+          </pre>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 export function ResearchBacktests() {
   const { markUnauthenticated } = useAuth()
   const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
@@ -250,6 +344,8 @@ export function ResearchBacktests() {
         <KpiCard value={hs?.research ?? '—'} label="In Research" color="amber" />
         <KpiCard value={research.data?.latest_backtest?.avg_pf?.toFixed(2) ?? '—'} label="Avg PF (latest BT)" color="purple" />
       </div>
+
+      <BacktestRunner />
 
       <Panel
         title="AI Research Summary"

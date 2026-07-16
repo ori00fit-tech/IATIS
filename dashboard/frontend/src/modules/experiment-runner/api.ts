@@ -34,4 +34,4 @@ export interface JobListResponse {
 export const getJobCatalog = () => apiGet<JobCatalogResponse>('/experiments/jobs')
 export const getJobList = () => apiGet<JobListResponse>('/experiments')
 export const getJobDetail = (jobId: string) => apiGet<JobDetail>(`/experiments/${jobId}`)
-export const runJob = (job: string) => apiPost<JobSummary>('/experiments/run', { job })
+export const runJob = (job: string, symbols?: string[]) => apiPost<JobSummary>('/experiments/run', { job, symbols })

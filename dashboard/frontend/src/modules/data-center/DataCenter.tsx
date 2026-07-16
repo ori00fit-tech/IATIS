@@ -18,6 +18,7 @@ const CELL_CLASS: Record<CacheStatus, string> = {
   OK: 'bg-green/15 text-green',
   STALE: 'bg-amber/15 text-amber',
   GAPS: 'bg-amber/25 text-amber',
+  STARVED: 'bg-red/25 text-red',
   MISSING: 'bg-red/15 text-red',
 }
 
@@ -97,11 +98,18 @@ export function DataCenter() {
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
         <KpiCard value={data?.summary.ok ?? '—'} label="OK" color="green" />
         <KpiCard value={data?.summary.stale ?? '—'} label="Stale" color="amber" />
-        <KpiCard value={data?.summary.gaps ?? '—'} label="Gaps" color="amber" />
+        <KpiCard value={data?.summary.starved ?? '—'} label="Starved" color="red" />
         <KpiCard value={data?.summary.missing ?? '—'} label="Missing" color="red" />
       </div>
 
-      <Panel title="Cache Completeness" right={data ? `checked ${new Date(data.checked_at).toLocaleTimeString()}` : undefined}>
+      <Panel
+        title="Live Feed Health"
+        right={
+          data
+            ? `from decision provenance · checked ${new Date(data.checked_at).toLocaleTimeString()}`
+            : undefined
+        }
+      >
         <VerifyAndExport />
         {error ? (
           <Empty>Could not load data health</Empty>
@@ -134,10 +142,10 @@ export function DataCenter() {
                             className={`inline-block px-2 py-1 rounded text-[0.85em] font-bold ${CELL_CLASS[cell.status]}`}
                             title={
                               cell.last_bar_time
-                                ? `last bar: ${cell.last_bar_time} (${cell.age_minutes}m ago) · tz: ${cell.timezone ?? '?'}\n` +
-                                  `${cell.gap_count_30d} gaps/30d · ${cell.duplicate_count} duplicate timestamps\n` +
-                                  `integrity score: ${cell.integrity_score}/100 (heuristic, not a statistical measure)`
-                                : 'no cache file'
+                                ? `provider: ${cell.provider ?? '?'} · ${cell.bars} bars\n` +
+                                  `last bar: ${cell.last_bar_time} (decision ${cell.age_minutes}m ago)\n` +
+                                  `STARVED = below engine minimums (210 decision-TF / 50 D1 bars) — the silent-degradation class`
+                                : 'no provenance-carrying decision yet for this symbol'
                             }
                           >
                             {cell.status}

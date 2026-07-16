@@ -873,7 +873,10 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     r = client.get("/experiments/jobs", headers=HDR)
     assert r.status_code == 200, r.text
     ids = {j["id"] for j in r.json()["jobs"]}
-    assert ids == {"verify_data_integrity", "forward_review", "backup_d1"}
+    # backtest added 2026-07-16 (operator request): the one parameterized
+    # job — symbols are validated against the configured universe
+    # server-side, so the argv is still never user-shaped.
+    assert ids == {"verify_data_integrity", "forward_review", "backup_d1", "backtest"}
 
 
 def test_experiment_job_catalog_categorizes_ops_vs_research(client):

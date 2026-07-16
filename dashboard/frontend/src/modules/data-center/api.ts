@@ -1,9 +1,10 @@
 import { apiGet } from '../../lib/api'
 
-export type CacheStatus = 'OK' | 'STALE' | 'GAPS' | 'MISSING'
+export type CacheStatus = 'OK' | 'STALE' | 'GAPS' | 'STARVED' | 'MISSING'
 
 export interface TimeframeStatus {
   bars: number
+  provider?: string | null
   last_bar_time: string | null
   age_minutes: number | null
   gap_count_30d: number
@@ -22,7 +23,7 @@ export interface SymbolDataHealth {
 export interface DataHealthResponse {
   checked_at: string
   symbols: SymbolDataHealth[]
-  summary: { ok: number; stale: number; gaps: number; missing: number }
+  summary: { ok: number; stale: number; gaps: number; starved?: number; missing: number }
 }
 
 export const getDataHealth = () => apiGet<DataHealthResponse>('/data-health')

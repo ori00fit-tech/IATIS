@@ -58,12 +58,26 @@ import argparse
 import json
 import re
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd  # noqa: E402
+
+# numpy 2.5 deprecated unit-less timedelta construction, and pandas 2.3.x
+# still triggers it INTERNALLY on ordinary Timedelta comparisons/arithmetic
+# (observed live 2026-07-16: hundreds of DeprecationWarning lines drowning
+# this script's report on the VPS — numpy 2.5.1 + pandas 2.3.3). The
+# comparisons remain correct; only the noise is the problem. Scoped to this
+# exact message so anything else still surfaces. Remove once pandas ships
+# a numpy-2.5-clean release.
+warnings.filterwarnings(
+    "ignore",
+    message=r"The 'generic' unit for NumPy timedelta is deprecated",
+    category=DeprecationWarning,
+)
 
 # Asset-class map (kept local so the verifier has no config dependency).
 ASSET_CLASS: dict[str, str] = {

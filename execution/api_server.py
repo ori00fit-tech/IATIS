@@ -1551,11 +1551,18 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     "verify_data_integrity": [sys.executable, "-m", "scripts.verify_data_integrity"],
     "forward_review": [sys.executable, "-m", "scripts.forward_review"],
     "backup_d1": [sys.executable, "-m", "scripts.backup_d1"],
+    # Parameterized job (the ONE exception to no-args, added 2026-07-16 on
+    # operator request): --symbols values are validated against the
+    # config-defined universe before touching the argv — a member of a
+    # server-side whitelist is security-equivalent to a job key. Runs the
+    # real cost-inclusive engine on LOCAL H1 datasets; no provider spend.
+    "backtest": [sys.executable, "-m", "backtest.runner"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
     "forward_review": "Evaluate registry.json's pre-registered D001/D002 forward decision rules against closed outcomes. One D1 read, no network.",
     "backup_d1": "Dump every D1 table + decisions.jsonl to backups/, gzip, verify row counts, rotate old backups. Writes to local disk only, no network beyond the D1 proxy already in use.",
+    "backtest": "Cost-inclusive backtest (backtest.runner: real measured spreads, gap-aware exits, Monte Carlo) on local H1 datasets. Symbols validated against the configured universe. CPU-minutes on the VPS; writes reports/.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -1565,8 +1572,12 @@ _JOB_CATEGORIES: dict[str, str] = {
     "verify_data_integrity": "research",
     "forward_review": "research",
     "backup_d1": "ops",
+    "backtest": "research",
 }
-_JOB_TIMEOUT_SECONDS = 600  # generous for these three (all finish in seconds to low-minutes locally); kills a runaway process rather than leaking it forever
+_JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
+_JOB_TIMEOUTS: dict[str, int] = {
+    "backtest": 1800,  # full multi-symbol runs are legitimately CPU-minutes
+}
 
 _job_executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, "_Job"] = {}
@@ -1574,9 +1585,13 @@ _jobs_lock = threading.Lock()
 
 
 class _Job:
-    def __init__(self, job_id: str, name: str):
+    def __init__(self, job_id: str, name: str, argv: list[str] | None = None):
         self.id = job_id
         self.name = name
+        # Frozen at creation: request-derived args (backtest symbols) are
+        # validated in the endpoint and baked in here, never re-read.
+        self.argv = list(argv) if argv is not None else list(_JOB_COMMANDS[name])
+        self.timeout = _JOB_TIMEOUTS.get(name, _JOB_TIMEOUT_SECONDS)
         self.status = "queued"  # queued -> running -> finished | failed | timeout
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.started_at: str | None = None
@@ -1604,7 +1619,7 @@ def _run_job(job: "_Job") -> None:
 
     job.status = "running"
     job.started_at = datetime.now(timezone.utc).isoformat()
-    argv = _JOB_COMMANDS[job.name]
+    argv = job.argv
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1615,7 +1630,7 @@ def _run_job(job: "_Job") -> None:
         for line in proc.stdout:
             with job.lock:
                 job.log_lines.append(line.rstrip("\n"))
-            if time.monotonic() - start > _JOB_TIMEOUT_SECONDS:
+            if time.monotonic() - start > job.timeout:
                 proc.kill()
                 job.status = "timeout"
                 break
@@ -1633,6 +1648,19 @@ def _run_job(job: "_Job") -> None:
 
 class _RunJobRequest(BaseModel):
     job: str
+    # backtest only: symbols validated against the configured universe.
+    symbols: list[str] | None = None
+
+
+def _configured_symbol_universe() -> set[str]:
+    """Every internal symbol name config.yaml knows (enabled or not) —
+    the server-side whitelist request symbols must be members of."""
+    config = _get_config()
+    return {
+        str(s.get("internal", "")).upper()
+        for s in config.get("data", {}).get("twelve_data_symbols", [])
+        if s.get("internal")
+    }
 
 
 @app.get("/experiments/jobs")
@@ -1661,6 +1689,24 @@ async def experiments_run(
     if body.job not in _JOB_COMMANDS:
         raise HTTPException(status_code=400, detail=f"Unknown job '{body.job}'. See /experiments/jobs.")
 
+    argv = list(_JOB_COMMANDS[body.job])
+    if body.job == "backtest":
+        symbols = [str(s).upper().strip() for s in (body.symbols or []) if str(s).strip()]
+        if not symbols:
+            raise HTTPException(status_code=400, detail="backtest requires at least one symbol.")
+        if len(symbols) > 20:
+            raise HTTPException(status_code=400, detail="backtest: at most 20 symbols per run.")
+        universe = _configured_symbol_universe()
+        unknown = sorted(set(symbols) - universe)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown symbol(s) {unknown} — must be in the configured universe.",
+            )
+        argv += ["--symbols", *symbols]
+    elif body.symbols:
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no symbols.")
+
     with _jobs_lock:
         already_running = any(
             j.name == body.job and j.status in ("queued", "running") for j in _jobs.values()
@@ -1668,11 +1714,14 @@ async def experiments_run(
         if already_running:
             raise HTTPException(status_code=409, detail=f"'{body.job}' is already running.")
         job_id = uuid.uuid4().hex[:12]
-        job = _Job(job_id, body.job)
+        job = _Job(job_id, body.job, argv=argv)
         _jobs[job_id] = job
 
     from storage.audit_log import log_action
-    log_action("experiment_run", x_api_key=x_api_key, session_id=iatis_session, detail=f"{body.job} ({job_id})")
+    log_action(
+        "experiment_run", x_api_key=x_api_key, session_id=iatis_session,
+        detail=f"{body.job} ({job_id})" + (f" symbols={body.symbols}" if body.job == "backtest" else ""),
+    )
 
     _job_executor.submit(_run_job, job)
     return _job_summary(job)
@@ -2335,41 +2384,125 @@ async def symbol_health_endpoint(
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
-_DH_CONFIG_TO_DM = {"M15": "15m", "H1": "1h", "H4": "4h", "D1": "1d"}
-_DH_STATUS_RANK = {"OK": 0, "GAPS": 1, "STALE": 2, "MISSING": 3}  # higher = worse
+
+
+_DH_V2_RANK = {"OK": 0, "GAPS": 1, "STALE": 2, "STARVED": 3, "MISSING": 4}
+# Data-starvation thresholds — the same invariants main.py warns on
+# (NNFX needs 210+ decision-TF bars, the MTF gate 50+ D1 bars). Below
+# them the pipeline runs but degrades silently — exactly the July 2026
+# incident class this panel exists to make visible.
+_DH_MIN_DECISION_TF_BARS = 210
+_DH_MIN_D1_BARS = 50
+# A decision older than this = the live feed for that symbol has gone
+# quiet (2h scheduler cadence → 3 missed runs).
+_DH_STALE_MINUTES = 360
 
 
 def _data_health_snapshot() -> dict[str, Any]:
-    """Per-symbol/timeframe OHLCV cache completeness — shared by
-    /data-health and /alerts (which flags STALE/GAPS/MISSING symbols).
+    """Per-symbol/timeframe LIVE-FEED health, derived from decision
+    provenance (utils/provenance.py) — the bars the pipeline ACTUALLY
+    consumed, per symbol, at its latest run. Shared by /data-health and
+    /alerts.
+
+    History: this used to inspect core/data_manager.py's local
+    `*_2y.csv` cache — a path the live pipeline no longer feeds (H4/D1
+    come from the provider chains with no local cache), so every symbol
+    reported MISSING regardless of live-feed truth (observed 2026-07-16).
+    Provenance is the honest source: it exists precisely to answer
+    "what data made this decision".
+
+    Statuses: OK · STALE (latest decision too old) · STARVED (bars below
+    the engine minimums — the silent-degradation class) · MISSING (no
+    provenance-carrying decision yet for this symbol).
     """
-    from core.data_manager import DataManager
+    import json as _json
 
     config = _get_config()
     symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
     active_symbols = [s["internal"] for s in symbols_cfg if s.get("enabled")]
     config_timeframes = config.get("data", {}).get("timeframes", ["H1", "H4", "D1"])
+    dtf = (config_timeframes or ["H1"])[0]  # decision TF = timeframes[0]
 
-    dm = DataManager()
+    latest: dict[str, Any] = {}
+    try:
+        from storage import d1_client
+        with d1_client.d1_connection() as con:
+            for symbol in active_symbols:
+                row = con.execute(
+                    "SELECT ts, data_versions FROM decisions "
+                    "WHERE symbol=? AND data_versions IS NOT NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (symbol,),
+                ).fetchone()
+                if row is not None:
+                    latest[symbol] = {"ts": row["ts"], "dv": row["data_versions"]}
+    except Exception as exc:
+        # Pre-migration table / D1 outage: report MISSING rather than 500 —
+        # the panel must stay readable when storage is the problem.
+        logger.warning(f"data-health: provenance read failed ({exc}) — all MISSING")
+
+    now = datetime.now(timezone.utc)
     results = []
-    summary = {"ok": 0, "stale": 0, "gaps": 0, "missing": 0}
+    summary = {"ok": 0, "stale": 0, "gaps": 0, "starved": 0, "missing": 0}
+
+    def _tf_missing() -> dict[str, Any]:
+        return {"bars": 0, "last_bar_time": None, "age_minutes": None,
+                "provider": None, "gap_count_30d": 0, "duplicate_count": 0,
+                "timezone": None, "integrity_score": 0, "status": "MISSING"}
 
     for symbol in active_symbols:
         tf_status: dict[str, Any] = {}
         worst = "OK"
-        for tf in config_timeframes:
-            dm_tf = _DH_CONFIG_TO_DM.get(tf)
-            if not dm_tf:
-                continue
-            status = dm.cache_status(symbol, dm_tf)
-            tf_status[tf] = status
-            if _DH_STATUS_RANK.get(status["status"], 0) > _DH_STATUS_RANK.get(worst, 0):
-                worst = status["status"]
+        rec = latest.get(symbol)
+        if rec is None:
+            tf_status = {tf: _tf_missing() for tf in config_timeframes}
+            worst = "MISSING"
+        else:
+            try:
+                versions = _json.loads(rec["dv"]) or {}
+            except (TypeError, ValueError):
+                versions = {}
+            try:
+                decided_at = datetime.fromisoformat(str(rec["ts"]))
+                if decided_at.tzinfo is None:
+                    decided_at = decided_at.replace(tzinfo=timezone.utc)
+                age_minutes = max(0.0, (now - decided_at).total_seconds() / 60)
+            except ValueError:
+                age_minutes = None
+
+            for tf in config_timeframes:
+                v = versions.get(tf) or {}
+                bars = int(v.get("row_count") or 0)
+                if v.get("error") or (not v):
+                    status = "MISSING"
+                elif tf == dtf and bars < _DH_MIN_DECISION_TF_BARS:
+                    status = "STARVED"
+                elif tf == "D1" and tf != dtf and bars < _DH_MIN_D1_BARS:
+                    status = "STARVED"
+                elif age_minutes is not None and age_minutes > _DH_STALE_MINUTES:
+                    status = "STALE"
+                else:
+                    status = "OK"
+                score = {"OK": 100, "STALE": 60, "STARVED": 30, "MISSING": 0}[status]
+                tf_status[tf] = {
+                    "bars": bars,
+                    "last_bar_time": v.get("last_ts"),
+                    "age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
+                    "provider": v.get("provider"),
+                    "gap_count_30d": 0,
+                    "duplicate_count": 0,
+                    "timezone": None,
+                    "integrity_score": score,
+                    "status": status,
+                }
+                if _DH_V2_RANK[status] > _DH_V2_RANK[worst]:
+                    worst = status
         results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
         summary[worst.lower()] += 1
 
     return {
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": now.isoformat(),
+        "source": "decision_provenance",
         "symbols": results,
         "summary": summary,
     }
@@ -2874,9 +3007,9 @@ async def list_alerts(
         dh = _data_health_snapshot()
         for sym in dh["symbols"]:
             status = sym["overall_status"]
-            if status in ("STALE", "GAPS", "MISSING"):
+            if status in ("STALE", "GAPS", "STARVED", "MISSING"):
                 add(
-                    "error" if status == "MISSING" else "warning",
+                    "error" if status in ("MISSING", "STARVED") else "warning",
                     "missing_data",
                     f"{sym['symbol']} data is {status}.",
                     {"symbol": sym["symbol"], "status": status},

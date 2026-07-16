@@ -269,3 +269,53 @@ def test_reconciliation_empty_contract(client):
     r = client.get("/reconciliation", headers=HDR)
     assert r.status_code == 200
     assert r.json()["status"] == "none"
+
+
+def _submitted_jobs(monkeypatch):
+    """Capture jobs instead of executing them (a real backtest is
+    CPU-minutes — the endpoint contract is what's under test)."""
+    import execution.api_server as m
+    captured = []
+    monkeypatch.setattr(m._job_executor, "submit", lambda fn, job: captured.append(job))
+    return captured
+
+
+def test_backtest_job_requires_symbols(client, monkeypatch):
+    _submitted_jobs(monkeypatch)
+    r = client.post("/experiments/run", json={"job": "backtest"}, headers=HDR)
+    assert r.status_code == 400
+    assert "at least one symbol" in r.json()["detail"]
+
+
+def test_backtest_job_rejects_unknown_symbol(client, monkeypatch):
+    _submitted_jobs(monkeypatch)
+    r = client.post("/experiments/run", json={"job": "backtest", "symbols": ["EURUSD", "HACKUSD"]}, headers=HDR)
+    assert r.status_code == 400
+    assert "HACKUSD" in r.json()["detail"]
+
+
+def test_backtest_job_builds_whitelisted_argv(client, monkeypatch):
+    captured = _submitted_jobs(monkeypatch)
+    r = client.post("/experiments/run", json={"job": "backtest", "symbols": ["eurusd", "XAUUSD"]}, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["job"] == "backtest"
+    assert len(captured) == 1
+    argv = captured[0].argv
+    assert argv[-3:] == ["--symbols", "EURUSD", "XAUUSD"]  # normalized upper
+    assert captured[0].timeout == 1800
+
+    import execution.api_server as m
+    m._jobs.clear()  # don't leak the queued job into other tests
+
+
+def test_non_backtest_job_rejects_symbols(client, monkeypatch):
+    _submitted_jobs(monkeypatch)
+    r = client.post("/experiments/run", json={"job": "forward_review", "symbols": ["EURUSD"]}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_backtest_in_catalog(client):
+    r = client.get("/experiments/jobs", headers=HDR)
+    assert r.status_code == 200
+    ids = {j["id"] for j in r.json()["jobs"]}
+    assert "backtest" in ids

@@ -190,6 +190,11 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                     f"✅ TRADE EXECUTED: {exec_result.direction} "
                                     f"{exec_result.symbol} trade_id={exec_result.trade_id}"
                                 )
+                                # TCA: record intended-vs-fill for every real
+                                # broker fill (storage/execution_quality.py).
+                                # Never raises; dry-run is excluded inside.
+                                from storage.execution_quality import log_fill
+                                log_fill(report, exec_result, broker=broker)
                         except Exception as exc:
                             logger.warning(f"Trade execution skipped for {internal}: {exc}")
             except Exception as exc:

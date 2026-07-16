@@ -1885,6 +1885,23 @@ async def shadow_book_endpoint(
         raise HTTPException(status_code=503, detail="Shadow book unavailable.")
 
 
+@app.get("/execution-quality")
+async def execution_quality_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """TCA report (storage/execution_quality.py): realized slippage per
+    symbol/session vs the backtest's slippage_pips assumption. Adverse-
+    positive, in backtest pip units. Real broker fills only."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage.execution_quality import summary
+        return summary()
+    except Exception as exc:
+        logger.error(f"execution-quality failed: {exc}")
+        raise HTTPException(status_code=503, detail="Execution-quality ledger unavailable.")
+
+
 @app.get("/meta-analysis")
 async def meta_analysis(
     x_api_key: str | None = Header(default=None),

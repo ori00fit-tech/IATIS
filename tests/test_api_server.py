@@ -246,3 +246,16 @@ def test_data_health(client):
     assert "symbols" in data and "summary" in data
     for entry in data["symbols"]:
         assert entry["overall_status"] in ("OK", "STALE", "GAPS", "MISSING")
+
+
+def test_execution_quality_requires_auth(client):
+    r = client.get("/execution-quality")
+    assert r.status_code == 401
+
+
+def test_execution_quality_contract(client):
+    r = client.get("/execution-quality", headers=HDR)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["backtest_assumption_pips"] == 0.5
+    assert "overall" in data and "by_symbol" in data and "by_session" in data

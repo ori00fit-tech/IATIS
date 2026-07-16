@@ -94,7 +94,18 @@ def main() -> int:
                                      "US100", "USTEC", "SPX", "US500", "SP500", "SPX500"]):
                 print(f"    {nm}  (id={name_to_id[nm]})")
 
-        probe = [n for n in KNOWN_PROBE_NAMES if n in name_to_id]
+        # Probe the default set, plus any broker symbol names passed on the
+        # command line (e.g. index names discovered above:
+        #   python -m scripts.ctrader_inspect_symbols US30 US500 USTEC
+        # ). Unknown names are reported so a typo is obvious.
+        requested = KNOWN_PROBE_NAMES + [a for a in sys.argv[1:] if not a.startswith("-")]
+        probe, unknown = [], []
+        for n in requested:
+            (probe if n in name_to_id else unknown).append(n)
+        # de-dup, preserve order
+        probe = list(dict.fromkeys(probe))
+        if unknown:
+            print(f"⚠️  Not on broker (skipped): {unknown}")
         ids = [name_to_id[n] for n in probe]
         print(f"\n🧾 Fetching specs for: {probe}")
         r = ProtoOASymbolByIdReq()

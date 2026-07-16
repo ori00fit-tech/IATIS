@@ -202,6 +202,6 @@ regime:
 system:
   mode: live
   name: IATIS
-  version: 0.4.5
+  version: 0.5.9
 telegram:
   enabled: true

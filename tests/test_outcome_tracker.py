@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from storage.outcome_tracker import (
     log_signal, close_signal, get_open_signals,
-    performance_summary, recent_signals
+    performance_summary, recent_signals, _pip_size
 )
 
 
@@ -81,6 +81,33 @@ def test_pnl_pips_calculated():
     close_signal(signal_id, 1.0640, "win")
     recent = recent_signals(limit=1)
     assert recent[0]["pnl_pips"] == pytest.approx(210.0, abs=1.0)
+
+
+def test_pip_size_by_asset_class():
+    # Broker-confirmed (IC Markets cTrader, 2026-07-16): FX 0.0001, JPY 0.01,
+    # metals/energy/crypto 0.01. Regression guard for the millions-of-pips bug.
+    assert _pip_size("EURUSD") == 0.0001
+    assert _pip_size("USDJPY") == 0.01
+    assert _pip_size("EURJPY") == 0.01
+    assert _pip_size("XAUUSD") == 0.01
+    assert _pip_size("XAGUSD") == 0.01   # was wrongly 0.001 before the fix
+    assert _pip_size("USOIL") == 0.01
+    assert _pip_size("BTCUSD") == 0.01   # was 0.0001 → millions of phantom pips
+    assert _pip_size("ETHUSD") == 0.01
+    # Unknown symbol never falls back to a value that re-triggers the bug.
+    assert _pip_size("FOOBAR") == 0.0001
+
+
+def test_crypto_pnl_pips_not_exploded():
+    # A $2,000 BTC move must be 200,000 pips (÷0.01), not 20,000,000 (÷0.0001).
+    report = _make_report(symbol="BTCUSD")
+    report["entry_price"] = 100_000.0
+    report["stop_loss"] = 98_000.0
+    report["take_profit"] = 104_000.0  # BEARISH, so exit below entry = win
+    sid = log_signal(report)
+    close_signal(sid, 98_000.0, "win")
+    recent = recent_signals(limit=1)
+    assert recent[0]["pnl_pips"] == pytest.approx(200_000.0, rel=1e-3)
 
 
 def test_regime_breakdown():

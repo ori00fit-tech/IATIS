@@ -44,6 +44,40 @@ logger = get_logger(__name__)
 # Callers with different sizing should pass ``risk_usd`` explicitly.
 DEFAULT_RISK_USD: float = 100.0
 
+# Broker-confirmed pip sizes by asset class (IC Markets cTrader
+# ProtoOASymbolById, verified 2026-07-16 via scripts.ctrader_inspect_symbols):
+# FX quotes to 5 digits, pip position 4 → 0.0001 (JPY pairs: 3 digits, pip 2 →
+# 0.01); metals, energy, and crypto all report pip position 2 → 0.01.
+# The previous inline table sent CRYPTO/INDICES/ENERGY to the FX default
+# (0.0001), so e.g. a BTC move (thousands of USD) / 0.0001 produced millions of
+# phantom "pips" that dominated total_pips; it also had XAGUSD at 0.001 when the
+# broker reports 0.01. INDICES is PROVISIONAL pending a broker-spec probe of
+# US30/US500/USTEC — confirm before treating index pips as exact.
+_PIP_SIZE_BY_CLASS: dict[str, float] = {
+    "FOREX": 0.0001,
+    "METALS": 0.01,
+    "ENERGY": 0.01,
+    "CRYPTO": 0.01,
+    "INDICES": 0.1,  # PROVISIONAL — confirm via scripts.ctrader_inspect_symbols
+}
+
+
+def _pip_size(symbol: str) -> float:
+    """Price increment of one pip for ``symbol``, matching the broker's spec.
+
+    JPY forex pairs use 0.01; all other forex 0.0001. Non-forex classes follow
+    the broker's pip position (0.01). Unknown symbols fall back to the forex
+    default so a mislabeled symbol never re-triggers the millions-of-pips bug.
+    """
+    if "JPY" in symbol.upper():
+        return 0.01
+    try:
+        from core.asset_profiles import get_profile
+        asset_class = get_profile(symbol).asset_class
+    except KeyError:
+        return 0.0001
+    return _PIP_SIZE_BY_CLASS.get(asset_class, 0.0001)
+
 
 @contextmanager
 def _conn():
@@ -171,12 +205,11 @@ def close_signal(
         direction = row["direction"]
         symbol = row["symbol"]
 
-        # Calculate pip P&L
-        pip_size = 0.01 if "JPY" in symbol else (
-            0.01 if symbol in ("XAUUSD",) else
-            0.001 if symbol in ("XAGUSD",) else
-            0.0001
-        )
+        # Pip P&L — pip_size MUST match the broker's pip definition per asset
+        # class (see _pip_size / _PIP_SIZE_BY_CLASS above). The old inline table
+        # defaulted crypto/indices/energy to 0.0001 and produced millions of
+        # phantom pips; this routes by measured broker spec instead.
+        pip_size = _pip_size(symbol)
         is_buy = direction in ("BUY", "BULLISH")
         price_diff = (exit_price - entry) if is_buy else (entry - exit_price)
         pnl_pips = round(price_diff / pip_size, 1)

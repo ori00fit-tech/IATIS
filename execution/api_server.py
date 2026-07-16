@@ -1078,16 +1078,26 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
         except Exception:
             continue
 
-    # Old format fallback
+    # Old format fallback. backtest_engine.save() stores rate-like metrics as
+    # fractions (win_rate/dd/return in 0..1); the new format above exposes them
+    # as top-level percentages. Project the legacy shape onto the same top-level
+    # keys so the dashboard renders one consistent row shape (it was previously
+    # emitting only `metrics`, which crashed the Research & Backtests table).
     if not results:
         for f in sorted(storage.glob("backtest_*.json")):
             try:
                 data = _json.loads(f.read_text())
+                m = data.get("metrics", {})
                 results.append({
                     "file": f.name,
                     "symbol": data.get("symbol"),
                     "period": data.get("period"),
-                    "metrics": data.get("metrics", {}),
+                    "trades": m.get("trades_closed", 0),
+                    "win_rate": round(m.get("win_rate", 0) * 100, 1),
+                    "profit_factor": round(m.get("profit_factor", 0), 3),
+                    "max_drawdown_pct": round(m.get("max_drawdown_pct", 0) * 100, 2),
+                    "total_return_pct": round(m.get("total_return_pct", 0) * 100, 2),
+                    "metrics": m,
                 })
             except Exception:
                 continue

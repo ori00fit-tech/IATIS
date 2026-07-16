@@ -33,15 +33,29 @@ export interface ResearchResponse {
   } | null
 }
 
+export interface BacktestMetrics {
+  trades_closed?: number
+  win_rate?: number // stored as a fraction (0..1) in the legacy backtest_*.json format
+  profit_factor?: number
+  max_drawdown_pct?: number // fraction in legacy format
+  total_return_pct?: number // fraction in legacy format
+  sharpe_ratio?: number
+}
+
+// The /backtest-results endpoint serves two on-disk shapes: the new
+// full_pipeline_backtest_*.json (top-level percentage fields) and the legacy
+// backtest_*.json fallback (values only under `metrics`, as fractions). Every
+// numeric field is therefore optional — see normalizeBacktest() in the module.
 export interface BacktestResult {
   file: string
   symbol: string
   period: string
-  trades: number
-  win_rate: number
-  profit_factor: number
-  max_drawdown_pct: number
-  total_return_pct: number
+  trades?: number
+  win_rate?: number
+  profit_factor?: number
+  max_drawdown_pct?: number
+  total_return_pct?: number
+  metrics?: BacktestMetrics
 }
 
 export interface BacktestResultsResponse {

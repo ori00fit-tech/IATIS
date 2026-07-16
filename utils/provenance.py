@@ -77,12 +77,22 @@ def config_hash(config: dict) -> str:
 
 
 def _frame_sha(df: Any) -> str:
-    """Stable 16-hex-char content hash of an OHLCV frame: index + the
-    OHLCV columns that exist, rounded to 8 decimals and serialized
-    canonically. Same bars → same hash across runs and processes."""
+    """Stable 16-hex-char content hash of an OHLCV frame.
+
+    Canonical by construction — hashes only the DATA, never presentation:
+    column names, index values as strings, and cell values coerced to
+    float64 (so an int64 volume column and its float64 round trip hash
+    identically) rounded to 8 decimals and rendered with repr (exact for
+    float64). Index NAME, dtypes, and CSV formatting are deliberately
+    excluded: research/replay.py depends on a JSON-round-tripped frame
+    hashing equal to the original."""
     cols = [c for c in ("open", "high", "low", "close", "volume") if c in df.columns]
-    payload = df[cols].round(8).to_csv() if cols else ""
-    payload = ",".join(str(i) for i in df.index[:1].tolist() + df.index[-1:].tolist()) + "\n" + payload
+    if cols:
+        vals = df[cols].astype("float64").round(8).to_numpy().tolist()
+        body = "\n".join(",".join(repr(v) for v in row) for row in vals)
+    else:
+        body = ""
+    payload = ",".join(cols) + "\n" + ",".join(str(i) for i in df.index) + "\n" + body
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

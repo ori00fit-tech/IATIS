@@ -35,6 +35,7 @@ backups/
 audit/
 decisions.csv
 storage/td_cache/
+storage/replay_windows/
 data/cot/
 iatis_d1_auditor.py
 

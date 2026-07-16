@@ -181,6 +181,13 @@ def _load_market_data(config: dict, timeframes: list[str]):
 
     # Backtest injection: skip all API calls, use pre-sliced DataFrame directly
     if config["data"].get("source") == "injected":
+        # Replay injection (research/replay.py): the EXACT per-timeframe
+        # frames a past live run saw. Live TFs may come from independent
+        # fetches, so rebuilding the view from one base frame would not be
+        # faithful — inject the whole dict.
+        injected_mtf = config["data"].get("_injected_mtf")
+        if injected_mtf:
+            return injected_mtf[timeframes[0]], injected_mtf
         injected_df = config["data"].get("_injected_df")
         if injected_df is not None and len(injected_df) > 0:
             df_base = injected_df.copy()
@@ -216,9 +223,18 @@ def _market_quality_gate(config: dict, df_base) -> tuple[Any, dict | None]:
     Returns (mqs_result, report): a non-None report means the gate
     rejected the session and the pipeline should stop with that NO_TRADE."""
     mq_cfg = config.get("market_quality", {})
+    # Replay determinism (research/replay.py): MQS session/day scoring uses
+    # wall-clock time — a replayed decision must be scored at the ORIGINAL
+    # decision time, not at whatever hour the replay happens to run.
+    replay_now = None
+    _rn = config.get("system", {}).get("_replay_now")
+    if _rn:
+        from datetime import datetime as _dt
+        replay_now = _dt.fromisoformat(_rn)
     mqs_result = assess_market_quality(
         df=df_base,
         symbol=config["data"].get("symbol", ""),
+        now=replay_now,
         timeframe=decision_timeframe(config),
         threshold_good=mq_cfg.get("threshold_good", MQS_THRESHOLD_GOOD),
         threshold_fair=mq_cfg.get("threshold_fair", MQS_THRESHOLD_FAIR),
@@ -692,6 +708,23 @@ def run_pipeline(config: dict) -> dict:
     )
 
     logger.info(f"=== IATIS pipeline complete: final_verdict={final_verdict} ===")
+
+    # Replay mode (research/replay.py): the pipeline ran purely to compare
+    # its output against a stored decision. Nothing below this line may
+    # happen — no persistence, no outcome logging, no alerts. Absent flag
+    # (all production/normal paths) = behavior unchanged.
+    if config.get("system", {}).get("replay_mode"):
+        logger.info("REPLAY MODE: skipping persistence, outcome logging and alerts")
+        return report
+
+    # Replay window capture: persist the exact per-TF input frames + config
+    # so this decision can be re-run bit-for-bit later (gap analysis S2).
+    # Default: EXECUTE decisions only (~1.6% of runs); 'all'/'off' via
+    # system.persist_replay_windows.
+    _rw_mode = str(config.get("system", {}).get("persist_replay_windows", "execute")).lower()
+    if _rw_mode == "all" or (_rw_mode == "execute" and final_verdict == "EXECUTE"):
+        from research.replay import persist_window
+        _safe_store("replay_window", persist_window, report, mtf_data, config)
 
     # Alert dedup must be evaluated BEFORE this decision is persisted —
     # afterwards the query would always find the row we just wrote.

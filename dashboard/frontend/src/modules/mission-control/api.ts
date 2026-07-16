@@ -1,4 +1,4 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiGetText } from '../../lib/api'
 
 export interface Health {
   status: string
@@ -134,3 +134,42 @@ export interface AiDailyReport {
 export const getAiNewsAnalysis = () => apiGet<AiNewsAnalysis>('/ai/news-analysis')
 export const getAiMacroAnalysis = () => apiGet<AiMacroAnalysis>('/ai/macro-analysis')
 export const getAiDailyReport = () => apiGet<AiDailyReport>('/ai/daily-report')
+
+// Market Health (gap analysis A4 — monitoring only, never a gate):
+// parsed from the Prometheus-text GET /metrics exposition
+// (execution/metrics.py). One 'name value' pair per non-comment line.
+export interface MarketHealth {
+  d1Up: boolean
+  d1LatencySeconds: number | null
+  lastDecisionAgeSeconds: number | null
+  decisionsTotal: number | null
+  executeTotal: number | null
+  openOutcomes: number | null
+  fillsTotal: number | null
+  schemaVersion: number | null
+  schemaLatest: number | null
+}
+
+export async function getMarketHealth(): Promise<MarketHealth> {
+  const text = await apiGetText('/metrics')
+  const values: Record<string, number> = {}
+  for (const line of text.split('\n')) {
+    if (!line || line.startsWith('#')) continue
+    const idx = line.lastIndexOf(' ')
+    if (idx <= 0) continue
+    const v = Number(line.slice(idx + 1))
+    if (!Number.isNaN(v)) values[line.slice(0, idx)] = v
+  }
+  const get = (name: string): number | null => (name in values ? values[name] : null)
+  return {
+    d1Up: get('iatis_d1_up') === 1,
+    d1LatencySeconds: get('iatis_d1_latency_seconds'),
+    lastDecisionAgeSeconds: get('iatis_last_decision_age_seconds'),
+    decisionsTotal: get('iatis_decisions_total'),
+    executeTotal: get('iatis_execute_decisions_total'),
+    openOutcomes: get('iatis_open_outcomes'),
+    fillsTotal: get('iatis_fills_total'),
+    schemaVersion: get('iatis_schema_version'),
+    schemaLatest: get('iatis_schema_version_latest'),
+  }
+}

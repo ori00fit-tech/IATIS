@@ -653,21 +653,37 @@ fixed PF/WR numbers, and treats stale ones as misleading.
 
 ---
 
-## Roadmap v0.6
+## Roadmap
 
-Prioritized, evidence-gated:
+The direction is to grow IATIS from a trading-decision engine into a full
+**Institutional Trading Intelligence Platform (ITIP)** — where every release
+adds real production value, not just features, and the deterministic core stays
+the sole decision authority. Full detail, including the engine maturity model
+and per-version exit criteria, is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+| Version | Theme | Focus |
+|---|---|---|
+| **v0.6** | Institutional Foundation | Engine maturity docs, per-engine scoring, evidence-based dynamic weighting, risk hardening (daily-risk/exposure/correlation), API expansion, daily/weekly reports, ops closure |
+| **v0.7** | Quant Research Platform | Walk-forward, Monte Carlo, parameter optimization, strategy comparison, feature engineering, data-quality scoring, data catalog, research workspace |
+| **v0.8** | Institutional Data Platform | Unified data lake, OHLCV/news/econ management, research-result storage, data-quality monitoring, multi-source sync, full decision archival |
+| **v0.9** | AI Decision Intelligence | Decision explanation, session summaries, engine-improvement suggestions, loss analysis, developer copilot — assistant only, never deciding |
+| **v1.0** | ITIP (first stable) | Integrated Command Center, decision governance, portfolio & institutional risk, multi-channel alerts, professional reports, stable API, multi-user auth/RBAC, backup & restore |
+| **Beyond 1.0** | Product modules | Research Studio · Portfolio Manager · Market Intelligence · Execution Hub · Data Center · AI Copilot · Enterprise Dashboard · Audit & Compliance |
+
+**Near-term v0.6 work items** (evidence-gated):
 
 1. **Complete the forward-demo sample** (~100 closed cTrader-demo trades) and
-   apply the pre-registered D001/D002 decision rules via
-   `scripts/forward_review.py`.
+   apply the pre-registered D001/D002 rules via `scripts/forward_review.py`.
 2. **Service-user migration** — move all `iatis-*.service` units off root.
 3. **cTrader reconnect + reconciliation soak test** under real conditions.
 4. **H018** (structure-based stops) once the sample threshold is reached.
 5. **Off-site backups by default** (documented rclone/R2 remote).
-6. **Add a git release tag + `CHANGELOG.md`** to anchor the now-unified
-   version marker.
-7. **Optional containerization / `pyproject.toml`** for reproducible installs.
-8. **Tighten CI ruff scope** as the style backlog is paid down.
+6. **Git release tag + `CHANGELOG.md`** to anchor the unified version marker.
+
+> Every roadmap item that touches trading behavior (enabling an engine,
+> changing a threshold, adaptive weighting) is **measurement work gated by a
+> pre-registered hypothesis clearing the OOS bar** — not a feature toggle. See
+> `CLAUDE.md` and the dead list.
 
 ---
 

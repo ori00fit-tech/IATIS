@@ -94,6 +94,9 @@ def test_pip_size_by_asset_class():
     assert _pip_size("USOIL") == 0.01
     assert _pip_size("BTCUSD") == 0.01   # was 0.0001 → millions of phantom pips
     assert _pip_size("ETHUSD") == 0.01
+    assert _pip_size("US30") == 0.1      # broker pip=1
+    assert _pip_size("NAS100") == 0.1
+    assert _pip_size("SPX500") == 0.1
     # Unknown symbol never falls back to a value that re-triggers the bug.
     assert _pip_size("FOOBAR") == 0.0001
 

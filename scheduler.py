@@ -208,6 +208,30 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                     )
                 )
 
+        # Data-confidence rotation (core/data_confidence.py, gap analysis
+        # S1): ONE symbol per run, cross-checked between its top two
+        # providers. Monitoring only — never gates a decision. Off by
+        # default: it costs ~1-2 extra provider calls per run.
+        if config.get("features", {}).get("data_confidence_check", False):
+            try:
+                from core.data_confidence import check_and_record, pick_symbol
+                dc_sym = pick_symbol([s.replace("/", "") for s in active_symbols])
+                if dc_sym:
+                    dc = check_and_record(dc_sym, config)
+                    if dc and str(dc.get("verdict", "")).startswith("MATERIAL"):
+                        _send_error_once(
+                            key=f"data_confidence_{dc_sym}",
+                            message=(
+                                f"⚠️ <b>Data confidence: MATERIAL disagreement</b> — {dc_sym}\n"
+                                f"{dc['provider_a']} vs {dc['provider_b']}: "
+                                f"mean {dc['mean_diff_pct']}%, max {dc['max_diff_pct']}% "
+                                f"({dc['bars_common']} bars). At least one provider is "
+                                f"wrong — investigate before trusting either."
+                            ),
+                        )
+            except Exception as exc:
+                logger.debug(f"data-confidence rotation skipped: {exc}")
+
         # Log portfolio exposure summary
         if execute_signals:
             exposure = portfolio_exposure_summary(execute_signals)

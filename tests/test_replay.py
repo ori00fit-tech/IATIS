@@ -16,11 +16,16 @@ from utils.helpers import load_config
 
 
 def _pipeline_config() -> dict:
-    """Real config.yaml, forced offline: synthetic data, news + telegram off."""
+    """Real config.yaml, forced offline and DETERMINISTIC: a seeded
+    synthetic frame is injected directly (the plain synthetic source
+    draws a fresh random walk per run — flaky branches), news + telegram
+    off. Seed 42 reproducibly yields NO_TRADE, confluence score 55.0,
+    votes SMC=BEARISH(39) / NNFX=BULLISH(55) / PA,Wyckoff=NEUTRAL."""
+    from core.data_loader import load_synthetic
     config = load_config()
-    config["data"]["source"] = "synthetic"
+    config["data"]["source"] = "injected"
     config["data"]["symbol"] = "EURUSD"
-    config["data"]["bars_to_load"] = 400
+    config["data"]["_injected_df"] = load_synthetic(bars=400, timeframe="H1", seed=42)
     config.setdefault("fundamentals", {})["news_filter_enabled"] = False
     config.setdefault("telegram", {})["enabled"] = False
     # Persist a window for EVERY verdict so the test never depends on the
@@ -81,31 +86,23 @@ def test_replay_mode_writes_nothing(windows_dir, fake_d1):
 
 def test_config_change_is_detected(windows_dir):
     """The regression property: replaying under a modified config must not
-    silently pass. Raising min_score_to_trade to an impossible value must
-    surface as a verdict/score/confluence diff."""
+    silently pass. With the seeded frame (SMC=BEARISH weight-0.202 vs
+    NNFX=BULLISH weight-0.227 → NNFX wins, score 55), inverting the two
+    weights flips the majority to SMC (score 39) — the diff MUST surface."""
     _run_and_capture(_pipeline_config())
     path = next(windows_dir.glob("*.json"))
 
     artifact = json.loads(path.read_text())
-    # Strictest threshold the pipeline's own validator accepts (max
-    # achievable weighted score is ~75; 101 is rejected at boot — itself
-    # a good property, verified by the validator's ConfluenceConfigError).
-    artifact["config"]["confluence"]["min_score_to_trade"] = 75
-    # For passed=False originals the threshold cannot bite further — the
-    # else-branch asserts the machinery still proves the data identical.
+    artifact["config"]["confluence"]["weights"]["smc"] = 0.5
+    artifact["config"]["confluence"]["weights"]["nnfx"] = 0.05
     tampered = path.parent / "tampered.json"
     tampered.write_text(json.dumps(artifact))
 
     result = replay_mod.replay(tampered)
-    original_passed = artifact["original"]["confluence"]["passed"]
-    if original_passed:
-        assert not result.identical, "threshold change must produce a diff"
-        assert any("confluence" in d or "final_verdict" in d for d in result.diffs)
-    else:
-        # Original never passed confluence — an impossible threshold cannot
-        # flip it further; the replay must still be clean and fingerprints
-        # must prove the data was identical.
-        assert all("sha256" not in d for d in result.diffs)
+    assert not result.identical, "weight change must produce a diff"
+    assert any(d.startswith("confluence.score") for d in result.diffs), result.diffs
+    # The data itself was untouched — fingerprints must still match.
+    assert all("sha256" not in d for d in result.diffs)
 
 
 def test_data_tampering_is_detected(windows_dir):

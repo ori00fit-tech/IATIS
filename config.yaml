@@ -142,6 +142,14 @@ features:
   market_quality_gate: true      # main.py — MQS gate can block/allow trades
   correlation_filter: true       # scheduler.py — portfolio correlation cap
   ai_weight_suggestions: true    # execution/api_server.py — POST /ai/optimize-weights
+  # core/data_confidence.py — cross-provider close check, ONE symbol per
+  # scheduler run (round-robin). Monitoring only, NEVER a gate. Off by
+  # default: costs ~1-2 extra provider calls per run. History at
+  # GET /data-confidence; MATERIAL disagreement alerts via Telegram.
+  data_confidence_check: false
+  data_confidence_interval: H1   # timeframe compared
+  data_confidence_bars: 48       # bars compared per check
+  data_confidence_tolerance_pct: 0.05  # per-bar close divergence tolerance
 fundamentals:
   blackout_look_ahead_min: 60
   news_filter_enabled: true

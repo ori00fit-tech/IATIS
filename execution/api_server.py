@@ -1901,6 +1901,23 @@ async def metrics_endpoint(
     return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
 
 
+@app.get("/data-confidence")
+async def data_confidence_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Cross-provider data-confidence history (core/data_confidence.py).
+    Reads the stored check table — never triggers provider fetches, so
+    the dashboard can poll it freely. Monitoring only, never a gate."""
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from core.data_confidence import recent_checks
+        return recent_checks()
+    except Exception as exc:
+        logger.error(f"data-confidence failed: {exc}")
+        raise HTTPException(status_code=503, detail="Data-confidence history unavailable.")
+
+
 @app.get("/execution-quality")
 async def execution_quality_endpoint(
     x_api_key: str | None = Header(default=None),

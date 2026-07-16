@@ -453,6 +453,7 @@ _NATIVE_TF: dict[str, set] = {
     "alpha_vantage": {"M1", "M5", "M15", "M30", "H1"},
     "finnhub":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
     "fcs_api":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    "alpaca":        {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
 }
 
 # FCS API added 2026-07-14 (fx/metals/indices only — no crypto endpoint used
@@ -464,8 +465,13 @@ _NATIVE_TF: dict[str, set] = {
 # use with no official rate limit contract, and its "H4" is a resample of
 # 1h bars rather than a native candle. Kept as a fallback, not removed —
 # every other provider in each chain is tried first.
+# alpaca added 2026-07-16 (operator request): crypto ONLY — Alpaca serves
+# US stocks + crypto, no FX/metals/index CFDs. Placed right after ccxt as
+# the first fallback AND as the independent cross-check partner for
+# core/data_confidence.py's top-2 comparison on the carrier pairs
+# (ccxt/Binance vs Alpaca are genuinely different venues).
 DEFAULT_CHAINS: dict[str, list[str]] = {
-    "crypto":  ["ccxt", "twelve_data", "finnhub", "yahoo_finance"],
+    "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub", "yahoo_finance"],
     "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub", "yahoo_finance"],
     "energy":  ["ctrader", "finnhub", "yahoo_finance"],
     "indices": ["ctrader", "fcs_api", "finnhub", "yahoo_finance"],
@@ -517,6 +523,79 @@ def _fetch_ccxt_provider(symbol: str, interval: str, outputsize: int) -> pd.Data
     df = fetch_ccxt(internal, timeframe=interval, days=days)
     if df is None or df.empty:
         raise DataFetchError(f"ccxt: no data for {internal} @ {interval}")
+    return df.tail(outputsize)
+
+
+_ALPACA_TF_MAP = {
+    "M1": "1Min", "M5": "5Min", "M15": "15Min", "M30": "30Min",
+    "H1": "1Hour", "H4": "4Hour", "D1": "1Day",
+}
+
+
+def _fetch_alpaca(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Crypto bars via Alpaca Market Data (v1beta3) — NATIVE H1/H4/D1.
+
+    Role in this codebase (2026-07-16, operator request): a second,
+    INDEPENDENT crypto source alongside ccxt/Binance — both a failover
+    and the cross-check partner core/data_confidence.py needs for the
+    carrier pairs. Alpaca serves US stocks and crypto only: no FX, no
+    metals, no index CFDs — so it appears exclusively in the crypto
+    chain, and refuses anything else loudly rather than guessing.
+
+    Auth: ALPACA_API_KEY / ALPACA_API_SECRET in .env. Data host is
+    https://data.alpaca.markets (ALPACA_DATA_URL to override) — NOT the
+    paper-api.alpaca.markets trading host, which serves orders, not bars.
+    """
+    api_key = os.environ.get("ALPACA_API_KEY", "")
+    api_secret = os.environ.get("ALPACA_API_SECRET", "")
+    if not (api_key and api_secret):
+        raise DataFetchError("ALPACA_API_KEY/ALPACA_API_SECRET not set — skipping Alpaca")
+
+    internal = _internal_symbol(symbol)
+    if internal not in _CRYPTO:
+        raise DataFetchError(f"Alpaca serves crypto only in this codebase (got {internal})")
+
+    tf = _ALPACA_TF_MAP.get(interval)
+    if tf is None:
+        raise DataFetchError(f"Alpaca: unsupported interval {interval}")
+
+    try:
+        import requests
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    base = os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets").rstrip("/")
+    alpaca_symbol = f"{internal[:-3]}/{internal[-3:]}"  # BTCUSD → BTC/USD
+    params = {
+        "symbols": alpaca_symbol,
+        "timeframe": tf,
+        "limit": min(int(outputsize), 10000),
+        "sort": "desc",  # newest first + limit = the latest N bars
+    }
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
+
+    logger.info(f"Alpaca: fetching {alpaca_symbol} @ {tf}")
+    try:
+        resp = requests.get(f"{base}/v1beta3/crypto/us/bars",
+                            params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Alpaca request failed: {exc}")
+
+    bars = (data.get("bars") or {}).get(alpaca_symbol) or []
+    if not bars:
+        raise DataFetchError(f"Alpaca: empty response for {alpaca_symbol}")
+
+    records = [{
+        "datetime": pd.Timestamp(b["t"]),
+        "open": float(b["o"]),
+        "high": float(b["h"]),
+        "low": float(b["l"]),
+        "close": float(b["c"]),
+        "volume": float(b.get("v", 0.0)),
+    } for b in bars]
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
     return df.tail(outputsize)
 
 
@@ -610,6 +689,8 @@ def fetch_with_failover(
                 df = _fetch_finnhub(symbol, interval, outputsize)
             elif provider == "fcs_api":
                 df = _fetch_fcs_api(symbol, interval, outputsize)
+            elif provider == "alpaca":
+                df = _fetch_alpaca(symbol, interval, outputsize)
             elif provider == "ccxt":
                 df = _fetch_ccxt_provider(symbol, interval, outputsize)
             elif provider == "ctrader":

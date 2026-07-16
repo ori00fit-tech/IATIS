@@ -71,7 +71,10 @@ data:
   # under heavy use, H4 is a resample not a native candle) — kept as a
   # fallback, not removed.
   provider_chains:
-    crypto:  [ccxt, twelve_data, finnhub, yahoo_finance]
+    # alpaca (2026-07-16): crypto ONLY — US stocks + crypto venue, no
+    # FX/metals/index CFDs. First fallback after ccxt AND the independent
+    # cross-check partner for core/data_confidence.py on the carriers.
+    crypto:  [ccxt, alpaca, twelve_data, finnhub, yahoo_finance]
     metals:  [ctrader, twelve_data, fcs_api, finnhub, yahoo_finance]
     energy:  [ctrader, finnhub, yahoo_finance]
     indices: [ctrader, fcs_api, finnhub, yahoo_finance]

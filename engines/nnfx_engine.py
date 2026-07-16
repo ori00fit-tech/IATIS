@@ -31,13 +31,11 @@ def _ema(series: pd.Series, period: int) -> pd.Series:
 
 def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Average Directional Index — trend strength (not direction)."""
+    from utils.indicators import true_range
+
     high, low, close = df["high"], df["low"], df["close"]
 
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs(),
-    ], axis=1).max(axis=1)
+    tr = true_range(df)
 
     dm_plus = (high - high.shift()).clip(lower=0)
     dm_minus = (low.shift() - low).clip(lower=0)

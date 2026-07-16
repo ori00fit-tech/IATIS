@@ -42,14 +42,8 @@ def _roc(series: pd.Series, period: int = 10) -> pd.Series:
 
 def _atr_percentile(df: pd.DataFrame, period: int = 14, lookback: int = 100) -> float:
     """Current ATR as percentile of its own recent history."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
+    from utils.indicators import atr as _atr
+    atr = _atr(df, period)
     current_atr = atr.iloc[-1]
     historical = atr.dropna().tail(lookback)
     if len(historical) < 10:

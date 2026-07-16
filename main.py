@@ -374,7 +374,11 @@ def _risk_gate(config: dict, df_base, conf: _ConfluenceEval):
         return None, None, None, None
 
     entry = df_base["close"].iloc[-1]
-    atr_estimate = (df_base["high"] - df_base["low"]).tail(14).mean()
+    # range_atr, NOT true ATR — the SL/TP distances the whole validated
+    # system (and rule 6's frozen thresholds) are built on. See
+    # utils/indicators.py before ever "upgrading" this.
+    from utils.indicators import range_atr
+    atr_estimate = range_atr(df_base, 14)
     direction = 1 if conf.vote_result.winning_bias == Bias.BULLISH else -1
 
     # Per-symbol RR override

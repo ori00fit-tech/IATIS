@@ -16,20 +16,12 @@ logger = get_logger(__name__)
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Average True Range."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-
-    tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    return tr.rolling(window=period, min_periods=period).mean()
+    """Average True Range. Canonical implementation lives in
+    utils/indicators.py (A2 consolidation); this re-export keeps every
+    existing importer (backtest engine, regime detector, tests) working
+    unchanged."""
+    from utils.indicators import atr as _atr_impl
+    return _atr_impl(df, period)
 
 
 def classify_volatility(df: pd.DataFrame, period: int = 14, lookback: int = 100) -> pd.Series:

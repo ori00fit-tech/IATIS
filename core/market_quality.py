@@ -106,17 +106,11 @@ def _atr_score(df: pd.DataFrame) -> tuple[float, float, str]:
     if len(df) < 20:
         return 15.0, 0.5, "Insufficient data"
 
-    high = df["high"]
-    low = df["low"]
-    close = df["close"].shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - close).abs(),
-        (low - close).abs(),
-    ], axis=1).max(axis=1)
+    from utils.indicators import atr as _atr
 
-    atr14 = float(tr.rolling(14).mean().iloc[-1])
-    atr_series = tr.rolling(14).mean().dropna()
+    atr_full = _atr(df, 14)
+    atr14 = float(atr_full.iloc[-1])
+    atr_series = atr_full.dropna()
 
     if len(atr_series) < 20:
         return 15.0, 0.5, "ATR: insufficient history"

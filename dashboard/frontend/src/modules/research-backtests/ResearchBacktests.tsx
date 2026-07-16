@@ -30,6 +30,32 @@ function pfBadge(pf: number) {
   return 'poor' as const
 }
 
+function finiteNum(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+// Collapse both /backtest-results shapes into one set of percentage-scaled
+// numbers. New rows carry top-level percentages; legacy rows carry only
+// `metrics` as fractions (×100 here). Anything missing stays undefined so the
+// table renders '—' instead of throwing on .toFixed of undefined — the exact
+// crash the Research & Backtests panel was hitting against legacy files.
+function normalizeBacktest(r: BacktestResult) {
+  const m = r.metrics ?? {}
+  const asPct = (top: unknown, frac: unknown): number | undefined => {
+    const t = finiteNum(top)
+    if (t !== undefined) return t
+    const f = finiteNum(frac)
+    return f !== undefined ? f * 100 : undefined
+  }
+  return {
+    trades: finiteNum(r.trades) ?? finiteNum(m.trades_closed),
+    winRate: asPct(r.win_rate, m.win_rate),
+    profitFactor: finiteNum(r.profit_factor) ?? finiteNum(m.profit_factor),
+    maxDrawdownPct: asPct(r.max_drawdown_pct, m.max_drawdown_pct),
+    totalReturnPct: asPct(r.total_return_pct, m.total_return_pct),
+  }
+}
+
 function statusTone(status: string) {
   if (status === 'PASSED') return 'exec' as const
   if (status.includes('FAILED')) return 'no-trade' as const
@@ -315,13 +341,41 @@ export function ResearchBacktests() {
 
   const backtestColumns: Column<BacktestResult>[] = [
     { header: 'Symbol', render: (r) => <span className="font-bold text-accent">{r.symbol}</span> },
-    { header: 'Trades', render: (r) => r.trades, align: 'right' },
-    { header: 'WR%', render: (r) => r.win_rate, align: 'right' },
-    { header: 'PF', render: (r) => <Badge tone={pfBadge(r.profit_factor)}>{r.profit_factor.toFixed(2)}</Badge>, align: 'right' },
-    { header: 'DD%', render: (r) => <span className="text-red">{r.max_drawdown_pct}%</span>, align: 'right' },
+    { header: 'Trades', render: (r) => normalizeBacktest(r).trades ?? '—', align: 'right' },
+    {
+      header: 'WR%',
+      render: (r) => {
+        const wr = normalizeBacktest(r).winRate
+        return wr != null ? `${wr.toFixed(1)}%` : '—'
+      },
+      align: 'right',
+    },
+    {
+      header: 'PF',
+      render: (r) => {
+        const pf = normalizeBacktest(r).profitFactor
+        return pf != null ? <Badge tone={pfBadge(pf)}>{pf.toFixed(2)}</Badge> : <span className="text-muted">—</span>
+      },
+      align: 'right',
+    },
+    {
+      header: 'DD%',
+      render: (r) => {
+        const dd = normalizeBacktest(r).maxDrawdownPct
+        return dd != null ? <span className="text-red">{dd.toFixed(1)}%</span> : <span className="text-muted">—</span>
+      },
+      align: 'right',
+    },
     {
       header: 'Return%',
-      render: (r) => <span className={r.total_return_pct >= 0 ? 'text-green' : 'text-red'}>{r.total_return_pct}%</span>,
+      render: (r) => {
+        const ret = normalizeBacktest(r).totalReturnPct
+        return ret != null ? (
+          <span className={ret >= 0 ? 'text-green' : 'text-red'}>{ret.toFixed(1)}%</span>
+        ) : (
+          <span className="text-muted">—</span>
+        )
+      },
       align: 'right',
     },
   ]

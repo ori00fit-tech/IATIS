@@ -366,7 +366,7 @@ Secrets live in `.env` only — never in config, chat, issues, or commits.
 | `OANDA_API_KEY`, `OANDA_ACCOUNT_ID`, `OANDA_ENVIRONMENT` | Optional | Fallback broker |
 | `ALPACA_API_KEY/_SECRET`, `FCS_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Optional | Failover / macro data |
 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Optional | AI layer (only the selected provider's key) |
-| `MARKETAUX_API_KEY`, `TAAPI_API_KEY`, `JBLANKED_API_KEY` | Optional | Research/news infrastructure |
+| `MARKETAUX_API_KEY`, `TAAPI_API_KEY` | Optional | Research/news infrastructure (economic calendar itself is keyless — Forex Factory) |
 | `ENV` | Optional | `development` enables Swagger + relaxes auth |
 | `IATIS_LOG_LEVEL` | Optional | Log-level override |
 

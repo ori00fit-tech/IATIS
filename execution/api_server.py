@@ -2345,7 +2345,7 @@ async def system_health_full(
         "twelve_data": "configured" if os.environ.get("TWELVE_DATA_API_KEY") else "missing",
         "alpha_vantage": "configured" if os.environ.get("ALPHA_VANTAGE_API_KEY") else "missing",
         "finnhub": "configured" if os.environ.get("FINNHUB_API_KEY") else "missing",
-        "jblanked": "configured" if os.environ.get("JBLANKED_API_KEY") else "missing",
+        "economic_calendar": "forex_factory (keyless)",
         "yahoo_finance": "always_available",
     }
 

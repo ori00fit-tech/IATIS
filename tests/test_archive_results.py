@@ -66,15 +66,21 @@ def test_rerun_is_idempotent_dedup(tmp_path):
     assert len(list(archive.rglob("*__*"))) == n_first
 
 
-def test_drifted_dataset_is_refused(tmp_path):
+def test_drifted_dataset_flagged_but_current_bytes_archived(tmp_path):
     """A dataset whose bytes no longer match the manifest's recorded hash
-    must be flagged, never archived under the old claim."""
+    must be flagged — and today's bytes archived under their OWN content
+    address (never under the old claim, which the content-addressed
+    layout makes impossible by construction)."""
     results, data, archive = _setup(tmp_path, drift=True)
     entries = archive_all(results, data, archive)
     ds = next(e for e in entries if e["name"] == "EURUSD_H4_deep.csv")
     assert ds["status"] == "SHA_MISMATCH"
     assert "expected_sha256" in ds
-    assert not any("EURUSD" in f.name for f in archive.rglob("*__*"))
+    assert ds["sha256"] != ds["expected_sha256"]
+    stored = archive / ds["archived_as"]
+    assert stored.exists()
+    assert stored.name.startswith(ds["sha256"])          # own hash
+    assert not stored.name.startswith(ds["expected_sha256"])  # not the claim
 
 
 def test_missing_dataset_is_reported(tmp_path):
@@ -106,3 +112,22 @@ def test_verify_store_detects_corruption(tmp_path):
     victim.write_text('{"pf": 9.99}')  # tamper
     failures = verify_store(archive)
     assert len(failures) == 1 and "h999_result.json" in failures[0]
+
+
+def test_upload_without_rclone_prints_instructions(tmp_path, monkeypatch, capsys):
+    """rclone missing must yield instructions + exit code 1, not a
+    traceback (observed live 2026-07-16)."""
+    import subprocess
+    from scripts import archive_results
+
+    monkeypatch.setenv("ARCHIVE_RCLONE_REMOTE", "r2:iatis-artifacts")
+
+    def no_rclone(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "rclone")
+
+    monkeypatch.setattr(subprocess, "run", no_rclone)
+    rc = archive_results.upload(tmp_path)
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "rclone is not installed" in out
+    assert "rclone config" in out

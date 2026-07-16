@@ -11,6 +11,7 @@ import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
 import { AlertCenter } from './modules/alert-center/AlertCenter'
 import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
+import { ExecutionQuality } from './modules/execution-quality/ExecutionQuality'
 import { Reports } from './modules/reports/Reports'
 import { ExperimentRunner } from './modules/experiment-runner/ExperimentRunner'
 import { VpsOperations } from './modules/vps-operations/VpsOperations'
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'mission-control', label: 'Mission Control' },
   { id: 'live-signals', label: 'Live Signals' },
   { id: 'forward-demo', label: 'Forward Demo' },
+  { id: 'execution-quality', label: 'Execution Quality' },
   { id: 'data-center', label: 'Data Center' },
   { id: 'engine-monitor', label: 'Engine Monitor' },
   { id: 'research', label: 'Research & Backtests' },
@@ -86,6 +88,7 @@ function Shell() {
         {tab === 'mission-control' && <MissionControl />}
         {tab === 'live-signals' && <LiveSignals />}
         {tab === 'forward-demo' && <ForwardDemo />}
+        {tab === 'execution-quality' && <ExecutionQuality />}
         {tab === 'data-center' && <DataCenter />}
         {tab === 'engine-monitor' && <EngineMonitor />}
         {tab === 'research' && <ResearchBacktests />}

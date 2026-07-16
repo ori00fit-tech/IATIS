@@ -4,8 +4,9 @@ import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
-import type { CacheStatus } from './api'
-import { getDataHealth } from './api'
+import type { CacheStatus, DataConfidenceCheck } from './api'
+import { getDataConfidence, getDataHealth } from './api'
+import { DataTable, type Column } from '../../components/DataTable'
 import { getProviderChains } from '../system-audit/api'
 import { getJobDetail, runJob, type JobDetail, type JobStatus } from '../experiment-runner/api'
 import { reportDownloadUrl } from '../reports/api'
@@ -85,6 +86,7 @@ export function DataCenter() {
   const { markUnauthenticated } = useAuth()
   const { data, loading, error } = usePolling(getDataHealth, POLL_MS, markUnauthenticated)
   const chains = usePolling(getProviderChains, POLL_MS * 5, markUnauthenticated)
+  const confidence = usePolling(getDataConfidence, POLL_MS, markUnauthenticated)
 
   const timeframeSet = new Set<string>()
   data?.symbols.forEach((s) => Object.keys(s.timeframes).forEach((tf) => timeframeSet.add(tf)))
@@ -212,6 +214,46 @@ export function DataCenter() {
           </div>
         )}
       </Panel>
+
+      <Panel
+        title="Cross-Provider Data Confidence"
+        right={
+          confidence.data
+            ? `${confidence.data.n} check(s) · ${confidence.data.material_disagreements} material`
+            : undefined
+        }
+      >
+        {confidence.data && confidence.data.checks.length > 0 ? (
+          <>
+            <DataTable columns={confidenceColumns} rows={confidence.data.checks} rowKey={(c) => `${c.ts}-${c.symbol}`} />
+            <p className="px-4 py-2 text-[0.72em] text-muted border-t border-border">{confidence.data.note}</p>
+          </>
+        ) : (
+          <Empty>
+            {confidence.loading
+              ? 'Loading...'
+              : 'No checks recorded yet. Enable features.data_confidence_check in config.yaml — the scheduler then cross-checks ONE symbol per run (round-robin) between the top two providers in its chain (~1-2 extra provider calls per run). Reading this panel never triggers fetches.'}
+          </Empty>
+        )}
+      </Panel>
     </div>
   )
 }
+
+const confidenceColumns: Column<DataConfidenceCheck>[] = [
+  { header: 'When (UTC)', render: (c) => c.ts.slice(0, 19).replace('T', ' ') },
+  { header: 'Symbol', render: (c) => <span className="text-accent font-bold">{c.symbol}</span> },
+  { header: 'TF', render: (c) => c.interval },
+  { header: 'Providers', render: (c) => `${c.provider_a ?? '?'} vs ${c.provider_b ?? '?'}` },
+  { header: 'Bars', render: (c) => c.bars_common ?? '—', align: 'right' },
+  { header: 'Mean Δ%', render: (c) => (c.mean_diff_pct != null ? c.mean_diff_pct.toFixed(4) : '—'), align: 'right' },
+  { header: 'Max Δ%', render: (c) => (c.max_diff_pct != null ? c.max_diff_pct.toFixed(3) : '—'), align: 'right' },
+  {
+    header: 'Verdict',
+    render: (c) => (
+      <Badge tone={c.verdict.startsWith('MATERIAL') ? 'poor' : c.verdict.startsWith('MINOR') ? 'marginal' : 'good'}>
+        {c.verdict}
+      </Badge>
+    ),
+  },
+]

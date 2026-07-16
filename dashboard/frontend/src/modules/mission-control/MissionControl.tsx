@@ -16,6 +16,8 @@ import {
   getAiNewsAnalysis,
   getAiMacroAnalysis,
   getAiDailyReport,
+  getMarketHealth,
+  type MarketHealth,
   type SymbolHealthEntry,
   type OutcomesSummary,
   type AiNewsAnalysis,
@@ -164,6 +166,42 @@ function PaperTradingPanel({ outcomes }: { outcomes: OutcomesSummary | null }) {
   )
 }
 
+// Market Health (gap analysis A4): the monitoring read-out — data-layer
+// and storage vitals in one row. Explicitly NOT a gate: nothing here can
+// block or downgrade a decision.
+function ageLabel(seconds: number | null): string {
+  if (seconds === null) return '—'
+  if (seconds < 90) return `${Math.round(seconds)}s`
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m`
+  return `${(seconds / 3600).toFixed(1)}h`
+}
+
+function MarketHealthStrip({ mh }: { mh: MarketHealth | null }) {
+  // Scheduler heartbeat proxy: the interval is 120min — alert color at 2x.
+  const ageTone =
+    mh?.lastDecisionAgeSeconds == null ? 'default' : mh.lastDecisionAgeSeconds > 2 * 120 * 60 ? 'red' : 'green'
+  const schemaOk = mh != null && mh.schemaVersion != null && mh.schemaVersion === mh.schemaLatest
+  return (
+    <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
+      <KpiCard value={mh ? (mh.d1Up ? 'UP' : 'DOWN') : '—'} label="Storage (D1)" color={mh ? (mh.d1Up ? 'green' : 'red') : 'default'} />
+      <KpiCard
+        value={mh?.d1LatencySeconds != null ? `${Math.round(mh.d1LatencySeconds * 1000)}ms` : '—'}
+        label="D1 Latency"
+        color={mh?.d1LatencySeconds != null && mh.d1LatencySeconds > 2 ? 'amber' : 'default'}
+      />
+      <KpiCard value={ageLabel(mh?.lastDecisionAgeSeconds ?? null)} label="Last Decision Age" color={ageTone as 'red' | 'green' | 'default'} />
+      <KpiCard value={mh?.decisionsTotal ?? '—'} label="Decisions Total" color="blue" />
+      <KpiCard value={mh?.executeTotal ?? '—'} label="Execute Signals" color="purple" />
+      <KpiCard value={mh?.fillsTotal ?? '—'} label="Real Fills (TCA)" color="amber" />
+      <KpiCard
+        value={mh?.schemaVersion != null ? `v${mh.schemaVersion}${schemaOk ? '' : ` / v${mh.schemaLatest}`}` : '—'}
+        label="Schema Version"
+        color={mh?.schemaVersion == null ? 'default' : schemaOk ? 'green' : 'red'}
+      />
+    </div>
+  )
+}
+
 export function MissionControl() {
   const { markUnauthenticated } = useAuth()
   const health = usePolling(getHealth, POLL_MS, markUnauthenticated)
@@ -171,6 +209,7 @@ export function MissionControl() {
   const budget = usePolling(getBudget, POLL_MS, markUnauthenticated)
   const symbolHealth = usePolling(getSymbolHealth, POLL_MS, markUnauthenticated)
   const outcomes = usePolling(getOutcomes, POLL_MS, markUnauthenticated)
+  const marketHealth = usePolling(getMarketHealth, POLL_MS * 2, markUnauthenticated)
 
   const hf = healthFull.data
   const creditsColor = (budget.data?.remaining_today ?? 0) > 400 ? 'green' : (budget.data?.remaining_today ?? 0) > 100 ? 'amber' : 'red'
@@ -216,6 +255,8 @@ export function MissionControl() {
           {healthFull.loading ? 'Checking system health...' : hf?.status === 'degraded' ? `Degraded — ${hf.issues.join('; ')}` : `All systems nominal · v${health.data?.version ?? '?'}`}
         </span>
       </div>
+
+      <MarketHealthStrip mh={marketHealth.data} />
 
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(140px,1fr))]">
         <KpiCard value={pct(hf?.system?.cpu_pct)} label="CPU" color={hf && hf.system && hf.system.cpu_pct > 80 ? 'red' : 'default'} />

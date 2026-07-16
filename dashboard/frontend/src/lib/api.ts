@@ -35,3 +35,12 @@ export function apiGet<T>(path: string, params?: Record<string, string | number 
 export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 }
+
+/** GET a text/plain endpoint (the Prometheus /metrics exposition). */
+export async function apiGetText(path: string): Promise<string> {
+  const res = await fetch(path, { credentials: 'include' })
+  if (!res.ok) {
+    throw new ApiError(res.status, `${res.status} ${path}`)
+  }
+  return res.text()
+}

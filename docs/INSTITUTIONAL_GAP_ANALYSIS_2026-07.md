@@ -447,6 +447,122 @@ What would move the overall score fastest, in order:
 
 ---
 
+## Addendum — response to operator review (2026-07-16)
+
+The operator reviewed this report, endorsed the TCA → Provenance → Replay
+priority order, and proposed four additions. Each was evaluated against the
+same evidence bar the rest of this document uses. Two are adopted (folded into
+existing recommendations), one is adopted in reduced form, and one is adopted
+as **monitoring-only** with an explicit warning. The scoring yardstick is also
+clarified.
+
+### A1. Market microstructure awareness (spread/liquidity/session regimes) — ADOPTED as a TCA dimension, not a new gate
+
+The observation is correct: London open and the Asian session are different
+markets, and spread regime matters more than most indicators. But the two
+halves of this proposal have very different statuses:
+
+- **As measurement: adopted.** The TCA ledger (M1) gains required dimensions:
+  every fill records `session` (from the existing `regimes/session_context.py`),
+  spread-at-fill where the broker event exposes it, and hour-of-day. The TCA
+  report then publishes slippage and spread *by session* — which is exactly how
+  an institution would discover that, e.g., XAUUSD fills around London open
+  cost 3× the assumption. This costs three columns and zero new concepts.
+  (Verified gap: neither `outcome_tracker.py` nor the backtest engine currently
+  tags outcomes with a session.)
+- **As a decision input: refused without pre-registration.** A session/spread
+  gate in the pipeline is a threshold change — it resets the forward sample
+  (rule 6) and needs its own H-entry with a chronological-OOS rule. Note also
+  that the H4 decision cadence already dilutes intraday session effects at the
+  *entry* level (H008b's London-session filter is on the dead list, ABANDONED),
+  while leaving them fully intact at the *execution* level — which is precisely
+  where the TCA dimension captures them without touching the strategy.
+
+### A2. Feature store — REJECTED as proposed; the underlying defect is real and gets a cheaper fix
+
+Institutional feature stores solve training/serving skew and cross-team feature
+reuse at scale — problems this system does not have (one process, H4 cadence,
+13s/run, no ML consumers). A store would add a cache-consistency failure mode
+in exchange for solving nothing measured. **However**, the concern behind the
+proposal is verified and legitimate: ATR is independently reimplemented in at
+least seven modules (`quant_engine.py`, `wyckoff_engine.py`, `smc_engine.py`,
+`price_action_engine.py`, `core/market_quality.py`,
+`regimes/volatility_classifier.py`, `backtesting/backtest_engine.py`). Seven
+implementations is seven chances for a silent divergence between what the
+gates see and what the backtest simulated.
+
+**Adopted replacement:** a single `utils/indicators.py` (ATR, ADX, RSI, EMA)
+with property tests, migrated to module-by-module **behind the Phase-2 replay
+harness** — each migration must reproduce stored decisions bit-for-bit before
+merging. Scheduled inside Phase 2 (it is exactly the kind of behavior-frozen
+refactor the replay corpus exists to make safe). No caching layer until a
+measurement says recomputation costs something.
+
+### A3. Data versioning — ADOPTED; folded into M2 and S3
+
+Agreed, and it sharpens two existing items rather than adding a new one:
+
+- **M2 (decision provenance)** is extended: the per-decision `bars_fingerprint`
+  becomes a structured record per timeframe — `{provider, first_ts, last_ts,
+  row_count, sha256}` — instead of a bare hash. Same migration, one JSON column.
+- **S3 (artifact archiving)** is extended: research datasets are archived with
+  the same record, and `research/manifest.py` already has the natural home for
+  it. This is also the missing piece that would have made the July live
+  addendum's data-starvation incident diagnosable from the decision rows alone
+  (row_count=125 H4 bars would have been visible in every stored decision).
+
+### A4. Composite "Market Health Score" — components ADOPTED (S1+S5), the composite gate REFUSED until pre-registered
+
+Everything proposed as an input — spread, latency, missing candles, provider
+confidence, news proximity, broker status — is worth measuring, and S1 (runtime
+data confidence) + S5 (metrics endpoint) between them cover the full list; this
+addendum makes that explicit by naming the combined dashboard read-out a
+**Market Health panel** (per symbol: data confidence, provider, staleness,
+spread vs baseline, broker connectivity, news window).
+
+What it must **not** become without evidence is a new Gate 0 in the decision
+path. The pipeline already has a market-quality gate (session + ATR + trend
+clarity); adding a second composite gate on top is (a) a threshold change that
+resets the forward counter, (b) un-attributable when it fires ("health 93%" —
+which input vetoed?), and (c) exactly the shape of packaging whose marginal
+value this project has repeatedly measured at ≈ 0. If, after the Market Health
+panel accumulates history alongside the shadow book, some component visibly
+correlates with bad outcomes — *that* is a pre-registered hypothesis with a
+decision rule, and the shadow-book method will price what the new gate saves
+or costs. Until then: monitor, alert, never gate.
+
+### A5. On the 60/100 score — yardstick clarification
+
+The operator finds 60 low relative to open-source trading systems, and that is
+correct: against the GitHub population, IATIS's research governance,
+experimental discipline, and auditability are comfortably top-decile — a
+peer-relative score would land far higher. This report deliberately did not
+use that yardstick. The scale here is "could a professional firm run this
+tomorrow" (the Step-9 header), on which unmeasured execution costs, n<40
+forward evidence, and root services are gating facts regardless of peer
+quality. Both statements are true simultaneously; the number that matters for
+decisions is the absolute one, because D002 — not a GitHub comparison — is
+what opens the live-capital discussion.
+
+### Revised Phase-1/2 ordering (operator-endorsed, dependencies preserved)
+
+1. **S4** schema versioning *(unchanged first position — M1 and M2 both add
+   tables/columns and are unsafe without it)*
+2. **M1** TCA ledger — now with per-session/spread dimensions (A1)
+3. **M2** decision provenance — now with structured per-TF data versions (A3)
+4. **S2** replay harness
+5. **S5** metrics endpoint + Market Health panel read-out (A4, monitoring-only)
+6. **S1** runtime data confidence
+7. **M4** non-root migration + rotation closure + restore rehearsal
+8. **S3** artifact archive with dataset version records (A3)
+9. Phase-2 refactors behind replay: `run_pipeline` split, then `utils/indicators.py`
+   consolidation (A2)
+
+M3 (scheduled reconciliation) stays in Phase 1 as originally specified — it is
+independent of this ordering and can land any time.
+
+---
+
 ## References
 
 - Perold, A. (1988). "The Implementation Shortfall: Paper Versus Reality."

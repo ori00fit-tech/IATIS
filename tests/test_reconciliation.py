@@ -118,3 +118,33 @@ def test_empty_both_sides_is_a_match(broker, internal):
     broker([])
     internal([])
     assert reconcile(LIVE_CFG)["status"] == "match"
+
+
+def test_store_and_read_roundtrip(fake_d1, broker, internal):
+    from execution.reconciliation import last_result, store_result
+
+    broker(["EURUSD", "BTCUSD"])
+    internal(["EURUSD"])
+    rec = reconcile(LIVE_CFG)
+    store_result(rec)
+
+    stored = last_result()
+    assert stored is not None
+    assert stored["status"] == "mismatch"
+    assert stored["broker_only"] == ["BTCUSD"]
+    assert stored["n_broker"] == 2 and stored["n_internal"] == 1
+
+
+def test_last_result_none_when_empty(fake_d1):
+    from execution.reconciliation import last_result
+    assert last_result() is None
+
+
+def test_store_never_raises_on_d1_outage(monkeypatch):
+    from execution import reconciliation as rc
+
+    def boom():
+        raise RuntimeError("worker down")
+
+    monkeypatch.setattr("storage.d1_client.d1_connection", boom)
+    rc.store_result({"status": "match", "checked_at": "t"})  # must not raise

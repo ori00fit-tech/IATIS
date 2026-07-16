@@ -259,3 +259,13 @@ def test_execution_quality_contract(client):
     data = r.json()
     assert data["backtest_assumption_pips"] == 0.5
     assert "overall" in data and "by_symbol" in data and "by_session" in data
+
+
+def test_reconciliation_requires_auth(client):
+    assert client.get("/reconciliation").status_code == 401
+
+
+def test_reconciliation_empty_contract(client):
+    r = client.get("/reconciliation", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["status"] == "none"

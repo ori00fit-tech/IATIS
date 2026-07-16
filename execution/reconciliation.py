@@ -98,6 +98,80 @@ def reconcile(config: dict) -> dict[str, Any]:
     return report
 
 
+# ---------------------------------------------------------------------------
+# Persistence — the dashboard reads STORED results only. The API server
+# process must never call reconcile() itself: get_shared_ctrader_client()
+# would open a SECOND cTrader session and fight the scheduler's over the
+# single per-account slot (the documented ALREADY_LOGGED_IN storm,
+# diagnosed 2026-07-14). The scheduler owns the session, so the scheduler
+# stores; everyone else reads.
+# ---------------------------------------------------------------------------
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS reconciliation_checks (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    reason        TEXT,
+    broker_only   TEXT,
+    internal_only TEXT,
+    n_broker      INTEGER,
+    n_internal    INTEGER
+)
+"""
+
+
+def store_result(report: dict[str, Any]) -> None:
+    """Persist one reconcile() report (scheduler-only caller). Never raises."""
+    try:
+        import json
+
+        from storage import d1_client
+        with d1_client.d1_connection() as con:
+            con.execute(_DDL)
+            con.execute(
+                """INSERT INTO reconciliation_checks
+                   (ts, status, reason, broker_only, internal_only, n_broker, n_internal)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    report.get("checked_at"),
+                    report.get("status", "unknown"),
+                    report.get("reason"),
+                    json.dumps(report.get("broker_only", [])),
+                    json.dumps(report.get("internal_only", [])),
+                    report.get("n_broker"),
+                    report.get("n_internal"),
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001 — monitoring must not kill the run
+        logger.warning(f"reconciliation: store failed (non-fatal): {exc}")
+
+
+def last_result() -> dict[str, Any] | None:
+    """Most recent stored reconciliation report (dashboard/endpoint reader)."""
+    import json
+
+    from storage import d1_client
+    with d1_client.d1_connection() as con:
+        con.execute(_DDL)
+        row = con.execute(
+            "SELECT ts, status, reason, broker_only, internal_only, "
+            "n_broker, n_internal FROM reconciliation_checks "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "checked_at": row["ts"],
+        "status": row["status"],
+        "reason": row["reason"],
+        "broker_only": json.loads(row["broker_only"] or "[]"),
+        "internal_only": json.loads(row["internal_only"] or "[]"),
+        "n_broker": row["n_broker"],
+        "n_internal": row["n_internal"],
+    }
+
+
 def format_alert(report: dict[str, Any]) -> str:
     """Telegram-ready mismatch message."""
     return (

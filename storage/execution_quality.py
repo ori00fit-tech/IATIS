@@ -244,6 +244,16 @@ def summary() -> dict[str, Any]:
                 "SELECT symbol, session, slippage_pips, slippage_r FROM fills"
             ).fetchall()
         ]
+        recent_cols = ("ts", "symbol", "direction", "session", "intended_price",
+                       "fill_price", "slippage_pips", "slippage_r", "trade_id")
+        recent = [
+            {k: r[k] for k in recent_cols}
+            for r in con.execute(
+                "SELECT ts, symbol, direction, session, intended_price, "
+                "fill_price, slippage_pips, slippage_r, trade_id "
+                "FROM fills ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        ]
 
     by_symbol: dict[str, list[dict]] = {}
     by_session: dict[str, list[dict]] = {}
@@ -256,6 +266,7 @@ def summary() -> dict[str, Any]:
         "overall": _bucket(rows),
         "by_symbol": {s: _bucket(v) for s, v in sorted(by_symbol.items())},
         "by_session": {s: _bucket(v) for s, v in sorted(by_session.items())},
+        "recent": recent,
         "note": (
             "Adverse-positive, in backtest pip units — directly comparable "
             "to BacktestConfig.slippage_pips. mean_slippage_r is the cost "

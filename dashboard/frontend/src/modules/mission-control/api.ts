@@ -173,3 +173,20 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     schemaLatest: get('iatis_schema_version_latest'),
   }
 }
+
+// Broker-vs-internal position reconciliation (gap analysis M3). Read-only:
+// the scheduler (which owns the single cTrader session) stores a result
+// every tick; this endpoint only reads the latest stored row.
+export interface ReconciliationResult {
+  status: 'match' | 'mismatch' | 'skipped' | 'none'
+  checked_at?: string
+  reason?: string | null
+  broker_only?: string[]
+  internal_only?: string[]
+  n_broker?: number | null
+  n_internal?: number | null
+}
+
+export function getReconciliation(): Promise<ReconciliationResult> {
+  return apiGet<ReconciliationResult>('/reconciliation')
+}

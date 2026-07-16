@@ -301,8 +301,9 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # with the standard per-key cooldown on any mismatch.
         if config.get("features", {}).get("broker_reconciliation", True):
             try:
-                from execution.reconciliation import format_alert, reconcile
+                from execution.reconciliation import format_alert, reconcile, store_result
                 rec = reconcile(config)
+                store_result(rec)  # the dashboard reads STORED results only
                 if rec.get("status") == "mismatch":
                     _send_error_once(key="reconciliation", message=format_alert(rec))
             except Exception as exc:

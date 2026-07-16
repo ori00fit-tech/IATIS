@@ -15,11 +15,24 @@ export interface SlippageBucket {
   mean_slippage_r?: number | null
 }
 
+export interface RecentFill {
+  ts: string
+  symbol: string
+  direction: string
+  session: string | null
+  intended_price: number
+  fill_price: number
+  slippage_pips: number
+  slippage_r: number | null
+  trade_id: string | null
+}
+
 export interface ExecutionQualityReport {
   backtest_assumption_pips: number
   overall: SlippageBucket
   by_symbol: Record<string, SlippageBucket>
   by_session: Record<string, SlippageBucket>
+  recent: RecentFill[]
   note: string
 }
 

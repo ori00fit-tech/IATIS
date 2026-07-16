@@ -60,3 +60,26 @@ roadmap placeholders instead of mock screens.
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture
 rationale.
+
+## Shell hardening (command-center layer)
+
+Cross-cutting improvements to the console frame itself, independent of any
+one module:
+
+- **Per-module error isolation** (`components/ErrorBoundary.tsx`): a
+  render-time throw in one module shows a recoverable fallback in that panel
+  only — it no longer white-screens the whole console. The boundary resets
+  automatically when you switch tabs.
+- **Visibility-aware polling** (`lib/usePolling.ts`): every poller pauses
+  while the browser tab is backgrounded and fires one catch-up fetch on
+  refocus. This stops ~26 always-on pollers from spending the budgeted API
+  credits Mission Control tracks while nobody is watching. The header shows a
+  **Live / Paused** pill reflecting the current state.
+- **Deep-linkable, restorable tabs** (`lib/useHashTab.ts`): the active module
+  lives in the URL hash (`#/engine-monitor`) and mirrors to localStorage —
+  shareable links, working back/forward, and the console reopens where you
+  left it instead of always on Mission Control.
+- **Command palette** (`components/CommandPalette.tsx`): `⌘K` / `Ctrl-K`
+  opens a fuzzy jump-to-module switch over all 15 modules — arrow keys +
+  Enter, never leaving the keyboard. Tab definitions are centralized in
+  `lib/tabs.ts`.

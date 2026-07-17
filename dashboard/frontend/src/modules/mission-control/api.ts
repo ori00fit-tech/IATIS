@@ -10,6 +10,18 @@ export interface Health {
 
 // Paper-trading evidence tracker (audit Phase 5): live outcomes are the
 // only path to a defensible edge claim — this makes the counter visible.
+// Just the closed-row fields the Evidence Progress panel needs to recompute a
+// realized drawdown (kept minimal to avoid a circular import with risk-center).
+export interface ClosedOutcomeRow {
+  direction: string
+  entry_price: number | null
+  stop_loss: number | null
+  exit_price: number | null
+  exit_time: string | null
+  outcome: string
+  pnl_pips: number | null
+}
+
 export interface OutcomesSummary {
   summary: {
     total_closed: number
@@ -18,8 +30,12 @@ export interface OutcomesSummary {
     win_rate: number
     total_pips: number
     open_signals: number
+    // Present since the /outcomes extension — optional so older shapes still type.
+    profit_factor?: number | 'Infinity' | null
+    avg_r_multiple?: number | null
   }
   open_signals: unknown[]
+  recent?: ClosedOutcomeRow[]
 }
 
 export interface HealthFull {
@@ -96,7 +112,9 @@ export const getHealth = () => apiGet<Health>('/health')
 export const getHealthFull = () => apiGet<HealthFull>('/health/full')
 export const getBudget = () => apiGet<Budget>('/budget')
 export const getSymbolHealth = () => apiGet<SymbolHealthResponse>('/symbol-health')
-export const getOutcomes = () => apiGet<OutcomesSummary>('/outcomes')
+// limit=200 gives the Evidence Progress panel enough closed history to
+// recompute a realized drawdown; the summary block is always whole-book.
+export const getOutcomes = () => apiGet<OutcomesSummary>('/outcomes', { limit: 200 })
 
 // AI briefing (ai/ai_analyzer.py) — explanation/reporting only, fetched
 // on demand (not polled: unlike the widgets above these hit an external

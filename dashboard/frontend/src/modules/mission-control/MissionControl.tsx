@@ -8,6 +8,7 @@ import { StatusRow } from '../../components/StatusDot'
 import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
 import { ExecutiveOverview } from './ExecutiveOverview'
+import { EvidenceProgress } from './EvidenceProgress'
 import { getDataHealth } from '../data-center/api'
 import {
   getHealth,
@@ -23,7 +24,6 @@ import {
   type MarketHealth,
   type ReconciliationResult,
   type SymbolHealthEntry,
-  type OutcomesSummary,
   type AiNewsAnalysis,
   type AiMacroAnalysis,
   type AiDailyReport,
@@ -127,48 +127,6 @@ function AiBriefingPanel() {
   )
 }
 
-// Below this sample size, win rate is noise (this panel's own caption says
-// so) — coloring it green/amber implies a read on performance that isn't
-// statistically there yet, so it stays neutral until n clears the bar.
-const MIN_SIGNIFICANT_N = 30
-
-function PaperTradingPanel({ outcomes }: { outcomes: OutcomesSummary | null }) {
-  const s = outcomes?.summary
-  const closed = s?.total_closed ?? 0
-  const progress = Math.min(100, Math.round((closed / EVIDENCE_TARGET) * 100))
-  const wrColor = closed < MIN_SIGNIFICANT_N ? 'text-text' : s && s.win_rate >= 50 ? 'text-green' : 'text-amber'
-  return (
-    <Panel
-      title="Paper Trading Evidence"
-      right={`target: ${EVIDENCE_TARGET} closed trades`}
-    >
-      {s ? (
-        <div className="p-4 flex flex-col gap-3">
-          <div className="flex items-baseline gap-4 flex-wrap">
-            <span className="text-[1.6em] font-extrabold text-accent">{closed}<span className="text-muted text-[0.55em] font-normal"> / {EVIDENCE_TARGET} closed</span></span>
-            <span className="text-[0.85em]">
-              WR{' '}
-              <b className={wrColor} title={closed < MIN_SIGNIFICANT_N ? `n=${closed} — below n=${MIN_SIGNIFICANT_N}, not yet statistically meaningful` : undefined}>
-                {closed ? `${s.win_rate.toFixed(1)}%` : '—'}
-              </b>
-            </span>
-            <span className="text-[0.85em]">W/L <b>{s.wins}/{s.losses}</b></span>
-            <span className="text-[0.85em]">open <b className="text-accent2">{s.open_signals}</b></span>
-          </div>
-          <div className="h-2 rounded bg-surface border border-border overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-accent to-accent2" style={{ width: `${progress}%` }} />
-          </div>
-          <p className="text-muted text-[0.75em]">
-            Live forward outcomes are the only proof of edge — backtests here are in-sample.
-            Statistics below n≈30 are noise; treat everything before the target as data collection.
-          </p>
-        </div>
-      ) : (
-        <Empty>No outcome data yet</Empty>
-      )}
-    </Panel>
-  )
-}
 
 // Market Health (gap analysis A4): the monitoring read-out — data-layer
 // and storage vitals in one row. Explicitly NOT a gate: nothing here can
@@ -380,7 +338,7 @@ export function MissionControl() {
         </Panel>
       </div>
 
-      <PaperTradingPanel outcomes={outcomes.data} />
+      <EvidenceProgress outcomes={outcomes.data} />
 
       <AiBriefingPanel />
     </div>

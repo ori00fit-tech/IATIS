@@ -59,7 +59,7 @@ export function systemHealthScore(hf: HealthFull | null, mh: MarketHealth | null
 
 /** Can I trust the inputs? cache completeness weighted by severity. */
 export function dataQualityScore(dh: DataHealthResponse | null): Score {
-  if (!dh) return { value: null, why: 'awaiting /data-health' }
+  if (!dh || !dh.summary) return { value: null, why: 'awaiting /data-health' }
   const su = dh.summary
   const total = su.ok + su.stale + su.gaps + (su.starved ?? 0) + su.missing
   if (total === 0) return { value: null, why: 'no symbols tracked' }

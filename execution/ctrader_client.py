@@ -729,10 +729,37 @@ class CTraderClient:
         self._set_state(ConnectionState.ERROR)
 
     def _on_disconnect(self, client: Any, reason: Any) -> None:
+        # Ignore callbacks from a superseded client. A stale connection torn
+        # down before a reconnect (see _stop_client) must not clobber the live
+        # connection's state or kick off a second reconnect loop — that overlap
+        # is exactly what produced the ALREADY_LOGGED_IN / fd-leak storm.
+        if client is not None and client is not self._client:
+            logger.debug("Ignoring disconnect from a superseded cTrader client.")
+            return
         self._set_state(ConnectionState.DISCONNECTED)
         logger.warning(f"⚠️ Disconnected: {reason}")
         if not self._intentional_disconnect:
             self._schedule_reconnect()
+
+    def _stop_client(self, client: Any) -> None:
+        """Best-effort teardown of a previous Twisted Client's service + socket.
+
+        Called before every connect(): each connect() creates a fresh Client,
+        and without stopping the old one a reconnect storm leaked file
+        descriptors (observed live: OSError [Errno 24] "Too many open files"
+        after hours of retries) and left a half-alive session the broker
+        rejected as ALREADY_LOGGED_IN. stopService is idempotent/safe on an
+        already-dead client; the disconnect callback it fires is ignored by the
+        superseded-client guard in _on_disconnect.
+        """
+        if client is None:
+            return
+        try:
+            from twisted.internet import reactor
+            if reactor.running:
+                reactor.callFromThread(client.stopService)
+        except Exception as exc:
+            logger.debug(f"Stale cTrader client teardown skipped: {exc}")
 
     def _schedule_reconnect(self) -> None:
         """Retry connect() with bounded exponential backoff.
@@ -809,6 +836,16 @@ class CTraderClient:
         try:
             from ctrader_open_api import Client, TcpProtocol
             from twisted.internet import reactor
+
+            # Release any previous client before creating a new one. Each
+            # connect() spins up a fresh Client/socket; without tearing down the
+            # old one a reconnect storm leaks file descriptors and leaves a
+            # half-alive session the broker rejects as ALREADY_LOGGED_IN. Null
+            # it first so the teardown's disconnect callback is treated as
+            # superseded (see _on_disconnect) and can't clobber the new state.
+            if self._client is not None:
+                stale, self._client = self._client, None
+                self._stop_client(stale)
 
             client = Client(self.host, self.PORT, TcpProtocol)
             self._client = client

@@ -1,9 +1,6 @@
 import { RoadmapCard } from '../../components/RoadmapCard'
 
 const PLANNED = [
-  { title: 'Risk Center', note: 'Exposure, drawdown, portfolio heat — planned v2' },
-  { title: 'Backtesting Charts', note: 'Equity curve, Monte Carlo, walk-forward — planned v2' },
-  { title: 'AI Decision Center', note: 'Explain-only layer, per VISION_v2.md constraints — planned v2' },
   { title: 'News Intelligence', note: 'Calendar countdown, blackout windows — planned v2' },
   { title: 'Execution Center', note: 'cTrader open/closed orders, execution log — planned v2' },
   { title: 'Cloudflare Panel', note: 'Requests, cache, firewall — needs Cloudflare API integration' },

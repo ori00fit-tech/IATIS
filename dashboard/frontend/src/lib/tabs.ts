@@ -11,6 +11,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'mission-control', label: 'Mission Control', hint: 'System health, credits, paper-trading evidence', glyph: '◎' },
   { id: 'live-signals', label: 'Live Signals', hint: 'Recent pipeline decisions + open paper signals', glyph: '⚡' },
   { id: 'forward-demo', label: 'Forward Demo', hint: 'D001/D002 forward rules + shadow-book gate ledger', glyph: '▮' },
+  { id: 'risk-center', label: 'Risk Center', hint: 'Exposure, RR compliance, R-distribution, per-symbol risk', glyph: '⛨' },
   { id: 'execution-quality', label: 'Execution Quality', hint: 'Real fills, slippage, TCA', glyph: '◈' },
   { id: 'data-center', label: 'Data Center', hint: 'OHLCV cache completeness, provider chains', glyph: '⛁' },
   { id: 'engine-monitor', label: 'Engine Monitor', hint: 'Per-engine votes, accuracy, weights', glyph: '⚙' },

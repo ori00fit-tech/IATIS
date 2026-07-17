@@ -200,6 +200,9 @@ _FRED_SERIES = {
     "US10Y": "DGS10",
     "US02Y": "DGS2",
     "SPY":   "SP500",
+    # LBMA Gold Fixing 10:30 AM (London), USD — the free official gold price
+    # series, a trusted replacement for the Yahoo GLD ETF proxy (2026-07-17).
+    "GLD":   "GOLDAMGBD228NLBM",
 }
 
 
@@ -280,11 +283,13 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
     Used by the Macro Engine to compute DXY trend, risk-on/off state,
     and yield curve signals.
 
-    Source order per series (official first, Yahoo as fallback):
-        VIX   : CBOE CSV → FRED VIXCLS → Yahoo ^VIX
-        DXY   : FRED DTWEXBGS (broad-dollar proxy) → Yahoo DX-Y.NYB
-        US10Y : FRED DGS10 → Yahoo ^TNX     US02Y: FRED DGS2 → Yahoo ^IRX
-        SPY   : Yahoo SPY → FRED SP500      GLD  : Yahoo GLD
+    Source order per series — trusted, official sources only (Yahoo removed
+    2026-07-17 as an untrusted price feed; every macro series now has a free
+    official source, so no Yahoo fallback is needed):
+        VIX   : CBOE CSV → FRED VIXCLS
+        DXY   : FRED DTWEXBGS (broad-dollar proxy)
+        US10Y : FRED DGS10          US02Y: FRED DGS2
+        SPY   : FRED SP500          GLD  : FRED GOLDAMGBD228NLBM (LBMA gold)
     """
     import time as _time
 
@@ -297,23 +302,21 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
             and _time.time() - _SNAPSHOT_CACHE["at"] < _SNAPSHOT_TTL_S):
         return _SNAPSHOT_CACHE["data"]
 
-    def _yahoo(sym: str) -> pd.DataFrame:
-        return load_from_yfinance(sym, interval="D1", period="6mo")
-
     def _fred(sym: str) -> pd.DataFrame:
         return load_from_fred(_FRED_SERIES[sym])
 
     _SOURCES: dict[str, list] = {
-        "VIX":   [("cboe", lambda s: load_vix_from_cboe()), ("fred", _fred), ("yahoo", _yahoo)],
-        "DXY":   [("fred", _fred), ("yahoo", _yahoo)],
-        "US10Y": [("fred", _fred), ("yahoo", _yahoo)],
-        "US02Y": [("fred", _fred), ("yahoo", _yahoo)],
-        "SPY":   [("yahoo", _yahoo), ("fred", _fred)],
+        "VIX":   [("cboe", lambda s: load_vix_from_cboe()), ("fred", _fred)],
+        "DXY":   [("fred", _fred)],
+        "US10Y": [("fred", _fred)],
+        "US02Y": [("fred", _fred)],
+        "SPY":   [("fred", _fred)],
+        "GLD":   [("fred", _fred)],
     }
 
     snapshot = {}
     for sym in symbols:
-        for source_name, fetch in _SOURCES.get(sym, [("yahoo", _yahoo)]):
+        for source_name, fetch in _SOURCES.get(sym, []):
             try:
                 df = fetch(sym)
                 if df is None or df.empty:

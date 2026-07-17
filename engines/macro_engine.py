@@ -9,12 +9,14 @@ This engine doesn't analyze price patterns. It analyzes:
 3. Yield Curve: US10Y vs US02Y spread — recession indicator
 4. VIX: fear gauge — high = defensive, low = risk-seeking
 
-The Macro Engine uses Yahoo Finance for daily data on these indices
-(via core/alt_data_loader.py). It runs once per day on D1 data, not
-on every H1 bar — macro context doesn't change intraday.
+The Macro Engine uses trusted official sources for daily data on these
+indices (CBOE for VIX, FRED for DXY/SPY/GLD via core/alt_data_loader.py's
+load_macro_snapshot). It runs once per day on D1 data, not on every H1
+bar — macro context doesn't change intraday.
 
 Phase 3 implementation: real logic with real data.
-Requires: yfinance installed, network access to Yahoo Finance.
+Requires: network access to CBOE / FRED (FRED_API_KEY optional — the
+keyless fredgraph.csv export is used when it's absent).
 Gracefully degrades to NEUTRAL if data unavailable.
 """
 
@@ -127,46 +129,37 @@ class MacroEngine(BaseEngine):
     name = "Macro"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
-        """Analyze macro context. Uses Yahoo Finance for DXY/SPY/VIX/GLD.
+        """Analyze macro context from trusted official sources.
 
         mtf_data is used only to determine the instrument being analyzed
         (via the symbol in the raw dict from a previous engine, if available).
-        The macro data itself comes from Yahoo Finance.
+        The macro series (DXY/SPY/VIX/GLD) come from CBOE + FRED via
+        load_macro_snapshot — Yahoo was removed as an untrusted feed
+        (2026-07-17); every series now has a free official source.
         """
         try:
-            from core.alt_data_loader import load_from_yfinance
+            from core.alt_data_loader import load_macro_snapshot
         except ImportError:
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
                 score=0.0,
-                reasons=["yfinance not installed — Macro engine disabled"],
+                reasons=["Macro loader unavailable — Macro engine disabled"],
             )
 
-        dxy_df = spy_df = vix_df = gld_df = None
-        load_errors = []
-
-        for sym in ["DXY", "SPY", "VIX", "GLD"]:
-            try:
-                df = load_from_yfinance(sym, interval="D1", period="3mo")
-                if sym == "DXY":
-                    dxy_df = df
-                elif sym == "SPY":
-                    spy_df = df
-                elif sym == "VIX":
-                    vix_df = df
-                elif sym == "GLD":
-                    gld_df = df
-            except Exception as exc:
-                load_errors.append(f"{sym}: {exc}")
-                logger.warning(f"Macro data load failed for {sym}: {exc}")
+        snapshot = load_macro_snapshot(["DXY", "SPY", "VIX", "GLD"])
+        dxy_df = snapshot.get("DXY")
+        spy_df = snapshot.get("SPY")
+        vix_df = snapshot.get("VIX")
+        gld_df = snapshot.get("GLD")
+        load_errors = [s for s in ["DXY", "SPY", "VIX", "GLD"] if s not in snapshot]
 
         if all(d is None for d in [dxy_df, spy_df, vix_df, gld_df]):
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
                 score=0.0,
-                reasons=["All macro data unavailable — network issue or yfinance blocked"],
+                reasons=["All macro data unavailable — CBOE/FRED unreachable"],
                 raw={"errors": load_errors},
             )
 

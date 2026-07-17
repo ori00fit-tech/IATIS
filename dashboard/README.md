@@ -42,12 +42,13 @@ roadmap placeholders instead of mock screens.
 
 | Module | Endpoint(s) | Notes |
 |---|---|---|
-| Mission Control | `/health`, `/health/full` (now includes swap, load average, real per-service systemd status — module 1), `/budget`, `/symbol-health` | system status, CPU/RAM/disk/swap/load, credits |
+| Mission Control | `/health`, `/health/full` (now includes swap, load average, real per-service systemd status — module 1), `/budget`, `/symbol-health`, `/data-health` | system status, CPU/RAM/disk/swap/load, credits — topped by the **Executive Overview** (v0.6 §1): six deterministic 0–100 composite scores (System Health, Data Quality, Risk Status live; Decision Quality + Research Integrity on-demand since those audits are expensive; Production Readiness = weakest-link), each deep-linking to the tab that explains it, plus a Research Status card. The evidence tile is now the full **Evidence Progress** panel (v0.6 §2): win rate with a 95% Wilson confidence interval, PF/expectancy/avg-R/realized-max-drawdown, and a sufficiency band — every figure greyed under a "data collection" banner while closed < 30 |
 | Live Signals | `/decisions`, `/outcomes` | recent pipeline decisions + open paper signals |
-| Risk Center *(v0.6.0)* | `/health/full`, `/outcomes`, `/symbol-health`, `/reconciliation` | exposure vs cap, live RR≥2 compliance, realized R-multiple distribution, per-symbol risk scaling. Monitoring only — never gates or sizes |
-| AI Decision Center *(v0.6.0)* | `/decisions`, `/ai/explain-trade` | decision anatomy (regime, confluence vote, fail-reasons, provenance) + explain-only AI narration per VISION_v2 — never generates or alters a signal |
+| Risk Center *(v0.6.0)* | `/health/full`, `/outcomes`, `/symbol-health`, `/reconciliation` | exposure vs cap, live RR≥2 compliance, realized R-multiple distribution, per-symbol risk scaling, plus a **Portfolio Heat** read (v0.6 §6: net directional bias, directional concentration, symbol stacking). Correlation heatmap + risk budgets are deferred (need new backend). Monitoring only — never gates or sizes |
+| AI Decision Center *(v0.6.0)* | `/decisions`, `/ai/explain-trade` | decision anatomy (regime, confluence vote, fail-reasons, provenance) + explain-only AI narration per VISION_v2 — never generates or alters a signal. Now tops with a **Decision Quality rollup** (v0.6 §5): avg confluence, avg meta-confidence, quorum quality (informative-weight share), avg risk sizing, and provenance coverage across the window |
 | Backtesting Charts *(v0.6.0)* | `/backtest-results` (now passes through legacy `equity_curve`), `/outcomes` | SVG equity curve + drawdown, switchable per-symbol metric comparison, score-calibration curve |
 | Data Center | `/data-health`, `/provider-chains` (now includes `recent_usage` from decisions.jsonl and `macro_sources` for CBOE/FRED/CFTC/Alternative.me — module 2) | OHLCV cache completeness per symbol/timeframe |
+| Provider Eval *(v0.6 §3)* | `/provider-chains`, `/data-confidence` | ranks every data provider by a deterministic composite — native decision-TF coverage (dominant, since a resampled/wrong bar poisons decisions), availability, chain-trust, proven usage, cross-provider agreement — with an **advisory** per-asset-class chain order. Providers in no chain are capped (deliver no data). Read-only; never changes a chain |
 | Engine Monitor | `/engine-stats` (now includes `attribution`: approximate per-engine PF/WR, time-window-joined to closed outcomes since there's no shared foreign key — see module 8) | per-engine vote/accuracy stats, current vs. suggested weights |
 | Research & Backtests | `/research`, `/research/{hypothesis_id}` (drill-down — module 4), `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |
 | Live Logs | `/logs`, `/logs/sources` | whitelisted journalctl/file log tail — no arbitrary shell access, see Mission Control module 13 |
@@ -63,6 +64,18 @@ roadmap placeholders instead of mock screens.
 All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture
 rationale.
+
+## Diagnostic error taxonomy (v0.6 cross-cutting)
+
+Every AI-backed panel (news, macro, daily report, trade explanation, research
+summary, AI Decision Center) routes failures through a shared classifier
+(`lib/diagnostics.ts`) and renders a typed code + "where to look" hint instead
+of a bare string, via `components/DiagnosticError.tsx` inside `AiStatusFrame`.
+Codes: `PROVIDER_UNAVAILABLE`, `AUTH_FAILED`, `RATE_LIMITED`, `TIMEOUT`,
+`BAD_FORMAT`, `AI_PROVIDER_ERROR`. Classification is pure and client-side —
+the frontend knows the panel is AI-side and `ApiError.message` carries the HTTP
+status — so no backend change is required (an explicit server `error_code`, if
+ever added, takes precedence).
 
 ## Shell hardening (command-center layer)
 

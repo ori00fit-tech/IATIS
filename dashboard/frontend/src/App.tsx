@@ -8,6 +8,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { MissionControl } from './modules/mission-control/MissionControl'
 import { LiveSignals } from './modules/live-signals/LiveSignals'
 import { DataCenter } from './modules/data-center/DataCenter'
+import { ProviderEval } from './modules/provider-eval/ProviderEval'
 import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
 import { AiDecisionCenter } from './modules/ai-decision-center/AiDecisionCenter'
 import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
@@ -31,6 +32,7 @@ const MODULES: Record<TabId, () => ReactNode> = {
   'risk-center': () => <RiskCenter />,
   'execution-quality': () => <ExecutionQuality />,
   'data-center': () => <DataCenter />,
+  'provider-eval': () => <ProviderEval />,
   'engine-monitor': () => <EngineMonitor />,
   'ai-decision-center': () => <AiDecisionCenter />,
   research: () => <ResearchBacktests />,

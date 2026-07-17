@@ -44,6 +44,48 @@ function NoTradeReasons({ reasons }: { reasons: Record<string, number> }) {
   )
 }
 
+// Decision Quality rollup (spec §5) — aggregates over the decision feed. Pure
+// synthesis: every figure is a mean/coverage of fields already on each report.
+function mean(xs: (number | null | undefined)[]): number | null {
+  const vals = xs.filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+}
+
+function DecisionQualityRollup({ feed }: { feed: DecisionEntry[] }) {
+  if (feed.length === 0) return null
+  const reports = feed.map((d) => d.report)
+  const avgScore = mean(reports.map((r) => r.confluence?.score))
+  const avgMeta = mean(reports.map((r) => r.meta_decision?.confidence))
+  const avgQuorum = mean(reports.map((r) => r.confluence?.informative_weight_share))
+  const avgRisk = mean(reports.map((r) => r.risk?.recommended_risk_pct))
+  const provCovered = reports.filter((r) => r.provenance?.config_hash).length
+  const provPct = (provCovered / reports.length) * 100
+
+  const cell = (label: string, value: string, sub?: string) => (
+    <div className="border border-border rounded-md p-3">
+      <div className="text-muted uppercase text-[0.62em] tracking-[1px] mb-1">{label}</div>
+      <div className="text-[1.2em] font-bold text-text">{value}</div>
+      {sub && <div className="text-[0.66em] text-muted mt-0.5">{sub}</div>}
+    </div>
+  )
+
+  return (
+    <Panel title="Decision Quality" right={`rollup over ${feed.length} decisions`}>
+      <div className="p-4 grid gap-3 grid-cols-[repeat(auto-fit,minmax(130px,1fr))]">
+        {cell('Avg Confluence', avgScore != null ? avgScore.toFixed(1) : '—')}
+        {cell('Avg Meta-Confidence', avgMeta != null ? `${avgMeta.toFixed(0)}%` : '—', 'meta_decision layer')}
+        {cell('Quorum Quality', avgQuorum != null ? `${(avgQuorum * 100).toFixed(0)}%` : '—', 'informative-weight share')}
+        {cell('Avg Risk Sizing', avgRisk != null ? `${avgRisk.toFixed(2)}%` : '—', 'when EXECUTE')}
+        {cell(
+          'Provenance Coverage',
+          `${provPct.toFixed(0)}%`,
+          `${provCovered}/${reports.length} with config_hash`,
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 function Explanation({ decision }: { decision: DecisionEntry }) {
   const [state, setState] = useState<{ loading: boolean; data: TradeExplanation | null; error: string | null }>({
     loading: false,
@@ -209,6 +251,8 @@ export function AiDecisionCenter() {
         <KpiCard value={summary?.no_trade ?? '—'} label="No-Trade" color="amber" />
         <KpiCard value={summary ? `${executeRate.toFixed(0)}%` : '—'} label="Execute Rate" color={executeRate >= 20 ? 'green' : 'default'} />
       </div>
+
+      <DecisionQualityRollup feed={feed} />
 
       <Panel title="Why NO_TRADE — reason breakdown" right="aggregated across the window">
         {summary ? <NoTradeReasons reasons={summary.no_trade_reasons ?? {}} /> : <Empty>{decisions.loading ? 'Loading…' : 'No data'}</Empty>}

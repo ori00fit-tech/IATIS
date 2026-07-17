@@ -112,11 +112,15 @@ the OOS split do the refusing.
 
 crypto → ccxt/Binance (native H4/D1) · fx/metals/energy/indices → cTrader
 broker feed when credentials exist → Twelve Data → FCS API (fx/metals/
-indices only) → AV (fx only) → Finnhub → Yahoo. Yahoo is deliberately last
-in every chain (2026-07-14): least reliable of this set — no rate-limit
-contract, throttles under heavy use, and its "H4" is a resample of 1h
-bars rather than a native candle. Macro: CBOE (VIX) / FRED (dollar,
-yields) / CFTC (COT). Chains:
+indices only) → AV (fx only) → Finnhub. **Yahoo was REMOVED entirely as an
+untrusted feed** — from every price chain (2026-07-16: measured wrong
+instruments — ^IXIC≠NDX, futures≠spot metals — cash-session gaps, and its
+"H4" a 1h resample) and from the macro layer (2026-07-17: replaced by
+CBOE/FRED). `load_from_yfinance`/`_fetch_yahoo_finance` survive only for
+offline research downloads and the failover unit tests; nothing live calls
+them. Macro: CBOE (VIX) / FRED (dollar DTWEXBGS, SPY SP500, GLD LBMA gold,
+yields DGS10/DGS2) / CFTC (COT) — official sources only, no Yahoo fallback.
+Chains:
 `config.yaml data.provider_chains`; per-decision provenance in every
 report's `data_providers`. NNFX needs ≥210 decision-TF bars and the MTF
 gate ≥50 D1 bars — `main.py` logs `DATA STARVATION` loudly if violated;

@@ -131,6 +131,19 @@ export function RiskCenter() {
   const noStop = open.filter((r) => r.stop_loss == null)
   const rMultRule = s?.avg_r_multiple
 
+  // Portfolio heat (spec §6, synthesizable slice): a flat book has no heat;
+  // a one-directional book concentrates correlated risk. Derived from the open
+  // book only — a correlation heatmap / risk budgets need new backend (§5).
+  const longs = open.filter((r) => isBuy(r.direction)).length
+  const shorts = open.length - longs
+  const netBias = open.length === 0 ? 'FLAT' : longs > shorts ? 'NET LONG' : shorts > longs ? 'NET SHORT' : 'BALANCED'
+  const dirConcentration = open.length ? (Math.abs(longs - shorts) / open.length) * 100 : 0
+  const bySymbol = open.reduce<Record<string, number>>((acc, r) => {
+    acc[r.symbol] = (acc[r.symbol] ?? 0) + 1
+    return acc
+  }, {})
+  const topSymbol = Object.entries(bySymbol).sort((a, b) => b[1] - a[1])[0]
+
   const openColumns: Column<OutcomeRow>[] = [
     { header: 'Symbol', render: (r) => <span className="font-bold text-accent">{r.symbol}</span> },
     {
@@ -222,6 +235,29 @@ export function RiskCenter() {
           <span className="font-bold shrink-0">{exp.estimated_pct.toFixed(1)}% / {exp.max_exposure_pct.toFixed(1)}%</span>
         </div>
       )}
+
+      <div className="flex items-center gap-4 flex-wrap px-3.5 py-2.5 rounded-md border border-border bg-surface text-[0.8em]">
+        <span className="text-muted uppercase text-[0.72em] tracking-[0.8px] shrink-0">Portfolio Heat</span>
+        <span>
+          Bias{' '}
+          <b className={netBias === 'FLAT' || netBias === 'BALANCED' ? 'text-muted' : netBias === 'NET LONG' ? 'text-green' : 'text-red'}>
+            {netBias}
+          </b>{' '}
+          <span className="text-muted">({longs}L / {shorts}S)</span>
+        </span>
+        <span title="Share of the open book pointing one way — high = correlated directional risk">
+          Directional concentration{' '}
+          <b className={dirConcentration >= 80 && open.length > 1 ? 'text-red' : dirConcentration >= 50 && open.length > 1 ? 'text-amber' : 'text-text'}>
+            {dirConcentration.toFixed(0)}%
+          </b>
+        </span>
+        {topSymbol && topSymbol[1] > 1 && (
+          <span className="text-amber">
+            {topSymbol[1]}× stacked on <b>{topSymbol[0]}</b>
+          </span>
+        )}
+        <span className="text-muted text-[0.85em] ml-auto shrink-0">correlation heatmap + risk budgets: pending backend (§5/§6)</span>
+      </div>
 
       <div className="grid grid-cols-2 gap-4 max-[900px]:grid-cols-1">
         <Panel title="Risk Rule Compliance" right="live, derived from open book">

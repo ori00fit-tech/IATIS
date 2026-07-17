@@ -1914,10 +1914,12 @@ async def provider_chains_endpoint(
     symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
     active = [s["internal"] for s in symbols_cfg if s.get("enabled")]
 
+    # yahoo_finance deliberately omitted (2026-07-17): removed as an untrusted
+    # feed — out of every price chain and replaced by CBOE/FRED in the macro
+    # layer — so it is no longer advertised as an available provider.
     availability = {
         "ctrader": bool(_os.getenv("CTRADER_CLIENT_ID") and _os.getenv("CTRADER_ACCESS_TOKEN")),
         "twelve_data": bool(_os.getenv("TWELVE_DATA_API_KEY")),
-        "yahoo_finance": True,
         "alpha_vantage": bool(_os.getenv("ALPHA_VANTAGE_API_KEY")),
         "finnhub": bool(_os.getenv("FINNHUB_API_KEY")),
         "ccxt": True,

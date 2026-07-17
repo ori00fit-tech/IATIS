@@ -18,6 +18,12 @@ const W_CHAIN_TRUST = 20
 const W_USAGE = 10
 const W_AGREEMENT = 10
 
+// Providers retired as untrusted — excluded from the ranking entirely (they
+// may still linger in native-TF maps for offline/test use). yahoo_finance was
+// removed 2026-07-17: measured wrong instruments and resampled "H4", out of
+// every price chain, and replaced by CBOE/FRED in the macro layer.
+export const RETIRED_PROVIDERS = new Set<string>(['yahoo_finance'])
+
 // Institutional caveats sourced from config.yaml's provider_chains comments
 // and CLAUDE.md's data-layer section — measured facts the raw endpoints don't
 // carry. Shown as context, never folded silently into the number.
@@ -29,8 +35,6 @@ export const PROVIDER_NOTES: Record<string, string> = {
   fcs_api: 'FX / metals / indices only (no crypto endpoint used).',
   alpha_vantage: 'FX only; no native H4/D1.',
   finnhub: 'Deep fallback across asset classes.',
-  yahoo_finance:
-    'Removed from every price chain (2026-07-16): measured wrong instruments (^IXIC≠NDX, futures≠spot metals), cash-session gaps, and H4 as a 1h resample. Kept for offline diffs only.',
 }
 
 export type AvailabilityState = 'up' | 'down' | 'unknown'
@@ -137,12 +141,14 @@ export function evaluateProviders(pc: ProviderChainsResponse, dc: DataConfidence
     }
   }
 
-  const providers = new Set<string>([
-    ...Object.keys(pc.native_timeframes ?? {}),
-    ...Object.keys(pc.availability ?? {}),
-    ...Object.values(pc.chains ?? {}).flat(),
-    ...Object.keys(pc.recent_usage ?? {}),
-  ])
+  const providers = new Set<string>(
+    [
+      ...Object.keys(pc.native_timeframes ?? {}),
+      ...Object.keys(pc.availability ?? {}),
+      ...Object.values(pc.chains ?? {}).flat(),
+      ...Object.keys(pc.recent_usage ?? {}),
+    ].filter((p) => !RETIRED_PROVIDERS.has(p)),
+  )
   const maxUsage = Math.max(0, ...Object.values(pc.recent_usage ?? {}).map((u) => u.count ?? 0))
 
   return [...providers]

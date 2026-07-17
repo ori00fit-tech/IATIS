@@ -84,13 +84,28 @@ def test_vix_failover_cboe_then_fred_then_yahoo(monkeypatch):
     assert snap["VIX"].attrs["provider"] == "fred"
 
 
-def test_dxy_prefers_fred_and_falls_back_to_yahoo(monkeypatch):
+def test_dxy_is_fred_only_no_yahoo_fallback(monkeypatch):
+    # Yahoo was removed as an untrusted feed (2026-07-17): DXY is FRED-only,
+    # so when FRED is down the series is simply absent — it must NOT silently
+    # fall back to Yahoo.
     monkeypatch.setattr(adl, "load_from_fred",
                         lambda *a, **k: (_ for _ in ()).throw(ValueError("fred down")))
     monkeypatch.setattr(adl, "load_from_yfinance",
-                        lambda sym, **k: adl._close_only_frame(["2026-07-09"], [104.2]))
+                        lambda *a, **k: pytest.fail("yahoo must not be reached"))
     snap = adl.load_macro_snapshot(["DXY"])
-    assert snap["DXY"].attrs["provider"] == "yahoo"
+    assert "DXY" not in snap
+
+
+def test_gld_uses_fred_gold_not_yahoo(monkeypatch):
+    # GLD (gold) now resolves to the FRED LBMA gold-fixing series, not Yahoo.
+    seen = []
+    monkeypatch.setattr(adl, "load_from_fred",
+                        lambda series_id, months=6: seen.append(series_id) or adl._close_only_frame(["2026-07-09"], [2350.0]))
+    monkeypatch.setattr(adl, "load_from_yfinance",
+                        lambda *a, **k: pytest.fail("yahoo must not be reached"))
+    snap = adl.load_macro_snapshot(["GLD"])
+    assert seen == ["GOLDAMGBD228NLBM"]
+    assert snap["GLD"].attrs["provider"] == "fred"
 
 
 def test_snapshot_cache_prevents_refetch_within_ttl(monkeypatch):

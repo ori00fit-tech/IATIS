@@ -2,7 +2,7 @@ import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { getProviderChains, getDataConfidence } from './api'
-import { evaluateProviders, reviewChains, type ProviderScore } from './scoring'
+import { evaluateProviders, reviewChains, RETIRED_PROVIDERS, type ProviderScore } from './scoring'
 
 const POLL_MS = 60_000
 
@@ -118,6 +118,12 @@ export function ProviderEval() {
             <ProviderRow key={p.provider} p={p} rank={i + 1} />
           ))}
         </div>
+        {RETIRED_PROVIDERS.size > 0 && (
+          <div className="px-4 py-2 border-t border-border text-[0.7em] text-muted">
+            Retired (untrusted, excluded): {[...RETIRED_PROVIDERS].join(', ')} — removed from all price chains and
+            replaced by CBOE/FRED in the macro layer.
+          </div>
+        )}
       </Panel>
 
       <Panel title="Chain Order Review" right="advisory — configured order encodes measured reliability">

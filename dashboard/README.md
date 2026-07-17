@@ -44,6 +44,9 @@ roadmap placeholders instead of mock screens.
 |---|---|---|
 | Mission Control | `/health`, `/health/full` (now includes swap, load average, real per-service systemd status — module 1), `/budget`, `/symbol-health` | system status, CPU/RAM/disk/swap/load, credits |
 | Live Signals | `/decisions`, `/outcomes` | recent pipeline decisions + open paper signals |
+| Risk Center *(v0.6.0)* | `/health/full`, `/outcomes`, `/symbol-health`, `/reconciliation` | exposure vs cap, live RR≥2 compliance, realized R-multiple distribution, per-symbol risk scaling. Monitoring only — never gates or sizes |
+| AI Decision Center *(v0.6.0)* | `/decisions`, `/ai/explain-trade` | decision anatomy (regime, confluence vote, fail-reasons, provenance) + explain-only AI narration per VISION_v2 — never generates or alters a signal |
+| Backtesting Charts *(v0.6.0)* | `/backtest-results` (now passes through legacy `equity_curve`), `/outcomes` | SVG equity curve + drawdown, switchable per-symbol metric comparison, score-calibration curve |
 | Data Center | `/data-health`, `/provider-chains` (now includes `recent_usage` from decisions.jsonl and `macro_sources` for CBOE/FRED/CFTC/Alternative.me — module 2) | OHLCV cache completeness per symbol/timeframe |
 | Engine Monitor | `/engine-stats` (now includes `attribution`: approximate per-engine PF/WR, time-window-joined to closed outcomes since there's no shared foreign key — see module 8) | per-engine vote/accuracy stats, current vs. suggested weights |
 | Research & Backtests | `/research`, `/research/{hypothesis_id}` (drill-down — module 4), `/backtest-results`, `/meta-analysis` | hypothesis registry, backtest runs, regime matrix |

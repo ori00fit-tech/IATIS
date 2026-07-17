@@ -9,6 +9,7 @@ import { MissionControl } from './modules/mission-control/MissionControl'
 import { LiveSignals } from './modules/live-signals/LiveSignals'
 import { DataCenter } from './modules/data-center/DataCenter'
 import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
+import { AiDecisionCenter } from './modules/ai-decision-center/AiDecisionCenter'
 import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
 import { BacktestingCharts } from './modules/backtesting-charts/BacktestingCharts'
 import { SystemAudit } from './modules/system-audit/SystemAudit'
@@ -31,6 +32,7 @@ const MODULES: Record<TabId, () => ReactNode> = {
   'execution-quality': () => <ExecutionQuality />,
   'data-center': () => <DataCenter />,
   'engine-monitor': () => <EngineMonitor />,
+  'ai-decision-center': () => <AiDecisionCenter />,
   research: () => <ResearchBacktests />,
   'backtesting-charts': () => <BacktestingCharts />,
   'system-audit': () => <SystemAudit />,

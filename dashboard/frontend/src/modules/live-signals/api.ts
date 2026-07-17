@@ -10,11 +10,31 @@ export interface PipelineReport {
     passed: boolean
     fail_reasons: string[]
     vote: { winning_bias: string; agree_count: number; total_engines: number }
+    // Share of enabled engine weight that voted informatively (main.py
+    // informative_weight_share) — the quorum-quality signal (audit Axis 8).
+    informative_weight_share?: number
   }
   entry_price: number | null
   stop_loss: number | null
   take_profit: number | null
   risk_reward: string | null
+  // Risk gate result (main.py risk block). recommended_risk_pct is the
+  // fractional-sizing % this decision would have taken.
+  risk?: {
+    passed: boolean | null
+    recommended_risk_pct: number | null
+    position_size_units: number | null
+    reasons?: string[]
+  }
+  // Meta-decision layer (confluence/meta_decision.py) — confidence/verdict
+  // multiplier applied after the gates.
+  meta_decision?: {
+    confidence: number
+    stability?: number
+    data_quality?: number
+    verdict: string
+    position_multiplier?: number
+  } | null
   // Provenance fingerprints (utils/provenance.py, gap analysis M2) —
   // present on every decision made after the 2026-07-16 deploy.
   provenance?: {

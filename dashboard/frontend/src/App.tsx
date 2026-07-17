@@ -10,6 +10,7 @@ import { LiveSignals } from './modules/live-signals/LiveSignals'
 import { DataCenter } from './modules/data-center/DataCenter'
 import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
 import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
+import { BacktestingCharts } from './modules/backtesting-charts/BacktestingCharts'
 import { SystemAudit } from './modules/system-audit/SystemAudit'
 import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
@@ -31,6 +32,7 @@ const MODULES: Record<TabId, () => ReactNode> = {
   'data-center': () => <DataCenter />,
   'engine-monitor': () => <EngineMonitor />,
   research: () => <ResearchBacktests />,
+  'backtesting-charts': () => <BacktestingCharts />,
   'system-audit': () => <SystemAudit />,
   logs: () => <LiveLogs />,
   files: () => <FileExplorer />,

@@ -16,6 +16,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'data-center', label: 'Data Center', hint: 'OHLCV cache completeness, provider chains', glyph: '⛁' },
   { id: 'engine-monitor', label: 'Engine Monitor', hint: 'Per-engine votes, accuracy, weights', glyph: '⚙' },
   { id: 'research', label: 'Research & Backtests', hint: 'Hypothesis registry, backtest runs, regime matrix', glyph: '⌕' },
+  { id: 'backtesting-charts', label: 'Backtesting Charts', hint: 'Equity curve, per-symbol comparison, score calibration', glyph: '📈' },
   { id: 'system-audit', label: 'System Audit', hint: 'Philosophy audit + research integrity checks', glyph: '✓' },
   { id: 'logs', label: 'Live Logs', hint: 'Whitelisted journalctl / file log tail', glyph: '≣' },
   { id: 'files', label: 'File Explorer', hint: 'Read-only, repo-confined file browser', glyph: '⁋' },

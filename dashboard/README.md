@@ -64,6 +64,18 @@ All polling-based (15–60s depending on module) — no WebSocket in v1; see
 `.claude/plans/glittery-drifting-lerdorf.md` for the full architecture
 rationale.
 
+## Diagnostic error taxonomy (v0.6 cross-cutting)
+
+Every AI-backed panel (news, macro, daily report, trade explanation, research
+summary, AI Decision Center) routes failures through a shared classifier
+(`lib/diagnostics.ts`) and renders a typed code + "where to look" hint instead
+of a bare string, via `components/DiagnosticError.tsx` inside `AiStatusFrame`.
+Codes: `PROVIDER_UNAVAILABLE`, `AUTH_FAILED`, `RATE_LIMITED`, `TIMEOUT`,
+`BAD_FORMAT`, `AI_PROVIDER_ERROR`. Classification is pure and client-side —
+the frontend knows the panel is AI-side and `ApiError.message` carries the HTTP
+status — so no backend change is required (an explicit server `error_code`, if
+ever added, takes precedence).
+
 ## Shell hardening (command-center layer)
 
 Cross-cutting improvements to the console frame itself, independent of any

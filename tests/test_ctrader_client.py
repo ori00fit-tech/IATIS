@@ -158,3 +158,44 @@ def test_executor_ctrader_reuses_shared_data_provider_client(monkeypatch):
     monkeypatch.setattr(dp, "get_shared_ctrader_client", lambda: sentinel)
     executor = TradeExecutor(dry_run=False, broker="ctrader")
     assert executor._get_client() is sentinel
+
+
+# ─── Spot resolution for the full broker universe (sweep re-cost, 2026-07-17) ─
+
+def test_get_spot_by_name_resolves_unmapped_symbols(monkeypatch):
+    """Every broker-enumerated symbol must be quotable — not just the 20
+    in IATIS_TO_CTRADER (the '72 of 77 winners never paid a real spread'
+    sweep caveat)."""
+    import threading
+    c = _make_client()
+    c._lock = threading.Lock()
+    c._symbol_name_to_id = {"ENSUSD": 4242, "EURUSD": 1}
+    monkeypatch.setattr(c, "_get_spot_scaled",
+                        lambda sid: (2050000, 2055000) if sid == 4242 else None)
+
+    q = c.get_spot_by_name("ENSUSD")
+    assert q is not None
+    bid, ask = q
+    assert bid == 2050000 / CTraderClient.SPOT_SCALE
+    assert ask == 2055000 / CTraderClient.SPOT_SCALE
+    assert c.get_spot_by_name("NOSUCH") is None
+
+
+def test_get_spot_delegates_to_by_name(monkeypatch):
+    import threading
+    c = _make_client()
+    c._lock = threading.Lock()
+    c._symbol_name_to_id = {"XTIUSD": 7}
+    monkeypatch.setattr(c, "_get_spot_scaled", lambda sid: (6500000, 6510000))
+    assert c.get_spot("USOIL") is not None      # USOIL → XTIUSD via the map
+    assert c.get_spot("UNMAPPED") is None       # not an IATIS symbol
+
+
+def test_sweep_pip_size_matches_engine_convention():
+    """The unit contract that makes measured spreads enter the cost model
+    at the right scale — crypto was 100x off before 2026-07-17."""
+    from scripts.backtest_ic_symbols import _pip_size
+    from storage.execution_quality import pip_size_for
+    for sym in ("BTCUSD", "ETHUSD", "XAUUSD", "USDJPY", "EURUSD", "ENSUSD", "XTIUSD"):
+        assert _pip_size(sym) == pip_size_for(sym), sym
+    assert _pip_size("BTCUSD") == 0.01   # the previously-wrong case

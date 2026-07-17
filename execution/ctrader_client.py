@@ -1155,7 +1155,19 @@ class CTraderClient:
         ct_symbol = IATIS_TO_CTRADER.get(iatis_symbol)
         if not ct_symbol:
             return None
-        symbol_id = self._symbol_name_to_id.get(ct_symbol)
+        return self.get_spot_by_name(ct_symbol)
+
+    def get_spot_by_name(self, ct_symbol: str) -> "tuple[float, float] | None":
+        """(bid, ask) for a BROKER symbol name, no IATIS_TO_CTRADER hop.
+
+        _symbol_name_to_id is populated from ProtoOASymbolsListRes with
+        EVERY symbol the broker enumerates, so this resolves the full
+        ~350-instrument universe — added 2026-07-17 so the discovery
+        sweep (scripts/backtest_ic_symbols.py) can charge a real measured
+        spread on every candidate instead of only the 20 mapped ones
+        (the '72 of 77 winners never paid a real spread' caveat)."""
+        with self._lock:
+            symbol_id = self._symbol_name_to_id.get(ct_symbol)
         if symbol_id is None:
             return None
         scaled = self._get_spot_scaled(symbol_id)

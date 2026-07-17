@@ -69,3 +69,38 @@ before any of their outcomes exist.
 Alt-coin candidates from the sweep — excluded until one shows ≥3y history
 AND cross-window rank stability. Any threshold/engine change — separate
 hypotheses, never this one.
+
+---
+
+## Result (2026-07-17) — RESOLVED, no symbol enabled
+
+Manifest: `research/results/h022_fx_cross_oos_20260717_manifest.json`
+(reproducible, clean tree). The pre-registered rule was applied literally
+by `research/experiments/H022_fx_cross_oos.py`.
+
+| symbol | TRAIN PF (n) | TEST PF (n) | worst TEST year | verdict |
+|---|---|---|---|---|
+| USDCNH | 1.298 (128) | **1.926 (18)** | 2025: 1.054 | **INSUFFICIENT_DATA** — n=18 < 40 |
+| GBPAUD | 0.802 (151) | 0.825 (80) | **2025: 0.337** | **REJECT** |
+| EURAUD | 0.758 (126) | 0.887 (70) | **2025: 0.424** | **REJECT** |
+
+**The screen-vs-OOS autopsy** — each candidate's ~200-day screen PF was,
+almost to the decimal, its lucky 2026 TEST-year patch:
+
+| symbol | screen PF (07-17) | TEST-2026 patch PF | 6.5y verdict |
+|---|---|---|---|
+| GBPAUD | 1.578 | 1.42 | loses both slices |
+| EURAUD | 1.416 | 1.612 | loses both slices |
+
+**Lesson (third confirmation of the H008b/H015 mirage class, now at the
+symbol-universe level):** a short screen sits on whatever patch it
+samples. The deep chronological split — applied by a rule written before
+the data existed — did the refusing.
+
+**USDCNH, honestly:** the one candidate profitable on BOTH chronological
+slices at real cost. It signals rarely (managed float, low volatility —
+18 TEST trades in 2.2 years), so it cannot clear the registered n≥40 bar
+and is NOT enabled. Any future revisit needs its own pre-registered
+entry; this one is closed.
+
+`config/symbols.yaml` untouched · D001/D002 untouched · no D003 registered.

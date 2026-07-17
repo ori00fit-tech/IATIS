@@ -1088,6 +1088,15 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
             try:
                 data = _json.loads(f.read_text())
                 m = data.get("metrics", {})
+                # equity_curve (a per-bar balance series) exists only in the
+                # legacy backtest_engine.save() format — the pipeline runs above
+                # don't persist one. Down-sample very long curves so the payload
+                # stays small; the dashboard's Backtesting Charts plots it when
+                # present and degrades to a metrics-only view otherwise.
+                curve = data.get("equity_curve") or []
+                if len(curve) > 500:
+                    stride = len(curve) // 500 + 1
+                    curve = curve[::stride]
                 results.append({
                     "file": f.name,
                     "symbol": data.get("symbol"),
@@ -1097,6 +1106,7 @@ async def backtest_results(x_api_key: str | None = Header(default=None), iatis_s
                     "profit_factor": round(m.get("profit_factor", 0), 3),
                     "max_drawdown_pct": round(m.get("max_drawdown_pct", 0) * 100, 2),
                     "total_return_pct": round(m.get("total_return_pct", 0) * 100, 2),
+                    "equity_curve": curve,
                     "metrics": m,
                 })
             except Exception:

@@ -68,12 +68,16 @@ def _to_df(bars: list[dict]):
 
 
 def _pip_size(name: str) -> float:
-    n = name.upper()
-    if "JPY" in n:
-        return 0.01
-    if any(x in n for x in ("XAU", "XAG", "OIL", "WTI", "BRENT")):
-        return 0.01
-    return 0.0001
+    """MUST match the backtest engine's pip convention, or measured
+    spreads enter the cost model at the wrong scale. Delegates to the
+    shared TCA implementation (storage/execution_quality.pip_size_for),
+    which mirrors backtest_engine.config_for_symbol exactly — including
+    its unknown-symbol fallback, so sweep pips and engine pips agree for
+    every candidate. (The old inline version gave crypto 0.0001 while
+    the engine uses 0.01 — a latent 100x cost error for BTC/ETH spreads,
+    fixed 2026-07-17.)"""
+    from storage.execution_quality import pip_size_for
+    return pip_size_for(name)
 
 
 def main() -> None:
@@ -84,10 +88,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="Max symbols to backtest (0=all)")
     ap.add_argument("--count", type=int, default=1200, help="H4 bars to fetch per symbol")
     ap.add_argument("--fresh", action="store_true", help="Ignore any checkpoint and restart the sweep")
+    ap.add_argument("--symbols", nargs="+", default=None,
+                    help="Re-cost mode: sweep ONLY these broker symbols, re-running "
+                         "them even if the checkpoint already has them (use after a "
+                         "spread-map/cost fix to re-price prior candidates in minutes)")
     ap.add_argument("--sleep", type=float, default=0.0, help="Seconds to pause between symbols (be nice to the API)")
     args = ap.parse_args()
 
-    from execution.ctrader_client import CTraderClient, IATIS_TO_CTRADER
+    from execution.ctrader_client import CTraderClient
 
     client = CTraderClient()
     print("Connecting to cTrader…")
@@ -113,9 +121,17 @@ def main() -> None:
             print("\n⚠️ No bars — check the trendbars decode/scaling before sweeping.")
         return
 
-    universe = symbols if args.all else [s for s in symbols if _looks_macro(s)]
-    if args.limit:
-        universe = universe[: args.limit]
+    if args.symbols:
+        wanted = [s.upper() for s in args.symbols]
+        by_upper = {s.upper(): s for s in symbols}
+        unknown = [s for s in wanted if s not in by_upper]
+        if unknown:
+            print(f"⚠️ Not on the broker: {unknown} — skipped")
+        universe = [by_upper[s] for s in wanted if s in by_upper]
+    else:
+        universe = symbols if args.all else [s for s in symbols if _looks_macro(s)]
+        if args.limit:
+            universe = universe[: args.limit]
     print(f"Backtesting {len(universe)} symbols (real broker H4 + real spread)…\n")
 
     from backtesting.backtest_engine import BacktestConfig, run_backtest
@@ -144,6 +160,13 @@ def main() -> None:
         ckpt.write_text(json.dumps(
             {"attempted": sorted(attempted), "rows": rows}, indent=1))
 
+    # Re-cost mode: targeted symbols re-run even if already attempted, and
+    # their new row REPLACES the old one (no duplicate symbols in results).
+    if args.symbols:
+        targeted = {s.upper() for s in args.symbols}
+        attempted -= {s for s in attempted if s.upper() in targeted}
+        rows[:] = [r for r in rows if r["symbol"].upper() not in targeted]
+
     print(f"{'symbol':14s}{'bars':>7s}{'spread':>8s}{'trades':>7s}{'WR%':>6s}{'PF':>7s}")
     for i, sym in enumerate(universe, 1):
         if sym in attempted:
@@ -155,12 +178,15 @@ def main() -> None:
             print(f"{sym:14s}  skipped ({0 if df is None else len(df)} bars < {MIN_BARS})")
             _save()
             continue
-        # real spread in pips from live quote (only for mapped IATIS symbols;
-        # get_spot resolves via IATIS_TO_CTRADER)
-        q = client.get_spot(sym) if sym in IATIS_TO_CTRADER else None
+        # Real spread from a live quote, for EVERY broker symbol
+        # (get_spot_by_name, 2026-07-17 — previously only the 20 mapped
+        # IATIS symbols paid a real cost). Timestamp recorded because a
+        # single snapshot can catch off-hours wide quotes (the XAUUSD
+        # 40-pip lesson from the 07-06 sweep) — judge spread WITH its hour.
+        q = client.get_spot_by_name(sym)
         spread_pips = round((q[1] - q[0]) / _pip_size(sym), 2) if q else None
         kwargs = {"step_bars": 2}
-        if spread_pips:
+        if spread_pips is not None:
             kwargs["commission_pips"] = spread_pips
         try:
             r = run_backtest(df, BacktestConfig.from_profile(sym, **kwargs), engine_config=cfg)
@@ -169,7 +195,10 @@ def main() -> None:
             _save()
             continue
         rows.append({"symbol": sym, "bars": len(df),
-                     "spread_pips": spread_pips, "trades": r.execute_count,
+                     "spread_pips": spread_pips,
+                     "spread_measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                     if spread_pips is not None else None,
+                     "trades": r.execute_count,
                      "win_rate": round(100 * r.win_rate, 1),
                      "profit_factor": round(r.profit_factor, 3),
                      "max_dd_pct": round(100 * r.max_drawdown_pct, 1)})

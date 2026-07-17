@@ -173,6 +173,10 @@ def main() -> None:
     ap.add_argument("--symbols", nargs="+", default=None)
     ap.add_argument("--timeframes", nargs="+", default=["4h", "1day"])
     ap.add_argument("--skip-existing", action="store_true")
+    ap.add_argument("--fx-extra", nargs="+", default=None,
+                    help="Additional plain-FX internal symbols NOT in the config "
+                         "universe (e.g. USDCNH GBPAUD EURAUD for H022). Six "
+                         "uppercase letters, mapped to Twelve Data as XXX/YYY.")
     args = ap.parse_args()
 
     api_key = os.environ.get("TWELVE_DATA_API_KEY", "")
@@ -184,6 +188,18 @@ def main() -> None:
     enabled = [s for s in cfg["data"]["twelve_data_symbols"] if s.get("enabled")]
     if args.symbols:
         enabled = [s for s in enabled if s["internal"] in set(args.symbols)]
+    if args.fx_extra:
+        # Research candidates outside the config universe (H022 and any
+        # successor): plain FX only, straight Twelve Data pagination —
+        # no Yahoo/ccxt special-casing applies to these.
+        import re as _re
+        known = {s["internal"] for s in enabled}
+        for sym in args.fx_extra:
+            sym = sym.upper()
+            if not _re.fullmatch(r"[A-Z]{6}", sym):
+                sys.exit(f"--fx-extra {sym!r}: expected six uppercase letters (e.g. GBPAUD)")
+            if sym not in known:
+                enabled.append({"internal": sym, "symbol": f"{sym[:3]}/{sym[3:]}"})
 
     DATA_DIR.mkdir(exist_ok=True)
     collected = []

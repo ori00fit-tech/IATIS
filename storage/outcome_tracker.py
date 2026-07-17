@@ -45,20 +45,23 @@ logger = get_logger(__name__)
 DEFAULT_RISK_USD: float = 100.0
 
 # Broker-confirmed pip sizes by asset class (IC Markets cTrader
-# ProtoOASymbolById, verified 2026-07-16 via scripts.ctrader_inspect_symbols):
-# FX quotes to 5 digits, pip position 4 → 0.0001 (JPY pairs: 3 digits, pip 2 →
-# 0.01); metals, energy, and crypto all report pip position 2 → 0.01.
+# ProtoOASymbolById, verified 2026-07-16 via scripts.ctrader_inspect_symbols).
+# pip_size = 10^-(pip position) from the live symbol spec:
+#   FX (EURUSD)   digits=5 pip=4 → 0.0001   (JPY pairs digits=3 pip=2 → 0.01)
+#   METALS (XAU)  digits=2 pip=2 → 0.01     (XAG digits=3 pip=2 → 0.01)
+#   ENERGY (XTI)  digits=2 pip=2 → 0.01
+#   CRYPTO (BTC)  digits=2 pip=2 → 0.01
+#   INDICES (US30/US500/USTEC) digits=2 pip=1 → 0.1
 # The previous inline table sent CRYPTO/INDICES/ENERGY to the FX default
 # (0.0001), so e.g. a BTC move (thousands of USD) / 0.0001 produced millions of
 # phantom "pips" that dominated total_pips; it also had XAGUSD at 0.001 when the
-# broker reports 0.01. INDICES is PROVISIONAL pending a broker-spec probe of
-# US30/US500/USTEC — confirm before treating index pips as exact.
+# broker reports 0.01.
 _PIP_SIZE_BY_CLASS: dict[str, float] = {
     "FOREX": 0.0001,
     "METALS": 0.01,
     "ENERGY": 0.01,
     "CRYPTO": 0.01,
-    "INDICES": 0.1,  # PROVISIONAL — confirm via scripts.ctrader_inspect_symbols
+    "INDICES": 0.1,   # US30/US500/USTEC: broker pip=1
 }
 
 

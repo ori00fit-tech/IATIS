@@ -7,6 +7,8 @@ import { Badge } from '../../components/Badge'
 import { StatusRow } from '../../components/StatusDot'
 import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
+import { ExecutiveOverview } from './ExecutiveOverview'
+import { getDataHealth } from '../data-center/api'
 import {
   getHealth,
   getHealthFull,
@@ -225,6 +227,7 @@ export function MissionControl() {
   const outcomes = usePolling(getOutcomes, POLL_MS, markUnauthenticated)
   const marketHealth = usePolling(getMarketHealth, POLL_MS * 2, markUnauthenticated)
   const reconciliation = usePolling(getReconciliation, POLL_MS * 2, markUnauthenticated)
+  const dataHealth = usePolling(getDataHealth, POLL_MS * 2, markUnauthenticated)
 
   const hf = healthFull.data
   const creditsColor = (budget.data?.remaining_today ?? 0) > 400 ? 'green' : (budget.data?.remaining_today ?? 0) > 100 ? 'amber' : 'red'
@@ -262,6 +265,13 @@ export function MissionControl() {
 
   return (
     <div className="flex flex-col gap-4">
+      <ExecutiveOverview
+        healthFull={hf ?? null}
+        marketHealth={marketHealth.data}
+        dataHealth={dataHealth.data}
+        reconciliation={reconciliation.data}
+      />
+
       <div className={`flex items-center gap-2 px-3.5 py-2 rounded-md border text-[0.78em] ${
         hf?.status === 'degraded' ? 'border-red/40 bg-red/5' : 'border-border bg-surface'
       }`}>

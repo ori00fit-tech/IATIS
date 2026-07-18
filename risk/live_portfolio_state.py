@@ -102,6 +102,21 @@ def compute_portfolio_state(
     starting_balance = float(risk_cfg.get("starting_balance", 10_000.0))
     per_trade_risk = float(risk_cfg.get("risk_per_trade_max", 0.01))
 
+    # Backtests / replays have no live positions to read, so a CLEAN book is
+    # the correct state here — never touch storage, and never fail closed. The
+    # fail-CLOSED fallback below is a LIVE-only safety response to an unreadable
+    # D1; applying it offline would block every simulated trade (100% exposure)
+    # and make the backtest produce nothing but NO_TRADE.
+    system_cfg = config.get("system", {})
+    if system_cfg.get("replay_mode") or system_cfg.get("backtest_mode"):
+        return PortfolioState(
+            account_balance=starting_balance,
+            equity_peak=starting_balance,
+            current_open_risk_pct=0.0,
+            current_drawdown_pct=0.0,
+            correlated_exposure_pct=0.0,
+        )
+
     kwargs = {"path": db_path} if db_path is not None else {}
     recent_fn = _recent_signals_fn or outcome_tracker.recent_signals
     open_fn = _open_signals_fn or outcome_tracker.get_open_signals

@@ -626,6 +626,14 @@ def _build_report(
 def run_pipeline(config: dict) -> dict:
     logger.info("=== IATIS pipeline starting ===")
 
+    # Replay/backtest runs must never touch the live store — not at the end of
+    # the pipeline (handled below) and not on the early-exit paths (validation
+    # failure, MQS gate) either. Writing there both hammered an unreachable D1
+    # with 2s retries per step AND polluted the live decisions.jsonl with
+    # thousands of backtest rows.
+    _sys_cfg = config.get("system", {})
+    _no_persist = bool(_sys_cfg.get("replay_mode") or _sys_cfg.get("backtest_mode"))
+
     # Fail loudly at boot if confluence config is internally inconsistent
     # (e.g. requiring more agreeing engines than are enabled), rather than
     # silently guaranteeing NO_TRADE forever. See confluence/score_calculator.py.
@@ -660,14 +668,16 @@ def run_pipeline(config: dict) -> dict:
     except DataValidationError as exc:
         logger.error(f"Data validation failed: {exc}")
         failure_report = {"final_verdict": "NO_TRADE", "reason": f"Data validation failed: {exc}"}
-        _safe_store("decision_log (validation failure)", log_decision, failure_report)
+        if not _no_persist:
+            _safe_store("decision_log (validation failure)", log_decision, failure_report)
         return failure_report
 
     # 3. Market Quality Score — gate before running 9 engines
     mqs_result, mqs_report = _market_quality_gate(config, df_base)
     if mqs_report is not None:
-        _safe_store("decision_log (MQS gate)", log_decision, mqs_report)
-        _safe_store("decision_db (MQS gate)", log_decision_db, mqs_report)
+        if not _no_persist:
+            _safe_store("decision_log (MQS gate)", log_decision, mqs_report)
+            _safe_store("decision_db (MQS gate)", log_decision_db, mqs_report)
         return mqs_report
 
     # 4. Regime detection
@@ -725,7 +735,7 @@ def run_pipeline(config: dict) -> dict:
     # Backtests must never write to the live decision store anyway. (Kept
     # distinct from source=="injected", which the replay-window generator also
     # uses and which DOES need this block to run.)
-    if config.get("system", {}).get("replay_mode") or config.get("system", {}).get("backtest_mode"):
+    if _no_persist:
         logger.info("REPLAY/BACKTEST MODE: skipping persistence, outcome logging and alerts")
         return report
 

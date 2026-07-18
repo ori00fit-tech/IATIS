@@ -199,3 +199,38 @@ def test_sweep_pip_size_matches_engine_convention():
     for sym in ("BTCUSD", "ETHUSD", "XAUUSD", "USDJPY", "EURUSD", "ENSUSD", "XTIUSD"):
         assert _pip_size(sym) == pip_size_for(sym), sym
     assert _pip_size("BTCUSD") == 0.01   # the previously-wrong case
+
+
+# ─── Reconnect teardown / superseded-client guard (fd-leak fix) ────────────────
+
+def _mk_client():
+    return CTraderClient(
+        client_id="test", client_secret="test",
+        account_id=12345, access_token="test",
+    )
+
+
+def test_on_disconnect_ignores_superseded_client(monkeypatch):
+    """A torn-down previous client's disconnect callback must not clobber the
+    live connection or trigger a reconnect (the ALREADY_LOGGED_IN/fd-leak storm)."""
+    c = _mk_client()
+    current = object()
+    stale = object()
+    c._client = current
+    c._intentional_disconnect = False
+    scheduled = {"n": 0}
+    monkeypatch.setattr(c, "_schedule_reconnect", lambda: scheduled.__setitem__("n", scheduled["n"] + 1))
+
+    c._on_disconnect(stale, "connection lost")   # superseded → ignored
+    assert scheduled["n"] == 0
+
+    c._on_disconnect(current, "connection lost")  # the live client → reconnect
+    assert scheduled["n"] == 1
+
+
+def test_stop_client_is_best_effort(monkeypatch):
+    """_stop_client never raises — None is a no-op, and a missing/other reactor
+    is swallowed (it runs during teardown when things are already broken)."""
+    c = _mk_client()
+    c._stop_client(None)  # no-op, must not raise
+    c._stop_client(object())  # reactor import/branch guarded → must not raise

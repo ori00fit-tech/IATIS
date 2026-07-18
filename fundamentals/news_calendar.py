@@ -171,13 +171,19 @@ def get_calendar_today() -> list[dict]:
     # live calendar hosts, so the cron-populated cache is the reliable path.
     cached = _read_cache()
     if cached:
+        # A fresh cache (_read_cache already drops anything >25h) contains the
+        # whole current week, so its today-slice is authoritative even when
+        # empty — a quiet day or weekend genuinely has 0 events. Returning it
+        # here (instead of only when non-empty) stops the scheduler hammering
+        # the rate-limited live feed for an answer we already hold — the source
+        # of the observed 429 / DNS fallback noise on event-free days.
         today_events = [e for e in cached if e.get("date", "").startswith(today)]
-        if today_events:
-            logger.info(f"Calendar cache (today): {len(today_events)} events")
-            return today_events
+        logger.info(f"Calendar cache (today): {len(today_events)} events")
+        return today_events
 
-    # Live Forex Factory public JSON (ends in a minimal hardcoded schedule if
-    # even that is unreachable, so the blackout gate never fails open).
+    # Cache missing/stale only: live Forex Factory public JSON (ends in a
+    # minimal hardcoded schedule if even that is unreachable, so the blackout
+    # gate never fails open).
     all_week = _forex_factory_fallback()
     today_events = [e for e in all_week if e.get("date", "").startswith(today)]
     logger.info(f"Forex Factory today: {len(today_events)} events")

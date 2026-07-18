@@ -131,3 +131,35 @@ def test_storage_failure_returns_fail_safe_state_not_crash():
     )
     assert s.account_balance == 10_000.0
     assert s.current_drawdown_pct == 0.0
+
+
+# ── Fail-safe direction (D1/storage outage must fail CLOSED) ─────────────────
+
+def test_portfolio_read_failure_fails_closed_and_blocks_trade():
+    """If the portfolio state can't be read (e.g. an unreachable D1 proxy), the
+    fallback must BLOCK new trades — assume the book is full — not wave them
+    through on a zero book. Regression for the observed live fail-OPEN."""
+    def _boom(*a, **kw):
+        raise RuntimeError("D1 proxy unreachable")
+
+    s = compute_portfolio_state(
+        symbol="EURUSD",
+        config=CONFIG,
+        _recent_signals_fn=_boom,
+        _open_signals_fn=_boom,
+    )
+    # Fail CLOSED: 100% open + correlated exposure.
+    assert s.current_open_risk_pct == 1.0
+    assert s.correlated_exposure_pct == 1.0
+
+    result = evaluate_risk(
+        RiskInputs(
+            account_balance=s.account_balance,
+            entry_price=1.1000, stop_loss_price=1.0950, take_profit_price=1.1100,
+            current_open_risk_pct=s.current_open_risk_pct,
+            current_drawdown_pct=s.current_drawdown_pct,
+            correlated_exposure_pct=s.correlated_exposure_pct,
+        ),
+        CONFIG,
+    )
+    assert result.passed is False

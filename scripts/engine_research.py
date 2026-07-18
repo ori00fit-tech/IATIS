@@ -74,6 +74,7 @@ def _collect_engine_votes(symbols: list[str], step: int = 8, warmup: int = 220):
                 continue
 
             cfg["data"]["source"] = "injected"
+            cfg.setdefault("system", {})["backtest_mode"] = True  # offline backtest: skip live persistence (D1)
             cfg["data"]["_injected_df"] = df.iloc[:i + 1].copy()
             cfg["data"]["symbol"] = sym
 
@@ -252,6 +253,7 @@ def run_h015(symbols: list[str], step: int = 12) -> dict:
                     continue
 
                 cfg["data"]["source"] = "injected"
+                cfg.setdefault("system", {})["backtest_mode"] = True  # offline backtest: skip live persistence (D1)
                 cfg["data"]["_injected_df"] = df.iloc[:i + 1].copy()
                 cfg["data"]["symbol"] = sym
 

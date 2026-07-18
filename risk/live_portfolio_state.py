@@ -115,13 +115,22 @@ def compute_portfolio_state(
         ]
         open_rows = open_fn(**kwargs)
     except Exception as exc:  # noqa: BLE001 — storage failure must not crash pipeline
-        logger.error(f"Portfolio state read failed — using fail-safe defaults: {exc}")
+        # Fail CLOSED, not open. If we cannot read our current exposure we do
+        # NOT know how much risk is already committed, so we must assume the
+        # book is full and block any new trade rather than wave it through
+        # blind. Returning a clean/zero book here (the previous behaviour) let
+        # trades EXECUTE during a storage/D1 outage — the opposite of a
+        # fail-safe (observed live: portfolio read failing on an unreachable D1
+        # proxy while the risk gate passed). 100% open + correlated exposure
+        # trips both the projected-exposure and correlation gates in
+        # risk_engine, so the decision is blocked with a clear reason.
+        logger.error(f"Portfolio state read failed — failing CLOSED (blocking new trades): {exc}")
         return PortfolioState(
             account_balance=starting_balance,
             equity_peak=starting_balance,
-            current_open_risk_pct=0.0,
+            current_open_risk_pct=1.0,
             current_drawdown_pct=0.0,
-            correlated_exposure_pct=0.0,
+            correlated_exposure_pct=1.0,
         )
 
     # ── Realized equity curve → balance + drawdown from peak ──────────

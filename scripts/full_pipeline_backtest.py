@@ -90,6 +90,7 @@ def backtest_symbol(symbol, df, step=8, warmup=220):
     # Build config ONCE — update only _injected_df each iteration
     cfg = build_config(symbol)
     cfg["data"]["source"] = "injected"
+    cfg.setdefault("system", {})["backtest_mode"] = True  # offline backtest: skip live persistence (D1)
 
     balance = 10_000.0
     peak = balance

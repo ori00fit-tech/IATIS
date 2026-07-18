@@ -52,6 +52,7 @@ def run_attribution(symbol: str, df, step: int = 8, warmup: int = 220):
             continue
 
         cfg["data"]["source"] = "injected"
+        cfg.setdefault("system", {})["backtest_mode"] = True  # offline backtest: skip live persistence (D1)
         cfg["data"]["_injected_df"] = df.iloc[:i+1].copy()
         cfg["data"]["symbol"] = symbol
 

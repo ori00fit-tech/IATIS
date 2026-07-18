@@ -717,8 +717,16 @@ def run_pipeline(config: dict) -> dict:
     # its output against a stored decision. Nothing below this line may
     # happen — no persistence, no outcome logging, no alerts. Absent flag
     # (all production/normal paths) = behavior unchanged.
-    if config.get("system", {}).get("replay_mode"):
-        logger.info("REPLAY MODE: skipping persistence, outcome logging and alerts")
+    #
+    # backtest_mode does the same for offline backtests. A backtest steps
+    # run_pipeline() thousands of times, and each live-persistence call retries
+    # with a 2s backoff on failure — against an unreachable D1 that turns an
+    # ~0.1s step into ~4s and a full-universe backtest into an 8-hour hang.
+    # Backtests must never write to the live decision store anyway. (Kept
+    # distinct from source=="injected", which the replay-window generator also
+    # uses and which DOES need this block to run.)
+    if config.get("system", {}).get("replay_mode") or config.get("system", {}).get("backtest_mode"):
+        logger.info("REPLAY/BACKTEST MODE: skipping persistence, outcome logging and alerts")
         return report
 
     # Replay window capture: persist the exact per-TF input frames + config

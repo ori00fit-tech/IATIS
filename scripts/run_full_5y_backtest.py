@@ -127,6 +127,7 @@ def run_backtest_for_symbol(symbol: str, csv_path: Path, step: int = 8,
             continue
 
         cfg["data"]["source"] = "injected"
+        cfg.setdefault("system", {})["backtest_mode"] = True  # offline backtest: skip live persistence (D1)
         cfg["data"]["_injected_df"] = df.iloc[:i+1].copy()
         cfg["data"]["symbol"] = symbol
 

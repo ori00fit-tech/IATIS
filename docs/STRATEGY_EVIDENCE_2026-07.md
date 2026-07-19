@@ -316,3 +316,42 @@ per-symbol breakdown under `addendum_2026-07-13`, explicitly marked
 `in_sample: true` — H009's `status` is unchanged (still PASSED-but-flagged
 by the edge_gate trust audit; this addendum does not and should not
 change that).
+
+## Full-universe walk-forward re-validation (2026-07-19) — no robust edge across the universe
+
+The old `walk_forward_validation` registry block (2026-06-25: "18/18 test
+windows, avg PF 3.08, provable edge") was run on **only 6 hand-picked
+symbols over ~2yr of H1 data**. Exactly the setup CLAUDE.md warns to treat
+as RESEARCH: a narrow, favourable slice. After the backtest-infrastructure
+fixes this session (backtest_mode flag so the pipeline stops fighting an
+unreachable D1; portfolio state returns a clean book offline instead of
+failing closed and blocking every simulated trade), the frozen production
+system — **engines/thresholds completely unmodified** — was re-run as a
+proper chronological walk-forward across the **full 20-symbol universe at
+the H4 decision TF**, 3 rolling TRAIN/TEST windows each.
+
+**Verdict: 0 CONSISTENT, 2 weakly ACCEPTABLE, 18 INCONSISTENT.**
+
+| symbol | W1 PF | W2 PF | W3 PF | grade |
+|---|---|---|---|---|
+| USDCAD | 1.44 | 1.34 | 1.64 | ACCEPTABLE (weak) |
+| NAS100 | 1.50 | 1.54 | 1.18 | ACCEPTABLE (weak) |
+| (other 18 symbols) | — | — | — | INCONSISTENT (PF flips window to window) |
+
+No symbol is CONSISTENT; no symbol's TEST evidence clears
+`research/edge_gate.py` `PROMOTION_CRITERIA` (≥300 OOS trades, OOS PF ≥ 1.2,
+walk-forward + Monte Carlo). **The two "acceptable" symbols are NOT
+promoted and NOT cherry-picked** — that is precisely the H015 mistake
+(a subset that looks good on one slice is universe-dependent noise; H015
+died ADOPT→dead going from 3 symbols to 15). Picking USDCAD/NAS100 out of
+20 on a single walk-forward is the same trap.
+
+This is the decisive test the older 6-symbol block was too narrow to be,
+and it **confirms the frozen state and the carriers-only thesis**: there is
+no robust cross-universe edge to promote, so the forward-demo counter
+(CLAUDE.md rule 6) remains the only prospective evidence, and D001/D002
+(`scripts/forward_review.py`) remain the only paths to any live-capital
+discussion. Nothing here changes the enabled engines, the thresholds, or
+any entry/exit. Full per-symbol per-window record:
+`research/results/walk_forward_20260719_manifest.json` (generated on the
+VPS from a clean tree via `scripts/revive_manifests.py`).

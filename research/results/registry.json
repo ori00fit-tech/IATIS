@@ -413,7 +413,8 @@
    "USOIL W3 WR=44.8% in 2026 — possible weakening",
    "Data limited to 2yr H1 — longer history would strengthen conclusion",
    "No slippage modeled — real results will be lower"
-  ]
+  ],
+  "scope_note": "NARROW/SUPERSEDED: 6 hand-picked symbols on ~2yr H1 data only. Treat as RESEARCH per CLAUDE.md (favourable slice). Superseded as the authoritative walk-forward reading by 'walk_forward_validation_full_universe_20260719' below, which re-ran the SAME frozen system across the full 20-symbol H4 universe and found no robust edge (0 CONSISTENT)."
  },
  "_decision_rules": {
   "D001_fx_cut": {
@@ -435,5 +436,38 @@
    "action": "carriers edge CONFIRMED forward — live-capital discussion may open (allow_live_trading stays false until explicitly decided)"
   },
   "_evaluator": "scripts/forward_review.py — applies these rules, never invents thresholds at read time"
+ },
+ "walk_forward_validation_full_universe_20260719": {
+  "status": "COMPLETED — NO ROBUST EDGE (negative result, committed per CLAUDE.md rule 4)",
+  "date": "2026-07-19",
+  "supersedes": "walk_forward_validation (2026-06-25, 6-symbol H1)",
+  "system_state": "frozen production (prod4 engines, thresholds unmodified) — measurement only, no live change",
+  "method": "Chronological walk-forward, full 20-symbol universe at H4 decision TF, 3 rolling TRAIN/TEST windows each. Run after this session's backtest-mode and portfolio-state offline fixes so the pipeline no longer fights an unreachable D1 nor fails-closed-blocks every simulated trade.",
+  "symbols_tested_count": 20,
+  "windows": 3,
+  "grade_counts": {
+   "CONSISTENT": 0,
+   "ACCEPTABLE": 2,
+   "INCONSISTENT": 18
+  },
+  "acceptable_symbols": {
+   "USDCAD": {
+    "W1": 1.44,
+    "W2": 1.34,
+    "W3": 1.64,
+    "grade": "ACCEPTABLE"
+   },
+   "NAS100": {
+    "W1": 1.5,
+    "W2": 1.54,
+    "W3": 1.18,
+    "grade": "ACCEPTABLE"
+   }
+  },
+  "promotion_cleared": false,
+  "cherry_pick_guard": "The 2 ACCEPTABLE symbols are NOT promoted and NOT to be picked out of the 20 — that is the H015 error (subset good on one slice = universe-dependent noise; H015 died ADOPT->dead 3sym->15sym). No symbol clears edge_gate PROMOTION_CRITERIA.",
+  "conclusion": "No robust cross-universe edge to promote. Confirms the frozen state and the carriers-only thesis: the forward-demo counter (rule 6) remains the only prospective evidence; D001/D002 remain the only paths to a live-capital discussion. No engine/threshold/entry/exit change.",
+  "manifest": "research/results/walk_forward_20260719_manifest.json",
+  "evidence_doc": "docs/STRATEGY_EVIDENCE_2026-07.md (section: Full-universe walk-forward re-validation 2026-07-19)"
  }
 }

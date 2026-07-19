@@ -82,17 +82,27 @@ def run_attribution(symbol: str, df, step: int = 8, warmup: int = 220):
         balance += pnl
         open_until = i + sim["bars"]
 
-        # Record engine votes for this trade
+        # Record engine votes for this trade.
+        # The current report exposes per-engine effect via
+        # confluence.contributions = {engine_name: signed_weighted_value},
+        # where sign is the effective bias (positive→BULLISH, negative→BEARISH,
+        # 0→NEUTRAL) and magnitude is the engine's weighted push. There is no
+        # top-level "engines" list, so the previous loop always yielded {}.
+        conf = report.get("confluence", {})
+        contributions = conf.get("contributions", {}) or {}
         engine_votes = {}
-        for eng in report.get("engines", []):
-            name = eng.get("engine", eng.get("engine_name", "?"))
-            engine_votes[name] = {
-                "bias": eng.get("bias", "NEUTRAL"),
-                "score": eng.get("score", 0),
-            }
+        for name, contrib in contributions.items():
+            c = float(contrib or 0.0)
+            if c > 0:
+                bias = "BULLISH"
+            elif c < 0:
+                bias = "BEARISH"
+            else:
+                bias = "NEUTRAL"
+            engine_votes[name] = {"bias": bias, "score": abs(c)}
 
         # Record reversal veto info
-        rv = report.get("confluence", {}).get("reversal_veto", {})
+        rv = conf.get("reversal_veto", {})
 
         trades.append({
             "bar": i,
@@ -100,12 +110,11 @@ def run_attribution(symbol: str, df, step: int = 8, warmup: int = 220):
             "outcome": sim["outcome"],
             "pnl": pnl,
             "direction": "BULLISH" if direction == 1 else "BEARISH",
-            "score": report.get("confluence", {}).get("adjusted_score",
-                     report.get("confluence", {}).get("final_score", 0)),
-            "regime": report.get("regime", {}).get("regime", "UNKNOWN"),
+            "score": conf.get("score", conf.get("raw_score", 0)),
+            "regime": report.get("regime", {}).get("state", "UNKNOWN"),
             "engine_votes": engine_votes,
             "reversal_veto": rv,
-            "winning_bias": report.get("confluence", {}).get("winning_bias", "?"),
+            "winning_bias": conf.get("vote", {}).get("winning_bias", "?"),
         })
 
     return trades

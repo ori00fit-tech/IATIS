@@ -354,7 +354,7 @@
   },
   "H024": {
    "title": "Hard regime gate vs. current soft regime-weighting: the system reweights engines by regime (confluence/regime_weights.py) but never blocks on it. Does a hard gate emitting NO_TRADE when regime==RANGING (trade only TRENDING) beat the always-on soft-weighted baseline out-of-sample across the 20-symbol universe?",
-   "status": "PLANNED",
+   "status": "NULL",
    "registered": "2026-07-19",
    "origin": "Operator-proposed (regime engine idea) + mechanism-motivated from code inspection. Finding: ~90% of the proposed 'regime engine' already exists and is LIVE — regimes/regime_detector.py (TRENDING/RANGING), regimes/volatility_classifier.py (ATR low/normal/high/extreme), regimes/session_context.py (London/NY), core/market_quality.py _market_quality_gate (already blocks on poor quality), and confluence/regime_weights.py (soft regime multipliers, hand-crafted + self-described as never validated). The genuinely un-measured lever is a HARD regime gate (block RANGING) vs the current SOFT weighting. Counter-prior stated up front: 2026-07-19 in-sample attribution (3238 trades) showed regime performance FLAT (RANGING WR 34.8% >= TRENDING 33.2%), so the naive 'trend-only is better' intuition is in-sample UNfavorable — which is exactly why a pre-registered OOS test is the arbiter.",
    "method": "Two-arm A/B on identical bars, FROZEN prod4 pipeline, full 20-symbol universe (walk_forward_20260719 set), H4 decision TF + D1 MTF gate, real measured spread, chronological TRAIN(65%)/TEST(35%) (H008c standard) + walk-forward windows. Arm A = current (soft regime weighting, all regimes tradeable). Arm B = identical PLUS a hard gate that emits NO_TRADE when regime==RANGING. Entries/exits/stops/targets byte-identical between arms; only the take/skip decision differs. Runner: scripts/H024_regime_gate_ab.py (to be written), backtest_mode=True.",
@@ -365,7 +365,24 @@
    "linked_experiment": "scripts/H024_regime_gate_ab.py",
    "linked_result": "research/results/H024_regime_gate_ab.json",
    "hypothesis_doc": "research/hypotheses/H024_regime_gate.md",
-   "last_updated": "2026-07-19"
+   "last_updated": "2026-07-19",
+   "result": {
+    "verdict": "NULL — hard regime gate immaterial (soft weighting keeps the edge)",
+    "run_date": "2026-07-19",
+    "universe": "19 symbols, H4, chronological TRAIN65/TEST35, backtest_mode",
+    "pooled_test_PF_A": 1.111,
+    "pooled_test_PF_B": 1.103,
+    "pooled_dPF": -0.009,
+    "pooled_test_trades_A": 1103,
+    "pooled_test_trades_B": 935,
+    "volume_retention": 0.848,
+    "symbol_win_frac": 0.474,
+    "carriers_PF_A": 1.308,
+    "carriers_PF_B": 1.273,
+    "checks": "1_dPF>=0.15 FAIL (-0.009); 2_volume>=0.50 PASS (0.848); 3_symbol_frac>=0.60 FAIL (0.474); 4_carriers_not_degraded PASS; n_guard PASS (1103)",
+    "interpretation": "Blocking RANGING removes ~15% of trades for a -0.009 PF change and mild carrier degradation. Confirms the 2026-07-19 attribution's flat regime WR was not a fluke: regime STATE (trend vs range) does not separate outcomes in this system. The current soft regime_weights are neither helped nor beaten by a hard gate. Feature flag features.regime_gate stays OFF/frozen (rule 6).",
+    "manifest": "research/results/H024_regime_gate_ab.json"
+   }
   }
  },
  "walk_forward_validation": {

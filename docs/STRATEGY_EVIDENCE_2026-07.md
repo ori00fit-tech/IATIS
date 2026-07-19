@@ -355,3 +355,24 @@ discussion. Nothing here changes the enabled engines, the thresholds, or
 any entry/exit. Full per-symbol per-window record:
 `research/results/walk_forward_20260719_manifest.json` (generated on the
 VPS from a clean tree via `scripts/revive_manifests.py`).
+
+## H024 — hard regime gate vs. soft regime-weighting (2026-07-19, NULL)
+
+The operator proposed a "regime engine" that switches trading on/off by market
+state. Code inspection first (measure before building) found ~90% of it already
+live — `regimes/regime_detector.py` (TRENDING/RANGING), `volatility_classifier`,
+`session_context`, the MQS gate that already blocks poor environments, and
+`confluence/regime_weights.py` (soft, hand-crafted, self-described as never
+validated). The one un-measured lever was a **hard** gate (block RANGING, trade
+only TRENDING) vs the current **soft** weighting, pre-registered as H024 with the
+falsification rule fixed before data. Counter-prior recorded up front: the same
+day's attribution showed regime WR flat (RANGING 34.8% ≥ TRENDING 33.2%).
+
+Two-arm A/B, frozen prod4, 19 symbols, chronological TRAIN65/TEST35. **Result —
+NULL:** pooled TEST PF **1.111 (arm A) vs 1.103 (arm B), ΔPF −0.009**; blocking
+RANGING removed ~15% of trades (volume retained 0.848) for no gain and mild
+carrier degradation (1.308 → 1.273); only 47% of symbols improved. Verdict by the
+pre-registered rule: NULL — the gate is immaterial and the soft weighting keeps
+the edge. Regime *state* does not separate outcomes in this system. Feature flag
+`features.regime_gate` stays OFF and frozen (rule 6). Manifest:
+`research/results/H024_regime_gate_ab.json`; registry H024.

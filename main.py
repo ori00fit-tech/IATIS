@@ -461,6 +461,26 @@ def _final_verdict(
             )
             logger.info(f"{downgrade_reason} → NO_TRADE")
 
+    # H024 — global HARD regime gate (research, pre-registered, FROZEN).
+    # Ships OFF: features.regime_gate default false, so this block is inert
+    # both live and across every existing test. When enabled it emits NO_TRADE
+    # for any decision whose detected regime is in the blocked set (pre-registered
+    # default: RANGING → trade only TRENDING). This is the GLOBAL counterpart to
+    # the per-symbol regime_filter above; unlike regime_weights it BLOCKS rather
+    # than reweights. Entries/exits are unchanged — only the take/skip flips —
+    # so an H024 A/B run attributes any ΔPF solely to the gate. Never touches
+    # live decisions until the forward-demo milestone (CLAUDE.md rule 6).
+    features_cfg = config.get("features", {})
+    if final_verdict == "EXECUTE" and features_cfg.get("regime_gate", False):
+        blocked_regimes = features_cfg.get("regime_gate_block", ["RANGING"])
+        if regime_state in blocked_regimes:
+            final_verdict = "NO_TRADE"
+            downgrade_reason = (
+                f"H024 regime gate: {regime_state} is in blocked set "
+                f"{list(blocked_regimes)}"
+            )
+            logger.info(f"{downgrade_reason} → NO_TRADE")
+
     # Meta Decision Layer — confidence + stability + engine contributions
     meta = None
     if final_verdict == "EXECUTE":

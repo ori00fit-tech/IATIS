@@ -369,7 +369,7 @@
   },
   "H025": {
    "title": "Information compression: before large moves the H4 price path becomes more algorithmically ordered (lower LZ76 complexity of the sign-of-return sequence), not merely lower-volatility; gating the frozen prod4 pipeline to below-median-complexity states improves pooled OOS PF.",
-   "status": "PLANNED",
+   "status": "FAILED",
    "registered": "2026-07-21",
    "origin": "Operator-proposed 2026-07-21 (batch-1 'unconventional' ideas, operator id H025; also batch-2 c-H037/c-H058). Survives the dead-list check: price-only input (sign sequence of closes), no liquidity/volume/entry-pattern concepts. Complexity is a different axis from ATR/Bollinger width: a low-ATR window can be maximally random and vice versa. Honest counter stated up front: LZ complexity correlates with trend persistence and vol clustering; if the effect is just an ATR-squeeze proxy, the recorded middle-ATR-tercile diagnostic will show it.",
    "method": "Two stages, strictly ordered. Frozen parameters (no forking paths): LZ76 on binary close-to-close sign sequence, window 64 H4 bars, normalized by n/log2(n); trailing 500-bar percentile per symbol; Stage-1 forward horizon 20 bars normalized by ATR(14); Stage-2 gate threshold percentile <= 0.50. Secondary measures (Shannon entropy 8-bin, zlib ratio) recorded only, never decision inputs. Stage 1 (TRAIN slice ONLY, 20-symbol universe, H008c chronological 65/35 split): does the bottom complexity quintile precede larger normalized moves? Stage 2 (only if Stage 1 passes): two-arm A/B on the FROZEN prod4 pipeline, identical bars, real measured spread; arm B adds NO_TRADE unless complexity percentile <= 0.50; entries/exits byte-identical. Runner: research/experiments/H025_information_compression.py (to be written).",
@@ -380,7 +380,9 @@
    "linked_experiment": "research/experiments/H025_information_compression.py",
    "linked_result": "research/results/H025_information_compression.json",
    "hypothesis_doc": "research/hypotheses/H025_information_compression.md",
-   "last_updated": "2026-07-21"
+   "last_updated": "2026-07-21",
+   "manifest": "research/results/h025_stage1_20260721_manifest.json",
+   "conclusion": "FAILED at Stage 1 by the pre-registered rule (2026-07-21, VPS run, manifest h025_stage1_20260721): pooled bottom-quintile/unconditional forward-move ratio 1.0049 (needed >= 1.10) and symbol-cluster bootstrap p = 0.3090 (needed < 0.05). Only the breadth guard passed (9/15 symbols ratio > 1.0 = 60%). Effect size is zero to the third decimal: low LZ76 complexity carries no information about forward 20-bar range/ATR on this universe. The recorded mid-ATR-tercile diagnostic is ~1.0 as well, so nothing was hiding behind volatility conditioning - 'compression' here is not even a repackaged ATR squeeze; it is nothing. Coverage: 15/20 symbols evaluated (AUDUSD/USDCAD/NZDUSD/EURGBP/EURCHF absent from the deep-history download universe); pooled quintile n = 7353 >> the 500 minimum, so the verdict stands. Per the registered rule Stage 2 is never built: no complexity gate, no features.complexity_gate flag, no OOS data consumed. Secondary measures (entropy/zlib) recorded in the result JSON."
   },
   "H033": {
    "title": "Meta-confidence gate: a frozen-spec logistic meta-model trained only on decision-time features of the system's own historical simulated trades can rank future trades by win probability well enough that skipping the lowest-confidence 30% improves pooled OOS PF.",

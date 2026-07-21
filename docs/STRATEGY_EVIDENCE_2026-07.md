@@ -355,3 +355,23 @@ discussion. Nothing here changes the enabled engines, the thresholds, or
 any entry/exit. Full per-symbol per-window record:
 `research/results/walk_forward_20260719_manifest.json` (generated on the
 VPS from a clean tree via `scripts/revive_manifests.py`).
+
+---
+
+### H025 — information compression (added to the rejected ledger, 2026-07-21)
+
+The operator's most promising "unconventional" idea (2026-07-21 intake,
+`research/hypotheses/BACKLOG_2026-07-21.md`): before large moves the market
+becomes more *ordered* — lower Lempel-Ziv complexity, a genuinely different
+axis from ATR/Bollinger width. Pre-registered same day with a two-stage rule
+so the OOS slice could not be spent on a dead premise.
+
+| enhancement | method | verdict |
+|---|---|---|
+| **Complexity gate** (LZ76 of the 64-bar sign sequence; trade only "compressible" states) | Stage 1 on TRAIN only (H008c 65/35 split, 15 evaluable symbols of the 20-universe): bottom complexity quintile (trailing-500 percentile) vs unconditional median forward 20-bar range/ATR14; symbol-cluster bootstrap, seeded, 1000 resamples (`research/experiments/H025_information_compression.py`) | **No information.** Pooled ratio **1.0049** (rule required ≥ 1.10), bootstrap p **0.309** (required < 0.05); 9/15 symbols > 1.0 (breadth guard alone passed). Mid-ATR-tercile diagnostic ≈ 1.0 too — the null isn't masked by a volatility squeeze; there is simply nothing there. Pooled quintile n = 7353 (≥ 500 minimum), so the null is well-powered. Stage 2 (the actual gate A/B) was never built, per the pre-registered rule — no `features.complexity_gate` flag exists. |
+
+Cost of the honest design: one TRAIN-only scan, zero OOS consumption, zero
+live-code surface. The two-stage pattern (cheap information test gates the
+expensive system A/B) is worth reusing for future exotic inputs. Result:
+`research/results/H025_information_compression.json` + manifest
+`h025_stage1_20260721_manifest.json` (generated on the VPS from a clean tree).

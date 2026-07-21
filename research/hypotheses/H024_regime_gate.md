@@ -80,8 +80,10 @@ system level, and the current soft weighting is not costing us edge.
 
 ## Not in scope (deliberately, for a clean single-mechanism test)
 Whether the *existing* hand-crafted `regime_weights.py` multipliers add anything
-over flat weights is a separate, also-worth-testing question (candidate H025:
-multipliers ON vs OFF A/B). H024 changes exactly one thing — the presence of the
+over flat weights is a separate, also-worth-testing question (reserved **H034**:
+multipliers ON vs OFF A/B — see `BACKLOG_2026-07-21.md`; H025 was subsequently
+assigned to the information-compression hypothesis). H024 changes exactly one
+thing — the presence of the
 hard gate — so its verdict is attributable.
 
 ## Live-safety (non-negotiable)

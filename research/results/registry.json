@@ -387,7 +387,7 @@
   },
   "H033": {
    "title": "Meta-confidence gate: a frozen-spec logistic meta-model trained only on decision-time features of the system's own historical simulated trades can rank future trades by win probability well enough that skipping the lowest-confidence 30% improves pooled OOS PF.",
-   "status": "PLANNED",
+   "status": "FAILED",
    "registered": "2026-07-21",
    "origin": "Operator-proposed 2026-07-21 (batch-1 operator id H033 'Meta-Engine'; batch-2 c-H045 'confidence calibration'). Meta-labeling applied to IATIS's own ledger - no market signal added; scores the frozen pipeline's decisions using only decision-time information. Prior honestly against it: every measured gate/addition so far cost edge or did nothing (7 gates shadow book, H015, H017), and the confluence score is already a hand-crafted confidence proxy with measured marginal value ~0. Operator's floated absolute 80% confidence cutoff replaced at registration by a percentile threshold: at ~34% base WR an absolute 0.80 cutoff would never trade.",
    "method": "Frozen model spec, no tuning, no model search: L2 logistic regression C=1.0, sklearn defaults, one pooled model. Label = simulated trade outcome (target vs stop). Features (decision-time only): confluence score, per-engine agreement vector (prod4), regime, volatility class, session, asset class, ATR(14) percentile, D1 alignment, proposed RR. No symbol identity beyond asset class. Fit on TRAIN-slice trades of the frozen prod4 backtest (20-symbol universe, H008c 65/35 chronological split, real spread), FREEZE, then replay TEST decisions: arm B skips scores below the 30th percentile of TRAIN score distribution. Walk-forward refit as robustness check. Consumes the arm-A ledger produced by the H024/H025 harness - no new backtest engine needed. Runner: research/experiments/H033_meta_confidence_gate.py (to be written).",
@@ -398,7 +398,9 @@
    "linked_experiment": "research/experiments/H033_meta_confidence_gate.py",
    "linked_result": "research/results/H033_meta_confidence_gate.json",
    "hypothesis_doc": "research/hypotheses/H033_meta_confidence_gate.md",
-   "last_updated": "2026-07-21"
+   "last_updated": "2026-07-22",
+   "manifest": "research/results/h033_meta_gate_20260722_manifest.json",
+   "conclusion": "FAILED by the pre-registered sanity gate (2026-07-22 VPS run): TEST AUC 0.5071 (floor 0.55) - the frozen-spec logistic model cannot rank the system's own trades out of sample at all. Walk-forward recorded reads confirm it is noise around 0.5, not a threshold artifact: W1 AUC 0.548, W2 AUC 0.474 (the 'signal' flips sign between windows). PF deltas were immaterial anyway (arm A 1.12 n=1187 - identical to H024's arm A, a good harness-reproduction check - vs arm B 1.116, dPF -0.004) and the gate disproportionately skipped good carrier trades (carriers 1.335 -> 1.233). Institutional meaning: the decision-time features (confluence score, engine agreement, regime, session, ATR percentile, D1 alignment, RR) carry ~zero information about which EXECUTE decisions win. This is a coherence check on the frozen-thresholds stance - if the score could rank trades, threshold tuning would matter; it cannot, so it does not. Also weakens the priors of backlog H049 (analog memory), H043 (consensus dynamics) and adaptive-threshold ideas: they are recombinations of the same informationless features. features.meta_gate was never created; nothing live changes. The featured 3415-trade arm-A ledger (H033_trade_ledger.json) is preserved as a research asset."
   }
  },
  "walk_forward_validation": {

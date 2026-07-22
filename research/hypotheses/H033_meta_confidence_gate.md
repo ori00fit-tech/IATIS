@@ -111,7 +111,21 @@ cannot reset the prospective counter mid-sample. The model is fit on
 simulated history only; it never trains on or alters the live demo book.
 
 ## Status
-`PLANNED`
+`FAILED` — 2026-07-22, killed by the pre-registered AUC sanity gate.
+
+**Result (VPS run, 3415-trade arm-A ledger; arm A reproduced H024's arm A
+exactly — PF 1.12, n=1187):** TEST AUC **0.5071** vs the 0.55 floor; the
+model cannot rank the system's own trades out of sample. Walk-forward
+recorded reads (W1 0.548, W2 0.474) show noise flipping sign, not a
+threshold artifact. ΔPF −0.004 (immaterial) and carriers degraded
+1.335 → 1.233 — the skipped tranche contained *good* carrier trades.
+Institutional meaning: the decision-time features carry ≈ zero
+information about which EXECUTE decisions win — a coherence check on the
+frozen-thresholds stance, and a weakened prior for every backlog idea
+recombining the same features (H043, H049, adaptive thresholds).
+`features.meta_gate` was never created. The featured ledger
+(`research/results/H033_trade_ledger.json`) is preserved as a research
+asset. Ledger entry: `docs/STRATEGY_EVIDENCE_2026-07.md`.
 
 ## Linked experiment
 `research/experiments/H033_meta_confidence_gate.py` (to be written AFTER

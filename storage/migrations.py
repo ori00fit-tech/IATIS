@@ -86,6 +86,16 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE decisions ADD COLUMN data_versions TEXT",
         ],
     ),
+    (
+        3,
+        "journal_tags",
+        # Trade Journal (dashboard): operator-assigned tags on an outcome
+        # row, stored as a JSON array of short strings. Annotation only —
+        # never read by any gate, weight, or measurement (storage/journal.py).
+        [
+            "ALTER TABLE outcomes ADD COLUMN tags TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -127,12 +137,15 @@ def apply_migrations() -> list[str]:
         for version, name, statements in MIGRATIONS:
             if version <= ver:
                 continue
-            # The decisions table may not exist yet on a fresh deploy where
-            # the pipeline never ran — ALTER TABLE would fail on it. Ensure
-            # module-owned tables exist before altering them.
+            # Module-owned tables may not exist yet on a fresh deploy where
+            # the pipeline never ran — ALTER TABLE would fail on them. Ensure
+            # they exist before altering.
             if any("ALTER TABLE decisions" in s for s in statements):
                 from storage import decision_db
                 con.execute(decision_db._CREATE_DECISIONS)
+            if any("ALTER TABLE outcomes" in s for s in statements):
+                from storage import outcome_tracker
+                outcome_tracker._init_db()
             for sql in statements:
                 try:
                     con.execute(sql)

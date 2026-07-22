@@ -281,9 +281,11 @@ def performance_summary() -> dict:
         losses = con.execute(
             "SELECT COUNT(*) FROM outcomes WHERE outcome='loss'"
         ).fetchone()[0]
-        total_pips = con.execute(
-            "SELECT SUM(pnl_pips) FROM outcomes WHERE outcome != 'open'"
-        ).fetchone()[0] or 0
+        # NOTE: total_pips is recomputed below from per-row prices — the
+        # stored pnl_pips column is poisoned on legacy rows written before
+        # the 2026-07-16 pip-size fix (crypto/indices went through the FX
+        # pip size, producing millions of phantom pips that made the
+        # dashboard's expectancy read −857k pips/trade).
         open_count = con.execute(
             "SELECT COUNT(*) FROM outcomes WHERE outcome='open'"
         ).fetchone()[0]
@@ -306,60 +308,66 @@ def performance_summary() -> dict:
         ORDER BY bucket DESC
         """).fetchall()
 
-        # Regime breakdown
+        # Regime breakdown (avg_pips recomputed from prices below — the
+        # stored pnl_pips column is poisoned on legacy rows).
         regime_rows = con.execute("""
         SELECT regime, COUNT(*) as n,
-               SUM(CASE WHEN outcome='win' THEN 1 ELSE 0 END) as wins,
-               AVG(pnl_pips) as avg_pips
+               SUM(CASE WHEN outcome='win' THEN 1 ELSE 0 END) as wins
         FROM outcomes
         WHERE outcome != 'open' AND regime IS NOT NULL
         GROUP BY regime
         """).fetchall()
+        regime_px_rows = con.execute("""
+        SELECT regime, symbol, entry_price, exit_price, direction
+        FROM outcomes
+        WHERE outcome != 'open' AND regime IS NOT NULL
+          AND entry_price IS NOT NULL AND exit_price IS NOT NULL
+        """).fetchall()
 
-        # Profit factor — same gross-win/gross-loss definition as
-        # scripts/forward_review.py's _bucket_stats, applied here to the
-        # whole book rather than one symbol bucket.
-        pf_row = con.execute("""
-        SELECT
-            SUM(CASE WHEN pnl_usd > 0 THEN pnl_usd ELSE 0 END) as gross_win,
-            SUM(CASE WHEN pnl_usd < 0 THEN -pnl_usd ELSE 0 END) as gross_loss
-        FROM outcomes WHERE outcome != 'open'
-        """).fetchone()
-        gross_win = pf_row["gross_win"] or 0.0
-        gross_loss = pf_row["gross_loss"] or 0.0
-        if gross_loss > 0:
-            profit_factor: float | str | None = round(gross_win / gross_loss, 3)
-        elif total == 0:
-            profit_factor = None
-        else:
-            # Zero losing trades: PF is mathematically infinite. A bare
-            # `Infinity` token is what Python's json.dumps would emit for
-            # float("inf"), but that's not valid JSON — a browser's
-            # JSON.parse (used by fetch().json()) throws on it. Send the
-            # string sentinel instead; the frontend renders it as "∞".
-            profit_factor = "Infinity"
-
-        # Average realized R-multiple, recomputed exactly from each row's
-        # own entry/stop/exit (not approximated from pnl_usd, which bakes
-        # in a per-trade risk_usd we don't always know) — this repo's own
+        # Per-row prices for every derived figure below. Recomputed exactly
+        # from each row's own entry/stop/exit (never from the stored
+        # pnl_pips/pnl_usd columns): legacy rows carry both a poisoned
+        # pnl_pips (pre-2026-07-16 pip-size bug) and a pnl_usd written with
+        # the old inflated "1 standard lot" approximation — this repo's own
         # rule is real evidence over convenient shortcuts.
         r_rows = con.execute("""
-        SELECT entry_price, stop_loss, exit_price, direction
+        SELECT symbol, entry_price, stop_loss, exit_price, direction
         FROM outcomes
         WHERE outcome != 'open' AND entry_price IS NOT NULL
-          AND stop_loss IS NOT NULL AND exit_price IS NOT NULL
+          AND exit_price IS NOT NULL
         """).fetchall()
 
     r_multiples: list[float] = []
+    total_pips = 0.0
     for row in r_rows:
-        entry, sl, exit_px = row["entry_price"], row["stop_loss"], row["exit_price"]
-        sl_distance = abs(entry - sl)
-        if sl_distance <= 0:
-            continue
+        entry, exit_px = row["entry_price"], row["exit_price"]
         is_buy = row["direction"] in ("BUY", "BULLISH")
         diff = (exit_px - entry) if is_buy else (entry - exit_px)
-        r_multiples.append(diff / sl_distance)
+        total_pips += diff / _pip_size(row["symbol"] or "")
+        sl = row["stop_loss"]
+        sl_distance = abs(entry - sl) if sl is not None else 0.0
+        if sl_distance > 0:
+            r_multiples.append(diff / sl_distance)
     avg_r_multiple = round(sum(r_multiples) / len(r_multiples), 3) if r_multiples else None
+    total_r = round(sum(r_multiples), 2) if r_multiples else None
+
+    # Profit factor — same gross-win/gross-loss definition as
+    # scripts/forward_review.py's _bucket_stats, applied to risk-normalized
+    # R-multiples (equivalent ordering to the pnl_usd version when pnl_usd
+    # is intact, immune to the legacy corruption when it is not).
+    gross_win = sum(r for r in r_multiples if r > 0)
+    gross_loss = -sum(r for r in r_multiples if r < 0)
+    if gross_loss > 0:
+        profit_factor: float | str | None = round(gross_win / gross_loss, 3)
+    elif total == 0 or not r_multiples:
+        profit_factor = None
+    else:
+        # Zero losing trades: PF is mathematically infinite. A bare
+        # `Infinity` token is what Python's json.dumps would emit for
+        # float("inf"), but that's not valid JSON — a browser's
+        # JSON.parse (used by fetch().json()) throws on it. Send the
+        # string sentinel instead; the frontend renders it as "∞".
+        profit_factor = "Infinity"
 
     win_rate = round(wins / total * 100, 1) if total > 0 else 0
     return {
@@ -370,11 +378,32 @@ def performance_summary() -> dict:
         "total_pips": round(total_pips, 1),
         "profit_factor": profit_factor,
         "avg_r_multiple": avg_r_multiple,
+        "total_r": total_r,
         "open_signals": open_count,
         "calibration": [dict(r) for r in calibration_rows],
-        "by_regime": [dict(r) for r in regime_rows],
+        "by_regime": _regime_breakdown(regime_rows, regime_px_rows),
         "note": f"Need 200+ trades for statistical significance (current: {total})",
     }
+
+
+def _regime_breakdown(regime_rows, regime_px_rows) -> list[dict]:
+    """Per-regime stats with avg_pips recomputed from row prices (the
+    stored pnl_pips is unreliable on legacy rows — see _PIP_SIZE_BY_CLASS)."""
+    pips_by_regime: dict[str, list[float]] = {}
+    for row in regime_px_rows:
+        entry, exit_px = row["entry_price"], row["exit_price"]
+        is_buy = row["direction"] in ("BUY", "BULLISH")
+        diff = (exit_px - entry) if is_buy else (entry - exit_px)
+        pips_by_regime.setdefault(row["regime"], []).append(
+            diff / _pip_size(row["symbol"] or "")
+        )
+    out = []
+    for r in regime_rows:
+        d = dict(r)
+        pips = pips_by_regime.get(d.get("regime"), [])
+        d["avg_pips"] = round(sum(pips) / len(pips), 1) if pips else None
+        out.append(d)
+    return out
 
 
 def recent_signals(limit: int = 10) -> list[dict]:

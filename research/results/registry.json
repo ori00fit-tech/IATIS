@@ -354,7 +354,7 @@
   },
   "H024": {
    "title": "Hard regime gate vs. current soft regime-weighting: the system reweights engines by regime (confluence/regime_weights.py) but never blocks on it. Does a hard gate emitting NO_TRADE when regime==RANGING (trade only TRENDING) beat the always-on soft-weighted baseline out-of-sample across the 20-symbol universe?",
-   "status": "PLANNED",
+   "status": "NULL",
    "registered": "2026-07-19",
    "origin": "Operator-proposed (regime engine idea) + mechanism-motivated from code inspection. Finding: ~90% of the proposed 'regime engine' already exists and is LIVE — regimes/regime_detector.py (TRENDING/RANGING), regimes/volatility_classifier.py (ATR low/normal/high/extreme), regimes/session_context.py (London/NY), core/market_quality.py _market_quality_gate (already blocks on poor quality), and confluence/regime_weights.py (soft regime multipliers, hand-crafted + self-described as never validated). The genuinely un-measured lever is a HARD regime gate (block RANGING) vs the current SOFT weighting. Counter-prior stated up front: 2026-07-19 in-sample attribution (3238 trades) showed regime performance FLAT (RANGING WR 34.8% >= TRENDING 33.2%), so the naive 'trend-only is better' intuition is in-sample UNfavorable — which is exactly why a pre-registered OOS test is the arbiter.",
    "method": "Two-arm A/B on identical bars, FROZEN prod4 pipeline, full 20-symbol universe (walk_forward_20260719 set), H4 decision TF + D1 MTF gate, real measured spread, chronological TRAIN(65%)/TEST(35%) (H008c standard) + walk-forward windows. Arm A = current (soft regime weighting, all regimes tradeable). Arm B = identical PLUS a hard gate that emits NO_TRADE when regime==RANGING. Entries/exits/stops/targets byte-identical between arms; only the take/skip decision differs. Runner: scripts/H024_regime_gate_ab.py (to be written), backtest_mode=True.",
@@ -365,7 +365,8 @@
    "linked_experiment": "scripts/H024_regime_gate_ab.py",
    "linked_result": "research/results/H024_regime_gate_ab.json",
    "hypothesis_doc": "research/hypotheses/H024_regime_gate.md",
-   "last_updated": "2026-07-19"
+   "last_updated": "2026-07-22",
+   "conclusion": "NULL by the pre-registered rule, applied by the pre-built runner (2026-07-22 VPS run, scripts/H024_regime_gate_ab.py): pooled TEST PF(A)=1.12 (n=1187) vs PF(B)=1.096 (n=1000), dPF=-0.024 (needed >=+0.15), volume retention 0.842 (passed), B>A in only 42.1% of symbols (needed >=60%), carriers PF 1.335->1.256 (degradation 0.079 > the 0.05 allowed). Runner verdict verbatim: 'NULL (gate immaterial; soft weighting keeps edge)'. Reading: blocking RANGING removes ~16% of trades and the removed trades were carrying their weight - especially on the carriers, where the gate strictly hurt. Consistent with the 2026-07-19 in-sample attribution (RANGING WR >= TRENDING) that the registration flagged as the counter-prior. features.regime_gate stays false (it always was); soft regime weighting stays as-is; no live change. Result JSON on the VPS - freeze via scripts/revive_manifests.py from a clean tree, commit with the evidence set."
   },
   "H025": {
    "title": "Information compression: before large moves the H4 price path becomes more algorithmically ordered (lower LZ76 complexity of the sign-of-return sequence), not merely lower-volatility; gating the frozen prod4 pipeline to below-median-complexity states improves pooled OOS PF.",

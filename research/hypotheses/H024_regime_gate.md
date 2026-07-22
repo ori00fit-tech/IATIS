@@ -95,7 +95,15 @@ milestone (CLAUDE.md rule 6). H024 is **FROZEN** like H018/H023 and can never
 reset the prospective counter mid-sample.
 
 ## Status
-`PLANNED`
+`NULL` — closed 2026-07-22 by the pre-registered rule, applied by the
+pre-built runner. Pooled TEST PF(A)=1.12 (n=1187) vs PF(B)=1.096 (n=1000):
+ΔPF −0.024 (needed ≥ +0.15); volume retention 0.842 (passed); B>A in 42.1%
+of symbols (needed ≥ 60%); carriers PF 1.335 → 1.256 (−0.079, beyond the
+−0.05 allowance). The RANGING trades the gate removed were contributing —
+exactly the in-sample counter-prior stated at registration. Soft weighting
+stays; `features.regime_gate` stays `false`. Ledger:
+`docs/STRATEGY_EVIDENCE_2026-07.md`; result JSON + manifest committed from
+the VPS.
 
 ## Linked experiment
 `scripts/H024_regime_gate_ab.py` (to be written — a two-arm runner over the

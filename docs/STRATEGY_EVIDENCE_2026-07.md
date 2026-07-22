@@ -375,3 +375,20 @@ live-code surface. The two-stage pattern (cheap information test gates the
 expensive system A/B) is worth reusing for future exotic inputs. Result:
 `research/results/H025_information_compression.json` + manifest
 `h025_stage1_20260721_manifest.json` (generated on the VPS from a clean tree).
+
+### H024 — hard regime gate (closed NULL, 2026-07-22)
+
+The one genuinely un-measured lever the "regime engine" proposal contained:
+the system *reweights* engines by regime but never *blocks* on it. Registered
+2026-07-19 with the counter-prior stated up front (in-sample attribution had
+RANGING WR ≥ TRENDING); runner built before any result existed.
+
+| enhancement | method | verdict |
+|---|---|---|
+| **Hard regime gate** (`NO_TRADE` when regime==RANGING; trade only TRENDING) | two-arm A/B, FROZEN prod4 on identical bars, full universe, H4+D1, real spread, chronological TEST slice (`scripts/H024_regime_gate_ab.py`) | **NULL — gate immaterial, and the carriers paid for it.** Pooled TEST PF(A)=1.12 (n=1187) vs PF(B)=1.096 (n=1000): ΔPF **−0.024** (needed ≥ +0.15). B>A in only 42.1% of symbols (needed ≥ 60%). Carriers PF **1.335 → 1.256** (−0.079, beyond the −0.05 allowance) — the RANGING trades the gate removed were *contributing*, exactly what the in-sample counter-prior predicted. Soft weighting stays; `features.regime_gate` stays `false`. |
+
+Second data point for the same lesson as the gate shadow-book: refusing
+trades is not free, and "trade only trends" folklore does not survive
+contact with the carriers' actual ledger. Reserved backlog items gated on
+this verdict (H038 regime persistence, H048 ML regime classifier) inherit a
+weakened prior.

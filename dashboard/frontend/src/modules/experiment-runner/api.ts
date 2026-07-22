@@ -4,6 +4,8 @@ export interface JobDescriptor {
   id: string
   description: string
   category: 'research' | 'ops'
+  /** True for jobs (backtest) that reject a run without symbols. */
+  requires_symbols?: boolean
 }
 
 export interface JobCatalogResponse {

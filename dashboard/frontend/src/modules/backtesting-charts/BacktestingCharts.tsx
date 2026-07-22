@@ -22,9 +22,14 @@ function num(v: unknown): number | undefined {
 function MetricComparison({ runs }: { runs: BacktestRun[] }) {
   const [metric, setMetric] = useState<Metric>('profit_factor')
   const meta = METRICS.find((m) => m.id === metric)!
+  // One bar per symbol: /backtest-results returns up to 3 result files, so a
+  // symbol re-run in a newer file appeared twice (EURUSD 1.17 and 1.27 side
+  // by side, unlabeled). Files arrive newest-first — keep the first (newest).
+  const seen = new Set<string>()
   const rows = runs
     .map((r) => ({ symbol: r.symbol, file: r.file, value: num(r[metric]) }))
     .filter((r): r is { symbol: string; file: string; value: number } => r.value !== undefined)
+    .filter((r) => (seen.has(r.symbol) ? false : (seen.add(r.symbol), true)))
   const max = Math.max(...rows.map((r) => Math.abs(r.value)), meta.id === 'profit_factor' ? 2 : 1)
 
   const color = (v: number): string => {

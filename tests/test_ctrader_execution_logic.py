@@ -250,3 +250,80 @@ def test_trendbar_decode_sorts_and_survives_bad_bar(client):
 def test_list_symbols_returns_sorted(client):
     client._symbol_id_to_name = {2: "GBPUSD", 1: "EURUSD", 3: "XAUUSD"}
     assert client.list_symbols() == ["EURUSD", "GBPUSD", "XAUUSD"]
+
+
+# ── ALREADY_LOGGED_IN handling (2026-07-22 reconnect-storm fix) ─────────────
+
+class _ErrorRes:
+    """Minimal stand-in for a ProtoOAErrorRes payload."""
+    def __init__(self, code="ALREADY_LOGGED_IN",
+                 description="Open API application is already authorized"):
+        self.errorCode = code
+        self.description = description
+
+
+def test_already_logged_in_during_app_auth_continues_bootstrap(client, monkeypatch):
+    """ALREADY_LOGGED_IN means the auth we asked for already holds — it must
+    continue to account auth, never flip to ERROR (the ERROR → instant
+    library retry → fresh auth → same rejection loop was the live storm)."""
+    from execution.ctrader_client import ConnectionState
+
+    sent = []
+    monkeypatch.setattr(client, "_send_account_auth", lambda c: sent.append("account_auth"))
+    client._client = object()
+    client._set_state(ConnectionState.TCP_CONNECTED)
+
+    client._on_error_res(_ErrorRes())
+
+    assert client._state == ConnectionState.APP_AUTH_OK
+    assert sent == ["account_auth"]
+
+
+def test_already_logged_in_during_account_auth_continues_bootstrap(client, monkeypatch):
+    from execution.ctrader_client import ConnectionState
+
+    sent = []
+    monkeypatch.setattr(client, "_send_trader_req", lambda c: sent.append("trader"))
+    monkeypatch.setattr(client, "_send_symbols_list_req", lambda c: sent.append("symbols"))
+    monkeypatch.setattr(client, "_send_reconcile_req", lambda c: sent.append("reconcile"))
+    client._client = object()
+    client._set_state(ConnectionState.APP_AUTH_OK)
+
+    client._on_error_res(_ErrorRes())
+
+    assert client._state == ConnectionState.ACCOUNT_AUTH_OK
+    assert sent == ["trader", "symbols", "reconcile"]
+
+
+def test_other_server_errors_still_fail_fast(client):
+    from execution.ctrader_client import ConnectionState
+
+    client._set_state(ConnectionState.TCP_CONNECTED)
+    client._on_error_res(_ErrorRes(code="CH_ACCESS_TOKEN_INVALID",
+                                   description="bad token"))
+    assert client._state == ConnectionState.ERROR
+
+
+def test_already_logged_in_errback_is_benign(client):
+    from execution.ctrader_client import ConnectionState
+
+    client._set_state(ConnectionState.TCP_CONNECTED)
+    client._on_error("app_auth", RuntimeError("ALREADY_LOGGED_IN — already authorized"))
+    assert client._state == ConnectionState.TCP_CONNECTED  # unchanged
+
+
+def test_superseded_client_tcp_connected_is_ignored(client, monkeypatch):
+    """A stale client's connected callback must not re-run auth or clobber
+    the live connection's state (the doubled 'TCP connected' storm)."""
+    from execution.ctrader_client import ConnectionState
+
+    sent = []
+    monkeypatch.setattr(client, "_send_app_auth", lambda c: sent.append("app_auth"))
+    monkeypatch.setattr(client, "_stop_client", lambda c: None)
+    client._client = object()          # the live client
+    client._set_state(ConnectionState.APP_AUTH_OK)
+
+    client._on_tcp_connected(object())  # a different, superseded client
+
+    assert client._state == ConnectionState.APP_AUTH_OK
+    assert sent == []

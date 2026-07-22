@@ -1693,7 +1693,14 @@ async def experiment_job_catalog(
     _check_auth(x_api_key, iatis_session)
     return {
         "jobs": [
-            {"id": k, "description": _JOB_DESCRIPTIONS.get(k, ""), "category": _JOB_CATEGORIES.get(k, "research")}
+            {
+                "id": k,
+                "description": _JOB_DESCRIPTIONS.get(k, ""),
+                "category": _JOB_CATEGORIES.get(k, "research"),
+                # The frontend needs to know to collect symbols BEFORE
+                # posting — running "backtest" bare is a guaranteed 400.
+                "requires_symbols": k == "backtest",
+            }
             for k in _JOB_COMMANDS
         ]
     }

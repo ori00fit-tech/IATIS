@@ -737,6 +737,53 @@ def fetch_with_failover(
     )
 
 
+# Resampling H4 needs ≥ 210 H4 bars (NNFX EMA200 + buffer, main.py's
+# starvation invariant) ⇒ ≥ ~840 H1 base bars. Below this the disk
+# archive is consulted; above it the fetched window is already enough.
+_MIN_RESAMPLE_BASE_BARS = 900
+
+
+def _deepen_with_history(symbol: str, tf: str | None, df: pd.DataFrame) -> pd.DataFrame:
+    """Left-extend a short fetched frame with the local history archive.
+
+    The archive is data/{SYMBOL}_{TF}_2y.csv (core/data_manager.py's cache,
+    also refreshed by scripts/download_deep_history). Merge rules: identical
+    lowercase OHLCV schema, indexes coerced to UTC, and the FETCHED bars win
+    on duplicate timestamps — the archive only ever supplies older bars, so
+    live decisions keep pricing off the live feed. Any failure returns the
+    frame unchanged; this is a deepener, never a gate.
+    """
+    if tf is None or len(df) >= _MIN_RESAMPLE_BASE_BARS:
+        return df
+    try:
+        from core.data_manager import DATA_DIR
+        path = DATA_DIR / f"{symbol}_{tf}_2y.csv"
+        if not path.exists():
+            return df
+        hist = pd.read_csv(path, index_col=0, parse_dates=True)
+        hist.columns = [str(c).lower() for c in hist.columns]
+        needed = ["open", "high", "low", "close", "volume"]
+        if not set(needed) <= set(hist.columns):
+            return df
+        hist = hist[needed]
+        hist.index = pd.to_datetime(hist.index, utc=True)
+        fresh = df.copy()
+        fresh.index = pd.to_datetime(fresh.index, utc=True)
+        merged = pd.concat([hist, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        if len(merged) <= len(df):
+            return df
+        merged.attrs = dict(df.attrs)
+        logger.info(
+            f"Deepened {symbol} @ {tf} resample base with disk history: "
+            f"{len(df)} fetched + archive -> {len(merged)} bars"
+        )
+        return merged
+    except Exception as exc:
+        logger.warning(f"History deepening skipped for {symbol} @ {tf}: {exc}")
+        return df
+
+
 def fetch_multi_timeframe_with_failover(
     symbol: str,
     timeframes: list[str],
@@ -787,8 +834,15 @@ def fetch_multi_timeframe_with_failover(
             best_base_df = df
             best_base_label = tf
 
-    # Resample whatever is still missing from the best base
+    # Resample whatever is still missing from the best base — after
+    # left-extending a short base with the on-disk history archive. A
+    # provider-capped window (FCS caps at 300 H1 bars; Twelve Data Free
+    # 403s on native H4/D1) resamples to < 210 H4 bars / < 50 D1 bars,
+    # which is exactly the DATA STARVATION class the audit flags (663
+    # NNFX 'Insufficient data' decisions). The archive supplies the deep
+    # past; the freshly fetched bars win on any overlap.
     if best_base_df is not None:
+        best_base_df = _deepen_with_history(symbol, best_base_label, best_base_df)
         for tf in timeframes:
             if tf not in views:
                 try:

@@ -49,12 +49,14 @@ export function ExperimentRunner() {
   }, [viewing])
 
   const runningJobNames = new Set((jobs.data?.jobs ?? []).filter((j) => j.status === 'queued' || j.status === 'running').map((j) => j.job))
+  // Per-job symbols text for jobs flagged requires_symbols (backtest).
+  const [symbolsInput, setSymbolsInput] = useState<Record<string, string>>({})
 
-  const start = async (jobId: string) => {
+  const start = async (jobId: string, symbols?: string[]) => {
     setStarting(jobId)
     setError(null)
     try {
-      const summary = await runJob(jobId)
+      const summary = await runJob(jobId, symbols)
       jobs.refetch()
       setViewing(summary.job_id)
     } catch (e) {
@@ -91,16 +93,30 @@ export function ExperimentRunner() {
               .filter((j) => j.category === 'research')
               .map((job) => {
               const isRunning = runningJobNames.has(job.id)
+              const symbols = (symbolsInput[job.id] ?? '')
+                .split(',')
+                .map((s) => s.trim().toUpperCase())
+                .filter(Boolean)
+              const needsSymbols = !!job.requires_symbols
               return (
-                <div key={job.id} className="px-4 py-3 flex items-center justify-between gap-4">
-                  <div>
+                <div key={job.id} className="px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
+                  <div className="min-w-[200px] flex-1">
                     <div className="text-[0.85em] font-bold text-text">{job.id}</div>
                     <div className="text-[0.78em] text-muted">{job.description}</div>
                   </div>
+                  {needsSymbols && (
+                    <input
+                      className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text placeholder:text-muted w-56"
+                      placeholder="symbols, e.g. XAUUSD, BTCUSD"
+                      value={symbolsInput[job.id] ?? ''}
+                      onChange={(e) => setSymbolsInput((m) => ({ ...m, [job.id]: e.target.value }))}
+                    />
+                  )}
                   <button
-                    onClick={() => start(job.id)}
-                    disabled={isRunning || starting === job.id}
-                    className="px-3 py-1.5 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 disabled:cursor-wait shrink-0"
+                    onClick={() => start(job.id, needsSymbols ? symbols : undefined)}
+                    disabled={isRunning || starting === job.id || (needsSymbols && symbols.length === 0)}
+                    title={needsSymbols && symbols.length === 0 ? 'Enter at least one symbol first' : undefined}
+                    className="px-3 py-1.5 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                   >
                     {isRunning ? 'Running…' : starting === job.id ? 'Starting…' : 'Run'}
                   </button>

@@ -319,6 +319,15 @@ class CTraderClient:
     # ─── Auth / bootstrap chain ──────────────────────────────────────────────
 
     def _on_tcp_connected(self, client: Any) -> None:
+        # Superseded-client guard (same as _on_disconnect): a stale client's
+        # ClientService can auto-reconnect after we've already created its
+        # replacement — its connected callback must not re-run auth or
+        # clobber the live connection's state. Observed live 2026-07-22 as
+        # doubled "TCP connected" lines and an ALREADY_LOGGED_IN storm.
+        if client is not None and client is not self._client:
+            logger.debug("Ignoring TCP-connected from a superseded cTrader client.")
+            self._stop_client(client)
+            return
         self._set_state(ConnectionState.TCP_CONNECTED)
         logger.info(f"✅ TCP connected to {self.host}:{self.PORT}")
         self._send_app_auth(client)
@@ -493,6 +502,10 @@ class CTraderClient:
 
     def _on_message(self, client: Any, message: Any) -> None:
         """Route every inbound protobuf message to its handler by type name."""
+        # Superseded-client guard — see _on_tcp_connected/_on_disconnect.
+        if client is not None and client is not self._client:
+            logger.debug("Ignoring message from a superseded cTrader client.")
+            return
         message = self._extract(message)
         msg_type = message.__class__.__name__
         logger.debug(f"📨 Received: {msg_type}")
@@ -722,9 +735,33 @@ class CTraderClient:
         This is the message the server returns when app/account auth, the trader
         request, or the symbols request is rejected. Previously it was swallowed
         at DEBUG, so a rejected bootstrap looked like a blind connect timeout.
+
+        ALREADY_LOGGED_IN is the one NON-fatal rejection: it means this
+        application is already authorized on the session — the auth we asked
+        for already holds. Treating it as fatal produced a live storm
+        (observed 2026-07-22): ERROR → the library's ClientService retried
+        instantly → fresh app-auth → ALREADY_LOGGED_IN again, looping every
+        second and starving the indices/energy feed. Continue the bootstrap
+        chain instead; if the session is genuinely unusable the NEXT step
+        fails with a real error and normal handling applies.
         """
         code = getattr(message, "errorCode", "")
         desc = getattr(message, "description", "")
+        if "ALREADY_LOGGED_IN" in str(code):
+            client = self._client
+            logger.warning(
+                f"⚠️ {code} — {desc}: application already authorized; "
+                f"continuing bootstrap instead of erroring."
+            )
+            if self._state == ConnectionState.TCP_CONNECTED and client is not None:
+                self._set_state(ConnectionState.APP_AUTH_OK)
+                self._send_account_auth(client)
+            elif self._state == ConnectionState.APP_AUTH_OK and client is not None:
+                self._set_state(ConnectionState.ACCOUNT_AUTH_OK)
+                self._send_trader_req(client)
+                self._send_symbols_list_req(client)
+                self._send_reconcile_req(client)
+            return
         logger.error(f"❌ Server error (ProtoOAErrorRes): {code} — {desc}")
         self._set_state(ConnectionState.ERROR)
 
@@ -823,6 +860,12 @@ class CTraderClient:
             failure.getErrorMessage() if hasattr(failure, "getErrorMessage")
             else str(failure)
         )
+        if "ALREADY_LOGGED_IN" in error_msg:
+            # Benign — handled by _on_error_res, which continues the
+            # bootstrap chain. The same rejection also lands here via the
+            # send() Deferred's errback; it must not flip the state to ERROR.
+            logger.debug(f"↩ {context}: ALREADY_LOGGED_IN via errback (benign)")
+            return
         logger.error(f"❌ Protocol error ({context}): {error_msg}")
         self._set_state(ConnectionState.ERROR)
 

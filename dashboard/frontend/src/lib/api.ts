@@ -16,7 +16,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    throw new ApiError(res.status, `${res.status} ${path}`)
+    // FastAPI puts the human-readable reason in {"detail": ...} — surface it
+    // instead of the bare "400 /path" that operators can't act on.
+    let detail = ''
+    try {
+      const body = (await res.json()) as { detail?: unknown }
+      if (typeof body.detail === 'string') detail = body.detail
+    } catch {
+      /* non-JSON error body — keep the bare status */
+    }
+    throw new ApiError(res.status, `${res.status} ${path}${detail ? ` — ${detail}` : ''}`)
   }
   return (await res.json()) as T
 }

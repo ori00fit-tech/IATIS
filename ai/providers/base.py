@@ -47,11 +47,48 @@ def load_prompt(name: str, **kwargs: Any) -> str:
         raise AIProviderError(f"Prompt '{name}' missing placeholder value: {exc}") from exc
 
 
+def _first_json_object(text: str) -> str | None:
+    """The first balanced top-level ``{...}`` in ``text``, or None.
+
+    Brace-scans with string/escape awareness so braces inside JSON string
+    values don't end the object early.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = in_string
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def extract_json(text: str) -> dict:
     """Parse a JSON object out of a model response.
 
-    Models occasionally wrap JSON in ```json fences despite instructions
-    not to — strip those before parsing rather than failing the call.
+    Models routinely violate "return only JSON": they wrap it in ```json
+    fences, prepend prose ("Here is the analysis:"), or append a closing
+    remark. Each of those used to fail the whole call and surface as
+    BAD_FORMAT on the dashboard — so after the fast path, fall back to
+    extracting the first balanced {...} from anywhere in the response.
     """
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -62,9 +99,25 @@ def extract_json(text: str) -> dict:
             lines = lines[:-1]
         cleaned = "\n".join(lines).strip()
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise AIProviderError(f"Provider returned non-JSON response: {exc}") from exc
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    candidate = _first_json_object(cleaned)
+    if candidate is not None:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                logger.debug("extract_json: recovered embedded JSON object from prose-wrapped response")
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise AIProviderError(
+        f"Provider returned non-JSON response (first 120 chars: {text.strip()[:120]!r})"
+    )
 
 
 class AIProvider(ABC):

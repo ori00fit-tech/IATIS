@@ -64,6 +64,21 @@ _error_cooldown: dict[str, float] = {}
 _COOLDOWN_SECONDS = 1800
 
 
+# Written at the end of every completed run; read by the API server's
+# scheduler-status panel (execution/api_server.py::_scheduler_status).
+RUN_MARKER_PATH = "storage/last_run.json"
+
+
+def _write_run_marker(ok: int, failed: int, execute_count: int) -> None:
+    with open(RUN_MARKER_PATH, "w", encoding="utf-8") as f:
+        json.dump({
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "symbols_ok": ok,
+            "symbols_failed": failed,
+            "execute_count": execute_count,
+        }, f)
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -249,6 +264,17 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             f"=== Run complete: {len(reports)} OK, {len(failed_symbols)} failed, "
             f"{execute_count} EXECUTE signals ==="
         )
+
+        # Run marker for /health/full's scheduler panel. The old detection
+        # text-mined "Run complete" out of a log file that doesn't exist
+        # when logging.file is unset (the default) and out of journalctl the
+        # API service user can't always read — so Mission Control showed
+        # "no run seen" against a green, actively-running service. A tiny
+        # JSON file is readable by the API process unconditionally.
+        try:
+            _write_run_marker(len(reports), len(failed_symbols), execute_count)
+        except Exception as exc:
+            logger.debug(f"run marker write skipped: {exc}")
 
         # Auto-close open outcomes based on current prices.
         # ``current_price`` is populated on EVERY report (EXECUTE and

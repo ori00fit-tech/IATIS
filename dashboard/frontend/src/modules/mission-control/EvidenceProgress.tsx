@@ -68,7 +68,6 @@ export function EvidenceProgress({ outcomes }: { outcomes: OutcomesSummary | nul
     .map(realizedR)
     .filter((r): r is number => r != null)
   const maxDD = rSeries.length ? maxDrawdownR(rSeries) : null
-  const expectancyPips = closed > 0 ? s.total_pips / closed : null
 
   return (
     <Panel title="Evidence Progress" right={`target: ${EVIDENCE_TARGET} closed trades`}>
@@ -144,9 +143,12 @@ export function EvidenceProgress({ outcomes }: { outcomes: OutcomesSummary | nul
             value={s.avg_r_multiple != null ? `${s.avg_r_multiple >= 0 ? '+' : ''}${s.avg_r_multiple.toFixed(2)}R` : '—'}
             muted={insufficient}
           />
+          {/* Total R replaces the old pips expectancy: summing pips across
+              asset classes (BTC vs EURUSD) is meaningless, and legacy rows
+              corrupted the stored pips anyway (−857k pips/trade on screen). */}
           <Stat
-            label="Expectancy / trade"
-            value={expectancyPips != null ? `${expectancyPips >= 0 ? '+' : ''}${expectancyPips.toFixed(1)} pips` : '—'}
+            label="Total R (book)"
+            value={s.total_r != null ? `${s.total_r >= 0 ? '+' : ''}${s.total_r.toFixed(2)}R` : '—'}
             muted={insufficient}
           />
           <Stat

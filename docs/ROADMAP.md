@@ -80,6 +80,10 @@ claims; make what already runs measurable, observable, and operable.
 - **Dashboard reporting** — live statistics plus scheduled **daily and weekly**
   reports (decisions, rejections-by-reason, engine attribution, forward-demo
   progress).
+- **Trade Journal** *(shipped 2026-07-22)* — full per-trade record over the
+  paper-trading ledger (`/journal*`, `storage/journal.py`): prices, realized R,
+  engine votes, regime, duration, cumulative-R equity curve, breakdowns,
+  operator notes/tags (annotation only — never feeds a gate), CSV export.
 - **Command Center → Operations Center** — reorganize the 15 tabs around three
   operator spines (system operation · data quality · decision quality) under an
   **Executive Overview** of composite health scores, plus a diagnostic error

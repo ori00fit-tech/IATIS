@@ -40,12 +40,35 @@ class GeminiProvider(AIProvider):
             )
             response.raise_for_status()
             data = response.json()
-            parts = data["candidates"][0]["content"]["parts"]
-            text = "".join(part.get("text", "") for part in parts)
+
+            # A safety block / empty result carries promptFeedback and no
+            # candidates — surface the block reason instead of a bare
+            # KeyError("candidates") masquerading as a shape problem.
+            candidates = data.get("candidates") or []
+            if not candidates:
+                reason = (data.get("promptFeedback") or {}).get("blockReason", "no candidates")
+                raise AIProviderError(f"Gemini returned no candidates ({reason})")
+
+            candidate = candidates[0]
+            # Thinking models emit "thought" parts before the answer;
+            # concatenating them used to corrupt the JSON payload.
+            parts = (candidate.get("content") or {}).get("parts") or []
+            text = "".join(
+                part.get("text", "") for part in parts if not part.get("thought")
+            )
             if not text:
-                raise AIProviderError("Gemini response had no text content")
+                finish = candidate.get("finishReason", "?")
+                raise AIProviderError(
+                    f"Gemini response had no text content (finishReason={finish})"
+                )
+            if candidate.get("finishReason") == "MAX_TOKENS":
+                # Truncated JSON parses as garbage downstream — name the
+                # real cause (raise ai.max_tokens) instead of BAD_FORMAT.
+                logger.warning(
+                    "Gemini response hit maxOutputTokens — output may be truncated"
+                )
             return text
         except requests.RequestException as exc:
             raise AIProviderError(f"Gemini request failed: {exc}") from exc
-        except (KeyError, IndexError) as exc:
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AIProviderError(f"Unexpected Gemini response shape: {exc}") from exc

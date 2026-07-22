@@ -18,6 +18,7 @@ import { LiveLogs } from './modules/live-logs/LiveLogs'
 import { FileExplorer } from './modules/file-explorer/FileExplorer'
 import { AlertCenter } from './modules/alert-center/AlertCenter'
 import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
+import { Journal } from './modules/journal/Journal'
 import { RiskCenter } from './modules/risk-center/RiskCenter'
 import { ExecutionQuality } from './modules/execution-quality/ExecutionQuality'
 import { Reports } from './modules/reports/Reports'
@@ -29,6 +30,7 @@ const MODULES: Record<TabId, () => ReactNode> = {
   'mission-control': () => <MissionControl />,
   'live-signals': () => <LiveSignals />,
   'forward-demo': () => <ForwardDemo />,
+  journal: () => <Journal />,
   'risk-center': () => <RiskCenter />,
   'execution-quality': () => <ExecutionQuality />,
   'data-center': () => <DataCenter />,

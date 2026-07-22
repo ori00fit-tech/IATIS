@@ -142,8 +142,14 @@ function reconcileCard(rec: ReconciliationResult | null): { value: string; color
   if (!rec || rec.status === 'none') return { value: '—', color: 'default' }
   if (rec.status === 'match') return { value: 'MATCH', color: 'green' }
   if (rec.status === 'mismatch') {
-    const n = (rec.broker_only?.length ?? 0) + (rec.internal_only?.length ?? 0)
-    return { value: `MISMATCH ×${n}`, color: 'red' }
+    const brokerOnly = rec.broker_only?.length ?? 0
+    const internalOnly = rec.internal_only?.length ?? 0
+    // Severity split: a position the BROKER holds that the tracker doesn't
+    // know about is unaccounted risk — always red. Internal-only rows are
+    // paper signals the broker was never asked to hold; real drift worth
+    // showing, but routine while execution is paper-first — amber.
+    if (brokerOnly > 0) return { value: `MISMATCH ×${brokerOnly + internalOnly}`, color: 'red' }
+    return { value: `PAPER-ONLY ×${internalOnly}`, color: 'amber' }
   }
   return { value: 'PAPER MODE', color: 'amber' } // skipped — no broker book to reconcile
 }

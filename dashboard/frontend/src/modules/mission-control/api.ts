@@ -33,6 +33,7 @@ export interface OutcomesSummary {
     // Present since the /outcomes extension — optional so older shapes still type.
     profit_factor?: number | 'Infinity' | null
     avg_r_multiple?: number | null
+    total_r?: number | null
   }
   open_signals: unknown[]
   recent?: ClosedOutcomeRow[]

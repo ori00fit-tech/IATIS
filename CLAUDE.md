@@ -56,6 +56,7 @@ Full verdicts: `docs/PHILOSOPHY_AUDIT_2026-07.md` (+ live addendum),
 | Managed exits (partial TP/BE/trail) | trade-management A/B | +100% was a look-ahead artifact; OOS ≈ 0 |
 | Currency-strength indices | measured | PF 0.90/0.49 |
 | ICT pattern folklore (Judas, PO3, OTE…) | same concepts as above | untestable variants of buried ideas |
+| Complexity/entropy "compression" as a predictability signal | H025 stage 1 | pooled ratio 1.005 (needed ≥1.10), p=0.31; ≈1.0 even inside the mid-ATR tercile |
 
 If someone (including the operator) asks to rebuild any of these: point at
 this table, offer a NEW pre-registered hypothesis if they insist, and let

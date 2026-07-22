@@ -108,7 +108,18 @@ reserved as **H034** in `research/hypotheses/BACKLOG_2026-07-21.md`. This
 H025 (operator's numbering, 2026-07-21 proposal) is the registered one.
 
 ## Status
-`PLANNED`
+`FAILED` — Stage 1, 2026-07-21 (same day as registration; the rule
+pre-existed the data by hours, which is exactly the point).
+
+**Result (VPS run, 15/20 symbols evaluable, pooled quintile n = 7353):**
+pooled ratio **1.0049** vs the required ≥ 1.10; bootstrap p **0.309** vs
+the required < 0.05; 9/15 symbols > 1.0 (the one guard that passed).
+The mid-ATR-tercile diagnostic ≈ 1.0 as well — the effect is not hiding
+behind volatility conditioning; low LZ76 complexity simply carries no
+information about forward 20-bar range on this universe. Per the
+pre-registered rule, Stage 2 is never built and no OOS data was consumed.
+Ledger: `docs/STRATEGY_EVIDENCE_2026-07.md`; result JSON + manifest
+committed from the VPS.
 
 ## Linked experiment
 `research/experiments/H025_information_compression.py` (to be written AFTER

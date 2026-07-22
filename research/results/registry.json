@@ -383,6 +383,20 @@
     "interpretation": "Blocking RANGING removes ~15% of trades for a -0.009 PF change and mild carrier degradation. Confirms the 2026-07-19 attribution's flat regime WR was not a fluke: regime STATE (trend vs range) does not separate outcomes in this system. The current soft regime_weights are neither helped nor beaten by a hard gate. Feature flag features.regime_gate stays OFF/frozen (rule 6).",
     "manifest": "research/results/H024_regime_gate_ab.json"
    }
+  },
+  "H025": {
+   "title": "Opportunity Scarcity Engine — does statistical rarity of the decision context (frequency of a pre-declared state tuple over a trailing 180d window) predict trade quality, such that filtering EXECUTE signals to their rarest states improves OOS PF with a monotonic dose-response?",
+   "status": "PLANNED",
+   "registered": "2026-07-19",
+   "origin": "Operator-proposed (Opportunity Scarcity Engine). Novel axis: no prior hypothesis tested the FREQUENCY of the decision context (all tested its content — structure/indicators/regime/session/news). Hardened before registration against the two dominant failure modes: (a) small-n mirage — rare states are low-count so their in-sample PF is high-variance, structurally the H008b/H015 trap; (b) single-threshold researcher DoF. Design pins a pre-declared state tuple, a trailing-180d rarity, a rarity grid {20,10,5,2}%, and requires a MONOTONIC dose-response plus a hard OOS sample guard (n>=200) to adopt.",
+   "method": "Single frozen-prod4 pass per symbol (19-symbol universe, H4, backtest_mode) recording each EXECUTE trade's pre-declared state tuple (regime_state, volatility, 5-pt confluence-score bin, mtf.confirming, primary session, winning_bias) and its trailing-180d rarity = 1 - freq(tuple among all decisions in window; no look-ahead). Chronological TRAIN65/TEST35. Arm A = all trades; arm B(p) = keep only the rarest p% for p in {20,10,5,2}. Overlay only suppresses trades (no new entries/exits), so post-hoc ranking of arm-A opportunities by rarity is the faithful test. Runner: scripts/H025_opportunity_scarcity_ab.py.",
+   "decision_rule": "ADOPT the OSE overlay ONLY if ALL hold on pooled TEST: (1) dose-response — pooled TEST PF monotonically non-decreasing as rarity tightens 20->10->5->2% (each >= prev-0.02), and tightest sample-valid bucket PF(B) >= PF(A)+0.15; (2) sample guard — adopt bucket pooled TEST n>=200, else INCONCLUSIVE (never ADOPT on n<200); (3) expectancy(B) > expectancy(A); (4) >=60% of symbols with n>=15 improve (H015 cherry-pick guard); (5) carriers PF(B) >= PF(A)-0.05. Any failure => FAILED/NO CHANGE. No trend and |dPF|<0.15 at all feasible buckets = NULL. Insufficient sample everywhere = INCONCLUSIVE.",
+   "distinct_from_prior_kill": "Not an entry pattern (SMC/ICT/BOS/FVG dead) — adds no detector. Not trade management (dead) — exits untouched. Not traditional filtering (ATR/session/news) — those gate on a feature's VALUE; H025 gates on the joint state's FREQUENCY. Not H024 — H024 gated on regime state value; H025 on state rarity. Orthogonal.",
+   "live_safety": "Measurement only. Feature flag features.opportunity_scarcity default false. No live change until forward-demo milestone (rule 6). FROZEN like H018/H023/H024.",
+   "linked_experiment": "scripts/H025_opportunity_scarcity_ab.py",
+   "linked_result": "research/results/H025_opportunity_scarcity_ab.json",
+   "hypothesis_doc": "research/hypotheses/H025_opportunity_scarcity.md",
+   "last_updated": "2026-07-19"
   }
  },
  "walk_forward_validation": {

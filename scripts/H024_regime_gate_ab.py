@@ -222,12 +222,57 @@ def evaluate_decision(rows: list[dict]) -> dict:
     }
 
 
+def _discover_csv(symbol: str, data_dir: Path) -> Path | None:
+    return next((data_dir / f"{symbol}_H1_{s}.csv"
+                 for s in ["2y", "5y"] if (data_dir / f"{symbol}_H1_{s}.csv").exists()), None)
+
+
+def write_h024_manifest(result: dict, data_dir: Path) -> Path:
+    """Reproducibility manifest for an H024 result (research/manifest.py
+    house format). Fingerprints the exact CSVs the run discovers, so a
+    later backfill is only valid while those files are untouched."""
+    from research.manifest import build_manifest, dataset_fingerprint, write_manifest
+    from utils.helpers import load_config
+
+    datasets = []
+    for row in result.get("per_symbol", []):
+        csv = _discover_csv(row["symbol"], data_dir)
+        if csv:
+            datasets.append(dataset_fingerprint(csv))
+    manifest = build_manifest(
+        kind="h024_regime_gate_ab",
+        config=load_config(),
+        params={
+            "hypothesis": "H024",
+            "train_frac": result.get("train_frac", TRAIN_FRAC),
+            "arms": result.get("arms"),
+            "decision_rule": result.get("decision_rule", DECISION),
+            "result_generated_at": result.get("generated_at"),
+        },
+        datasets=datasets,
+        results={"decision": result.get("decision"), "per_symbol": result.get("per_symbol")},
+    )
+    return write_manifest(manifest, f"h024_regime_gate_ab_{time.strftime('%Y%m%d')}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="H024 regime-gate A/B (pre-registered)")
     parser.add_argument("--symbols", nargs="+")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--step", type=int, default=8)
+    parser.add_argument("--manifest-only", action="store_true",
+                        help="write the reproducibility manifest for the existing "
+                             "result JSON without re-running the A/B")
     args = parser.parse_args()
+
+    if args.manifest_only:
+        rp = Path("research/results/H024_regime_gate_ab.json")
+        if not rp.exists():
+            raise SystemExit(f"{rp} not found — nothing to backfill")
+        result = json.loads(rp.read_text())
+        out = write_h024_manifest(result, Path("data"))
+        print(f"Manifest (backfilled from existing result, no re-run): {out}")
+        return
 
     symbols = ACTIVE_SYMBOLS if (args.all or not args.symbols) else args.symbols
 
@@ -290,8 +335,10 @@ def main() -> None:
     p = Path("research/results/H024_regime_gate_ab.json")
     p.write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
     print(f"\nSaved: {p}")
-    print("Next: freeze via scripts/revive_manifests.py from a clean tree, then "
-          "record the verdict in registry.json (H024) + the evidence ledger.")
+    mp = write_h024_manifest(out, data_dir)
+    print(f"Manifest: {mp}")
+    print("Next: record the verdict in registry.json (H024) + the evidence "
+          "ledger; commit result + manifest from a clean tree (rule 4).")
 
 
 if __name__ == "__main__":

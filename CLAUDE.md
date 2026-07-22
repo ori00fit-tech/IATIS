@@ -57,6 +57,7 @@ Full verdicts: `docs/PHILOSOPHY_AUDIT_2026-07.md` (+ live addendum),
 | Currency-strength indices | measured | PF 0.90/0.49 |
 | ICT pattern folklore (Judas, PO3, OTE…) | same concepts as above | untestable variants of buried ideas |
 | Complexity/entropy "compression" as a predictability signal | H025 stage 1 | pooled ratio 1.005 (needed ≥1.10), p=0.31; ≈1.0 even inside the mid-ATR tercile |
+| Hard regime gate (block RANGING, trade only TRENDING) | H024 | TEST ΔPF −0.024; B>A in 42% of symbols; carriers PF 1.335→1.256 |
 
 If someone (including the operator) asks to rebuild any of these: point at
 this table, offer a NEW pre-registered hypothesis if they insist, and let
@@ -74,6 +75,9 @@ the OOS split do the refusing.
   its ledger, not from opinion.
 - **`engines.smc_full_spec`: false** (H017 FAILED). Detectors stay in the
   codebase for future re-tests only.
+- **`features.regime_gate`: false** (H024 NULL, 2026-07-22 — hard gate
+  immaterial pooled, strictly worse on carriers; soft regime weighting
+  stays).
 - **Swap model ships OFF** (`data/swap_rates.json` all zeros). Filling it
   with real cTrader rates and re-running `h4_yearly_stability` is a
   pre-registered check on the FX book.

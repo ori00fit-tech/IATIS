@@ -1,0 +1,700 @@
+{
+  "kind": "h024_regime_gate_ab",
+  "generated_at": "2026-07-22T06:25:07.130189+00:00",
+  "git": {
+    "commit": "917f9afb0f9b36b5a8b5faad3e6161a0229b2dcb",
+    "dirty": false
+  },
+  "reproducible": true,
+  "config": {
+    "sha256": "f54ef120da1a8a38a26b35aca781d29e38a177098789b8d1f08676cac718212e",
+    "files": [
+      "config.yaml",
+      "config/ai.yaml",
+      "config/engines.yaml",
+      "config/risk.yaml",
+      "config/symbols.yaml"
+    ],
+    "behavior_blocks": {
+      "confluence": {
+        "min_engines_agreeing": 2,
+        "min_score_to_trade": 58,
+        "min_informative_weight_share": 0.6,
+        "weights": {
+          "divergence": 0.0606,
+          "ict": 0.0657,
+          "macro": 0.0,
+          "market_structure": 0.0859,
+          "nnfx": 0.2273,
+          "price_action": 0.1869,
+          "quant": 0.0707,
+          "sentiment": 0.0303,
+          "smc": 0.202,
+          "wyckoff": 0.0707
+        }
+      },
+      "engines": {
+        "smc_full_spec": false,
+        "enabled": {
+          "divergence": false,
+          "ict": false,
+          "macro": false,
+          "market_structure": false,
+          "nnfx": true,
+          "price_action": true,
+          "quant": false,
+          "sentiment": false,
+          "smc": true,
+          "wyckoff": true
+        },
+        "versions": {
+          "divergence": "1.0",
+          "ict": "1.0",
+          "macro": "1.0",
+          "market_structure": "1.0",
+          "nnfx": "1.0",
+          "price_action": "1.0",
+          "quant": "1.0",
+          "sentiment": "1.0",
+          "smc": "1.0",
+          "wyckoff": "1.0"
+        }
+      },
+      "risk": {
+        "starting_balance": 10000.0,
+        "max_drawdown_reduce": 0.1,
+        "max_drawdown_stop": 0.15,
+        "max_exposure": 0.05,
+        "min_risk_reward": 2.0,
+        "risk_per_trade_max": 0.01,
+        "risk_per_trade_min": 0.0025,
+        "sl_atr_multiplier": 2.5
+      },
+      "market_quality": {
+        "threshold_good": 60,
+        "threshold_fair": 40
+      },
+      "regime": {
+        "atr_period": 14,
+        "lookback": 100
+      },
+      "data": {
+        "bars_to_load": 3000,
+        "provider_chains": {
+          "crypto": [
+            "ccxt",
+            "alpaca",
+            "twelve_data",
+            "finnhub"
+          ],
+          "metals": [
+            "ctrader",
+            "twelve_data",
+            "fcs_api",
+            "finnhub"
+          ],
+          "energy": [
+            "ctrader",
+            "finnhub"
+          ],
+          "indices": [
+            "ctrader",
+            "fcs_api",
+            "finnhub"
+          ],
+          "fx": [
+            "ctrader",
+            "twelve_data",
+            "fcs_api",
+            "alpha_vantage",
+            "finnhub"
+          ]
+        },
+        "source": "twelve_data",
+        "symbol": "EURUSD",
+        "timeframes": [
+          "H4",
+          "D1",
+          "H1"
+        ],
+        "twelve_data_symbols": [
+          {
+            "enabled": true,
+            "internal": "EURUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "EUR/USD",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "FX book overall is statistically indistinguishable from breakeven (three independent confirmations, see CLAUDE.md); this pair has no individual disqualifying measurement \u2014 kept per D001 (cut only triggers on aggregate forward FX PF < 1.0 @ n>=40).",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPUSD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "GBP/USD",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/JPY",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USDCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CHF",
+            "asset_class": "fx_major",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "AUDUSD",
+            "min_score": 55,
+            "rr": 2.0,
+            "symbol": "AUD/USD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.938, maxDD 29% (n=273) \u2014 below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "USDCAD",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "USD/CAD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.954, maxDD 28% (n=282) \u2014 below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "NZDUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "NZD/USD",
+            "asset_class": "fx_major",
+            "status": "PAUSED",
+            "status_reason": "PF 0.985 (n=286) \u2014 at breakeven, no measured edge, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "EURJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "GBPJPY",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "GBP/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "AUDJPY",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "AUD/JPY",
+            "asset_class": "fx_minor",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; see EURUSD note on aggregate FX book status.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "EURGBP",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/GBP",
+            "asset_class": "fx_minor",
+            "status": "RETIRED",
+            "status_reason": "PF 0.635, WR 25.8%, maxDD 51% (n=248) \u2014 structurally broken, not merely marginal. Would need a new pre-registered hypothesis to revisit.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": false,
+            "internal": "EURCHF",
+            "min_score": 58,
+            "rr": 2.0,
+            "symbol": "EUR/CHF",
+            "asset_class": "fx_minor",
+            "status": "PAUSED",
+            "status_reason": "PF 0.951 (n=188) \u2014 at/below breakeven, disabled.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "XAUUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAU/USD",
+            "asset_class": "metals",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "XAGUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "XAG/USD",
+            "asset_class": "metals",
+            "status": "ACTIVE",
+            "status_reason": "Carrier-adjacent metal, same H4/D1 trend-capture logic as XAUUSD.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "USOIL",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "WTI/USD",
+            "asset_class": "energy",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "US30",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "DJI",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "NAS100",
+            "min_score": 60,
+            "rr": 2.5,
+            "symbol": "NDX",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "SPX500",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "SPX",
+            "asset_class": "indices",
+            "status": "ACTIVE",
+            "status_reason": "No individual disqualifying measurement; monitored alongside the carrier book.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "BTCUSD",
+            "min_score": 55,
+            "rr": 2.5,
+            "symbol": "BTC/USD",
+            "asset_class": "crypto",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          },
+          {
+            "enabled": true,
+            "internal": "ETHUSD",
+            "min_score": 60,
+            "rr": 2.0,
+            "symbol": "ETH/USD",
+            "asset_class": "crypto",
+            "status": "ACTIVE",
+            "status_reason": "Carrier asset \u2014 core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md.",
+            "status_since": "2026-07-12"
+          }
+        ]
+      }
+    }
+  },
+  "params": {
+    "hypothesis": "H024",
+    "train_frac": 0.65,
+    "arms": {
+      "A": "regime_gate=False (control)",
+      "B": "regime_gate=True, block=['RANGING']"
+    },
+    "decision_rule": {
+      "min_pooled_dPF": 0.15,
+      "min_volume_retention": 0.5,
+      "min_symbol_win_frac": 0.6,
+      "max_carrier_degradation": 0.05
+    },
+    "result_generated_at": "2026-07-22T04:25:32.781705+00:00"
+  },
+  "datasets": [
+    {
+      "file": "data/EURUSD_H1_2y.csv",
+      "sha256": "1601ffee6c8a344f1d5ecbe7f99d1b2b0f0f334daef2095f800436d05e28a811",
+      "size_bytes": 1272250
+    },
+    {
+      "file": "data/GBPUSD_H1_2y.csv",
+      "sha256": "b851fa41f0fe02770569ee1885583e67ae313e44939cf66156ece9760f9d40ad",
+      "size_bytes": 1271747
+    },
+    {
+      "file": "data/USDJPY_H1_2y.csv",
+      "sha256": "15c51443050b986e14424404ed81561321c66f0f6123be92289a3d2c8112da0a",
+      "size_bytes": 1250271
+    },
+    {
+      "file": "data/USDCHF_H1_2y.csv",
+      "sha256": "e9be2c51d35a72126b89093aaf4c5efe028a0590c342eccf5af7d8586ff519a0",
+      "size_bytes": 1272735
+    },
+    {
+      "file": "data/AUDUSD_H1_2y.csv",
+      "sha256": "6889ce488d9ee3a31f77cd508c0d7cfce415a9dfcfbfecee5e3148f1e2ec0f9d",
+      "size_bytes": 1284594
+    },
+    {
+      "file": "data/USDCAD_H1_2y.csv",
+      "sha256": "f8c4c6cf4311b7e5cc2663f46628d8f174a59aa5e72ed6c46613611670b07bde",
+      "size_bytes": 1278851
+    },
+    {
+      "file": "data/NZDUSD_H1_2y.csv",
+      "sha256": "846d66c4056a6bc2ca43cb50e453e0c110bc9c9d530b02810f894755dd61cb0d",
+      "size_bytes": 1285182
+    },
+    {
+      "file": "data/EURJPY_H1_2y.csv",
+      "sha256": "41e2ee11d4681bbe775d45952cf6e2af8db1226aedefe496200fab4240494e14",
+      "size_bytes": 1259885
+    },
+    {
+      "file": "data/AUDJPY_H1_2y.csv",
+      "sha256": "19fa07dd993a4ed92e0ca7085f87c660a1771ec9c0b7c2b930b7b81eac4a5553",
+      "size_bytes": 1243706
+    },
+    {
+      "file": "data/EURGBP_H1_2y.csv",
+      "sha256": "00854828dc4c4879ea9cd0ca7a829bcb56431f3e9bcfd081e88b046ec2e08984",
+      "size_bytes": 1280572
+    },
+    {
+      "file": "data/EURCHF_H1_2y.csv",
+      "sha256": "ce4845cb6986f32922f379ca3634178bd2b9426c1497d07981ae21b2c543bfa7",
+      "size_bytes": 1278955
+    },
+    {
+      "file": "data/XAUUSD_H1_2y.csv",
+      "sha256": "6539890569034e9f167fc5bac3d42b1c7477c0b82243fef15da09f93a5bf0e07",
+      "size_bytes": 1043277
+    },
+    {
+      "file": "data/XAGUSD_H1_2y.csv",
+      "sha256": "6365a56f851a4b83407679ce22858599d630213ff4a20699f6e60cc973776dbd",
+      "size_bytes": 1170136
+    },
+    {
+      "file": "data/USOIL_H1_2y.csv",
+      "sha256": "b85c2644a5cff23bb752dc8618b43e61d1c800d977e6821b3252df093841c10f",
+      "size_bytes": 1140552
+    },
+    {
+      "file": "data/US30_H1_2y.csv",
+      "sha256": "2dc6a326ff51017780cbc0a19b97e2bea66b0ce941e4c3aa7b9689b0d1bc9e88",
+      "size_bytes": 313175
+    },
+    {
+      "file": "data/NAS100_H1_2y.csv",
+      "sha256": "e12b2e1e1e5915329db49a8661269b6e4a2699b3ec051175e0283e60485e94cb",
+      "size_bytes": 331455
+    },
+    {
+      "file": "data/SPX500_H1_2y.csv",
+      "sha256": "9f58fd621fb3189683f4cc20626ca638bbab3e127bc3fc10f305156d69a328fb",
+      "size_bytes": 342279
+    },
+    {
+      "file": "data/BTCUSD_H1_2y.csv",
+      "sha256": "a16ebc9b9a7f43f1a0c35067334a13cdb7e4ae801777e331c6d6a9d8fe858e9e",
+      "size_bytes": 1486543
+    },
+    {
+      "file": "data/ETHUSD_H1_2y.csv",
+      "sha256": "00befde5d9c1fa24add1be900c3c7c8ccb4a7d351adc29b511eb328c5bdbc72d",
+      "size_bytes": 1735512
+    }
+  ],
+  "results": {
+    "decision": {
+      "verdict": "NULL (gate immaterial; soft weighting keeps edge)",
+      "pooled_test_PF_A": 1.12,
+      "pooled_test_PF_B": 1.096,
+      "pooled_dPF": -0.024,
+      "pooled_test_trades_A": 1187,
+      "pooled_test_trades_B": 1000,
+      "volume_retention": 0.842,
+      "symbol_win_frac": 0.421,
+      "symbols_improved": [
+        "EURUSD",
+        "USDJPY",
+        "NZDUSD",
+        "EURGBP",
+        "XAGUSD",
+        "NAS100",
+        "SPX500",
+        "ETHUSD"
+      ],
+      "carriers_test_PF_A": 1.335,
+      "carriers_test_PF_B": 1.256,
+      "checks": {
+        "1_pooled_dPF>=0.15": false,
+        "2_volume_retention>=0.50": true,
+        "3_symbol_win_frac>=0.60": false,
+        "4_carriers_not_degraded": false,
+        "n_guard_pooled_A>=300": true
+      },
+      "note": "Verdict is on the pooled chronological TEST slice. Pre-registered rule \u2014 not to be edited to force a pass (CLAUDE.md rule 1). Regardless of verdict this is measurement only; gate stays OFF and frozen until the forward-demo milestone (rule 6)."
+    },
+    "per_symbol": [
+      {
+        "symbol": "EURUSD",
+        "asset_class": "forex",
+        "split_idx": 8103,
+        "test_trades_A": 60,
+        "test_trades_B": 47,
+        "test_PF_A": 1.294,
+        "test_PF_B": 1.432,
+        "test_WR_A": 40.0,
+        "test_WR_B": 42.6
+      },
+      {
+        "symbol": "GBPUSD",
+        "asset_class": "forex",
+        "split_idx": 8104,
+        "test_trades_A": 67,
+        "test_trades_B": 55,
+        "test_PF_A": 1.145,
+        "test_PF_B": 1.091,
+        "test_WR_A": 37.3,
+        "test_WR_B": 36.4
+      },
+      {
+        "symbol": "USDJPY",
+        "asset_class": "forex",
+        "split_idx": 8047,
+        "test_trades_A": 69,
+        "test_trades_B": 56,
+        "test_PF_A": 0.754,
+        "test_PF_B": 0.861,
+        "test_WR_A": 27.5,
+        "test_WR_B": 30.4
+      },
+      {
+        "symbol": "USDCHF",
+        "asset_class": "forex",
+        "split_idx": 8070,
+        "test_trades_A": 62,
+        "test_trades_B": 54,
+        "test_PF_A": 1.009,
+        "test_PF_B": 0.912,
+        "test_WR_A": 33.9,
+        "test_WR_B": 31.5
+      },
+      {
+        "symbol": "AUDUSD",
+        "asset_class": "forex",
+        "split_idx": 8145,
+        "test_trades_A": 85,
+        "test_trades_B": 68,
+        "test_PF_A": 1.019,
+        "test_PF_B": 0.944,
+        "test_WR_A": 34.1,
+        "test_WR_B": 32.4
+      },
+      {
+        "symbol": "USDCAD",
+        "asset_class": "forex",
+        "split_idx": 8150,
+        "test_trades_A": 58,
+        "test_trades_B": 55,
+        "test_PF_A": 1.47,
+        "test_PF_B": 1.298,
+        "test_WR_A": 43.1,
+        "test_WR_B": 40.0
+      },
+      {
+        "symbol": "NZDUSD",
+        "asset_class": "forex",
+        "split_idx": 8145,
+        "test_trades_A": 78,
+        "test_trades_B": 64,
+        "test_PF_A": 0.985,
+        "test_PF_B": 1.033,
+        "test_WR_A": 33.3,
+        "test_WR_B": 34.4
+      },
+      {
+        "symbol": "EURJPY",
+        "asset_class": "forex",
+        "split_idx": 8110,
+        "test_trades_A": 68,
+        "test_trades_B": 66,
+        "test_PF_A": 0.739,
+        "test_PF_B": 0.664,
+        "test_WR_A": 26.5,
+        "test_WR_B": 25.8
+      },
+      {
+        "symbol": "AUDJPY",
+        "asset_class": "forex",
+        "split_idx": 8111,
+        "test_trades_A": 75,
+        "test_trades_B": 65,
+        "test_PF_A": 1.091,
+        "test_PF_B": 0.932,
+        "test_WR_A": 36.0,
+        "test_WR_B": 32.3
+      },
+      {
+        "symbol": "EURGBP",
+        "asset_class": "forex",
+        "split_idx": 8117,
+        "test_trades_A": 49,
+        "test_trades_B": 42,
+        "test_PF_A": 1.021,
+        "test_PF_B": 1.064,
+        "test_WR_A": 34.7,
+        "test_WR_B": 35.7
+      },
+      {
+        "symbol": "EURCHF",
+        "asset_class": "forex",
+        "split_idx": 8109,
+        "test_trades_A": 43,
+        "test_trades_B": 38,
+        "test_PF_A": 1.11,
+        "test_PF_B": 1.083,
+        "test_WR_A": 39.5,
+        "test_WR_B": 36.8
+      },
+      {
+        "symbol": "XAUUSD",
+        "asset_class": "metal",
+        "split_idx": 7544,
+        "test_trades_A": 59,
+        "test_trades_B": 51,
+        "test_PF_A": 1.604,
+        "test_PF_B": 1.602,
+        "test_WR_A": 40.7,
+        "test_WR_B": 41.2
+      },
+      {
+        "symbol": "XAGUSD",
+        "asset_class": "metal",
+        "split_idx": 7543,
+        "test_trades_A": 81,
+        "test_trades_B": 67,
+        "test_PF_A": 1.398,
+        "test_PF_B": 1.438,
+        "test_WR_A": 37.0,
+        "test_WR_B": 37.3
+      },
+      {
+        "symbol": "USOIL",
+        "asset_class": "metal",
+        "split_idx": 7412,
+        "test_trades_A": 71,
+        "test_trades_B": 58,
+        "test_PF_A": 0.984,
+        "test_PF_B": 0.87,
+        "test_WR_A": 29.6,
+        "test_WR_B": 27.6
+      },
+      {
+        "symbol": "US30",
+        "asset_class": "index",
+        "split_idx": 2343,
+        "test_trades_A": 25,
+        "test_trades_B": 18,
+        "test_PF_A": 0.842,
+        "test_PF_B": 0.785,
+        "test_WR_A": 28.0,
+        "test_WR_B": 27.8
+      },
+      {
+        "symbol": "NAS100",
+        "asset_class": "index",
+        "split_idx": 2343,
+        "test_trades_A": 26,
+        "test_trades_B": 19,
+        "test_PF_A": 0.773,
+        "test_PF_B": 1.138,
+        "test_WR_A": 26.9,
+        "test_WR_B": 31.6
+      },
+      {
+        "symbol": "SPX500",
+        "asset_class": "index",
+        "split_idx": 2343,
+        "test_trades_A": 25,
+        "test_trades_B": 22,
+        "test_PF_A": 1.029,
+        "test_PF_B": 1.145,
+        "test_WR_A": 32.0,
+        "test_WR_B": 31.8
+      },
+      {
+        "symbol": "BTCUSD",
+        "asset_class": "crypto",
+        "split_idx": 11342,
+        "test_trades_A": 94,
+        "test_trades_B": 82,
+        "test_PF_A": 1.246,
+        "test_PF_B": 1.079,
+        "test_WR_A": 34.0,
+        "test_WR_B": 30.5
+      },
+      {
+        "symbol": "ETHUSD",
+        "asset_class": "crypto",
+        "split_idx": 11342,
+        "test_trades_A": 92,
+        "test_trades_B": 73,
+        "test_PF_A": 1.141,
+        "test_PF_B": 1.173,
+        "test_WR_A": 37.0,
+        "test_WR_B": 38.4
+      }
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "hypothesis": "H033",
+  "generated_at": "2026-07-22T04:59:53.739916+00:00",
+  "train_frac": 0.65,
+  "skip_percentile": 30,
+  "feature_columns": [
+    "score",
+    "eng_smc",
+    "eng_price_action",
+    "eng_nnfx",
+    "eng_wyckoff",
+    "regime_trending",
+    "vol_low",
+    "vol_high",
+    "vol_extreme",
+    "sess_london",
+    "sess_ny",
+    "ac_metal",
+    "ac_crypto",
+    "ac_index",
+    "ac_energy",
+    "atr_pctl",
+    "d1_confirming",
+    "rr"
+  ],
+  "decision_rule": {
+    "min_pooled_dPF": 0.15,
+    "min_volume_retention": 0.5,
+    "min_symbol_win_frac": 0.6,
+    "max_carrier_degradation": 0.05,
+    "min_auc": 0.55,
+    "min_train_trades": 1000,
+    "min_pooled_A_test_trades": 300
+  },
+  "decision": {
+    "verdict": "FAILED",
+    "verdict_reasons": [
+      "TEST AUC 0.5071 < 0.55 \u2014 the model cannot rank its own trades out of sample; any PF delta is luck, not self-knowledge"
+    ],
+    "checks": {
+      "sanity_auc>=0.55": false
+    },
+    "test_auc": 0.5071,
+    "train_trades": 2228,
+    "pooled_test_trades_A": 1187,
+    "pooled_test_trades_B": 808,
+    "pooled_test_PF_A": 1.12,
+    "pooled_test_PF_B": 1.116,
+    "pooled_dPF": -0.004,
+    "volume_retention": 0.681,
+    "skip_threshold_train_p30": 0.3183,
+    "symbol_win_frac": 0.632,
+    "symbols_improved": [
+      "AUDJPY",
+      "AUDUSD",
+      "EURCHF",
+      "EURGBP",
+      "EURJPY",
+      "GBPUSD",
+      "NAS100",
+      "US30",
+      "USDCAD",
+      "USDCHF",
+      "USDJPY",
+      "XAUUSD"
+    ],
+    "carriers_test_PF_A": 1.335,
+    "carriers_test_PF_B": 1.233,
+    "model_coefficients": {
+      "score": 0.0037,
+      "eng_smc": 0.0,
+      "eng_price_action": 0.0,
+      "eng_nnfx": 0.0,
+      "eng_wyckoff": 0.0,
+      "regime_trending": -0.0528,
+      "vol_low": 0.1711,
+      "vol_high": 0.0381,
+      "vol_extreme": -0.0645,
+      "sess_london": 0.0653,
+      "sess_ny": 0.1299,
+      "ac_metal": 0.0027,
+      "ac_crypto": 0.2984,
+      "ac_index": 0.0284,
+      "ac_energy": 0.0,
+      "atr_pctl": 0.1309,
+      "d1_confirming": -0.0355,
+      "rr": -0.4108
+    },
+    "model_intercept": -0.1953,
+    "walk_forward_recorded_only": [
+      {
+        "window": "W1_fit_TRAIN",
+        "n": 588,
+        "auc": 0.5479,
+        "pf_a": 1.259,
+        "pf_b": 1.323,
+        "retention": 0.692
+      },
+      {
+        "window": "W2_fit_TRAIN+W1",
+        "n": 599,
+        "auc": 0.4744,
+        "pf_a": 0.994,
+        "pf_b": 0.906,
+        "retention": 0.681
+      }
+    ],
+    "note": "Verdict from the pre-registered rule (registry H033, 2026-07-21) applied literally. Measurement only: features.meta_gate does not exist and nothing live changes regardless of verdict (rule 6)."
+  },
+  "duration_sec": 1087.1
+}

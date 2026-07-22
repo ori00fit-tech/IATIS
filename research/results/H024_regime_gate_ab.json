@@ -1,0 +1,257 @@
+{
+  "hypothesis": "H024",
+  "generated_at": "2026-07-22T04:25:32.781705+00:00",
+  "arms": {
+    "A": "regime_gate=False (control)",
+    "B": "regime_gate=True, block=['RANGING']"
+  },
+  "train_frac": 0.65,
+  "decision_rule": {
+    "min_pooled_dPF": 0.15,
+    "min_volume_retention": 0.5,
+    "min_symbol_win_frac": 0.6,
+    "max_carrier_degradation": 0.05
+  },
+  "per_symbol": [
+    {
+      "symbol": "EURUSD",
+      "asset_class": "forex",
+      "split_idx": 8103,
+      "test_trades_A": 60,
+      "test_trades_B": 47,
+      "test_PF_A": 1.294,
+      "test_PF_B": 1.432,
+      "test_WR_A": 40.0,
+      "test_WR_B": 42.6
+    },
+    {
+      "symbol": "GBPUSD",
+      "asset_class": "forex",
+      "split_idx": 8104,
+      "test_trades_A": 67,
+      "test_trades_B": 55,
+      "test_PF_A": 1.145,
+      "test_PF_B": 1.091,
+      "test_WR_A": 37.3,
+      "test_WR_B": 36.4
+    },
+    {
+      "symbol": "USDJPY",
+      "asset_class": "forex",
+      "split_idx": 8047,
+      "test_trades_A": 69,
+      "test_trades_B": 56,
+      "test_PF_A": 0.754,
+      "test_PF_B": 0.861,
+      "test_WR_A": 27.5,
+      "test_WR_B": 30.4
+    },
+    {
+      "symbol": "USDCHF",
+      "asset_class": "forex",
+      "split_idx": 8070,
+      "test_trades_A": 62,
+      "test_trades_B": 54,
+      "test_PF_A": 1.009,
+      "test_PF_B": 0.912,
+      "test_WR_A": 33.9,
+      "test_WR_B": 31.5
+    },
+    {
+      "symbol": "AUDUSD",
+      "asset_class": "forex",
+      "split_idx": 8145,
+      "test_trades_A": 85,
+      "test_trades_B": 68,
+      "test_PF_A": 1.019,
+      "test_PF_B": 0.944,
+      "test_WR_A": 34.1,
+      "test_WR_B": 32.4
+    },
+    {
+      "symbol": "USDCAD",
+      "asset_class": "forex",
+      "split_idx": 8150,
+      "test_trades_A": 58,
+      "test_trades_B": 55,
+      "test_PF_A": 1.47,
+      "test_PF_B": 1.298,
+      "test_WR_A": 43.1,
+      "test_WR_B": 40.0
+    },
+    {
+      "symbol": "NZDUSD",
+      "asset_class": "forex",
+      "split_idx": 8145,
+      "test_trades_A": 78,
+      "test_trades_B": 64,
+      "test_PF_A": 0.985,
+      "test_PF_B": 1.033,
+      "test_WR_A": 33.3,
+      "test_WR_B": 34.4
+    },
+    {
+      "symbol": "EURJPY",
+      "asset_class": "forex",
+      "split_idx": 8110,
+      "test_trades_A": 68,
+      "test_trades_B": 66,
+      "test_PF_A": 0.739,
+      "test_PF_B": 0.664,
+      "test_WR_A": 26.5,
+      "test_WR_B": 25.8
+    },
+    {
+      "symbol": "AUDJPY",
+      "asset_class": "forex",
+      "split_idx": 8111,
+      "test_trades_A": 75,
+      "test_trades_B": 65,
+      "test_PF_A": 1.091,
+      "test_PF_B": 0.932,
+      "test_WR_A": 36.0,
+      "test_WR_B": 32.3
+    },
+    {
+      "symbol": "EURGBP",
+      "asset_class": "forex",
+      "split_idx": 8117,
+      "test_trades_A": 49,
+      "test_trades_B": 42,
+      "test_PF_A": 1.021,
+      "test_PF_B": 1.064,
+      "test_WR_A": 34.7,
+      "test_WR_B": 35.7
+    },
+    {
+      "symbol": "EURCHF",
+      "asset_class": "forex",
+      "split_idx": 8109,
+      "test_trades_A": 43,
+      "test_trades_B": 38,
+      "test_PF_A": 1.11,
+      "test_PF_B": 1.083,
+      "test_WR_A": 39.5,
+      "test_WR_B": 36.8
+    },
+    {
+      "symbol": "XAUUSD",
+      "asset_class": "metal",
+      "split_idx": 7544,
+      "test_trades_A": 59,
+      "test_trades_B": 51,
+      "test_PF_A": 1.604,
+      "test_PF_B": 1.602,
+      "test_WR_A": 40.7,
+      "test_WR_B": 41.2
+    },
+    {
+      "symbol": "XAGUSD",
+      "asset_class": "metal",
+      "split_idx": 7543,
+      "test_trades_A": 81,
+      "test_trades_B": 67,
+      "test_PF_A": 1.398,
+      "test_PF_B": 1.438,
+      "test_WR_A": 37.0,
+      "test_WR_B": 37.3
+    },
+    {
+      "symbol": "USOIL",
+      "asset_class": "metal",
+      "split_idx": 7412,
+      "test_trades_A": 71,
+      "test_trades_B": 58,
+      "test_PF_A": 0.984,
+      "test_PF_B": 0.87,
+      "test_WR_A": 29.6,
+      "test_WR_B": 27.6
+    },
+    {
+      "symbol": "US30",
+      "asset_class": "index",
+      "split_idx": 2343,
+      "test_trades_A": 25,
+      "test_trades_B": 18,
+      "test_PF_A": 0.842,
+      "test_PF_B": 0.785,
+      "test_WR_A": 28.0,
+      "test_WR_B": 27.8
+    },
+    {
+      "symbol": "NAS100",
+      "asset_class": "index",
+      "split_idx": 2343,
+      "test_trades_A": 26,
+      "test_trades_B": 19,
+      "test_PF_A": 0.773,
+      "test_PF_B": 1.138,
+      "test_WR_A": 26.9,
+      "test_WR_B": 31.6
+    },
+    {
+      "symbol": "SPX500",
+      "asset_class": "index",
+      "split_idx": 2343,
+      "test_trades_A": 25,
+      "test_trades_B": 22,
+      "test_PF_A": 1.029,
+      "test_PF_B": 1.145,
+      "test_WR_A": 32.0,
+      "test_WR_B": 31.8
+    },
+    {
+      "symbol": "BTCUSD",
+      "asset_class": "crypto",
+      "split_idx": 11342,
+      "test_trades_A": 94,
+      "test_trades_B": 82,
+      "test_PF_A": 1.246,
+      "test_PF_B": 1.079,
+      "test_WR_A": 34.0,
+      "test_WR_B": 30.5
+    },
+    {
+      "symbol": "ETHUSD",
+      "asset_class": "crypto",
+      "split_idx": 11342,
+      "test_trades_A": 92,
+      "test_trades_B": 73,
+      "test_PF_A": 1.141,
+      "test_PF_B": 1.173,
+      "test_WR_A": 37.0,
+      "test_WR_B": 38.4
+    }
+  ],
+  "decision": {
+    "verdict": "NULL (gate immaterial; soft weighting keeps edge)",
+    "pooled_test_PF_A": 1.12,
+    "pooled_test_PF_B": 1.096,
+    "pooled_dPF": -0.024,
+    "pooled_test_trades_A": 1187,
+    "pooled_test_trades_B": 1000,
+    "volume_retention": 0.842,
+    "symbol_win_frac": 0.421,
+    "symbols_improved": [
+      "EURUSD",
+      "USDJPY",
+      "NZDUSD",
+      "EURGBP",
+      "XAGUSD",
+      "NAS100",
+      "SPX500",
+      "ETHUSD"
+    ],
+    "carriers_test_PF_A": 1.335,
+    "carriers_test_PF_B": 1.256,
+    "checks": {
+      "1_pooled_dPF>=0.15": false,
+      "2_volume_retention>=0.50": true,
+      "3_symbol_win_frac>=0.60": false,
+      "4_carriers_not_degraded": false,
+      "n_guard_pooled_A>=300": true
+    },
+    "note": "Verdict is on the pooled chronological TEST slice. Pre-registered rule \u2014 not to be edited to force a pass (CLAUDE.md rule 1). Regardless of verdict this is measurement only; gate stays OFF and frozen until the forward-demo milestone (rule 6)."
+  },
+  "duration_sec": 2353.0
+}

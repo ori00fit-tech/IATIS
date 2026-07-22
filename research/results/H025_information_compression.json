@@ -1,0 +1,173 @@
+{
+ "stage1": {
+  "verdict": "FAILED",
+  "verdict_reasons": [
+   "pooled ratio 1.0049 < 1.1",
+   "bootstrap p 0.3090 >= 0.05"
+  ],
+  "pooled_ratio": 1.0049,
+  "pooled_quintile_n": 7353,
+  "bootstrap_p": 0.309,
+  "positive_symbols": 9,
+  "symbols_evaluated": 15,
+  "missing_symbols": [
+   "AUDUSD",
+   "USDCAD",
+   "NZDUSD",
+   "EURGBP",
+   "EURCHF"
+  ],
+  "per_symbol": {
+   "EURUSD": {
+    "bars_evaluated": 6347,
+    "quintile_n": 571,
+    "unconditional_median_move": 4.6481,
+    "quintile_median_move": 4.5957,
+    "ratio": 0.9887,
+    "diag_mid_atr_tercile_ratio": 0.9799,
+    "diag_median_entropy_quintile": 0.7723,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "GBPUSD": {
+    "bars_evaluated": 6358,
+    "quintile_n": 586,
+    "unconditional_median_move": 4.4943,
+    "quintile_median_move": 4.6775,
+    "ratio": 1.0408,
+    "diag_mid_atr_tercile_ratio": 1.09,
+    "diag_median_entropy_quintile": 0.7722,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "USDJPY": {
+    "bars_evaluated": 6333,
+    "quintile_n": 509,
+    "unconditional_median_move": 4.7424,
+    "quintile_median_move": 4.3762,
+    "ratio": 0.9228,
+    "diag_mid_atr_tercile_ratio": 0.9188,
+    "diag_median_entropy_quintile": 0.7857,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "USDCHF": {
+    "bars_evaluated": 6335,
+    "quintile_n": 555,
+    "unconditional_median_move": 4.4088,
+    "quintile_median_move": 4.8081,
+    "ratio": 1.0906,
+    "diag_mid_atr_tercile_ratio": 1.1135,
+    "diag_median_entropy_quintile": 0.7727,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "EURJPY": {
+    "bars_evaluated": 6349,
+    "quintile_n": 553,
+    "unconditional_median_move": 4.5769,
+    "quintile_median_move": 4.6908,
+    "ratio": 1.0249,
+    "diag_mid_atr_tercile_ratio": 1.0257,
+    "diag_median_entropy_quintile": 0.7976,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "GBPJPY": {
+    "bars_evaluated": 6354,
+    "quintile_n": 658,
+    "unconditional_median_move": 4.5569,
+    "quintile_median_move": 4.4129,
+    "ratio": 0.9684,
+    "diag_mid_atr_tercile_ratio": 0.986,
+    "diag_median_entropy_quintile": 0.8,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "AUDJPY": {
+    "bars_evaluated": 6350,
+    "quintile_n": 605,
+    "unconditional_median_move": 4.366,
+    "quintile_median_move": 4.4405,
+    "ratio": 1.0171,
+    "diag_mid_atr_tercile_ratio": 0.9264,
+    "diag_median_entropy_quintile": 0.8231,
+    "diag_median_zlib_quintile": 0.7344
+   },
+   "XAUUSD": {
+    "bars_evaluated": 6384,
+    "quintile_n": 635,
+    "unconditional_median_move": 4.6856,
+    "quintile_median_move": 4.8888,
+    "ratio": 1.0434,
+    "diag_mid_atr_tercile_ratio": 0.9678,
+    "diag_median_entropy_quintile": 0.7774,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "XAGUSD": {
+    "bars_evaluated": 1837,
+    "quintile_n": 124,
+    "unconditional_median_move": 4.6112,
+    "quintile_median_move": 4.7372,
+    "ratio": 1.0273,
+    "diag_mid_atr_tercile_ratio": 1.0242,
+    "diag_median_entropy_quintile": 0.7239,
+    "diag_median_zlib_quintile": 0.7031
+   },
+   "USOIL": {
+    "bars_evaluated": 1809,
+    "quintile_n": 104,
+    "unconditional_median_move": 4.8921,
+    "quintile_median_move": 4.3793,
+    "ratio": 0.8952,
+    "diag_mid_atr_tercile_ratio": 0.8873,
+    "diag_median_entropy_quintile": 0.7221,
+    "diag_median_zlib_quintile": 0.7031
+   },
+   "US30": {
+    "bars_evaluated": 525,
+    "quintile_n": 40,
+    "unconditional_median_move": 5.1004,
+    "quintile_median_move": 5.4348,
+    "ratio": 1.0656,
+    "diag_mid_atr_tercile_ratio": 1.0886,
+    "diag_median_entropy_quintile": 0.6204,
+    "diag_median_zlib_quintile": 0.6875
+   },
+   "NAS100": {
+    "bars_evaluated": 525,
+    "quintile_n": 58,
+    "unconditional_median_move": 5.085,
+    "quintile_median_move": 4.3821,
+    "ratio": 0.8618,
+    "diag_mid_atr_tercile_ratio": 0.8693,
+    "diag_median_entropy_quintile": 0.7651,
+    "diag_median_zlib_quintile": 0.7188
+   },
+   "SPX500": {
+    "bars_evaluated": 525,
+    "quintile_n": 56,
+    "unconditional_median_move": 4.9947,
+    "quintile_median_move": 4.5155,
+    "ratio": 0.9041,
+    "diag_mid_atr_tercile_ratio": 1.075,
+    "diag_median_entropy_quintile": 0.7311,
+    "diag_median_zlib_quintile": 0.7031
+   },
+   "BTCUSD": {
+    "bars_evaluated": 12122,
+    "quintile_n": 1103,
+    "unconditional_median_move": 4.3222,
+    "quintile_median_move": 4.4318,
+    "ratio": 1.0254,
+    "diag_mid_atr_tercile_ratio": 0.9483,
+    "diag_median_entropy_quintile": 0.7376,
+    "diag_median_zlib_quintile": 0.7031
+   },
+   "ETHUSD": {
+    "bars_evaluated": 12122,
+    "quintile_n": 1196,
+    "unconditional_median_move": 4.3607,
+    "quintile_median_move": 4.3655,
+    "ratio": 1.0011,
+    "diag_mid_atr_tercile_ratio": 0.931,
+    "diag_median_entropy_quintile": 0.7557,
+    "diag_median_zlib_quintile": 0.7188
+   }
+  }
+ }
+}

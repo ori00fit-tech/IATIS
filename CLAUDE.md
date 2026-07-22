@@ -58,6 +58,7 @@ Full verdicts: `docs/PHILOSOPHY_AUDIT_2026-07.md` (+ live addendum),
 | ICT pattern folklore (Judas, PO3, OTE…) | same concepts as above | untestable variants of buried ideas |
 | Complexity/entropy "compression" as a predictability signal | H025 stage 1 | pooled ratio 1.005 (needed ≥1.10), p=0.31; ≈1.0 even inside the mid-ATR tercile |
 | Hard regime gate (block RANGING, trade only TRENDING) | H024 | TEST ΔPF −0.024; B>A in 42% of symbols; carriers PF 1.335→1.256 |
+| Meta-model self-confidence gating (learn own failures from decision features) | H033 | TEST AUC 0.507 (floor 0.55); WF 0.548/0.474 = sign-flipping noise; carriers degraded |
 
 If someone (including the operator) asks to rebuild any of these: point at
 this table, offer a NEW pre-registered hypothesis if they insist, and let

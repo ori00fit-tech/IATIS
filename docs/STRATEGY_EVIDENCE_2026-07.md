@@ -392,3 +392,25 @@ trades is not free, and "trade only trends" folklore does not survive
 contact with the carriers' actual ledger. Reserved backlog items gated on
 this verdict (H038 regime persistence, H048 ML regime classifier) inherit a
 weakened prior.
+
+### H033 — meta-confidence gate (added to the rejected ledger, 2026-07-22)
+
+The operator's second batch-1 pick: no market signal added — a frozen-spec
+logistic meta-model on the system's OWN decision-time features (score,
+engine agreement, regime, volatility class, session, asset class, ATR
+percentile, D1 alignment, RR), skipping the lowest-confidence 30%.
+Registered 2026-07-21 with an AUC sanity gate precisely so a lucky PF delta
+could not masquerade as self-knowledge.
+
+| enhancement | method | verdict |
+|---|---|---|
+| **Meta-confidence gate** (system predicts its own hit rate; skips low-confidence trades) | one arm-A pass of the frozen pipeline with feature capture (3415 trades, H024 harness — arm A reproduced H024's exactly: PF 1.12, n=1187), pooled TRAIN fit, frozen model, TEST ledger filter (`research/experiments/H033_meta_confidence_gate.py`) | **No self-knowledge.** TEST AUC **0.5071** (sanity floor 0.55) → FAILED before PF is even consulted. Walk-forward recorded reads: W1 AUC 0.548, W2 **0.474** — noise flipping sign, not signal. PF immaterial anyway (ΔPF −0.004) and carriers degraded (1.335 → 1.233): the gate skipped *good* carrier trades. `features.meta_gate` never created. |
+
+The institutional reading is bigger than the hypothesis: **the decision-time
+features carry ≈ zero information about which EXECUTE decisions win.** That
+is a coherence check on the frozen-thresholds stance (if the confluence
+score could rank trades, threshold tuning would matter — it can't, so it
+doesn't) and it pre-weakens every backlog idea that recombines the same
+features (H043 consensus dynamics, H049 analog memory, adaptive
+thresholds). The featured arm-A ledger (`H033_trade_ledger.json`) stays as
+a research asset. Result + manifest committed from the VPS.

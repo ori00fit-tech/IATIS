@@ -3,13 +3,18 @@ research/edge_gate.py
 -------------------------
 Enforces the research-layer rule in code, not just in README prose:
 an engine may only be enabled in config.yaml if its backing hypothesis
-in results/registry.json has status "PASSED".
+in results/registry.json has status "PASSED" or "RESEARCH".
 
-Phase 1 engines (SMC basic swing-structure, Price Action) are exempt —
-they don't claim any "edge," they're plain technical structure/trend
-reads, documented as such in the README. The gate applies to anything
-claiming a discovered statistical advantage (e.g. the planned SMC
-liquidity-sweep logic behind H001, and future ICT/NNFX/Quant engines).
+Every enabled engine now carries a hypothesis — including SMC and Price
+Action, which used to bypass this gate entirely via EXEMPT_ENGINES on the
+rationale that they were "plain technical reads" claiming no edge. That
+rationale didn't survive scrutiny (docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md
+P1-1): both are weighted and vote inside the scored confluence system
+exactly like every other gated engine, so as of 2026-07-23 they carry
+H101/H102 (RESEARCH status, existing H015 evidence cited, no code/weight/
+threshold change) instead of a bare bypass. EXEMPT_ENGINES stays empty and
+present only so a future engine can't quietly recreate the same loophole
+without a deliberate, reviewed decision to reintroduce it.
 
 main.py should call check_edge_gate() before building active engines,
 so a misconfigured config.yaml fails loudly instead of silently trading
@@ -27,12 +32,11 @@ logger = get_logger(__name__)
 
 REGISTRY_PATH = Path(__file__).resolve().parent / "results" / "registry.json"
 
-# Engines that are plain technical reads, not edge claims — always allowed.
-# ICT/NNFX/Quant are now Phase 3 implementations, but still require
-# hypothesis validation before live activation. They can be enabled
-# for RESEARCH / PAPER TRADING by setting their hypothesis to "RESEARCH"
-# status in registry.json — use with caution.
-EXEMPT_ENGINES = {"smc", "price_action"}
+# Deliberately empty (2026-07-23) — every enabled engine now carries a
+# hypothesis, closing the smc/price_action bypass. Kept as a named set
+# (not deleted) so reintroducing an exemption is a visible, reviewable
+# one-line diff instead of a re-derivation from scratch.
+EXEMPT_ENGINES: set[str] = set()
 
 # Maps config.yaml engine keys to the hypothesis ID that must be PASSED
 # (or RESEARCH for paper-trading-only mode) before that engine may be enabled.
@@ -45,6 +49,8 @@ ENGINE_HYPOTHESIS_MAP = {
     "divergence":       "H010",   # RSI/MACD Divergence — RESEARCH
     "market_structure": "H011",   # BOS/CHoCH/MSS — RESEARCH
     "sentiment":        "H012",   # COT + Retail Proxy — RESEARCH
+    "smc":              "H101",  # SMC swing-structure — RESEARCH (governance closure, H015 evidence)
+    "price_action":     "H102",  # Price Action — RESEARCH (governance closure, H015 evidence)
 }
 
 # Hypothesis statuses that allow engine activation

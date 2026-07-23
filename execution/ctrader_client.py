@@ -1558,9 +1558,20 @@ class CTraderClient:
         elif deal is not None and getattr(deal, "orderId", 0):
             order_id = str(deal.orderId)
 
+        # FIX (2026-07-23, TCA "missing intended/fill price — not recorded"
+        # on every single live fill): deal.executionPrice/order.executionPrice
+        # were empty on every real order response observed in production —
+        # the server's ProtoOAExecutionEvent for a market-order fill carries
+        # the real fill price on `position.price`, not on `deal` or `order`.
+        # position.price is already trusted elsewhere in this file as the
+        # broker's ground truth for fill price (_on_execution_event,
+        # _on_reconcile_res), so it belongs ahead of the order/deal fields
+        # here too, not only after them.
         exec_price = 0.0
         if deal is not None and getattr(deal, "executionPrice", 0):
             exec_price = float(deal.executionPrice)
+        elif position is not None and getattr(position, "price", 0):
+            exec_price = float(position.price)
         elif order_obj is not None and getattr(order_obj, "executionPrice", 0):
             exec_price = float(order_obj.executionPrice)
         elif order.entry_price:

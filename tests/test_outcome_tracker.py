@@ -170,3 +170,17 @@ def test_performance_summary_profit_factor_infinite_with_only_wins():
     close_signal(sid, 1.0640, "win", risk_usd=100.0)
     summary = performance_summary()
     assert summary["profit_factor"] == "Infinity"
+
+
+def test_performance_summary_all_breakeven_profit_factor_is_not_infinite():
+    """Regression for docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-9: an
+    all-breakeven book (zero wins AND zero losses) is 0/0, undefined — not
+    infinite. This exact bug existed independently in this function's own
+    inline profit_factor logic (fixed by consolidating onto
+    utils.trade_math.profit_factor, the same fix already applied to
+    storage/journal.py's sibling copy under P3-2)."""
+    # BEARISH entry=1.0850, exit=1.0850 -> price_diff=0, r=0 (breakeven).
+    sid = log_signal(_make_report(symbol="BE1"))
+    close_signal(sid, 1.0850, "breakeven", risk_usd=100.0)
+    summary = performance_summary()
+    assert summary["profit_factor"] is None

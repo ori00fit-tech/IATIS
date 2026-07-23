@@ -26,6 +26,7 @@ from typing import Any
 
 from storage import d1_client
 from storage.outcome_tracker import _init_db, _pip_size
+from utils import trade_math
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,21 +36,20 @@ logger = get_logger(__name__)
 _OUTCOME_VALUES = {"win", "loss", "breakeven", "open"}
 _DIRECTION_VALUES = {"BUY", "SELL", "BULLISH", "BEARISH"}
 
-
-def _is_buy(direction: str | None) -> bool:
-    return direction in ("BUY", "BULLISH")
+# Thin aliases kept for this module's existing call sites — the real
+# implementation lives in utils/trade_math.py, shared with
+# storage/outcome_tracker.py and scripts/repair_outcome_pips.py (audit
+# docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-9).
+_is_buy = trade_math.is_buy_direction
 
 
 def _realized_r(row: dict) -> float | None:
     """R-multiple recomputed from the row's own prices (never pnl_usd)."""
-    entry, sl, exit_px = row.get("entry_price"), row.get("stop_loss"), row.get("exit_price")
-    if entry is None or sl is None or exit_px is None:
-        return None
-    risk = abs(entry - sl)
-    if risk <= 0:
-        return None
-    diff = (exit_px - entry) if _is_buy(row.get("direction")) else (entry - exit_px)
-    return round(diff / risk, 4)
+    r = trade_math.realized_r(
+        row.get("entry_price"), row.get("stop_loss"), row.get("exit_price"),
+        row.get("direction"),
+    )
+    return round(r, 4) if r is not None else None
 
 
 def _planned_rr(row: dict) -> float | None:
@@ -74,7 +74,7 @@ def _clean_pips(row: dict) -> float | None:
     entry, exit_px = row.get("entry_price"), row.get("exit_price")
     if entry is None or exit_px is None:
         return None
-    diff = (exit_px - entry) if _is_buy(row.get("direction")) else (entry - exit_px)
+    diff = trade_math.price_diff(entry, exit_px, row.get("direction"))
     return round(diff / _pip_size(row.get("symbol", "")), 1)
 
 
@@ -308,19 +308,8 @@ def journal_stats() -> dict[str, Any]:
     r_values = [x["r"] for x in equity_curve]
     wins = [r for r in r_values if r > 0]
     losses = [r for r in r_values if r < 0]
-    gross_win = sum(wins)
-    gross_loss = -sum(losses)
-    if gross_loss > 0:
-        profit_factor: float | str | None = round(gross_win / gross_loss, 3)
-    elif gross_win > 0:
-        profit_factor = "Infinity"  # same JSON-safe sentinel as outcome_tracker
-    else:
-        # No losses AND no wins (an all-breakeven book, or nothing closed
-        # yet) — 0/0 is undefined, not infinite. The old `elif r_values`
-        # check reported "Infinity" here too, mislabeling a book with zero
-        # wins as an infinitely profitable one (audit
-        # docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-2).
-        profit_factor = None
+    pf = trade_math.profit_factor(r_values)
+    profit_factor: float | str | None = round(pf, 3) if isinstance(pf, float) else pf
 
     def _bucket(rows_subset: list[dict], key: str) -> list[dict[str, Any]]:
         groups: dict[str, list[dict]] = {}

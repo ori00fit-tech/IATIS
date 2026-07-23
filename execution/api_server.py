@@ -1640,25 +1640,49 @@ def _run_job(job: "_Job") -> None:
     job.status = "running"
     job.started_at = datetime.now(timezone.utc).isoformat()
     argv = job.argv
+    # done/watchdog: the read loop below only checks the timeout between
+    # lines it receives, so a child whose stdout is block-buffered (any
+    # non-TTY `python3 -m ...` process without PYTHONUNBUFFERED) or that
+    # hangs producing no output at all could run past `job.timeout`
+    # indefinitely — the loop just blocks on the next readline (audit
+    # docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P1-3). PYTHONUNBUFFERED=1
+    # fixes the common case (Python children flush every line); the
+    # watchdog timer is the real, unconditional wall-clock enforcement.
+    done = threading.Event()
+
+    def _hard_kill(proc: "subprocess.Popen[str]") -> None:
+        if not done.is_set():
+            job.status = "timeout"
+            proc.kill()
+
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, cwd=_REPO_ROOT, bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        start = time.monotonic()
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            with job.lock:
-                job.log_lines.append(line.rstrip("\n"))
-            if time.monotonic() - start > job.timeout:
-                proc.kill()
-                job.status = "timeout"
-                break
-        proc.wait(timeout=10)
+        watchdog = threading.Timer(job.timeout, _hard_kill, args=(proc,))
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            start = time.monotonic()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                with job.lock:
+                    job.log_lines.append(line.rstrip("\n"))
+                if time.monotonic() - start > job.timeout:
+                    proc.kill()
+                    job.status = "timeout"
+                    break
+            proc.wait(timeout=10)
+        finally:
+            done.set()
+            watchdog.cancel()
         if job.status != "timeout":
             job.returncode = proc.returncode
             job.status = "finished" if proc.returncode == 0 else "failed"
     except Exception as exc:
+        done.set()
         with job.lock:
             job.log_lines.append(f"[runner error] {exc}")
         job.status = "failed"

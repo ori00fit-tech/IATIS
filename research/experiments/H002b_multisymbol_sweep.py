@@ -186,5 +186,5 @@ def run_experiment(
 
 if __name__ == "__main__":
     raise SystemExit(
-        "Run via run_h002b.py — see research/hypotheses/H002_qualified_sweep.md"
+        "Run via scripts/run_h002b.py — see research/hypotheses/H002_qualified_sweep.md"
     )

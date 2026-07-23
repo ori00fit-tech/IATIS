@@ -6,8 +6,8 @@ Run H002b: multi-symbol qualified sweep aggregation.
 Loads EURUSD + GBPUSD + XAUUSD from local CSVs (Yahoo Finance 2yr data).
 
 Usage:
-    python3 run_h002b.py
-    python3 run_h002b.py --symbols EURUSD GBPUSD   # subset
+    python3 scripts/run_h002b.py
+    python3 scripts/run_h002b.py --symbols EURUSD GBPUSD   # subset
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root (moved into scripts/ 2026-07-23, audit P2-3)
 
 
 def main():

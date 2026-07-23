@@ -540,6 +540,25 @@ def test_files_read_rejects_traversal(client, fake_repo):
     assert r.status_code == 400
 
 
+def test_files_read_denies_secret_word_in_intermediate_directory(client, fake_repo):
+    """docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-4: the word filter
+    used to check only the basename, so config/secrets/db.json would have
+    passed untouched even though 'secrets' is a denylisted word."""
+    (fake_repo / "config").mkdir()
+    (fake_repo / "config" / "secrets").mkdir()
+    (fake_repo / "config" / "secrets" / "db.json").write_text("{}")
+    r = client.get("/files/read", params={"path": "config/secrets/db.json"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_read_denies_extensionless_private_key(client, fake_repo):
+    """P3-5: an extension-based check alone misses ssh-keygen's default
+    extensionless private key filenames."""
+    (fake_repo / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+    r = client.get("/files/read", params={"path": "id_rsa"}, headers=HDR)
+    assert r.status_code == 403
+
+
 def test_files_download_requires_auth(client):
     assert client.get("/files/download", params={"path": "README.md"}).status_code == 401
 
@@ -934,6 +953,62 @@ def test_run_job_uses_fixed_argv_never_shell(monkeypatch):
     assert captured["kwargs"].get("shell", False) is False
     assert job.status == "finished"
     assert job.log_lines == ["line one", "line two"]
+
+
+def test_run_job_watchdog_kills_silent_hang_even_without_output(monkeypatch):
+    """Regression for docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P1-3: the
+    old implementation only checked job.timeout inside the stdout read
+    loop, so a child that never writes any output (or block-buffers it)
+    could hang past its nominal timeout indefinitely. The watchdog timer
+    must kill it independently of the read loop ever running."""
+    import time as time_mod
+
+    import execution.api_server as m
+
+    monkeypatch.setattr(
+        m, "_JOB_COMMANDS",
+        {"silent_hang": [sys.executable, "-c", "import time; time.sleep(30)"]},
+    )
+
+    job = m._Job("silent-hang-id", "silent_hang")
+    job.timeout = 1  # force a fast timeout instead of waiting on the real default
+
+    start = time_mod.monotonic()
+    m._run_job(job)
+    elapsed = time_mod.monotonic() - start
+
+    assert job.status == "timeout"
+    # Watchdog must fire near job.timeout, nowhere close to the 30s sleep.
+    assert elapsed < 10, f"watchdog did not enforce the timeout (took {elapsed:.1f}s)"
+
+
+def test_run_job_passes_unbuffered_env_to_child(monkeypatch):
+    """PYTHONUNBUFFERED=1 must reach the child so line-buffered stdout
+    reaches the read loop promptly (the watchdog above is the hard
+    backstop; this is the fix for the common case)."""
+    import execution.api_server as m
+
+    captured: dict = {}
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            captured["kwargs"] = kwargs
+            self.stdout = iter(["line\n"])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"fake_job": ["echo", "hi"]})
+
+    job = m._Job("test-id-2", "fake_job")
+    m._run_job(job)
+
+    assert captured["kwargs"]["env"]["PYTHONUNBUFFERED"] == "1"
 
 
 def test_experiments_run_and_poll_to_completion(client, monkeypatch):

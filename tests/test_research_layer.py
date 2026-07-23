@@ -19,8 +19,10 @@ from storage.decision_log import filter_decisions, log_decision, read_decisions,
 
 # ---------- edge gate ----------
 
-def test_edge_gate_allows_exempt_engines():
-    # smc and price_action are plain technical reads, always allowed
+def test_edge_gate_allows_smc_and_price_action_via_research_hypotheses():
+    # smc (H101) and price_action (H102) are RESEARCH-status hypotheses as
+    # of 2026-07-23 (governance closure, docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md
+    # P1-1) — no longer a bare EXEMPT_ENGINES bypass, but still allowed.
     check_edge_gate({"smc": True, "price_action": True})  # should not raise
 
 

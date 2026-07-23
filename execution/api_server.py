@@ -1640,25 +1640,49 @@ def _run_job(job: "_Job") -> None:
     job.status = "running"
     job.started_at = datetime.now(timezone.utc).isoformat()
     argv = job.argv
+    # done/watchdog: the read loop below only checks the timeout between
+    # lines it receives, so a child whose stdout is block-buffered (any
+    # non-TTY `python3 -m ...` process without PYTHONUNBUFFERED) or that
+    # hangs producing no output at all could run past `job.timeout`
+    # indefinitely — the loop just blocks on the next readline (audit
+    # docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P1-3). PYTHONUNBUFFERED=1
+    # fixes the common case (Python children flush every line); the
+    # watchdog timer is the real, unconditional wall-clock enforcement.
+    done = threading.Event()
+
+    def _hard_kill(proc: "subprocess.Popen[str]") -> None:
+        if not done.is_set():
+            job.status = "timeout"
+            proc.kill()
+
     try:
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, cwd=_REPO_ROOT, bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        start = time.monotonic()
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            with job.lock:
-                job.log_lines.append(line.rstrip("\n"))
-            if time.monotonic() - start > job.timeout:
-                proc.kill()
-                job.status = "timeout"
-                break
-        proc.wait(timeout=10)
+        watchdog = threading.Timer(job.timeout, _hard_kill, args=(proc,))
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            start = time.monotonic()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                with job.lock:
+                    job.log_lines.append(line.rstrip("\n"))
+                if time.monotonic() - start > job.timeout:
+                    proc.kill()
+                    job.status = "timeout"
+                    break
+            proc.wait(timeout=10)
+        finally:
+            done.set()
+            watchdog.cancel()
         if job.status != "timeout":
             job.returncode = proc.returncode
             job.status = "finished" if proc.returncode == 0 else "failed"
     except Exception as exc:
+        done.set()
         with job.lock:
             job.log_lines.append(f"[runner error] {exc}")
         job.status = "failed"
@@ -2233,15 +2257,23 @@ async def journal_annotate(
         raise HTTPException(status_code=400, detail="'tags' must be a list of strings.")
     try:
         from storage.journal import annotate
-        success = annotate(signal_id, notes=notes, tags=tags)
+        found, applied = annotate(signal_id, notes=notes, tags=tags)
     except Exception as exc:
         logger.error(f"Journal annotate error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
     from storage.audit_log import log_action
     log_action("journal_annotate", x_api_key=x_api_key, session_id=iatis_session,
-               success=success, detail=signal_id)
-    if not success:
+               success=found and applied, detail=signal_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Unknown signal_id.")
+    if not applied:
+        # Found the row but nothing was actually written (e.g. tags were
+        # requested but the tags-column migration hasn't run and no notes
+        # were given) — must not report success:true for a no-op.
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing was persisted — tags require migration 3 (storage.migrations) and no notes were provided.",
+        )
     return {"success": True, "signal_id": signal_id}
 
 
@@ -2824,8 +2856,17 @@ _DENY_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist
 # Exact "word" matches on a path segment's alnum-split tokens — deliberately
 # whole-word (not substring) so e.g. dashboard/frontend/src/theme/tokens.css
 # (a design-tokens stylesheet, not a secret) is never falsely denied.
+# Checked against EVERY path segment, not just the basename (audit
+# docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-4): a future
+# config/secrets/db.json or credentials/aws.json would otherwise pass
+# untouched, since only a fixed directory-name list (_DENY_DIR_NAMES) was
+# checked for intermediate segments and the word filter applied to the
+# basename alone.
 _DENY_WORDS = {"credential", "credentials", "secret", "secrets", "token", "password", "passwords"}
 _DENY_EXTENSIONS = {"pem", "key", "pfx", "p12", "crt", "cer"}
+# Extensionless private-key filenames (ssh-keygen's default names) — an
+# extension-based check alone misses these entirely.
+_DENY_FILENAME_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 _DENY_PREFIXES = ("storage/sessions", "storage/td_cache")
 _MAX_READ_BYTES = 512_000
 _MAX_SEARCH_FILES = 4000
@@ -2841,10 +2882,17 @@ def _is_denied_path(posix_rel: str) -> bool:
     basename = parts[-1]
     if basename == ".env" or basename.startswith(".env."):
         return True
+    if basename.startswith(_DENY_FILENAME_PREFIXES):
+        return True
     stem_ext = basename.rsplit(".", 1)
     if len(stem_ext) == 2 and stem_ext[1].lower() in _DENY_EXTENSIONS:
         return True
-    words = {w.lower() for w in re.split(r"[^A-Za-z0-9]+", basename) if w}
+    words = {
+        w.lower()
+        for part in parts
+        for w in re.split(r"[^A-Za-z0-9]+", part)
+        if w
+    }
     if words & _DENY_WORDS:
         return True
     return False

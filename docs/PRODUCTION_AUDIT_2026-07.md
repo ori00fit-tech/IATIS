@@ -60,7 +60,7 @@ Layered, config-driven architecture (data → quality gate → regime → engine
 ### Code smells (file-by-file highlights)
 - `main.py`: `run_pipeline(config)` mixes data loading, gating, engine execution, scoring, report assembly, persistence, and notification. Any storage exception (see Phase 3) escapes it. Priority: split into composable stages; this also unlocks unit-testing individual gates without a full run.
 - `execution/api_server.py` (1,610 lines): endpoints + inline HTML dashboard + login page + session store in one module; 36% coverage. Priority: extract HTML templates and session store.
-- `execution/ctrader_client.py` (728 statements, 24% coverage): the largest module in the repo and the one that would place real orders — the least tested. Currently gated off (`ctrader_enabled: false`, `dry_run: true`), which is the correct state.
+- `execution/ctrader_client.py` (728 statements, 24% coverage): the largest module in the repo and the one that would place real orders — the least tested. Currently gated off (`ctrader_enabled: false`, `dry_run: true`), which is the correct state. **STALE as of 2026-07-06**: `config.yaml` flipped to `ctrader_enabled: true, dry_run: false` that day — real orders execute on the cTrader *demo* account (`allow_live_trading: false` still correctly gates real money). Coverage was 24% here, 36% by 2026-07-22, and 61% after docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md's P0-2 remediation — this file's claim is left unedited above (audit trail), corrected only here.
 - Typing is present on most public functions; storage and confluence modules are well-typed (pydantic v2 used for API models). No mypy config exists — NOT ENOUGH EVIDENCE that annotations are internally consistent.
 
 ### Positive patterns worth keeping

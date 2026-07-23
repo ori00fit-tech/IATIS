@@ -8,6 +8,15 @@ pin the effective, merged config produced by load_config() to the exact
 values the old single-file config.yaml carried, so a future edit to the
 loader or the split files can't silently change what the system trades
 on. See utils/helpers.py::load_config and each config/*.yaml header.
+
+2026-07-23: USOIL/US30/NAS100/SPX500 deliberately flipped to disabled
+(docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P1-2) — they appeared in
+zero backtest result manifests (USOIL's only appearance LOST, PF 0.87)
+yet were enabled: true on "no individual disqualifying measurement",
+the same absence-of-evidence-as-permission pattern already corrected
+for AUDUSD/USDCAD/NZDUSD/EURGBP/EURCHF. This pin is updated intentionally,
+in the same commit as the config change, per this file's own purpose:
+a silent drift would fail here; a deliberate, documented one updates here.
 """
 from __future__ import annotations
 
@@ -31,10 +40,10 @@ _EXPECTED_SYMBOLS = [
     (False, "EURCHF", 58, 2.0, "EUR/CHF"),
     (True, "XAUUSD", 55, 2.5, "XAU/USD"),
     (True, "XAGUSD", 55, 2.5, "XAG/USD"),
-    (True, "USOIL", 55, 2.5, "WTI/USD"),
-    (True, "US30", 55, 2.5, "DJI"),
-    (True, "NAS100", 60, 2.5, "NDX"),
-    (True, "SPX500", 55, 2.5, "SPX"),
+    (False, "USOIL", 55, 2.5, "WTI/USD"),
+    (False, "US30", 55, 2.5, "DJI"),
+    (False, "NAS100", 60, 2.5, "NDX"),
+    (False, "SPX500", 55, 2.5, "SPX"),
     (True, "BTCUSD", 55, 2.5, "BTC/USD"),
     (True, "ETHUSD", 60, 2.0, "ETH/USD"),
 ]

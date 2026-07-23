@@ -290,4 +290,4 @@ def run_experiment(
 
 
 if __name__ == "__main__":
-    raise SystemExit("Run via run_h008.py")
+    raise SystemExit("Run via scripts/run_h008.py")

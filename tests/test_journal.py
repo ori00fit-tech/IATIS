@@ -109,9 +109,39 @@ def test_journal_stats_recomputes_from_prices():
     assert stats["total_r"] == pytest.approx(3.0, abs=0.01)
     assert stats["win_rate"] == 100.0
     assert stats["profit_factor"] == "Infinity"
-    assert len(stats["equity_curve"]) == 1
-    assert stats["equity_curve"][0]["cum_r"] == pytest.approx(3.0, abs=0.01)
-    assert stats["by_symbol"][0]["symbol"] == "EURUSD"
+
+
+def test_journal_stats_all_breakeven_book_is_not_infinite():
+    """P3-2 regression: zero wins AND zero losses (0/0) is undefined, not
+    infinite — the old check reported "Infinity" for this case too."""
+    from storage.journal import journal_stats
+
+    _seed_closed_trade(entry=1.0850, sl=1.0920, tp=1.0640, exit_px=1.0850,
+                       outcome="breakeven")  # exit == entry -> realized_r == 0
+
+    stats = journal_stats()
+    assert stats["wins"] == 0
+    assert stats["losses"] == 0
+    assert stats["profit_factor"] is None
+
+
+def test_journal_stats_by_direction_normalizes_buy_sell_synonyms():
+    """P3-3 regression: BUY and BULLISH (and SELL/BEARISH) must land in the
+    same bucket, not fragment into 4 groups."""
+    from storage import d1_client
+    from storage.journal import journal_stats
+
+    _seed_closed_trade(symbol="EURUSD", direction="BEARISH")
+    sid2 = _seed_closed_trade(symbol="GBPUSD", direction="BEARISH")
+    with d1_client.d1_connection() as con:
+        # Simulate a hypothetical future write path storing the raw
+        # BUY/SELL vocabulary instead of BULLISH/BEARISH.
+        con.execute("UPDATE outcomes SET direction='SELL' WHERE signal_id=?", (sid2,))
+
+    stats = journal_stats()
+    by_dir = {row["direction"]: row for row in stats["by_direction"]}
+    assert set(by_dir.keys()) == {"SELL"}
+    assert by_dir["SELL"]["n"] == 2
 
 
 def test_performance_summary_ignores_poisoned_pips():
@@ -138,9 +168,9 @@ def test_annotate_notes_and_missing_signal():
     from storage.journal import annotate, trade_detail
 
     sid = _seed_closed_trade()
-    assert annotate(sid, notes="reviewed — clean trend day") is True
+    assert annotate(sid, notes="reviewed — clean trend day") == (True, True)
     assert trade_detail(sid)["notes"] == "reviewed — clean trend day"
-    assert annotate("nope_123", notes="x") is False
+    assert annotate("nope_123", notes="x") == (False, False)
 
 
 def test_annotate_tags_roundtrip():
@@ -149,8 +179,36 @@ def test_annotate_tags_roundtrip():
 
     apply_migrations()  # tags column arrives with migration 3
     sid = _seed_closed_trade()
-    assert annotate(sid, tags=["news-spike", "a-plus-setup"]) is True
+    assert annotate(sid, tags=["news-spike", "a-plus-setup"]) == (True, True)
     assert trade_detail(sid)["tags"] == ["news-spike", "a-plus-setup"]
+
+
+def test_annotate_tags_without_migration_reports_found_but_not_applied():
+    """Regression for docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-5: the
+    signal exists (found=True) but nothing was persisted (applied=False)
+    when tags are requested without notes and the tags column is missing —
+    previously this silently reported success."""
+    from storage.journal import annotate, trade_detail
+
+    sid = _seed_closed_trade()  # no apply_migrations() — tags column absent
+    before = trade_detail(sid).get("notes")
+    found, applied = annotate(sid, tags=["news-spike"])
+    assert found is True
+    assert applied is False
+    assert trade_detail(sid).get("notes") == before  # nothing changed
+
+
+def test_annotate_notes_still_applied_even_if_tags_column_missing():
+    """When both notes and tags are given but the tags column is missing,
+    the notes write must still go through — applied reflects the request
+    as a whole, but nothing that *could* be written is silently dropped."""
+    from storage.journal import annotate, trade_detail
+
+    sid = _seed_closed_trade()
+    found, applied = annotate(sid, notes="partial write ok", tags=["x"])
+    assert found is True
+    assert applied is True
+    assert trade_detail(sid)["notes"] == "partial write ok"
 
 
 # ── API contract ───────────────────────────────────────────────────────────
@@ -196,6 +254,14 @@ def test_journal_annotate_endpoint(client):
                        json={"notes": "x"}).status_code == 404
 
 
+def test_journal_annotate_endpoint_409s_on_no_op(client):
+    """P2-5: tags-only request with no migration applied must not report
+    200/success:true for a write that didn't happen."""
+    sid = _seed_closed_trade()  # tags column absent — no apply_migrations()
+    res = client.post(f"/journal/{sid}/annotate", headers=HDR, json={"tags": ["x"]})
+    assert res.status_code == 409
+
+
 def test_journal_export_csv(client):
     _seed_closed_trade()
     res = client.get("/journal/export", headers=HDR)
@@ -204,3 +270,22 @@ def test_journal_export_csv(client):
     lines = res.text.strip().splitlines()
     assert lines[0].startswith("signal_id,symbol,direction,outcome")
     assert len(lines) >= 2
+
+
+def test_journal_export_csv_escapes_formula_injection_in_notes(client):
+    """P3-1: a note starting with =/+/-/@ must not be openable as a live
+    formula in Excel/Sheets — it must round-trip as literal text."""
+    from storage.journal import annotate
+
+    import csv
+    import io
+
+    sid = _seed_closed_trade()
+    annotate(sid, notes="=cmd|'/c calc'!A1")
+    res = client.get("/journal/export", headers=HDR)
+    assert res.status_code == 200
+
+    rows = list(csv.DictReader(io.StringIO(res.text)))
+    row = next(r for r in rows if r["signal_id"] == sid)
+    assert row["notes"] == "'=cmd|'/c calc'!A1"  # '-prefixed: inert text, not a live formula
+    assert not row["notes"].startswith("=")

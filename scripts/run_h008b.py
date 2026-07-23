@@ -6,12 +6,12 @@ H008b: BOS+FVG with London session (02-10 UTC) + ATR quality filter.
 Target: raise WR from 55.2% to 60%+ for statistical significance.
 
 Usage:
-    python3 run_h008b.py                    # EURUSD only
-    python3 run_h008b.py --all              # all available CSVs
+    python3 scripts/run_h008b.py                    # EURUSD only
+    python3 scripts/run_h008b.py --all              # all available CSVs
 """
 import argparse, sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root (moved into scripts/ 2026-07-23, audit P2-3)
 
 def main():
     parser = argparse.ArgumentParser()

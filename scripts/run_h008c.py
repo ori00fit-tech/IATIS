@@ -6,7 +6,7 @@ Run the honest, look-ahead-free, out-of-sample BOS+FVG re-test (H008c) on
 REAL deep M15 data fetched by scripts/fetch_m15_twelvedata.py.
 
     python3 scripts/fetch_m15_twelvedata.py --symbols EUR/USD,GBP/USD,XAU/USD --pages 16
-    python3 run_h008c.py
+    python3 scripts/run_h008c.py
 
 Reports, per symbol and POOLED (train/test chronological split):
   * causal unfiltered WR       (H008 concept, look-ahead removed)
@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root (moved into scripts/ 2026-07-23, audit P2-3)
 
 import pandas as pd  # noqa: E402
 

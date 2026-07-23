@@ -416,6 +416,28 @@
    "linked_result": "research/results/H037_decision_delay.json",
    "hypothesis_doc": "research/hypotheses/H037_decision_delay.md",
    "last_updated": "2026-07-22"
+  },
+  "H101": {
+   "title": "SMC swing-structure engine as confluence input (governance closure)",
+   "status": "RESEARCH",
+   "blocks_engine": "smc",
+   "description": "Retroactively documents SMC's standing evidence to close the EXEMPT_ENGINES governance gap (docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P1-1) rather than proposing new work. SMC is weighted and votes in the scored confluence system like every other gated engine, so it should carry a hypothesis like every other engine (CLAUDE.md rule 1).",
+   "existing_evidence": "H015 (RESOLVED, 15-symbol OOS-confirmed, 2026-07-10): \"drop-smc helps mildly in-train everywhere but no alternative containing it survives the adoption rule OOS.\" Mixed, not a clean win either direction - hence RESEARCH, not PASSED or FAILED.",
+   "falsification_criteria": "A dedicated prod4-vs-prod4-minus-SMC A/B on the full 20-symbol universe, chronological OOS split (H008c method), >=300 OOS trades: reject if the SMC-included arm's TEST-slice mean dPF is not positive with OOS-win-fraction >=60%. Not yet run.",
+   "hypothesis_doc": "research/hypotheses/H101_smc_structural_bias.md",
+   "last_updated": "2026-07-23",
+   "notes": "Supersedes a bare EXEMPT_ENGINES bypass in research/edge_gate.py that predated PROMOTION_CRITERIA (2026-07-09). No engine/threshold/entry/exit change - smc stays enabled exactly as before; only its governance status changed."
+  },
+  "H102": {
+   "title": "Price Action engine as confluence input (governance closure)",
+   "status": "RESEARCH",
+   "blocks_engine": "price_action",
+   "description": "Retroactively documents Price Action's standing evidence to close the same EXEMPT_ENGINES gap as H101.",
+   "existing_evidence": "H015 (RESOLVED, 15-symbol OOS-confirmed, 2026-07-10): \"nnfx and price_action are load-bearing (dropping either always hurts)\" - stable across every subset search run (3-symbol and 15-symbol universes). The strongest positive OOS signal any single engine carries short of the carrier trend-capture edge itself.",
+   "falsification_criteria": "Reject only if a dedicated marginal-contribution A/B under the current voting system contradicts H015 - TEST-slice mean dPF from removing price_action is non-negative with OOS-win-fraction >=60% favoring removal. Kept at RESEARCH rather than promoted directly because no run isolated price_action's marginal contribution specifically, and the promotion bar is process, not opinion.",
+   "hypothesis_doc": "research/hypotheses/H102_price_action_confluence.md",
+   "last_updated": "2026-07-23",
+   "notes": "Supersedes a bare EXEMPT_ENGINES bypass in research/edge_gate.py that predated PROMOTION_CRITERIA (2026-07-09). No engine/threshold/entry/exit change - price_action stays enabled exactly as before; only its governance status changed."
   }
  },
  "walk_forward_validation": {

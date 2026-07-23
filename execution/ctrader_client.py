@@ -42,17 +42,77 @@ Connection state flow:
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from queue import Queue
 from typing import Any
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ─── Cross-process session lock (audit P0-3, 2026-07-23) ───────────────────
+#
+# cTrader's Open API allows only ONE authenticated session per account+app
+# (see core/data_providers.py get_shared_ctrader_client's docstring — this
+# was already known and is why that module enforces an intra-process
+# singleton). The 2026-07-22 ALREADY_LOGGED_IN reconnect fix (commit
+# 7c0400b) made a second, colliding authentication attempt non-fatal by
+# design — correct for THIS process's own reconnects, but it also means
+# nothing in this module previously stopped a second *OS process* (a
+# stale/zombie process from an incomplete systemd restart, or an operator
+# running a second instance by mistake) from racing this one to
+# authenticate. During that race window both processes could believe they
+# hold the session and both attempt to submit real orders before the
+# broker's single-session enforcement kicks either one out.
+#
+# This is a coarse, whole-VPS advisory lock (one lock file, not
+# per-account) — correct for this deployment's single-account, single-VPS
+# shape. A future multi-account deployment would need one lock file per
+# account. Held for the process's entire lifetime; flock releases
+# automatically on process exit (including a crash or kill -9), so no
+# cleanup path can leak a stale lock the way a manually-managed PID file
+# could.
+_PROCESS_LOCK_PATH = Path(__file__).resolve().parent.parent / "storage" / "ctrader_session.lock"
+_process_lock_file = None  # module-level: one lock per process, not per client instance
+
+
+class DuplicateSessionError(Exception):
+    """Raised when another OS process already holds the cTrader session lock."""
+
+
+def _acquire_process_lock(lock_path: Path = _PROCESS_LOCK_PATH) -> None:
+    """Acquire the whole-process cTrader session lock, or raise.
+
+    Idempotent within a process: a second CTraderClient in the same
+    process (already prevented in practice by get_shared_ctrader_client's
+    singleton) is a no-op here, not an error — this guard is specifically
+    about a *different OS process*, which flock's per-open-file-description
+    semantics detect even when that other process is this same codebase.
+    """
+    global _process_lock_file
+    if _process_lock_file is not None:
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise DuplicateSessionError(
+            f"Another process already holds the cTrader session lock ({lock_path}) "
+            "— refusing to connect a second session to avoid duplicate real-order "
+            "submission (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P0-3)."
+        ) from exc
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _process_lock_file = fh
 
 
 # ─── Connection State Machine ──────────────────────────────────────────────
@@ -651,11 +711,24 @@ class CTraderClient:
         """
         try:
             positions = getattr(message, "position", None)
-            if not positions:
-                logger.info("🧾 Reconcile: no open positions reported by broker")
+            # `positions is None` (field truly absent — nothing to act on) is
+            # NOT the same as `positions == []` (broker explicitly reports
+            # zero open positions). The old `if not positions: return` early
+            # exit treated both identically, which meant reconcile could
+            # only ever ADD stale-cleared positions, never CLEAR them —
+            # a real correctness bug (found via test_ctrader_message_handlers.py,
+            # audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P0-2 coverage
+            # work): after a reconnect, if every position had actually been
+            # closed, the in-memory `_positions` map would keep believing a
+            # stale one was still open — exactly the kind of state drift
+            # that risk checks and has_open_position() depend on being correct.
+            if positions is None:
+                logger.warning("⚠️ ProtoOAReconcileRes missing `position` field — leaving position state unchanged")
                 return
             with self._lock:
                 self._positions.clear()
+                if not positions:
+                    logger.info("🧾 Reconcile: no open positions reported by broker")
                 for position in positions:
                     trade_data = getattr(position, "tradeData", None)
                     sym_id = int(getattr(trade_data, "symbolId", 0)) if trade_data else 0
@@ -855,12 +928,25 @@ class CTraderClient:
 
         threading.Thread(target=_attempt, daemon=True, name="ctrader-reconnect").start()
 
+    # Only the two auth-stage requests can legitimately race a stale
+    # session into ALREADY_LOGGED_IN — every other context (trader_req,
+    # symbols_list, reconcile, symbol_details, trendbars, spot subscribe)
+    # sending it back would be unexpected, not benign. Scoping the swallow
+    # here (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-4)
+    # prevents an ALREADY_LOGGED_IN-shaped error on, say, a reconcile
+    # request from silently no-oping instead of surfacing as an error —
+    # the old check matched the substring across every _on_error call site.
+    _ALREADY_LOGGED_IN_BENIGN_CONTEXTS = frozenset({"app_auth", "account_auth"})
+
     def _on_error(self, context: str, failure: Any) -> None:
         error_msg = (
             failure.getErrorMessage() if hasattr(failure, "getErrorMessage")
             else str(failure)
         )
-        if "ALREADY_LOGGED_IN" in error_msg:
+        if (
+            context in self._ALREADY_LOGGED_IN_BENIGN_CONTEXTS
+            and "ALREADY_LOGGED_IN" in error_msg
+        ):
             # Benign — handled by _on_error_res, which continues the
             # bootstrap chain. The same rejection also lands here via the
             # send() Deferred's errback; it must not flip the state to ERROR.
@@ -877,6 +963,8 @@ class CTraderClient:
         # any future unplanned drop of *this* connection.
         self._intentional_disconnect = False
         try:
+            _acquire_process_lock()
+
             from ctrader_open_api import Client, TcpProtocol
             from twisted.internet import reactor
 

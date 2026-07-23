@@ -39,6 +39,16 @@ class RiskInputs:
     current_drawdown_pct: float = 0.0    # current drawdown from equity peak
     correlated_exposure_pct: float = 0.0  # exposure to instruments correlated with this trade
     correlation_limit_pct: float = 0.10   # block if correlated_exposure_pct exceeds this
+    # True when this exact symbol already has an open position/signal.
+    # risk/live_portfolio_state.py's correlated-exposure calc deliberately
+    # EXCLUDES the candidate symbol from its own correlation group (correct
+    # — it measures exposure to OTHER correlated instruments), which means
+    # nothing else was checking "is this exact symbol already open" before
+    # this field existed: two live EURUSD signals opened ~2h apart with
+    # near-identical entry/SL/TP (observed 2026-07-21/22 in production) went
+    # through uncontested, doubling real risk on one setup while the
+    # exposure-cap math still believed only one EURUSD position existed.
+    symbol_already_open: bool = False
 
 
 def _risk_reward_ratio(entry: float, stop: float, target: float) -> float:
@@ -80,6 +90,16 @@ def evaluate_risk(inputs: RiskInputs, config: dict) -> RiskCheckResult:
     rr = _risk_reward_ratio(inputs.entry_price, inputs.stop_loss_price, inputs.take_profit_price)
     if rr < min_rr * (1.0 - 1e-9):
         reasons.append(f"Risk/reward {rr:.2f} below minimum required {min_rr:.2f}")
+
+    # --- Same-symbol duplicate-position guard ---
+    # A new signal on a symbol that already has an open position is not an
+    # independent trade — it doubles real risk on one setup while every
+    # exposure calculation above still assumes one position per symbol.
+    if inputs.symbol_already_open:
+        reasons.append(
+            "Symbol already has an open position — refusing a second "
+            "simultaneous position on the same instrument"
+        )
 
     # --- Correlation exposure cap ---
     if inputs.correlated_exposure_pct >= inputs.correlation_limit_pct:

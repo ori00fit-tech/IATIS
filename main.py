@@ -402,6 +402,7 @@ def _risk_gate(config: dict, df_base, conf: _ConfluenceEval):
         current_open_risk_pct=portfolio_state.current_open_risk_pct,
         current_drawdown_pct=portfolio_state.current_drawdown_pct,
         correlated_exposure_pct=portfolio_state.correlated_exposure_pct,
+        symbol_already_open=config["data"].get("symbol", "") in portfolio_state.open_symbols,
     )
     return evaluate_risk(risk_inputs, config), entry, stop, target
 

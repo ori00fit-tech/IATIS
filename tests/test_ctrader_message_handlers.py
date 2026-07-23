@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from execution.ctrader_client import CTraderClient, ConnectionState
+from execution.ctrader_client import CTraderClient, CTraderOrder, ConnectionState
 
 
 @pytest.fixture
@@ -492,3 +492,59 @@ def test_on_message_dispatcher_error_is_swallowed(client, monkeypatch):
         raise RuntimeError("handler exploded")
     monkeypatch.setattr(client, "_on_trader_res", _boom)
     client._on_message(client=None, message=_fake_response("ProtoOATraderRes"))  # must not raise
+
+
+# ── _parse_execution_response ───────────────────────────────────────────────
+# Regression coverage for the 2026-07-23 production bug: every single live
+# cTrader fill logged "TCA: fill ... missing intended/fill price — not
+# recorded" (storage/execution_quality.py) because this parser only read
+# deal.executionPrice / order.executionPrice, both empty on the actual
+# ProtoOAExecutionEvent this account receives for a market-order fill — the
+# real fill price was sitting on position.price the whole time (the same
+# field _on_execution_event/_on_reconcile_res already trust elsewhere in
+# this file).
+
+def _order() -> CTraderOrder:
+    return CTraderOrder(
+        symbol="EURUSD", direction="BUY", volume=100_000,
+        stop_loss=1.0800, take_profit=1.0950,
+    )
+
+
+def test_parse_execution_response_reads_price_from_position_when_deal_is_empty(client):
+    position = SimpleNamespace(positionId=654120888, price=1.08765)
+    response = _fake_response(
+        "ProtoOAExecutionEvent", executionType=2, errorCode="",
+        deal=None, position=position, order=None,
+    )
+    result = client._parse_execution_response(_order(), response)
+
+    assert result.success is True
+    assert result.entry_price == 1.08765
+    assert result.position_id == "654120888"
+
+
+def test_parse_execution_response_prefers_deal_execution_price_over_position(client):
+    deal = SimpleNamespace(executionPrice=1.09000, positionId=1, orderId=1)
+    position = SimpleNamespace(positionId=1, price=1.08765)
+    response = _fake_response(
+        "ProtoOAExecutionEvent", executionType=2, errorCode="",
+        deal=deal, position=position, order=None,
+    )
+    result = client._parse_execution_response(_order(), response)
+
+    assert result.entry_price == 1.09000
+
+
+def test_parse_execution_response_falls_back_to_order_entry_price_when_nothing_else_is_set(client):
+    response = _fake_response(
+        "ProtoOAExecutionEvent", executionType=1, errorCode="",
+        deal=None, position=None, order=None,
+    )
+    order = CTraderOrder(
+        symbol="EURUSD", direction="BUY", volume=100_000,
+        stop_loss=1.0800, take_profit=1.0950, entry_price=1.0875,
+    )
+    result = client._parse_execution_response(order, response)
+
+    assert result.entry_price == 1.0875

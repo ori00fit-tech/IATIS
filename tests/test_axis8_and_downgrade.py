@@ -132,7 +132,7 @@ def _passing_conf(symbol_cfg=None):
     score = calculate_score(HEALTHY_PANEL, WEIGHTS, vote.winning_bias)
     return _ConfluenceEval(
         vote_result=vote, score_result=score, contradiction_result=None,
-        mtf_result=None, reversal_veto=None, active_weights=WEIGHTS,
+        mtf_result=None, active_weights=WEIGHTS,
         adjusted_score=70.0, fail_reasons=[], passed=True,
         symbol_cfg=symbol_cfg or {}, informative_weight_share=0.9,
     )

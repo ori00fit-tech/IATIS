@@ -540,6 +540,25 @@ def test_files_read_rejects_traversal(client, fake_repo):
     assert r.status_code == 400
 
 
+def test_files_read_denies_secret_word_in_intermediate_directory(client, fake_repo):
+    """docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-4: the word filter
+    used to check only the basename, so config/secrets/db.json would have
+    passed untouched even though 'secrets' is a denylisted word."""
+    (fake_repo / "config").mkdir()
+    (fake_repo / "config" / "secrets").mkdir()
+    (fake_repo / "config" / "secrets" / "db.json").write_text("{}")
+    r = client.get("/files/read", params={"path": "config/secrets/db.json"}, headers=HDR)
+    assert r.status_code == 403
+
+
+def test_files_read_denies_extensionless_private_key(client, fake_repo):
+    """P3-5: an extension-based check alone misses ssh-keygen's default
+    extensionless private key filenames."""
+    (fake_repo / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+    r = client.get("/files/read", params={"path": "id_rsa"}, headers=HDR)
+    assert r.status_code == 403
+
+
 def test_files_download_requires_auth(client):
     assert client.get("/files/download", params={"path": "README.md"}).status_code == 401
 

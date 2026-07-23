@@ -2848,8 +2848,17 @@ _DENY_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist
 # Exact "word" matches on a path segment's alnum-split tokens — deliberately
 # whole-word (not substring) so e.g. dashboard/frontend/src/theme/tokens.css
 # (a design-tokens stylesheet, not a secret) is never falsely denied.
+# Checked against EVERY path segment, not just the basename (audit
+# docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-4): a future
+# config/secrets/db.json or credentials/aws.json would otherwise pass
+# untouched, since only a fixed directory-name list (_DENY_DIR_NAMES) was
+# checked for intermediate segments and the word filter applied to the
+# basename alone.
 _DENY_WORDS = {"credential", "credentials", "secret", "secrets", "token", "password", "passwords"}
 _DENY_EXTENSIONS = {"pem", "key", "pfx", "p12", "crt", "cer"}
+# Extensionless private-key filenames (ssh-keygen's default names) — an
+# extension-based check alone misses these entirely.
+_DENY_FILENAME_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 _DENY_PREFIXES = ("storage/sessions", "storage/td_cache")
 _MAX_READ_BYTES = 512_000
 _MAX_SEARCH_FILES = 4000
@@ -2865,10 +2874,17 @@ def _is_denied_path(posix_rel: str) -> bool:
     basename = parts[-1]
     if basename == ".env" or basename.startswith(".env."):
         return True
+    if basename.startswith(_DENY_FILENAME_PREFIXES):
+        return True
     stem_ext = basename.rsplit(".", 1)
     if len(stem_ext) == 2 and stem_ext[1].lower() in _DENY_EXTENSIONS:
         return True
-    words = {w.lower() for w in re.split(r"[^A-Za-z0-9]+", basename) if w}
+    words = {
+        w.lower()
+        for part in parts
+        for w in re.split(r"[^A-Za-z0-9]+", part)
+        if w
+    }
     if words & _DENY_WORDS:
         return True
     return False

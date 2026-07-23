@@ -342,7 +342,7 @@ score moves fast; until then, this stays demo-only.
 | # | Problem | Evidence | Recommendation | Effort |
 |---|---|---|---|---|
 | P2-1 | `execution/api_server.py` is a 3,482-line monolith (routing + HTML + sessions + 15 dashboard modules), flagged in all three prior audits, never split | file line count, this session | Extract per-module `APIRouter`s (File Explorer, Experiment Runner, Journal, etc.) behind the existing replay/test harness | 3-5 days |
-| P2-2 | Two backtest packages (`backtest/` + `backtesting/`) still both exist; `backtest/metrics.py` (287 lines) still has zero external importers | `grep` this session found only internal `backtest/` cross-references | Merge into one package, delete the dead metrics module | 1 day |
+| P2-2 | Two backtest packages (`backtest/` + `backtesting/`) still both exist — organizational duplication, not dead code | `backtest/runner.py` is live (invoked by the Experiment Runner's whitelisted "backtest" job and `scripts/engine_ablation.py`); `backtest/metrics.py` is imported by `backtest/{walk_forward,report,monte_carlo,runner}.py` — **correction, 2026-07-23**: an earlier draft of this row wrongly claimed `backtest/metrics.py` had zero importers, conflating it with the already-deleted `backtesting/metrics.py` (a *different* file, singular vs. plural package name). Verified via `grep` before any deletion was attempted — nothing in `backtest/` was removed | Merge `backtest/` and `backtesting/` into one package (both are live; this is a rename/consolidation, not a deletion) | 1 day |
 | P2-3 | `run_h002.py`, `run_h002b.py`, `run_h008.py`, `run_h008b.py`, `run_h008c.py` still live at repo root instead of `research/` | `ls run_h*.py`, this session | Move into `research/experiments/` or `scripts/` for consistency with H024/H025/H033/H037 | 1 hour |
 | P2-4 | File Explorer's secret-path denylist checks the whole-word `token/secret/credential/password` filter only against the file's basename, not intermediate directory names | `_is_denied_path`, `execution/api_server.py` (agent-verified line ~2841) | Apply the word filter to every path segment, not just the last | 30 min |
 | P2-5 | `journal.annotate()` returns `{"success": true}` (and audit-logs success) even when the `tags` migration hasn't run and no `notes` was given — a silent no-op reported as success | `storage/journal.py:207-243`, agent-verified | Return an explicit "not applied" result when `sets` ends up empty | 1 hour |
@@ -496,7 +496,8 @@ findings since July — not a regression in kind, just accumulation faster
 than paydown, and it's honestly disclosed as out-of-scope-for-now in the CI
 file's own header rather than hidden. Dead code from the July audit
 (`utils/feature_def.py`, `execution/tradingview_webhook.py`) is confirmed
-gone; `backtest/metrics.py` (P2-2) is not.
+gone. `backtest/metrics.py` is NOT dead code (see P2-2's correction) — the
+`backtest/`/`backtesting/` split is organizational duplication only.
 
 # Refactoring Opportunities
 

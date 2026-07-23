@@ -312,15 +312,30 @@ def journal_stats() -> dict[str, Any]:
     gross_loss = -sum(losses)
     if gross_loss > 0:
         profit_factor: float | str | None = round(gross_win / gross_loss, 3)
-    elif r_values:
+    elif gross_win > 0:
         profit_factor = "Infinity"  # same JSON-safe sentinel as outcome_tracker
     else:
+        # No losses AND no wins (an all-breakeven book, or nothing closed
+        # yet) — 0/0 is undefined, not infinite. The old `elif r_values`
+        # check reported "Infinity" here too, mislabeling a book with zero
+        # wins as an infinitely profitable one (audit
+        # docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-2).
         profit_factor = None
 
     def _bucket(rows_subset: list[dict], key: str) -> list[dict[str, Any]]:
         groups: dict[str, list[dict]] = {}
         for r in rows_subset:
-            k = str(r.get(key) or "—")
+            if key == "direction":
+                # Normalize BUY/BULLISH and SELL/BEARISH into one bucket
+                # each via the same _is_buy() helper _realized_r() already
+                # uses — production only ever writes BULLISH/BEARISH
+                # today, but a future write path storing BUY/SELL must
+                # not silently fragment "by direction" into 4 buckets
+                # instead of 2 (audit
+                # docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-3).
+                k = "BUY" if _is_buy(r.get(key)) else "SELL"
+            else:
+                k = str(r.get(key) or "—")
             groups.setdefault(k, []).append(r)
         out = []
         for k, grp in sorted(groups.items()):
@@ -375,6 +390,21 @@ _CSV_FIELDS = [
 ]
 
 
+# Leading characters Excel/Sheets/LibreOffice treat as the start of a
+# formula when a CSV cell is opened — a classic CSV-injection vector via
+# any operator-controlled free-text field (in practice, `notes`).
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: Any) -> Any:
+    """Prefix a leading formula-trigger character with `'` so the cell is
+    always treated as text on open, never evaluated (audit
+    docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-1)."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def export_csv() -> str:
     """The whole journal as CSV (newest first) for offline analysis."""
     listing = list_trades(limit=100_000)
@@ -382,5 +412,5 @@ def export_csv() -> str:
     writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDS, extrasaction="ignore")
     writer.writeheader()
     for t in listing["trades"]:
-        writer.writerow({k: t.get(k) for k in _CSV_FIELDS})
+        writer.writerow({k: _csv_safe(t.get(k)) for k in _CSV_FIELDS})
     return buf.getvalue()

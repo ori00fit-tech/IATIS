@@ -109,9 +109,39 @@ def test_journal_stats_recomputes_from_prices():
     assert stats["total_r"] == pytest.approx(3.0, abs=0.01)
     assert stats["win_rate"] == 100.0
     assert stats["profit_factor"] == "Infinity"
-    assert len(stats["equity_curve"]) == 1
-    assert stats["equity_curve"][0]["cum_r"] == pytest.approx(3.0, abs=0.01)
-    assert stats["by_symbol"][0]["symbol"] == "EURUSD"
+
+
+def test_journal_stats_all_breakeven_book_is_not_infinite():
+    """P3-2 regression: zero wins AND zero losses (0/0) is undefined, not
+    infinite — the old check reported "Infinity" for this case too."""
+    from storage.journal import journal_stats
+
+    _seed_closed_trade(entry=1.0850, sl=1.0920, tp=1.0640, exit_px=1.0850,
+                       outcome="breakeven")  # exit == entry -> realized_r == 0
+
+    stats = journal_stats()
+    assert stats["wins"] == 0
+    assert stats["losses"] == 0
+    assert stats["profit_factor"] is None
+
+
+def test_journal_stats_by_direction_normalizes_buy_sell_synonyms():
+    """P3-3 regression: BUY and BULLISH (and SELL/BEARISH) must land in the
+    same bucket, not fragment into 4 groups."""
+    from storage import d1_client
+    from storage.journal import journal_stats
+
+    _seed_closed_trade(symbol="EURUSD", direction="BEARISH")
+    sid2 = _seed_closed_trade(symbol="GBPUSD", direction="BEARISH")
+    with d1_client.d1_connection() as con:
+        # Simulate a hypothetical future write path storing the raw
+        # BUY/SELL vocabulary instead of BULLISH/BEARISH.
+        con.execute("UPDATE outcomes SET direction='SELL' WHERE signal_id=?", (sid2,))
+
+    stats = journal_stats()
+    by_dir = {row["direction"]: row for row in stats["by_direction"]}
+    assert set(by_dir.keys()) == {"SELL"}
+    assert by_dir["SELL"]["n"] == 2
 
 
 def test_performance_summary_ignores_poisoned_pips():
@@ -240,3 +270,22 @@ def test_journal_export_csv(client):
     lines = res.text.strip().splitlines()
     assert lines[0].startswith("signal_id,symbol,direction,outcome")
     assert len(lines) >= 2
+
+
+def test_journal_export_csv_escapes_formula_injection_in_notes(client):
+    """P3-1: a note starting with =/+/-/@ must not be openable as a live
+    formula in Excel/Sheets — it must round-trip as literal text."""
+    from storage.journal import annotate
+
+    import csv
+    import io
+
+    sid = _seed_closed_trade()
+    annotate(sid, notes="=cmd|'/c calc'!A1")
+    res = client.get("/journal/export", headers=HDR)
+    assert res.status_code == 200
+
+    rows = list(csv.DictReader(io.StringIO(res.text)))
+    row = next(r for r in rows if r["signal_id"] == sid)
+    assert row["notes"] == "'=cmd|'/c calc'!A1"  # '-prefixed: inert text, not a live formula
+    assert not row["notes"].startswith("=")

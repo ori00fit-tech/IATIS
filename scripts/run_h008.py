@@ -5,14 +5,14 @@ run_h008.py
 Run H008: BOS + FVG confluence entry experiment.
 
 Usage:
-    python3 run_h008.py                           # EURUSD from CSV
-    python3 run_h008.py --symbol GBPUSD
-    python3 run_h008.py --all                     # all available CSVs
+    python3 scripts/run_h008.py                           # EURUSD from CSV
+    python3 scripts/run_h008.py --symbol GBPUSD
+    python3 scripts/run_h008.py --all                     # all available CSVs
 """
 from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root (moved into scripts/ 2026-07-23, audit P2-3)
 
 
 def run_one(symbol: str, df_m15, df_h1, source: str):

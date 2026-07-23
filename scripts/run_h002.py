@@ -5,10 +5,10 @@ run_h002.py
 Runs H002 experiment (qualified liquidity sweep) on real data
 fetched from Twelve Data. Run this on the VPS where API keys are set.
 
-Usage:
-    python3 run_h002.py                     # EURUSD default
-    python3 run_h002.py --symbol GBPUSD
-    python3 run_h002.py --symbol XAUUSD --bars 2000
+Usage (from the repo root):
+    python3 scripts/run_h002.py                     # EURUSD default
+    python3 scripts/run_h002.py --symbol GBPUSD
+    python3 scripts/run_h002.py --symbol XAUUSD --bars 2000
 
 Cost: 2 Twelve Data API credits (M15 + H1).
 """
@@ -19,6 +19,13 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
+
+# Moved into scripts/ 2026-07-23 (audit P2-3) — previously relied on being
+# run directly from the repo root, which put the repo root on sys.path[0]
+# implicitly. Now explicit, so `from core...`/`from research...` below
+# resolve regardless of invocation style.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv()

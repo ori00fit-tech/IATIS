@@ -245,4 +245,4 @@ def run_experiment(df_m15: pd.DataFrame, source: str, symbol: str = "UNKNOWN") -
 
 
 if __name__ == "__main__":
-    raise SystemExit("Run via run_h008c.py")
+    raise SystemExit("Run via scripts/run_h008c.py")

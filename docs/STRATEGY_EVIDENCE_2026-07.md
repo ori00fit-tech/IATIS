@@ -213,7 +213,7 @@ SHA256): `engine_activation_*`, `crypto_volume_*`, `pairs_trading_*`,
 `h4_yearly_stability_*`, `d1_backtest_*`, `h4_backtest_*`,
 `ctrader_spread_recost_*`, `ic_symbols_backtest_*`, `h008c_oos_*`,
 `engine_subset_search_*`. Re-run
-any experiment from its script in `scripts/` (or `run_h008c.py`) to
+any experiment from its script in `scripts/` (or `scripts/run_h008c.py`) to
 reproduce; `scripts/fetch_m15_twelvedata.py` rebuilds the real M15 inputs.
 
 ### H017 — SMC full-spec as internal confluence (added to the rejected ledger, 2026-07-10)

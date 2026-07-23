@@ -43,7 +43,7 @@ REVIVAL_COMMANDS: dict[str, tuple[list[str], str]] = {
         "H015 — OOS subset search (deep H4 CSVs required)",
     ),
     "h008c_oos_bosfvg": (
-        [sys.executable, "run_h008c.py"],
+        [sys.executable, "scripts/run_h008c.py"],  # moved from repo root 2026-07-23 (audit P2-3)
         "H008c — BOS+FVG OOS re-test (real M15; scripts/fetch_m15_twelvedata.py rebuilds inputs)",
     ),
     "crypto_volume_experiment": (

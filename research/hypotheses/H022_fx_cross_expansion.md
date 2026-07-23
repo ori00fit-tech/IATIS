@@ -1,7 +1,7 @@
 # H022 — FX-cross universe expansion (USDCNH, GBPAUD, EURAUD)
 
-**Status:** PLANNED · **Registered:** 2026-07-17 (rule written before any
-deep-history result exists — CLAUDE.md rule 1)
+**Status:** FAILED · **Registered:** 2026-07-17 (rule written before any
+deep-history result exists — CLAUDE.md rule 1) · **Resolved:** 2026-07-23
 
 ## Claim
 
@@ -69,3 +69,31 @@ before any of their outcomes exist.
 Alt-coin candidates from the sweep — excluded until one shows ≥3y history
 AND cross-window rank stability. Any threshold/engine change — separate
 hypotheses, never this one.
+
+## Result (applied 2026-07-23)
+
+The deep-history run (`research/results/h022_fx_cross_oos_20260717_manifest.json`)
+was actually generated on **2026-07-17**, the same day this hypothesis was
+registered — but the rule above was never applied back to this doc or to
+`registry.json` until this audit (2026-07-23) caught the gap while
+surveying which `PLANNED` hypotheses were genuinely untested. Applying the
+pre-registered rule literally, per symbol, to that manifest:
+
+| symbol | TEST PF | TEST n | worst TEST year PF | verdict |
+|---|---|---|---|---|
+| USDCNH | 1.926 | 18 | 1.054 (2025) | **INSUFFICIENT DATA** (n < 40) |
+| GBPAUD | 0.825 | 80 | 0.337 (2025) | **REJECT** |
+| EURAUD | 0.887 | 70 | 0.424 (2025) | **REJECT** |
+
+GBPAUD and EURAUD fail *both* conditions, not narrowly — PF well under
+1.2, and a 2025 collapse (PF 0.34 / 0.42) far below the 0.9 yearly floor.
+That is a real regime-instability signal on both crosses, not a
+sampling artifact, and echoes the general FX-12 non-edge (p = 0.078,
+`docs/PHILOSOPHY_AUDIT_2026-07.md:29`). USDCNH's PF looks promising but
+has too few TEST trades to evaluate — it stays open only in the narrow
+sense that more history could someday clear the n ≥ 40 floor; that is not
+a reason to revisit GBPAUD or EURAUD, which are closed.
+
+**Overall: FAILED.** None of the three symbols are ADOPT-TO-DEMO.
+`config/symbols.yaml` is unaffected — none of the three were ever enabled,
+so there is nothing to revert.

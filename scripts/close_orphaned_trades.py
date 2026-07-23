@@ -33,9 +33,21 @@ open signals remain at the end.
 """
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Explicit path, not bare load_dotenv(): the no-arg form locates .env
+    # by walking up from the CALLING file's own directory (stack-frame
+    # inspection, not os.getcwd()) — that's fine for scheduler.py sitting
+    # right next to .env, but it makes this script's discovery depend on
+    # exactly how it's invoked (-m, sudo -u, wrapper shells). Anchoring to
+    # the repo root removes that variable entirely.
+    load_dotenv(_REPO_ROOT / ".env")
 except ImportError:
     pass
 
@@ -54,7 +66,40 @@ def classify(direction: str, entry: float, exit_price: float, tol: float = 1e-6)
     return "win" if favorable else "loss"
 
 
+def _check_d1_env() -> str | None:
+    """Return a diagnostic message if D1_WORKER_URL isn't set, else None."""
+    if os.environ.get("D1_WORKER_URL"):
+        return None
+    env_path = _REPO_ROOT / ".env"
+    lines = [
+        "D1_WORKER_URL is not set — .env did not load correctly.",
+        f"  expected .env at: {env_path}",
+        f"  exists: {env_path.is_file()}",
+    ]
+    if env_path.is_file():
+        try:
+            env_path.read_text()
+            lines.append("  readable: yes")
+        except PermissionError:
+            lines.append(
+                f"  readable: NO — permission denied as this user. "
+                f"Run this as the user that owns {env_path} "
+                f"(e.g. `sudo -u iatis {sys.executable} -m scripts.close_orphaned_trades`)."
+            )
+    else:
+        lines.append(
+            "  fix: copy/create .env at the repo root shown above, or set "
+            "D1_WORKER_URL directly in the environment before running this script."
+        )
+    return "\n".join(lines)
+
+
 def main() -> int:
+    diag = _check_d1_env()
+    if diag:
+        print(diag)
+        return 1
+
     open_signals = get_open_signals()
     if not open_signals:
         print("No open signals in the tracker — nothing to do.")

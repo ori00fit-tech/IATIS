@@ -8,9 +8,11 @@ end-to-end run against the fake D1 fixture using a scripted `input()`.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
-from scripts.close_orphaned_trades import classify, main
+from scripts.close_orphaned_trades import _check_d1_env, classify, main
 from storage.outcome_tracker import get_open_signals, log_signal
 
 
@@ -85,3 +87,46 @@ def test_main_no_open_signals_is_a_noop(capsys):
     rc = main()
     assert rc == 0
     assert "nothing to do" in capsys.readouterr().out.lower()
+
+
+# ── _check_d1_env() diagnostics (the VPS load_dotenv() failure mode) ────────
+
+def test_check_d1_env_passes_when_var_is_set(monkeypatch):
+    monkeypatch.setenv("D1_WORKER_URL", "https://fake-d1-test.workers.dev")
+    assert _check_d1_env() is None
+
+
+def test_check_d1_env_reports_missing_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("D1_WORKER_URL", raising=False)
+    monkeypatch.setattr("scripts.close_orphaned_trades._REPO_ROOT", tmp_path)
+    diag = _check_d1_env()
+    assert diag is not None
+    assert "not set" in diag
+    assert str(tmp_path / ".env") in diag
+    assert "exists: False" in diag
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses file permission bits, so chmod 0o000 can't be tested as root",
+)
+def test_check_d1_env_reports_unreadable_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("D1_WORKER_URL", raising=False)
+    monkeypatch.setattr("scripts.close_orphaned_trades._REPO_ROOT", tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text("D1_WORKER_URL=https://example.com\n")
+    env_file.chmod(0o000)
+    try:
+        diag = _check_d1_env()
+    finally:
+        env_file.chmod(0o600)  # restore so tmp_path cleanup can remove it
+    assert diag is not None
+    assert "permission denied" in diag.lower()
+
+
+def test_main_returns_nonzero_and_skips_storage_when_d1_env_missing(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("D1_WORKER_URL", raising=False)
+    monkeypatch.setattr("scripts.close_orphaned_trades._REPO_ROOT", tmp_path)
+    rc = main()
+    assert rc == 1
+    assert "D1_WORKER_URL is not set" in capsys.readouterr().out

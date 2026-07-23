@@ -30,6 +30,7 @@ import sys
 
 from storage import d1_client
 from storage.outcome_tracker import DEFAULT_RISK_USD, _init_db, _pip_size
+from utils import trade_math
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,8 +57,7 @@ def repair(apply: bool = False) -> dict:
         for row in rows:
             checked += 1
             entry, exit_px = row["entry_price"], row["exit_price"]
-            is_buy = row["direction"] in ("BUY", "BULLISH")
-            diff = (exit_px - entry) if is_buy else (entry - exit_px)
+            diff = trade_math.price_diff(entry, exit_px, row["direction"])
 
             want_pips = round(diff / _pip_size(row["symbol"] or ""), 1)
             sl = row["stop_loss"]

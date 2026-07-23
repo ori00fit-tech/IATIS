@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from storage import d1_client
+from utils import trade_math
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -213,8 +214,7 @@ def close_signal(
         # defaulted crypto/indices/energy to 0.0001 and produced millions of
         # phantom pips; this routes by measured broker spec instead.
         pip_size = _pip_size(symbol)
-        is_buy = direction in ("BUY", "BULLISH")
-        price_diff = (exit_price - entry) if is_buy else (entry - exit_price)
+        price_diff = trade_math.price_diff(entry, exit_price, direction)
         pnl_pips = round(price_diff / pip_size, 1)
 
         # Risk-normalized USD P&L (R-multiple × per-trade risk budget).
@@ -341,8 +341,7 @@ def performance_summary() -> dict:
     total_pips = 0.0
     for row in r_rows:
         entry, exit_px = row["entry_price"], row["exit_price"]
-        is_buy = row["direction"] in ("BUY", "BULLISH")
-        diff = (exit_px - entry) if is_buy else (entry - exit_px)
+        diff = trade_math.price_diff(entry, exit_px, row["direction"])
         total_pips += diff / _pip_size(row["symbol"] or "")
         sl = row["stop_loss"]
         sl_distance = abs(entry - sl) if sl is not None else 0.0
@@ -355,19 +354,16 @@ def performance_summary() -> dict:
     # scripts/forward_review.py's _bucket_stats, applied to risk-normalized
     # R-multiples (equivalent ordering to the pnl_usd version when pnl_usd
     # is intact, immune to the legacy corruption when it is not).
-    gross_win = sum(r for r in r_multiples if r > 0)
-    gross_loss = -sum(r for r in r_multiples if r < 0)
-    if gross_loss > 0:
-        profit_factor: float | str | None = round(gross_win / gross_loss, 3)
-    elif total == 0 or not r_multiples:
-        profit_factor = None
-    else:
-        # Zero losing trades: PF is mathematically infinite. A bare
-        # `Infinity` token is what Python's json.dumps would emit for
-        # float("inf"), but that's not valid JSON — a browser's
-        # JSON.parse (used by fetch().json()) throws on it. Send the
-        # string sentinel instead; the frontend renders it as "∞".
-        profit_factor = "Infinity"
+    #
+    # trade_math.profit_factor returns the JSON-safe "Infinity" sentinel
+    # (a bare float("inf") is not valid JSON; a browser's fetch().json()
+    # throws on it) for wins-with-zero-losses, and None — not "Infinity"
+    # — for an all-breakeven book (0/0 is undefined, not infinite; this
+    # exact case was a real bug in this function's own former inline copy
+    # of this formula until the audit's P2-9 consolidation caught it by
+    # writing shared tests for storage/journal.py's sibling copy first).
+    pf = trade_math.profit_factor(r_multiples)
+    profit_factor: float | str | None = round(pf, 3) if isinstance(pf, float) else pf
 
     win_rate = round(wins / total * 100, 1) if total > 0 else 0
     return {
@@ -392,8 +388,7 @@ def _regime_breakdown(regime_rows, regime_px_rows) -> list[dict]:
     pips_by_regime: dict[str, list[float]] = {}
     for row in regime_px_rows:
         entry, exit_px = row["entry_price"], row["exit_price"]
-        is_buy = row["direction"] in ("BUY", "BULLISH")
-        diff = (exit_px - entry) if is_buy else (entry - exit_px)
+        diff = trade_math.price_diff(entry, exit_px, row["direction"])
         pips_by_regime.setdefault(row["regime"], []).append(
             diff / _pip_size(row["symbol"] or "")
         )
@@ -506,8 +501,7 @@ def auto_close_outcomes(
         if hit is None and max_open_hours:
             age_h = _open_age_hours(sig.get("entry_time"), now)
             if age_h is not None and age_h >= max_open_hours:
-                is_buy = direction in ("BUY", "BULLISH")
-                diff = (price - entry) if is_buy else (entry - price)
+                diff = trade_math.price_diff(entry, price, direction)
                 sl_dist = abs(entry - sl)
                 r = diff / sl_dist if sl_dist > 0 else 0.0
                 outcome = "win" if r > 0.1 else "loss" if r < -0.1 else "breakeven"

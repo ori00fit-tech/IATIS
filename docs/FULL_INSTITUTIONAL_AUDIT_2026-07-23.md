@@ -43,7 +43,7 @@ must not repeat: trusting a document instead of the config.
 | **Overall institutional score** | **63** | Up modestly from the 2026-07-16 gap analysis's 60 — TCA, decision provenance, and schema migrations (that audit's top three "must-have" gaps) are now genuinely shipped and verified in code this session. Held down by: zero evidence the 2026-07-05 credential leak was ever rotated (18 days on), live (demo) order execution through a module at 36% coverage against the project's own 60% precondition, and a newly-found latent duplicate-order risk. |
 | Readiness score (could a firm run this tomorrow) | 35 | Research layer is ready; ops/security layer is not — see P0s. |
 | Research score | 90 | Exceptional. Four new hypotheses independently re-derived from raw code this session (H024/H025/H033/H037) — all four hold up: real chronological OOS splits, real seeded bootstraps, no fabricated results, no premature PASSED status. |
-| Engineering score | 68 | 982 green tests, CI-gated, hermetic; three flagged monoliths (`api_server.py` 3,482 lines, `main.py`'s CC-71 pipeline, dual backtest packages) persist across three audits with zero remediation. |
+| Engineering score | 72 (updated post-remediation) | 1083 green tests, CI-gated, hermetic; of the three flagged monoliths, `api_server.py` (3,530 lines → 138-line composition root + 17 focused modules) was resolved this session with an AST-diff safety net, not just tests; `main.py`'s CC-71 pipeline and dual backtest packages remain. |
 | Security score | 45 | Code-level controls are genuinely strong (verified: no SQL injection anywhere, every new endpoint auth-gated, path-traversal defense in the new File Explorer actually resolves symlinks/`..` correctly) — but an unconfirmed 18-day-old credential leak and root-owned production services are disqualifying regardless of code quality. |
 | Architecture score | 72 | Sound layered/hexagonal-shaped design, acyclic imports, AI provably isolated from the decision path — undercut only by the same three unaddressed monoliths. |
 | Maintainability score | 68 | Strong docs (verified accurate against code repeatedly, including this session), CI now real; lint backlog grew 332→376 findings ungated beyond E9/F821. |
@@ -341,7 +341,7 @@ score moves fast; until then, this stays demo-only.
 
 | # | Problem | Evidence | Recommendation | Effort |
 |---|---|---|---|---|
-| P2-1 | `execution/api_server.py` is a 3,482-line monolith (routing + HTML + sessions + 15 dashboard modules), flagged in all three prior audits, never split | file line count, this session | Extract per-module `APIRouter`s (File Explorer, Experiment Runner, Journal, etc.) behind the existing replay/test harness | 3-5 days |
+| P2-1 | **RESOLVED, 2026-07-23.** `execution/api_server.py` was a 3,530-line monolith (routing + HTML + sessions + 15 dashboard modules), flagged in all three prior audits, never split | Split into `execution/api_core.py` (app/auth/config/sessions), `execution/api_shared_helpers.py` (the 4 functions genuinely consumed by 2+ router modules, e.g. `_scheduler_status` by both `/health/full` and `/alerts`), and 15 files under `execution/routes/` — one per logical module. `execution/api_server.py` is now a 138-line composition root. Verified complete, not approximate: an AST diff comparing every function's statement count/last-statement-type between the original file and the split caught two real bugs before they shipped — a `Path(__file__).parent.parent` that silently resolved one directory short once nested under `routes/` (would have broken File Explorer's entire path confinement), and an off-by-one `sed` extraction that dropped `/files/search`'s final `return` (caught immediately by the existing test suite, not by the AST diff). Also fixed en route: several tests monkeypatched `execution.api_server`'s internals (`_JOB_COMMANDS`, `_config_cache`, `_REPO_ROOT`) expecting to affect real behavior — `global`/monkeypatch only ever affects the module actually being patched, not a re-exported facade, so those tests were redirected to the module that now genuinely owns each name. All 60 original routes verified present (route-for-route diff against the pre-split file); full suite green (1083 passed, 1 skipped); `ruff --select E9,F821` clean repo-wide. | Was 3-5 days estimated; done in one session with an AST-diff safety net |
 | P2-2 | Two backtest packages (`backtest/` + `backtesting/`) still both exist — organizational duplication, not dead code | `backtest/runner.py` is live (invoked by the Experiment Runner's whitelisted "backtest" job and `scripts/engine_ablation.py`); `backtest/metrics.py` is imported by `backtest/{walk_forward,report,monte_carlo,runner}.py` — **correction, 2026-07-23**: an earlier draft of this row wrongly claimed `backtest/metrics.py` had zero importers, conflating it with the already-deleted `backtesting/metrics.py` (a *different* file, singular vs. plural package name). Verified via `grep` before any deletion was attempted — nothing in `backtest/` was removed | Merge `backtest/` and `backtesting/` into one package (both are live; this is a rename/consolidation, not a deletion) | 1 day |
 | P2-3 | `run_h002.py`, `run_h002b.py`, `run_h008.py`, `run_h008b.py`, `run_h008c.py` still live at repo root instead of `research/` | `ls run_h*.py`, this session | Move into `research/experiments/` or `scripts/` for consistency with H024/H025/H033/H037 | 1 hour |
 | P2-4 | File Explorer's secret-path denylist checks the whole-word `token/secret/credential/password` filter only against the file's basename, not intermediate directory names | `_is_denied_path`, `execution/api_server.py` (agent-verified line ~2841) | Apply the word filter to every path segment, not just the last | 30 min |
@@ -349,7 +349,7 @@ score moves fast; until then, this stays demo-only.
 | P2-6 | AI JSON extraction (`ai/providers/base.py:_first_json_object`) grabs the *first* `{` in text, not the first one that parses — fails on model output containing an earlier unrelated brace | reproduced this session by the dedicated agent (`${100}... {"sentiment":...}` case) | Scan all `{` positions and try each as a JSON start, not just the first | 1-2 hours |
 | P2-7 | Lint backlog grew 332→376 findings since the July audit; CI only gates E9/F821 (by design, documented) | fresh `ruff check .` this session | Expand CI `--select` incrementally as backlog is paid down, per the CI file's own stated intent | ongoing |
 | P2-8 | `docs/PRODUCTION_AUDIT_2026-07.md:63` ("Currently gated off ... correct state") is now factually wrong and contradicts `config.yaml` | this session's fact-check | Add a one-line dated addendum to the July doc noting the 2026-07-06 config change, so a future reader doesn't trust stale prose over config | 15 min |
-| P2-9 | R-multiple/pip-sign recompute logic is duplicated near-identically across `storage/journal.py`, `storage/outcome_tracker.py` (two call sites), and `scripts/repair_outcome_pips.py` — four places to keep in lockstep | agent-verified | Extract one shared `compute_realized_r()` helper | 2-3 hours |
+| P2-9 | **RESOLVED, 2026-07-23.** R-multiple/pip-sign recompute logic was duplicated near-identically across `storage/journal.py`, `storage/outcome_tracker.py` (5 separate call sites — `close_signal`, `performance_summary`, `_regime_breakdown`, and the time-stop branch of `auto_close_outcomes`), and `scripts/repair_outcome_pips.py` | Consolidated into `utils/trade_math.py` (`is_buy_direction`, `price_diff`, `realized_r`, `profit_factor`; 25 dedicated tests). Not cosmetic: the consolidation surfaced that `storage/outcome_tracker.py`'s `performance_summary()` had the SAME all-breakeven `profit_factor` bug already found and fixed in `storage/journal.py`'s independent copy (P3-2) — both now delegate to one implementation, so this class of bug can't silently diverge between them again. Every existing test in the affected files passed unchanged before and after, verified file-by-file; full suite green | 2-3 hours estimated; matched |
 
 ---
 
@@ -462,7 +462,10 @@ new data point: `execution/api_server.py` coverage rose from 36% (July) to
 an estimated ~76% this session (measured via `pytest --cov`), which is
 itself a performance-adjacent risk-reduction fact worth recording — most of
 that file's risky surface (auth, journal, TCA) is now exercised by tests,
-even though the file's *size* remains a maintainability problem (P2-1).
+even though the file's *size* remained a maintainability problem until
+this session's P2-1 split (see the P2 table) reduced it from 3,530 to 138
+lines by extracting 15 per-module routers plus two shared infrastructure
+modules.
 
 # Trading Logic Review
 
@@ -501,12 +504,11 @@ gone. `backtest/metrics.py` is NOT dead code (see P2-2's correction) — the
 
 # Refactoring Opportunities
 
-1. Split `execution/api_server.py` into per-module routers (P2-1) — biggest
-   single maintainability win available, now safer than it was in July
-   because the file's own test coverage has grown substantially.
-2. Extract one shared `compute_realized_r()` (P2-9) — four duplicated
-   implementations of the same sign-sensitive formula is a latent
-   correctness bug waiting for one of the four to be edited alone.
+1. ~~Split `execution/api_server.py` into per-module routers (P2-1)~~ —
+   **done, 2026-07-23.**
+2. ~~Extract one shared trade-math helper (P2-9)~~ — **done, 2026-07-23**
+   (`utils/trade_math.py`); the consolidation itself surfaced a real bug
+   (see P2-9's own entry).
 3. Merge `backtest/` and `backtesting/` (P2-2) — smaller win, still open
    three audits running.
 
@@ -544,8 +546,13 @@ ops-runbook items open 18+ days with zero closure evidence (P0-1, P0-4,
 P1-5) is the largest debt category — not because the remediation is hard
 (all three are cheap, scripted, or a checklist) but because "written down
 and never executed" is worse than either "not planned" or "done," since it
-creates false confidence for the next reader. Second: the three persistent
-monoliths (P2-1 and its siblings). Third: the swap-cost gap (P1-6), which is
+creates false confidence for the next reader. Second: of the three
+persistent monoliths this document originally flagged, `execution/api_server.py`
+(P2-1) is now resolved (this session); `main.py`'s CC-71 `run_pipeline` and
+`execution/ctrader_client.py`'s remaining size are not — the same
+behavior-preservation discipline (an AST diff, not just tests) that made
+the api_server split safe is the template for whichever of those two goes
+next. Third: the swap-cost gap (P1-6), which is
 cheap to close and has been open since before CLAUDE.md was written.
 
 # Hidden Risks

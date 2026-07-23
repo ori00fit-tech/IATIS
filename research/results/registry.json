@@ -58,8 +58,8 @@
    "title": "Macro DXY trend + Risk-On/Off state",
    "status": "RESEARCH",
    "blocks_engine": "macro",
-   "notes": "Paper trading. Requires yfinance.",
-   "last_updated": "2026-06-24"
+   "notes": "Paper trading. Data source corrected 2026-07-23 (was stale): does NOT require yfinance - engines/macro_engine.py reads DXY/SPY/VIX/GLD via core/alt_data_loader.py's load_macro_snapshot(), which sources CBOE (VIX) + FRED (DXY proxy DTWEXBGS, SPY, GLD) since the 2026-07-16/17 Yahoo removal. Still the un-duplicated home for any 'DXY as a leading signal for XAUUSD' proposal (raised again in an operator plan review 2026-07-23) - a new hypothesis here would be a duplicate; the open work is evaluating this existing engine OOS, not building a new one.",
+   "last_updated": "2026-07-23"
   },
   "H008": {
    "title": "BOS + FVG confluence entry (EURUSD/XAUUSD specific)",
@@ -449,6 +449,32 @@
    "distinct_from_prior_kill": "NOT H033 (that tested a NEW trained logistic model as a gate; this tests whether the EXISTING hand-crafted, already-live meta_decision.py gate should be removed - different mechanism, though H033's finding is the motivating prior). NOT H013/reversal_veto (that gate was a proven structural no-op removed outright the same day - this one is live and must be measured, not assumed).",
    "live_safety": "Measurement only, on the backtest harness - zero live/config change until this hypothesis resolves and is promoted through the normal process. main.py's live meta_decision gate stays exactly as-is regardless of how long this takes. Same FROZEN discipline as H018/H023/H024/H033: do not let a plan review's plausible-sounding critique become a live change without its own OOS evidence.",
    "hypothesis_doc": "research/hypotheses/H103_meta_decision_gate_removal.md",
+   "last_updated": "2026-07-23"
+  },
+  "H104": {
+   "title": "Crypto tick-level order-flow imbalance (cumulative delta divergence) as an independent entry signal for BTCUSD/ETHUSD, distinct from the rejected bar-level volume input",
+   "status": "PLANNED",
+   "registered": "2026-07-23",
+   "origin": "Operator plan review (2026-07-23). Explicitly NOT a re-run of the crypto_volume experiment (research/results/crypto_volume_20260706_manifest.json, dead list: ccxt raw traded volume fed into existing engines as a feature, DeltaPF -0.016 BTC / 0.000 ETH - that test has no H-number in this registry, contrary to a plan citation that called it 'H019'; H019 is a separate, still-PLANNED hypothesis about funding-rate/OI/Fear&Greed positioning, thematically adjacent but a different mechanism from both this and the dead volume test). H104 differs from the dead test on three axes: (1) tick/aggTrade granularity vs bar-level volume; (2) aggressor-side classification (buy-initiated vs sell-initiated) vs an undifferentiated volume total; (3) an independent entry signal with its own logic vs a feature bolted onto an existing engine's score.",
+   "hypothesis_statement": "Cumulative Delta (CD) divergence on a 15min aggregation (price makes a new H4 high while CD does not confirm, or vice versa) predicts mean-reversion within the next 4-8 H4 candles on BTCUSD/ETHUSD, with PF >= 1.3 after realistic costs (taker fee 0.04% + spread).",
+   "data_source": "Binance WebSocket aggTrade stream (wss://stream.binance.com:9443/ws/<symbol>@aggTrade) -> local tick store -> 15min CD aggregation. New data pipeline, not yet built.",
+   "decision_rule": "Written before any data collection. PASS (promote to RESEARCH, eligible for demo paper-trading): pooled OOS n >= 300 (research/edge_gate.py PROMOTION_CRITERIA, not the operator draft's n>=100 - kept consistent with every other engine's bar) AND PF >= 1.3 AND bootstrap p < 0.05. FAIL: PF < 1.1, or n < 150 after 3 months of live tick collection (data-availability floor distinct from the OOS-trade floor). INCONCLUSIVE (extend 60 days, re-evaluate, does not reset the clock): between FAIL and PASS thresholds.",
+   "distinct_from_prior_kill": "NOT crypto_volume A/B (bar-level aggregate volume as an existing-engine feature, dead). NOT H019 (funding rate/open interest/Fear&Greed positioning proxies - aggregated sentiment, not tick-level order flow). A genuinely untested mechanism per the audit trail in this registry.",
+   "live_safety": "Research/data-collection only. No engine exists yet, no config flag, no live-path change. Building the tick collector and 15min CD aggregation is infrastructure work that can start before the decision rule is evaluated (the rule only gates PROMOTION, not data collection) - but no signal from this may influence any live or demo decision until PASS.",
+   "hypothesis_doc": "research/hypotheses/H104_crypto_order_flow_imbalance.md",
+   "last_updated": "2026-07-23"
+  },
+  "H105": {
+   "title": "Does closing the gap between the strategy's reference entry price (decision-bar close) and the actual broker fill (next scheduler tick, live market order) cost measurable edge, and can a limit order reduce it?",
+   "status": "PLANNED",
+   "registered": "2026-07-23",
+   "origin": "Operator plan review (2026-07-23) proposed 'limit entry at H4_open - 0.3xATR instead of market-open entry'. Corrected before registration: verified in main.py:369 that the strategy's reference entry price is the CLOSE of the last decision-timeframe bar (df_base['close'].iloc[-1]), not the bar's open - and the real cTrader fill happens later, at whatever live spot price exists when the scheduler (interval=120min per iatis-scheduler.service, not synced to H4 boundaries) next runs execute_from_report(). The actual untested gap is reference-price-vs-live-fill-lag, not open-vs-limit within a single candle as originally framed.",
+   "hypothesis_statement": "Placing a limit order at the decision-bar close price (the strategy's own reference price) instead of an immediate market order at scheduler-tick time reduces the average entry cost (vs the reference price) by >= 0.15 ATR, without missing more than 15% of trades that would otherwise have filled (price moving away before the limit fills).",
+   "method": "Paper/shadow measurement first (no execution change): log, for every EXECUTE decision, the reference close price, the scheduler-tick timestamp, and the actual cTrader fill price already captured via TCA (storage/execution_quality.py, live since 2026-07-16) - compute the realized slippage distribution directly from data already being collected, before building any limit-order logic.",
+   "decision_rule": "Written before analysis. PASS (build limit-order execution path): TCA data shows mean adverse slippage >= 0.15 ATR-equivalent across >= 100 real fills. FAIL (not worth building): mean adverse slippage < 0.05 ATR-equivalent, or the distribution is not consistently adverse (i.e., current market-order timing is not systematically costly). Between: INCONCLUSIVE, keep accumulating TCA data.",
+   "distinct_from_prior_kill": "NOT managed exits / partial TP / trailing stops (dead list: trade-management A/B, +100% was a look-ahead artifact, OOS ~= 0) - H105 only concerns entry fill quality, exits are untouched. NOT a correlation cap (BTCUSD/ETHUSD already grouped in risk/correlation_engine.py RISK_ASSETS and gated via correlated_exposure_pct - already live, not a new idea).",
+   "live_safety": "Stage 1 (measurement) uses TCA data already being collected live - no code or config change. Stage 2 (building limit-order logic) only starts if Stage 1's decision rule PASSes, and even then stays behind a new config flag, demo-only, until its own forward evidence accumulates - same discipline as every other live-path change (CLAUDE.md rule 6).",
+   "hypothesis_doc": "research/hypotheses/H105_entry_fill_lag.md",
    "last_updated": "2026-07-23"
   }
  },

@@ -47,38 +47,53 @@ def load_prompt(name: str, **kwargs: Any) -> str:
         raise AIProviderError(f"Prompt '{name}' missing placeholder value: {exc}") from exc
 
 
-def _first_json_object(text: str) -> str | None:
-    """The first balanced top-level ``{...}`` in ``text``, or None.
+def _iter_json_object_candidates(text: str):
+    """Yield every balanced top-level ``{...}`` substring in ``text``, in
+    order of appearance, one per ``{`` found outside a string literal.
 
     Brace-scans with string/escape awareness so braces inside JSON string
-    values don't end the object early.
+    values don't end an object early. Previously only the FIRST ``{`` in
+    the text was tried — which fails whenever a response contains an
+    earlier, unrelated brace pair ahead of the real JSON object (e.g. "The
+    deal is ${100} give or take. Here: {"sentiment": "NEUTRAL"}" — `${100}`
+    balances but never parses, so the real object right after it was never
+    reached). extract_json tries each yielded candidate in turn until one
+    actually parses (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-6).
     """
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escaped:
-            escaped = False
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
             continue
-        if ch == "\\":
-            escaped = in_string
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return None
+        start = i
+        depth = 0
+        in_string = False
+        escaped = False
+        j = start
+        closed_at = None
+        while j < n:
+            ch = text[j]
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = in_string
+            elif ch == '"':
+                in_string = not in_string
+            elif not in_string:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        closed_at = j
+                        break
+            j += 1
+        if closed_at is not None:
+            yield text[start:closed_at + 1]
+        # Continue scanning right after this start (not past its close) so
+        # a `{` nested inside a failed candidate is still tried on its own.
+        i = start + 1
 
 
 def extract_json(text: str) -> dict:
@@ -105,15 +120,14 @@ def extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    candidate = _first_json_object(cleaned)
-    if candidate is not None:
+    for candidate in _iter_json_object_candidates(cleaned):
         try:
             parsed = json.loads(candidate)
             if isinstance(parsed, dict):
                 logger.debug("extract_json: recovered embedded JSON object from prose-wrapped response")
                 return parsed
         except json.JSONDecodeError:
-            pass
+            continue
 
     raise AIProviderError(
         f"Provider returned non-JSON response (first 120 chars: {text.strip()[:120]!r})"

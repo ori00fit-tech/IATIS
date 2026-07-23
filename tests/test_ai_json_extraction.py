@@ -49,3 +49,19 @@ def test_no_json_raises():
 def test_truncated_json_raises():
     with pytest.raises(AIProviderError):
         extract_json('{"a": 1, "b": ')
+
+
+def test_earlier_unrelated_brace_pair_does_not_shadow_the_real_object():
+    """Regression for docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-6: the
+    old implementation grabbed the FIRST `{` in the text, so a response
+    like "The deal is ${100} give or take. Here: {...real json...}" would
+    try to parse "{100}" (balanced, but not valid JSON — no key), fail,
+    and raise — never reaching the real object right after it. This is
+    the exact BAD_FORMAT failure the module exists to prevent."""
+    text = 'The deal is ${100} give or take. Here: {"sentiment": "NEUTRAL"}'
+    assert extract_json(text) == {"sentiment": "NEUTRAL"}
+
+
+def test_multiple_false_starts_before_the_real_object():
+    text = 'Notes: {not json}, also {"broken": , still not it. Actually: {"ok": true}'
+    assert extract_json(text) == {"ok": True}

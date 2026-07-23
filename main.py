@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from confluence.contradiction_engine import check_contradictions
-from confluence.reversal_veto import check_reversal_veto
 from confluence.mtf_confirmation import check_mtf_confirmation
 from confluence.meta_decision import evaluate_meta_decision
 from confluence.regime_weights import apply_regime_weights
@@ -268,7 +267,6 @@ class _ConfluenceEval:
     score_result: Any
     contradiction_result: Any
     mtf_result: Any
-    reversal_veto: Any
     active_weights: dict
     adjusted_score: float
     fail_reasons: list[str]
@@ -285,7 +283,7 @@ def _evaluate_confluence(
     regime_volatility: str,
 ) -> _ConfluenceEval:
     """Stage 3: vote + regime-aware weighted score + contradiction check +
-    MTF confirmation + H013 reversal veto."""
+    MTF confirmation."""
     # Adjust weights based on current market regime
     base_weights = config["confluence"]["weights"]
     active_weights = apply_regime_weights(base_weights, regime_state, regime_volatility)
@@ -337,25 +335,20 @@ def _evaluate_confluence(
     if contradiction_result.blocked:
         fail_reasons.extend(contradiction_result.reasons)
 
-    # H013: Reversal Engine Group Veto — when 2+ reversal engines
-    # (Divergence, Wyckoff, Sentiment) unanimously oppose the trend
-    # direction → block or reduce size
-    reversal_veto = check_reversal_veto(outputs, vote_result.winning_bias)
-    if reversal_veto.vetoed:
-        fail_reasons.append(reversal_veto.reason)
-    elif reversal_veto.soft_veto:
-        # Soft veto: don't block, but reduce adjusted_score proportionally
-        adjusted_score = round(adjusted_score * reversal_veto.confidence_multiplier, 2)
-        logger.info(
-            f"H013 soft veto applied: score {score_result.final_score} → {adjusted_score}"
-        )
+    # H013 reversal veto removed from the live path (2026-07-23,
+    # PHILOSOPHY_AUDIT_2026-07.md:140): needs 2+ of {Divergence, Wyckoff,
+    # Sentiment} active to do anything, but config/engines.yaml only
+    # enables wyckoff — structurally a zero-behavioral-change no-op, so
+    # removing it here is not a live-decision change (CLAUDE.md rule 6
+    # doesn't apply). check_reversal_veto() itself stays in
+    # confluence/reversal_veto.py for backtesting/backtest_engine.py and
+    # scripts/engine_ablation.py, which still A/B it in research.
 
     return _ConfluenceEval(
         vote_result=vote_result,
         score_result=score_result,
         contradiction_result=contradiction_result,
         mtf_result=mtf_result,
-        reversal_veto=reversal_veto,
         active_weights=active_weights,
         adjusted_score=adjusted_score,
         fail_reasons=fail_reasons,
@@ -588,7 +581,6 @@ def _build_report(
                 "blocked": conf.contradiction_result.blocked,
                 "reasons": conf.contradiction_result.reasons,
             },
-            "reversal_veto": conf.reversal_veto.to_dict(),
             "passed": conf.passed,
             "fail_reasons": conf.fail_reasons,
         },

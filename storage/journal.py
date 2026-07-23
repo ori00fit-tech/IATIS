@@ -204,12 +204,22 @@ def trade_detail(signal_id: str) -> dict[str, Any] | None:
     return _enrich(dict(row))
 
 
-def annotate(signal_id: str, notes: str | None = None, tags: list[str] | None = None) -> bool:
+def annotate(
+    signal_id: str, notes: str | None = None, tags: list[str] | None = None
+) -> tuple[bool, bool]:
     """Operator annotation — the ONLY write this module performs.
 
     Notes/tags never feed any gate, weight, or measurement; they exist so
     a human can attach context ("news spike", "reviewed 07-22") to a
     trade for later reading. Absent fields are left unchanged.
+
+    Returns (found, applied). `found` is False only when signal_id doesn't
+    exist (callers should 404). `applied` is False when the signal_id was
+    found but nothing was actually written — e.g. tags were requested but
+    the tags-column migration (3) hasn't run yet and no notes were given.
+    Previously this returned a single bool that was True whenever the
+    signal_id existed, even if nothing was persisted — a silent no-op
+    reported as success (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-5).
     """
     _init_db()
     sets: list[str] = []
@@ -222,7 +232,7 @@ def annotate(signal_id: str, notes: str | None = None, tags: list[str] | None = 
             "SELECT 1 FROM outcomes WHERE signal_id = ?", (signal_id,)
         ).fetchone()
         if not exists:
-            return False
+            return False, False
         if tags is not None:
             if _has_tags_column(con):
                 cleaned = [str(t).strip()[:40] for t in tags if str(t).strip()][:12]
@@ -234,13 +244,18 @@ def annotate(signal_id: str, notes: str | None = None, tags: list[str] | None = 
                     "Journal tags requested but outcomes.tags is missing — "
                     "run `python -m storage.migrations` (migration 3)."
                 )
-        if sets:
-            con.execute(
-                f"UPDATE outcomes SET {', '.join(sets)} WHERE signal_id = ?",
-                (*params, signal_id),
+        if not sets:
+            logger.warning(
+                f"Journal annotation for {signal_id} applied nothing "
+                "(no notes given, and tags could not be saved — see warning above if tags were requested)."
             )
+            return True, False
+        con.execute(
+            f"UPDATE outcomes SET {', '.join(sets)} WHERE signal_id = ?",
+            (*params, signal_id),
+        )
     logger.info(f"Journal annotation saved for {signal_id}")
-    return True
+    return True, True
 
 
 def journal_stats() -> dict[str, Any]:

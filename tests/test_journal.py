@@ -138,9 +138,9 @@ def test_annotate_notes_and_missing_signal():
     from storage.journal import annotate, trade_detail
 
     sid = _seed_closed_trade()
-    assert annotate(sid, notes="reviewed — clean trend day") is True
+    assert annotate(sid, notes="reviewed — clean trend day") == (True, True)
     assert trade_detail(sid)["notes"] == "reviewed — clean trend day"
-    assert annotate("nope_123", notes="x") is False
+    assert annotate("nope_123", notes="x") == (False, False)
 
 
 def test_annotate_tags_roundtrip():
@@ -149,8 +149,36 @@ def test_annotate_tags_roundtrip():
 
     apply_migrations()  # tags column arrives with migration 3
     sid = _seed_closed_trade()
-    assert annotate(sid, tags=["news-spike", "a-plus-setup"]) is True
+    assert annotate(sid, tags=["news-spike", "a-plus-setup"]) == (True, True)
     assert trade_detail(sid)["tags"] == ["news-spike", "a-plus-setup"]
+
+
+def test_annotate_tags_without_migration_reports_found_but_not_applied():
+    """Regression for docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-5: the
+    signal exists (found=True) but nothing was persisted (applied=False)
+    when tags are requested without notes and the tags column is missing —
+    previously this silently reported success."""
+    from storage.journal import annotate, trade_detail
+
+    sid = _seed_closed_trade()  # no apply_migrations() — tags column absent
+    before = trade_detail(sid).get("notes")
+    found, applied = annotate(sid, tags=["news-spike"])
+    assert found is True
+    assert applied is False
+    assert trade_detail(sid).get("notes") == before  # nothing changed
+
+
+def test_annotate_notes_still_applied_even_if_tags_column_missing():
+    """When both notes and tags are given but the tags column is missing,
+    the notes write must still go through — applied reflects the request
+    as a whole, but nothing that *could* be written is silently dropped."""
+    from storage.journal import annotate, trade_detail
+
+    sid = _seed_closed_trade()
+    found, applied = annotate(sid, notes="partial write ok", tags=["x"])
+    assert found is True
+    assert applied is True
+    assert trade_detail(sid)["notes"] == "partial write ok"
 
 
 # ── API contract ───────────────────────────────────────────────────────────
@@ -194,6 +222,14 @@ def test_journal_annotate_endpoint(client):
     assert client.post(f"/journal/{sid}/annotate", headers=HDR, json={}).status_code == 400
     assert client.post("/journal/nope/annotate", headers=HDR,
                        json={"notes": "x"}).status_code == 404
+
+
+def test_journal_annotate_endpoint_409s_on_no_op(client):
+    """P2-5: tags-only request with no migration applied must not report
+    200/success:true for a write that didn't happen."""
+    sid = _seed_closed_trade()  # tags column absent — no apply_migrations()
+    res = client.post(f"/journal/{sid}/annotate", headers=HDR, json={"tags": ["x"]})
+    assert res.status_code == 409
 
 
 def test_journal_export_csv(client):

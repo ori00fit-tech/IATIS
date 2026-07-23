@@ -2257,15 +2257,23 @@ async def journal_annotate(
         raise HTTPException(status_code=400, detail="'tags' must be a list of strings.")
     try:
         from storage.journal import annotate
-        success = annotate(signal_id, notes=notes, tags=tags)
+        found, applied = annotate(signal_id, notes=notes, tags=tags)
     except Exception as exc:
         logger.error(f"Journal annotate error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
     from storage.audit_log import log_action
     log_action("journal_annotate", x_api_key=x_api_key, session_id=iatis_session,
-               success=success, detail=signal_id)
-    if not success:
+               success=found and applied, detail=signal_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Unknown signal_id.")
+    if not applied:
+        # Found the row but nothing was actually written (e.g. tags were
+        # requested but the tags-column migration hasn't run and no notes
+        # were given) — must not report success:true for a no-op.
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing was persisted — tags require migration 3 (storage.migrations) and no notes were provided.",
+        )
     return {"success": True, "signal_id": signal_id}
 
 

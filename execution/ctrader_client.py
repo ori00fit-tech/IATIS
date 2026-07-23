@@ -928,12 +928,25 @@ class CTraderClient:
 
         threading.Thread(target=_attempt, daemon=True, name="ctrader-reconnect").start()
 
+    # Only the two auth-stage requests can legitimately race a stale
+    # session into ALREADY_LOGGED_IN — every other context (trader_req,
+    # symbols_list, reconcile, symbol_details, trendbars, spot subscribe)
+    # sending it back would be unexpected, not benign. Scoping the swallow
+    # here (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P3-4)
+    # prevents an ALREADY_LOGGED_IN-shaped error on, say, a reconcile
+    # request from silently no-oping instead of surfacing as an error —
+    # the old check matched the substring across every _on_error call site.
+    _ALREADY_LOGGED_IN_BENIGN_CONTEXTS = frozenset({"app_auth", "account_auth"})
+
     def _on_error(self, context: str, failure: Any) -> None:
         error_msg = (
             failure.getErrorMessage() if hasattr(failure, "getErrorMessage")
             else str(failure)
         )
-        if "ALREADY_LOGGED_IN" in error_msg:
+        if (
+            context in self._ALREADY_LOGGED_IN_BENIGN_CONTEXTS
+            and "ALREADY_LOGGED_IN" in error_msg
+        ):
             # Benign — handled by _on_error_res, which continues the
             # bootstrap chain. The same rejection also lands here via the
             # send() Deferred's errback; it must not flip the state to ERROR.

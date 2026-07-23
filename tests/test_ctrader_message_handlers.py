@@ -441,6 +441,17 @@ def test_on_error_uses_get_error_message_when_available(client):
     assert client._state == ConnectionState.ACCOUNT_AUTH_OK  # benign path taken
 
 
+def test_on_error_already_logged_in_outside_auth_context_still_errors(client):
+    """P3-4 regression: the benign swallow is scoped to the two auth-stage
+    contexts. An ALREADY_LOGGED_IN-shaped message on any other request
+    (reconcile, symbols_list, trader_req, symbol_details, trendbars) is
+    unexpected, not benign, and must still surface as an error — the old
+    check matched the substring across every _on_error call site."""
+    client._state = ConnectionState.SYMBOLS_LOADED
+    client._on_error("reconcile", RuntimeError("ALREADY_LOGGED_IN — already authorized"))
+    assert client._state == ConnectionState.ERROR
+
+
 # ── _on_message dispatcher ────────────────────────────────────────────────
 
 def test_on_message_routes_trader_res_to_its_handler(client, monkeypatch):

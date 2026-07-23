@@ -42,17 +42,77 @@ Connection state flow:
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from queue import Queue
 from typing import Any
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+# ─── Cross-process session lock (audit P0-3, 2026-07-23) ───────────────────
+#
+# cTrader's Open API allows only ONE authenticated session per account+app
+# (see core/data_providers.py get_shared_ctrader_client's docstring — this
+# was already known and is why that module enforces an intra-process
+# singleton). The 2026-07-22 ALREADY_LOGGED_IN reconnect fix (commit
+# 7c0400b) made a second, colliding authentication attempt non-fatal by
+# design — correct for THIS process's own reconnects, but it also means
+# nothing in this module previously stopped a second *OS process* (a
+# stale/zombie process from an incomplete systemd restart, or an operator
+# running a second instance by mistake) from racing this one to
+# authenticate. During that race window both processes could believe they
+# hold the session and both attempt to submit real orders before the
+# broker's single-session enforcement kicks either one out.
+#
+# This is a coarse, whole-VPS advisory lock (one lock file, not
+# per-account) — correct for this deployment's single-account, single-VPS
+# shape. A future multi-account deployment would need one lock file per
+# account. Held for the process's entire lifetime; flock releases
+# automatically on process exit (including a crash or kill -9), so no
+# cleanup path can leak a stale lock the way a manually-managed PID file
+# could.
+_PROCESS_LOCK_PATH = Path(__file__).resolve().parent.parent / "storage" / "ctrader_session.lock"
+_process_lock_file = None  # module-level: one lock per process, not per client instance
+
+
+class DuplicateSessionError(Exception):
+    """Raised when another OS process already holds the cTrader session lock."""
+
+
+def _acquire_process_lock(lock_path: Path = _PROCESS_LOCK_PATH) -> None:
+    """Acquire the whole-process cTrader session lock, or raise.
+
+    Idempotent within a process: a second CTraderClient in the same
+    process (already prevented in practice by get_shared_ctrader_client's
+    singleton) is a no-op here, not an error — this guard is specifically
+    about a *different OS process*, which flock's per-open-file-description
+    semantics detect even when that other process is this same codebase.
+    """
+    global _process_lock_file
+    if _process_lock_file is not None:
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise DuplicateSessionError(
+            f"Another process already holds the cTrader session lock ({lock_path}) "
+            "— refusing to connect a second session to avoid duplicate real-order "
+            "submission (audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P0-3)."
+        ) from exc
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _process_lock_file = fh
 
 
 # ─── Connection State Machine ──────────────────────────────────────────────
@@ -877,6 +937,8 @@ class CTraderClient:
         # any future unplanned drop of *this* connection.
         self._intentional_disconnect = False
         try:
+            _acquire_process_lock()
+
             from ctrader_open_api import Client, TcpProtocol
             from twisted.internet import reactor
 

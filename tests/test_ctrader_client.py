@@ -234,3 +234,84 @@ def test_stop_client_is_best_effort(monkeypatch):
     c = _mk_client()
     c._stop_client(None)  # no-op, must not raise
     c._stop_client(object())  # reactor import/branch guarded → must not raise
+
+
+# ─── Cross-process session lock (audit P0-3) ───────────────────────────────
+# The 2026-07-22 ALREADY_LOGGED_IN fix made a second, colliding auth attempt
+# non-fatal for THIS process's own reconnects, but its own code comment
+# admitted a genuinely conflicting session was assumed, not verified, to
+# fail downstream. These tests cover the cross-process guard added to close
+# that gap: connect() must refuse to proceed if another OS process already
+# holds the session lock, using flock's real per-open-file-description
+# semantics (which distinguish two independent opens of the same path even
+# within one test process, exactly like two real OS processes would race).
+
+@pytest.fixture(autouse=True)
+def _reset_process_lock(monkeypatch, tmp_path):
+    """Every test gets its own lock file path and a clean module-level
+    lock-holder slot, so tests can't leak a held lock into each other or
+    into the rest of the suite (a real connect() attempt elsewhere would
+    otherwise silently always succeed after the first test acquires it)."""
+    import execution.ctrader_client as m
+    monkeypatch.setattr(m, "_PROCESS_LOCK_PATH", tmp_path / "ctrader_session.lock")
+    monkeypatch.setattr(m, "_process_lock_file", None)
+    yield
+    # Best-effort close so a held fd from this test doesn't linger.
+    if m._process_lock_file is not None:
+        try:
+            m._process_lock_file.close()
+        except OSError:
+            pass
+        m._process_lock_file = None
+
+
+def test_acquire_process_lock_succeeds_when_uncontended():
+    import execution.ctrader_client as m
+    m._acquire_process_lock(m._PROCESS_LOCK_PATH)
+    assert m._process_lock_file is not None
+    assert m._PROCESS_LOCK_PATH.exists()
+
+
+def test_acquire_process_lock_is_idempotent_within_one_process():
+    import execution.ctrader_client as m
+    m._acquire_process_lock(m._PROCESS_LOCK_PATH)
+    held = m._process_lock_file
+    m._acquire_process_lock(m._PROCESS_LOCK_PATH)  # second call, same process
+    assert m._process_lock_file is held  # no-op, didn't re-open/re-lock
+
+
+def test_acquire_process_lock_rejects_a_second_holder():
+    """Simulates a second OS process: a fresh open() of the SAME path, held
+    independently of this test's own lock, must be rejected. flock locks
+    attach to the open-file-description, not the process, so this is a
+    faithful stand-in for a genuinely separate process without needing to
+    actually fork/spawn one."""
+    import execution.ctrader_client as m
+
+    m._acquire_process_lock(m._PROCESS_LOCK_PATH)  # "process A" acquires it
+    # Keep process A's file object alive — flock releases on close/GC, and
+    # dropping the only reference (just clearing the module attribute)
+    # would silently free the lock, defeating the whole test.
+    holder_fh = m._process_lock_file
+    m._process_lock_file = None  # simulate "process B": hasn't acquired yet
+
+    with pytest.raises(m.DuplicateSessionError, match="Another process already holds"):
+        m._acquire_process_lock(m._PROCESS_LOCK_PATH)
+
+    holder_fh.close()
+
+
+def test_connect_refuses_when_lock_is_held_by_another_process(monkeypatch):
+    """End-to-end through the real connect() entry point: a held lock must
+    make connect() fail closed (return False) rather than proceed to
+    authenticate a second, colliding session."""
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    m._acquire_process_lock(m._PROCESS_LOCK_PATH)  # someone else holds it
+    holder_fh = m._process_lock_file  # keep it alive — see comment above
+    m._process_lock_file = None  # this client's process hasn't acquired yet
+
+    assert c.connect(timeout=1) is False
+
+    holder_fh.close()

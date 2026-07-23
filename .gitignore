@@ -19,6 +19,7 @@ storage/*.json
 storage/*.jsonl
 storage/*.db
 storage/*.log
+storage/*.lock
 !storage/.gitkeep
 
 # Research results (generated, not authored)

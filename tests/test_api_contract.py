@@ -468,7 +468,12 @@ def fake_repo(tmp_path, monkeypatch):
     # A real filename from this repo — must NOT be caught by the "token"
     # denylist word (it's design tokens, not an auth token).
     (tmp_path / "dashboard" / "tokens.css").write_text(":root { --accent: #fff; }\n")
-    monkeypatch.setattr("execution.api_server._REPO_ROOT", tmp_path)
+    # Must patch the module that actually reads _REPO_ROOT at call time
+    # (execution.routes.files), not execution.api_server's re-exported
+    # copy of the name — patching a re-export only rebinds that facade
+    # module's own attribute, not the value execution.routes.files'
+    # _resolve_safe_path() looks up in its own namespace.
+    monkeypatch.setattr("execution.routes.files._REPO_ROOT", tmp_path)
     return tmp_path
 
 
@@ -926,7 +931,7 @@ def test_experiments_list_requires_auth(client):
 def test_run_job_uses_fixed_argv_never_shell(monkeypatch):
     """Unit-level guarantee on the actual subprocess call, independent of
     timing: fixed argv list, shell never True, output captured line by line."""
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     captured: dict = {}
 
@@ -963,7 +968,7 @@ def test_run_job_watchdog_kills_silent_hang_even_without_output(monkeypatch):
     must kill it independently of the read loop ever running."""
     import time as time_mod
 
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr(
         m, "_JOB_COMMANDS",
@@ -986,7 +991,7 @@ def test_run_job_passes_unbuffered_env_to_child(monkeypatch):
     """PYTHONUNBUFFERED=1 must reach the child so line-buffered stdout
     reaches the read loop promptly (the watchdog above is the hard
     backstop; this is the fix for the common case)."""
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     captured: dict = {}
 
@@ -1012,7 +1017,7 @@ def test_run_job_passes_unbuffered_env_to_child(monkeypatch):
 
 
 def test_experiments_run_and_poll_to_completion(client, monkeypatch):
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr(m, "_JOB_COMMANDS", {"echo_job": [sys.executable, "-c", "print('hello from job')"]})
 
@@ -1027,7 +1032,7 @@ def test_experiments_run_and_poll_to_completion(client, monkeypatch):
 
 
 def test_experiments_run_failed_job_reports_nonzero_returncode(client, monkeypatch):
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr(m, "_JOB_COMMANDS", {"failing_job": [sys.executable, "-c", "import sys; sys.exit(1)"]})
 
@@ -1038,7 +1043,7 @@ def test_experiments_run_failed_job_reports_nonzero_returncode(client, monkeypat
 
 
 def test_experiments_run_rejects_duplicate_concurrent_run(client, monkeypatch):
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr(m, "_JOB_COMMANDS", {"slow_job": [sys.executable, "-c", "import time; time.sleep(1)"]})
 
@@ -1052,7 +1057,7 @@ def test_experiments_run_rejects_duplicate_concurrent_run(client, monkeypatch):
 
 
 def test_experiments_list_includes_started_jobs(client, monkeypatch):
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr(m, "_JOB_COMMANDS", {"list_test_job": [sys.executable, "-c", "print('x')"]})
     r = client.post("/experiments/run", json={"job": "list_test_job"}, headers=HDR)
@@ -1074,7 +1079,7 @@ def test_ops_reload_config_requires_auth(client):
 
 
 def test_ops_reload_config_clears_cache(client):
-    import execution.api_server as m
+    import execution.api_core as m  # owns _config_cache, not the api_server facade
 
     m._config_cache = {"stale": True}
     r = client.post("/ops/reload-config", headers=HDR)
@@ -1113,7 +1118,7 @@ def test_audit_log_records_login_success_and_failure(client, tmp_path, monkeypat
 
 
 def test_audit_log_records_experiment_run(client, tmp_path, monkeypatch):
-    import execution.api_server as m
+    import execution.routes.experiments as m  # owns _JOB_COMMANDS/_Job/_run_job, not the api_server facade
 
     monkeypatch.setattr("storage.audit_log.DEFAULT_LOG_PATH", tmp_path / "audit.jsonl")
     monkeypatch.setattr(m, "_JOB_COMMANDS", {"audit_test_job": [sys.executable, "-c", "print('x')"]})

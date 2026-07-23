@@ -119,6 +119,39 @@ def test_uncorrelated_symbol_has_zero_correlated_exposure():
     assert s.correlated_exposure_pct == 0.0
 
 
+def test_correlated_exposure_excludes_the_candidate_symbol_itself():
+    """_correlated_symbols() deliberately discards the candidate symbol
+    from its own group (correct — it measures exposure to OTHER
+    correlated instruments) — but that means a second open position on
+    the EXACT SAME symbol contributes zero to correlated_exposure_pct.
+    open_symbols (asserted below) is what main.py's symbol_already_open
+    wiring uses to close that gap — this test pins the data it depends on."""
+    s = _state("EURUSD", [], [_open("EURUSD")])
+    assert s.correlated_exposure_pct == 0.0
+    assert "EURUSD" in s.open_symbols
+
+
+def test_open_symbols_includes_candidate_when_already_open_end_to_end():
+    """The exact production gap (2026-07-21/22): two EURUSD signals ~2h
+    apart both went through because nothing checked open_symbols against
+    the candidate symbol. Confirms the risk gate now blocks it when main.py
+    wires symbol_already_open = (symbol in portfolio_state.open_symbols)."""
+    s = _state("EURUSD", [], [_open("EURUSD")])
+    inputs = RiskInputs(
+        account_balance=s.account_balance,
+        entry_price=1.0850,
+        stop_loss_price=1.0820,
+        take_profit_price=1.0940,
+        current_open_risk_pct=s.current_open_risk_pct,
+        current_drawdown_pct=s.current_drawdown_pct,
+        correlated_exposure_pct=s.correlated_exposure_pct,
+        symbol_already_open="EURUSD" in s.open_symbols,
+    )
+    result = evaluate_risk(inputs, CONFIG)
+    assert result.passed is False
+    assert any("already" in r.lower() and "open" in r.lower() for r in result.reasons)
+
+
 # ── Fail-safe behavior ──────────────────────────────────────────────────
 
 def test_storage_failure_returns_fail_safe_state_not_crash():

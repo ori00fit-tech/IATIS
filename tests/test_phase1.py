@@ -232,6 +232,38 @@ def test_risk_engine_passes_on_good_trade(config):
     assert result.position_size_units is not None
 
 
+def test_risk_engine_blocks_second_position_on_same_symbol(config):
+    """Regression: two live EURUSD signals ~2h apart with near-identical
+    entry/SL/TP went through uncontested in production (2026-07-21/22) —
+    risk/live_portfolio_state.py's correlated-exposure calc deliberately
+    excludes the candidate symbol from its own correlation group, so
+    nothing else was checking "is this exact symbol already open"."""
+    inputs = RiskInputs(
+        account_balance=10_000,
+        entry_price=1.0850,
+        stop_loss_price=1.0820,
+        take_profit_price=1.0940,
+        symbol_already_open=True,
+    )
+    result = evaluate_risk(inputs, config)
+    assert result.passed is False
+    assert any("already" in r.lower() and "open" in r.lower() for r in result.reasons)
+
+
+def test_risk_engine_allows_new_symbol_when_others_are_open(config):
+    """symbol_already_open is per-candidate-symbol — other open positions
+    must not block an otherwise-good trade on a DIFFERENT symbol."""
+    inputs = RiskInputs(
+        account_balance=10_000,
+        entry_price=1.0850,
+        stop_loss_price=1.0820,
+        take_profit_price=1.0940,
+        symbol_already_open=False,
+    )
+    result = evaluate_risk(inputs, config)
+    assert result.passed is True
+
+
 # ---------- confluence config sanity (prevents EXECUTE-unreachable bug) ----------
 
 def test_validate_confluence_config_passes_when_consistent():

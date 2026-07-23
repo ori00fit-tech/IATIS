@@ -711,11 +711,24 @@ class CTraderClient:
         """
         try:
             positions = getattr(message, "position", None)
-            if not positions:
-                logger.info("🧾 Reconcile: no open positions reported by broker")
+            # `positions is None` (field truly absent — nothing to act on) is
+            # NOT the same as `positions == []` (broker explicitly reports
+            # zero open positions). The old `if not positions: return` early
+            # exit treated both identically, which meant reconcile could
+            # only ever ADD stale-cleared positions, never CLEAR them —
+            # a real correctness bug (found via test_ctrader_message_handlers.py,
+            # audit docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P0-2 coverage
+            # work): after a reconnect, if every position had actually been
+            # closed, the in-memory `_positions` map would keep believing a
+            # stale one was still open — exactly the kind of state drift
+            # that risk checks and has_open_position() depend on being correct.
+            if positions is None:
+                logger.warning("⚠️ ProtoOAReconcileRes missing `position` field — leaving position state unchanged")
                 return
             with self._lock:
                 self._positions.clear()
+                if not positions:
+                    logger.info("🧾 Reconcile: no open positions reported by broker")
                 for position in positions:
                     trade_data = getattr(position, "tradeData", None)
                     sym_id = int(getattr(trade_data, "symbolId", 0)) if trade_data else 0

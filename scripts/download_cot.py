@@ -109,8 +109,8 @@ def iter_cot_rows(text: str):
         market = row[_IDX_NAME].strip().upper()
         if market.startswith(_EXCLUDED_PREFIXES):
             continue
-        for internal, contract in COT_SYMBOLS.items():
-            if not market.startswith(contract.upper() + " - "):
+        for internal, aliases in COT_SYMBOLS.items():
+            if not any(market.startswith(alias.upper() + " - ") for alias in aliases):
                 continue
             try:
                 oi = _to_int(row[_IDX_OI])

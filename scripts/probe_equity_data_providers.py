@@ -22,10 +22,18 @@ Specifically unverified, in order of risk:
      These are AV's original, documented-free core endpoints (unlike
      FX_INTRADAY, already confirmed premium-gated) — expected to work,
      not confirmed.
-  3. Twelve Data equity coverage. The client is fully generic (verified
+  3. Alpaca's /v2/stocks/{symbol}/bars (added 2026-07-24, operator
+     request). Alpaca was already integrated for crypto only — this
+     project's own account already has ALPACA_API_KEY/SECRET, so auth
+     isn't the risk; the unverified part is whether the free tier's
+     historical depth/rate limit for STOCK bars specifically matches
+     the crypto path's (Alpaca has, at points in its history, gated
+     real-time stock data behind IEX-only vs. full-SIP tiers — whether
+     that also constrains historical bars on the free tier is unchecked).
+  4. Twelve Data equity coverage. The client is fully generic (verified
      by code inspection, not a live call) and Twelve Data's own product
      description covers US equities on the free tier — the lowest-risk
-     of the three, still unconfirmed by an actual request.
+     of the four, still unconfirmed by an actual request.
 
 Futures (--probe-futures): NO fetch code exists yet for this asset
 class, deliberately — unlike stocks/ETFs, no provider chain here has been
@@ -51,12 +59,42 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+try:
+    from dotenv import load_dotenv
+    # Explicit path — see scripts/collect_marketaux_sentiment.py and
+    # scripts/download_ctrader_fx_history.py for why bare load_dotenv()
+    # is unreliable depending on how this script is invoked. Without this,
+    # every provider in this probe silently reports "API_KEY not set" even
+    # when .env has real keys (observed on the VPS, 2026-07-24) — this
+    # script forgot the load call every other credentialed script here has.
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+except PermissionError:
+    _env_path = PROJECT_ROOT / ".env"
+    raise SystemExit(
+        f"Permission denied reading {_env_path} as the current user. "
+        f".env is owned by the iatis service user (600) — run this as "
+        f"that user instead:\n"
+        f"  sudo -u iatis {sys.executable} -m scripts.probe_equity_data_providers ..."
+    )
+
 DEFAULT_SYMBOLS = ["AAPL", "NVDA", "SPY", "QQQ"]
 # Twelve Data's own docs list individual commodity futures (e.g. corn,
 # cocoa) but do not state free-tier availability explicitly — these are
 # guesses at plausible Twelve Data futures symbol formats, not confirmed
 # to exist or resolve to anything.
 FUTURES_PROBE_SYMBOLS = ["CL1", "ES1", "GC1"]
+
+
+def probe_alpaca(symbol: str) -> None:
+    from core.data_providers import _fetch_alpaca_equity
+    try:
+        df = _fetch_alpaca_equity(symbol, "D1", outputsize=30)
+        span = f"{df.index[0]} -> {df.index[-1]}" if len(df) else "empty"
+        print(f"  [alpaca]      {symbol}: OK, {len(df)} bars ({span})")
+    except Exception as exc:
+        print(f"  [alpaca]      {symbol}: FAILED — {exc}")
 
 
 def probe_twelve_data(symbol: str) -> None:
@@ -119,6 +157,7 @@ def main() -> int:
 
     for symbol in args.symbols:
         print(f"\n{symbol}:")
+        probe_alpaca(symbol)
         probe_twelve_data(symbol)
         probe_finnhub(symbol)
         probe_alpha_vantage(symbol)

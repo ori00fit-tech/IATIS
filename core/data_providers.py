@@ -174,12 +174,20 @@ def _to_av_symbol(symbol: str) -> tuple[str, str]:
 
 
 def _is_equity_symbol(symbol: str) -> bool:
-    """Every FX/metals/crypto symbol in this codebase is formatted with a
-    '/' (e.g. 'EUR/USD', 'XAU/USD', 'BTC/USD'); plain stock/ETF tickers
-    never contain one (e.g. 'AAPL', 'SPY'). Used to route the shared
-    'alpha_vantage'/'finnhub' provider-chain entries to the correct
-    endpoint without inventing new provider names."""
-    return "/" not in symbol
+    """True only for symbols explicitly registered as stocks/ETFs
+    (_STOCKS/_ETF below) — deliberately NOT a generic 'no slash present'
+    heuristic. That heuristic was tried first and found WRONG the same
+    day via a real regression test: index/metal fetch-names like 'SPX'
+    (FETCH_TO_INTERNAL) and 'XAUUSD'/'SPX500' (internal form) are ALSO
+    slash-free in some calling conventions, so a bare slash-absence
+    check silently misrouted them to the equity endpoint instead of
+    correctly refusing them (test_alpaca_provider.py's
+    test_non_crypto_symbol_is_refused caught this — Alpaca's equity path
+    made a real network attempt for 'XAUUSD'). Used to route the shared
+    'alpha_vantage'/'finnhub'/'alpaca' provider-chain entries to the
+    correct endpoint without inventing new provider names."""
+    internal = _internal_symbol(symbol)
+    return internal in _STOCKS or internal in _ETF
 
 
 def _fetch_alpha_vantage_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
@@ -644,8 +652,8 @@ DEFAULT_CHAINS: dict[str, list[str]] = {
     "indices": ["ctrader", "fcs_api", "finnhub"],
     "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
     # 2026-07-24, NOT YET LIVE-VERIFIED — see config.yaml's stocks/etf note.
-    "stocks":  ["twelve_data", "alpha_vantage", "finnhub"],
-    "etf":     ["twelve_data", "alpha_vantage", "finnhub"],
+    "stocks":  ["alpaca", "twelve_data", "alpha_vantage", "finnhub"],
+    "etf":     ["alpaca", "twelve_data", "alpha_vantage", "finnhub"],
 }
 
 _CRYPTO = {"BTCUSD", "ETHUSD"}
@@ -715,20 +723,75 @@ _ALPACA_TF_MAP = {
 }
 
 
+def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Stocks/ETFs via Alpaca's stock bars endpoint (/v2/stocks/{symbol}/bars)
+    — a genuinely different endpoint from the crypto path in _fetch_alpaca
+    below (plain ticker, e.g. 'AAPL', no '/' — and a different host path,
+    /v2/stocks/ vs /v1beta3/crypto/us/). Same auth (ALPACA_API_KEY/
+    ALPACA_API_SECRET), same response bar shape (o/h/l/c/v/t), same
+    _ALPACA_TF_MAP. Added 2026-07-24 (operator request) — the
+    'Alpaca serves US stocks and crypto only' comment on _fetch_alpaca
+    predates this function; only the crypto half was ever wired in
+    before. NOT YET verified against the real API from this codebase —
+    see scripts/probe_equity_data_providers.py."""
+    api_key = os.environ.get("ALPACA_API_KEY", "")
+    api_secret = os.environ.get("ALPACA_API_SECRET", "")
+    if not (api_key and api_secret):
+        raise DataFetchError("ALPACA_API_KEY/ALPACA_API_SECRET not set — skipping Alpaca")
+
+    tf = _ALPACA_TF_MAP.get(interval)
+    if tf is None:
+        raise DataFetchError(f"Alpaca: unsupported interval {interval}")
+
+    try:
+        import requests
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    base = os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets").rstrip("/")
+    params = {"timeframe": tf, "limit": min(int(outputsize), 10000), "sort": "desc"}
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
+
+    logger.info(f"Alpaca (equity): fetching {symbol} @ {tf}")
+    try:
+        resp = requests.get(f"{base}/v2/stocks/{symbol}/bars",
+                            params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Alpaca equity request failed: {exc}")
+
+    bars = data.get("bars") or []
+    if not bars:
+        raise DataFetchError(f"Alpaca equity: empty response for {symbol}")
+
+    records = [{
+        "datetime": pd.Timestamp(b["t"]),
+        "open": float(b["o"]), "high": float(b["h"]),
+        "low": float(b["l"]), "close": float(b["c"]),
+        "volume": float(b.get("v", 0.0)),
+    } for b in bars]
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
+    return df.tail(outputsize)
+
+
 def _fetch_alpaca(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     """Crypto bars via Alpaca Market Data (v1beta3) — NATIVE H1/H4/D1.
 
     Role in this codebase (2026-07-16, operator request): a second,
     INDEPENDENT crypto source alongside ccxt/Binance — both a failover
     and the cross-check partner core/data_confidence.py needs for the
-    carrier pairs. Alpaca serves US stocks and crypto only: no FX, no
-    metals, no index CFDs — so it appears exclusively in the crypto
-    chain, and refuses anything else loudly rather than guessing.
+    carrier pairs. Equity/ETF symbols (no '/') route to
+    _fetch_alpaca_equity(), a genuinely different endpoint added
+    2026-07-24 — this function stays crypto-only.
 
     Auth: ALPACA_API_KEY / ALPACA_API_SECRET in .env. Data host is
     https://data.alpaca.markets (ALPACA_DATA_URL to override) — NOT the
     paper-api.alpaca.markets trading host, which serves orders, not bars.
     """
+    if _is_equity_symbol(symbol):
+        return _fetch_alpaca_equity(symbol, interval, outputsize)
+
     api_key = os.environ.get("ALPACA_API_KEY", "")
     api_secret = os.environ.get("ALPACA_API_SECRET", "")
     if not (api_key and api_secret):

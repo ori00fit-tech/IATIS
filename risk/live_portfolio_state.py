@@ -17,9 +17,15 @@ live data. All inputs are injected — no hidden globals, no direct DB
 path assumptions beyond outcome_tracker's own default.
 
 Design notes:
-- Drawdown is computed from the realized equity curve (closed-trade
-  pnl_usd applied cumulatively to the configured starting balance),
-  measured as the current distance from the running equity peak.
+- Drawdown is computed from the realized equity curve: each closed
+  trade's P&L is RECOMPUTED from its own entry/stop_loss/exit_price/
+  direction (trade_math.realized_r × DEFAULT_RISK_USD), never read from
+  the stored pnl_usd column — that column can carry legacy corruption
+  (pre-2026-07-16 pip-size bug) or NULL (no stop_loss stored), and
+  storage/outcome_tracker.py's own performance_summary() already
+  distrusts it for the same reason. Applied cumulatively to the
+  configured starting balance, measured as the current distance from the
+  running equity peak.
 - Open risk assumes each open signal risks ``risk_per_trade_max`` of
   the account (entry→SL distance is already sized to that budget by
   the pipeline). This is conservative and deterministic.
@@ -35,6 +41,8 @@ from typing import Callable
 
 from risk.correlation_engine import CORRELATION_GROUPS
 from storage import outcome_tracker
+from storage.outcome_tracker import DEFAULT_RISK_USD
+from utils import trade_math
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -149,11 +157,30 @@ def compute_portfolio_state(
         )
 
     # ── Realized equity curve → balance + drawdown from peak ──────────
+    # Recomputed from each row's own entry/stop/exit/direction — NEVER
+    # from the stored pnl_usd column. storage/outcome_tracker.py's own
+    # performance_summary() already distrusts that column for the same
+    # reason (legacy rows written with the old inflated "1 standard lot"
+    # approximation, pre-2026-07-16 pip-size fix) and recomputes from
+    # prices instead; this module read the untrusted column directly,
+    # despite fetching the same rows with entry_price/stop_loss/exit_price
+    # already present. `row.get("pnl_usd") or 0.0` also silently treated
+    # a NULL pnl_usd (close_signal() leaves it NULL when no stop_loss was
+    # stored — "cannot size the trade") as exactly $0 profit rather than
+    # unknown, feeding a corrupted equity curve straight into the
+    # drawdown hard-stop/reduce gates. trade_math.realized_r matches
+    # close_signal()'s own R = price_diff / |entry-SL| formula exactly;
+    # DEFAULT_RISK_USD matches its risk_usd default (every real caller
+    # uses the default — see storage/outcome_tracker.py).
     equity = starting_balance
     peak = starting_balance
     for row in closed:
-        pnl = row.get("pnl_usd") or 0.0
-        equity += float(pnl)
+        r = trade_math.realized_r(
+            row.get("entry_price"), row.get("stop_loss"),
+            row.get("exit_price"), row.get("direction"),
+        )
+        pnl = r * DEFAULT_RISK_USD if r is not None else 0.0
+        equity += pnl
         peak = max(peak, equity)
 
     drawdown_pct = 0.0 if peak <= 0 else max(0.0, (peak - equity) / peak)

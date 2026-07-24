@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from risk.live_portfolio_state import PortfolioState, compute_portfolio_state
 from risk.risk_engine import RiskInputs, evaluate_risk
+from storage.outcome_tracker import DEFAULT_RISK_USD
 
 CONFIG = {
     "risk": {
@@ -25,8 +26,18 @@ CONFIG = {
 
 
 def _closed(symbol: str, pnl_usd: float) -> dict:
-    return {"symbol": symbol, "outcome": "loss" if pnl_usd < 0 else "win",
-            "pnl_usd": pnl_usd}
+    """A closed row that recomputes to exactly `pnl_usd` via the REAL
+    formula compute_portfolio_state() now uses (trade_math.realized_r *
+    DEFAULT_RISK_USD) — not the stored pnl_usd column, which the fix this
+    pins no longer trusts. entry=100/sl_distance=1 keeps the algebra
+    simple: R = pnl_usd / DEFAULT_RISK_USD, exit = entry + R."""
+    r = pnl_usd / DEFAULT_RISK_USD
+    entry, sl_distance = 100.0, 1.0
+    return {
+        "symbol": symbol, "outcome": "loss" if pnl_usd < 0 else "win",
+        "entry_price": entry, "stop_loss": entry - sl_distance,
+        "exit_price": entry + r * sl_distance, "direction": "BUY",
+    }
 
 
 def _open(symbol: str) -> dict:
@@ -196,3 +207,39 @@ def test_portfolio_read_failure_fails_closed_and_blocks_trade():
         CONFIG,
     )
     assert result.passed is False
+
+
+# ── pnl_usd recompute (regression: the stored column is untrusted) ──────
+
+def test_poisoned_stored_pnl_usd_is_ignored_in_favor_of_the_recompute():
+    """Legacy rows can carry a corrupted pnl_usd (pre-2026-07-16 pip-size
+    bug / old '1 standard lot' approximation, per
+    storage/outcome_tracker.py's own performance_summary() comments) —
+    compute_portfolio_state() must recompute from entry/stop/exit/direction,
+    never trust the stored column, exactly like performance_summary()
+    already does."""
+    row = _closed("EURUSD", 500.0)  # recomputes to +500 for real
+    row["pnl_usd"] = 999_999.0      # poisoned/stale stored value — must be ignored
+    s = _state("EURUSD", [row], [])
+    assert s.account_balance == 10_500.0  # the recomputed +500, not the poisoned column
+
+
+def test_missing_stop_loss_contributes_zero_not_a_crash():
+    """close_signal() leaves pnl_usd NULL when no stop_loss was stored
+    ('cannot size the trade'). The recompute must treat that the same
+    way — a real $0 contribution to the equity curve — not raise."""
+    row = {"symbol": "EURUSD", "outcome": "win",
+           "entry_price": 100.0, "stop_loss": None, "exit_price": 105.0,
+           "direction": "BUY"}
+    s = _state("EURUSD", [row], [])
+    assert s.account_balance == 10_000.0
+
+
+def test_null_stored_pnl_usd_does_not_prevent_a_real_recompute():
+    """The exact bug this fix closes: `row.get('pnl_usd') or 0.0` treated
+    a NULL stored pnl_usd as $0 even when entry/stop/exit were present
+    and a real R-multiple was computable."""
+    row = _closed("EURUSD", -300.0)
+    row["pnl_usd"] = None
+    s = _state("EURUSD", [row], [])
+    assert s.account_balance == 9_700.0  # NOT 10_000.0

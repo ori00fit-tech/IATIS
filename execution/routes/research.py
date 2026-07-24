@@ -93,6 +93,273 @@ async def research_symbols(
     }
 
 
+# The frozen prod4 activation set (CLAUDE.md, config/engines.yaml): do not
+# read this as a suggestion to enable more — "Enabling more engines (any)"
+# is on the dead list (H015, run twice). This constant only labels what
+# /research/engines reports; it changes nothing about what runs.
+_PROD4_ENGINES = frozenset({"smc", "price_action", "nnfx", "wyckoff"})
+
+
+@router.get("/research/engines")
+async def research_engines(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Engine Selector (Research Workspace, 2026-07-24): every engine's
+    activation state, confluence weight, and version, sourced from
+    config/engines.yaml + confluence.weights — not reimplemented here.
+    Read-only: this endpoint reports the frozen prod4 configuration, it
+    does not let a caller toggle an engine (CLAUDE.md: enabling another
+    engine needs a new pre-registered hypothesis, not a dashboard click).
+    """
+    _check_auth(x_api_key, iatis_session)
+    config = _get_config()
+    engines_cfg = config.get("engines", {})
+    enabled = engines_cfg.get("enabled", {})
+    versions = engines_cfg.get("versions", {})
+    weights = config.get("confluence", {}).get("weights", {})
+
+    all_names = sorted(set(enabled) | set(versions) | set(weights))
+    return {
+        "engines": [
+            {
+                "name": name,
+                "enabled": bool(enabled.get(name, False)),
+                "prod4": name in _PROD4_ENGINES,
+                "weight": weights.get(name),
+                "version": versions.get(name),
+            }
+            for name in all_names
+        ],
+        "smc_full_spec": bool(engines_cfg.get("smc_full_spec", False)),
+        "crypto_positioning_modulator": bool(engines_cfg.get("crypto_positioning_modulator", False)),
+    }
+
+
+# Technical Indicator catalog (Dataset Builder, 2026-07-24) — a read-only
+# inventory of the indicator math that ALREADY exists in this codebase
+# (grep-verified against the source, not guessed), for the Dataset
+# Builder / Engine Selector UI to show what each engine's numbers are
+# actually built from. This does NOT compute anything new and does NOT
+# change any engine's live formula — see utils/indicators.py's own
+# consolidation note: two ATR variants are deliberately different
+# (range_atr is NOT a bug), and "upgrading" a variant is a strategy
+# change requiring a new pre-registered hypothesis (CLAUDE.md rule 6).
+# The two independent RSI implementations below (SMA-smoothed vs
+# EWM/Wilder-smoothed) are the same kind of intentional-until-measured
+# divergence — listed, not merged.
+_INDICATOR_CATALOG: list[dict[str, Any]] = [
+    {
+        "id": "atr_true_range",
+        "name": "ATR (true-range)",
+        "category": "volatility",
+        "description": "Rolling mean of true range (max of H-L, |H-prevC|, |L-prevC|) over `period` bars.",
+        "default_params": {"period": 14},
+        "source": "utils/indicators.py:atr",
+        "used_by": ["regimes/volatility_classifier.py:atr (re-export)", "quant_engine (_atr_percentile)", "nnfx_engine (_adx)"],
+    },
+    {
+        "id": "atr_range_mean",
+        "name": "ATR (simplified range mean)",
+        "category": "volatility",
+        "description": "Mean of (high-low) over the last `period` bars, as a scalar. NOT true ATR — ignores gaps via prev-close. Deliberately different from atr_true_range; frozen per prod4 measurement, see source docstring.",
+        "default_params": {"period": 14},
+        "source": "utils/indicators.py:range_atr",
+        "used_by": ["smc_engine", "wyckoff_engine", "price_action_engine"],
+    },
+    {
+        "id": "atr_percentile",
+        "name": "ATR percentile",
+        "category": "volatility",
+        "description": "Current ATR's percentile rank within its own recent history (lookback bars).",
+        "default_params": {"period": 14, "lookback": 100},
+        "source": "engines/quant_engine.py:_atr_percentile",
+        "used_by": ["quant_engine (disabled in prod4)"],
+    },
+    {
+        "id": "volatility_classification",
+        "name": "Volatility regime (low/normal/high/extreme)",
+        "category": "volatility",
+        "description": "Classifies each bar's ATR relative to its own recent history into 4 labels.",
+        "default_params": {"period": 14, "lookback": 100},
+        "source": "regimes/volatility_classifier.py:classify_volatility",
+        "used_by": ["regime layer (soft regime weighting only — features.regime_gate hard gate is OFF, H024 NULL)"],
+    },
+    {
+        "id": "rsi_sma",
+        "name": "RSI (SMA-smoothed gain/loss)",
+        "category": "momentum",
+        "description": "Classic RSI with a simple rolling mean of gains/losses.",
+        "default_params": {"period": 14},
+        "source": "engines/price_action_engine.py:_rsi (identical copy in engines/quant_engine.py:_rsi)",
+        "used_by": ["price_action_engine", "quant_engine (disabled in prod4)"],
+    },
+    {
+        "id": "rsi_ewm",
+        "name": "RSI (EWM/Wilder-style smoothed gain/loss)",
+        "category": "momentum",
+        "description": "RSI variant using exponentially-weighted (alpha=1/period) gain/loss smoothing instead of a simple rolling mean — a different number from rsi_sma on the same series.",
+        "default_params": {"period": 14},
+        "source": "engines/divergence_engine.py:_rsi",
+        "used_by": ["divergence_engine (disabled in prod4)"],
+    },
+    {
+        "id": "macd",
+        "name": "MACD (line + signal)",
+        "category": "momentum",
+        "description": "EMA(fast)-EMA(slow) as the MACD line, EMA(signal) of that line as the signal line.",
+        "default_params": {"fast": 12, "slow": 26, "signal": 9},
+        "source": "engines/divergence_engine.py:_macd",
+        "used_by": ["divergence_engine (disabled in prod4)"],
+    },
+    {
+        "id": "bollinger_bands",
+        "name": "Bollinger Bands",
+        "category": "volatility",
+        "description": "Rolling mean +/- (std_mult * rolling std).",
+        "default_params": {"period": 20, "std": 2.0},
+        "source": "engines/price_action_engine.py:_bollinger",
+        "used_by": ["price_action_engine"],
+    },
+    {
+        "id": "ema",
+        "name": "EMA (exponential moving average)",
+        "category": "trend",
+        "description": "Standard exponential moving average, span=period.",
+        "default_params": {"period": None},
+        "source": "engines/nnfx_engine.py:_ema",
+        "used_by": ["nnfx_engine"],
+    },
+    {
+        "id": "adx",
+        "name": "ADX (Average Directional Index)",
+        "category": "trend",
+        "description": "Trend-strength (not direction) from smoothed +DI/-DI derived from true range.",
+        "default_params": {"period": 14},
+        "source": "engines/nnfx_engine.py:_adx",
+        "used_by": ["nnfx_engine"],
+    },
+    {
+        "id": "roc",
+        "name": "ROC (rate of change)",
+        "category": "momentum",
+        "description": "Percent change over `period` bars.",
+        "default_params": {"period": 10},
+        "source": "engines/quant_engine.py:_roc",
+        "used_by": ["quant_engine (disabled in prod4)"],
+    },
+]
+
+
+@router.get("/research/indicators")
+async def research_indicators(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Technical Indicator catalog (Dataset Builder, 2026-07-24) — see
+    _INDICATOR_CATALOG's module comment: a read-only inventory of the
+    indicator math already implemented in this codebase, grouped by
+    category, for the Dataset Builder to let a researcher see/select
+    which indicators back a chosen engine. Adds no new computation."""
+    _check_auth(x_api_key, iatis_session)
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    for ind in _INDICATOR_CATALOG:
+        by_category.setdefault(ind["category"], []).append(ind)
+    return {
+        "count": len(_INDICATOR_CATALOG),
+        "categories": by_category,
+        "indicators": _INDICATOR_CATALOG,
+    }
+
+
+# Dataset Builder / Scenario Testing config schema (2026-07-24) — describes
+# the REAL cost/scenario parameters backtest.runner.RunnerConfig and
+# backtesting.backtest_engine.BacktestConfig already accept, so the
+# frontend can build a form against actual fields instead of inventing
+# ones this system doesn't support. Two groups matter for interpreting a
+# scenario run:
+#   - cost/scenario fields: legitimate per-run overrides (spread via
+#     commission_pips, slippage_pips, swap, RR, sizing).
+#   - gate ablation flags: default ON because the backtest must simulate
+#     the SAME system that trades live; turning one off is an ABLATION
+#     STUDY, not a production tuning knob, and any result produced with a
+#     gate disabled must be labeled as an ablation in the result manifest
+#     (backtesting/backtest_engine.py's own docstring).
+_SCENARIO_CONFIG_FIELDS: list[dict[str, Any]] = [
+    {"field": "commission_pips", "group": "cost", "default": 0.5,
+     "description": "Spread/commission cost in pips, charged per trade. from_profile() defaults it to the REAL measured broker spread per symbol (REAL_SPREAD_PIPS) unless overridden."},
+    {"field": "slippage_pips", "group": "cost", "default": 0.5,
+     "description": "Slippage applied against the trader on entry and on SL exits (TP exits assumed filled at price). 0 disables it."},
+    {"field": "swap_pips_per_night", "group": "cost", "default": 0.0,
+     "description": "Rollover/financing cost in pips per UTC-day boundary held. Ships at 0.0 system-wide (data/swap_rates.json all zeros) until real per-symbol rates are filled in."},
+    {"field": "min_rr", "group": "risk", "default": 2.0,
+     "description": "Minimum reward:risk required for a setup to be taken. Aligned with production config.yaml risk.min_risk_reward."},
+    {"field": "sl_atr_multiplier", "group": "risk", "default": 2.5,
+     "description": "Stop-loss distance = ATR * this multiplier. Aligned with production config.yaml risk.sl_atr_multiplier."},
+    {"field": "risk_per_trade", "group": "risk", "default": 0.01,
+     "description": "Fraction of account balance risked per trade (fractional position sizing)."},
+    {"field": "initial_balance", "group": "risk", "default": 10000.0,
+     "description": "Starting simulated account balance."},
+    {"field": "warmup_bars", "group": "structural", "default": 210,
+     "description": "Bars consumed before the engine starts producing decisions (NNFX needs 210+ for EMA200)."},
+    {"field": "step_bars", "group": "structural", "default": 4,
+     "description": "Bar stride between simulated decision points."},
+    {"field": "asset_class", "group": "structural", "default": "forex",
+     "description": "Controls P&L math: 'forex' (pips*pip_size*lot*100000), 'metal'/'index' (price_diff*lot*dollar_per_point)."},
+    {"field": "start", "group": "dataset", "default": None,
+     "description": "Optional ISO date to slice the dataset's start (inclusive)."},
+    {"field": "end", "group": "dataset", "default": None,
+     "description": "Optional ISO date to slice the dataset's end (inclusive)."},
+]
+_SCENARIO_GATE_FLAGS: list[dict[str, Any]] = [
+    {"field": "use_mqs_gate", "default": True, "description": "Market Quality Score gate (session/volatility/day-of-week filter)."},
+    {"field": "use_regime_weights", "default": True, "description": "Regime-adaptive engine weighting. NOT the hard regime gate (features.regime_gate, OFF — H024 NULL)."},
+    {"field": "use_mtf_confirmation", "default": True, "description": "D1/H1 multi-timeframe alignment score adjustment."},
+    {"field": "use_reversal_veto", "default": True, "description": "H013 hard/soft reversal veto."},
+]
+# core/market_quality.py SESSIONS — the real session windows the MQS gate
+# scores against (UTC hour ranges, end < start means it crosses midnight).
+_SESSION_TEMPLATES: dict[str, dict[str, int]] = {
+    "Sydney": {"start_utc": 21, "end_utc": 6},
+    "Tokyo": {"start_utc": 23, "end_utc": 8},
+    "London": {"start_utc": 7, "end_utc": 16},
+    "NewYork": {"start_utc": 12, "end_utc": 21},
+}
+
+
+@router.get("/research/scenario-config")
+async def research_scenario_config(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Dataset Builder / Scenario Testing (2026-07-24): the real cost,
+    risk, and structural parameters a backtest scenario can vary
+    (backtest.runner.RunnerConfig / backtesting.backtest_engine.
+    BacktestConfig), the gate ablation flags (default ON — disabling one
+    is an ablation study, not a tuning knob), and the real session
+    templates the MQS gate scores against.
+
+    Two fields from the originally proposed field set are intentionally
+    absent because this system does not support them: tick-level data
+    (OHLC bars only, H1 native with H4/D1 resampled) and a configurable
+    timezone (every internal timestamp is UTC; SESSIONS below are how
+    session-of-day is actually derived). Data Provider / Data Quality are
+    already covered by /provider-chains and /research/symbols.
+    """
+    _check_auth(x_api_key, iatis_session)
+    return {
+        "scenario_fields": _SCENARIO_CONFIG_FIELDS,
+        "gate_flags": _SCENARIO_GATE_FLAGS,
+        "session_templates": _SESSION_TEMPLATES,
+        "data_mode": "ohlc_only",
+        "timezone": "UTC",
+        "not_supported": [
+            "tick_level_data — this system only ever simulates OHLC bars, no tick replay exists",
+            "configurable_timezone — every internal timestamp is UTC; use session_templates for session-of-day instead",
+        ],
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

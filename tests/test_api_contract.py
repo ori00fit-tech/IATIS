@@ -1359,11 +1359,15 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
-    # /research/symbols, and /research/integrity — all literal routes
-    # must still resolve to themselves, not be captured as
-    # hypothesis_id="manifests"/"symbols"/"integrity".
+    # /research/symbols, /research/engines, /research/indicators,
+    # /research/scenario-config, and /research/integrity — all literal
+    # routes must still resolve to themselves, not be captured as
+    # hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
+    assert client.get("/research/engines", headers=HDR).status_code == 200
+    assert client.get("/research/indicators", headers=HDR).status_code == 200
+    assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1431,3 +1435,67 @@ def test_research_symbols_groups_by_asset_class(client):
     assert any(s["internal"] == "EURUSD" for s in fx_majors)
     carriers = body["asset_classes"].get("metals", [])
     assert any(s["internal"] == "XAUUSD" for s in carriers)
+
+
+def test_research_engines_requires_auth(client):
+    assert client.get("/research/engines").status_code == 401
+
+
+def test_research_engines_reports_frozen_prod4_set(client):
+    # CLAUDE.md: engines enabled = smc, price_action, nnfx, wyckoff.
+    r = client.get("/research/engines", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_name = {e["name"]: e for e in body["engines"]}
+    for name in ("smc", "price_action", "nnfx", "wyckoff"):
+        assert by_name[name]["enabled"] is True, by_name[name]
+        assert by_name[name]["prod4"] is True
+    for name in ("divergence", "ict", "macro", "market_structure", "quant", "sentiment"):
+        assert by_name[name]["enabled"] is False, by_name[name]
+        assert by_name[name]["prod4"] is False
+    assert body["smc_full_spec"] is False  # H017 FAILED
+
+
+def test_research_indicators_requires_auth(client):
+    assert client.get("/research/indicators").status_code == 401
+
+
+def test_research_indicators_contract(client):
+    r = client.get("/research/indicators", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == len(body["indicators"])
+    assert body["count"] > 0
+    ids = {i["id"] for i in body["indicators"]}
+    # Both documented ATR variants and both RSI variants must be listed
+    # distinctly, per utils/indicators.py's own consolidation note — this
+    # endpoint must not silently merge them.
+    assert {"atr_true_range", "atr_range_mean", "rsi_sma", "rsi_ewm", "macd"}.issubset(ids)
+    for ind in body["indicators"]:
+        assert {"id", "name", "category", "description", "default_params", "source", "used_by"}.issubset(ind.keys())
+
+
+def test_research_scenario_config_requires_auth(client):
+    assert client.get("/research/scenario-config").status_code == 401
+
+
+def test_research_scenario_config_contract(client):
+    r = client.get("/research/scenario-config", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"scenario_fields", "gate_flags", "session_templates", "data_mode", "timezone", "not_supported"}.issubset(body.keys())
+    assert body["timezone"] == "UTC"
+    assert body["data_mode"] == "ohlc_only"
+
+    field_names = {f["field"] for f in body["scenario_fields"]}
+    assert {"commission_pips", "slippage_pips", "swap_pips_per_night", "min_rr", "sl_atr_multiplier"}.issubset(field_names)
+
+    gate_names = {g["field"] for g in body["gate_flags"]}
+    assert gate_names == {"use_mqs_gate", "use_regime_weights", "use_mtf_confirmation", "use_reversal_veto"}
+    # Gates are production-parity defaults, ON — disabling any is an
+    # ablation study, not a tuning knob (backtesting/backtest_engine.py).
+    assert all(g["default"] is True for g in body["gate_flags"])
+
+    assert set(body["session_templates"]) == {"Sydney", "Tokyo", "London", "NewYork"}
+    for session in body["session_templates"].values():
+        assert {"start_utc", "end_utc"}.issubset(session.keys())

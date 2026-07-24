@@ -50,29 +50,41 @@ logger = get_logger(__name__)
 
 
 # COT symbol mapping (CFTC contract names)
-COT_SYMBOLS = {
-    "EURUSD": "EURO FX",
-    "GBPUSD": "BRITISH POUND",
-    "USDJPY": "JAPANESE YEN",
-    "AUDUSD": "AUSTRALIAN DOLLAR",
-    "USDCAD": "CANADIAN DOLLAR",
-    # CFTC's contract is listed as "NZ DOLLAR" (not "NEW ZEALAND DOLLAR")
-    # as of the 2025 archive — confirmed 2026-07-24 via a real yearly
-    # archive probe (H012, research/results/registry.json) after the old
-    # name matched zero rows all year.
-    "NZDUSD": "NZ DOLLAR",
-    "USDCHF": "SWISS FRANC",
-    "XAUUSD": "GOLD",
-    "XAGUSD": "SILVER",
-    # CFTC's NYMEX WTI contract is now listed as "WTI FINANCIAL CRUDE
-    # OIL" (not "CRUDE OIL, LIGHT SWEET") — confirmed 2026-07-24. The old
-    # name only bare-prefix-matched a DIFFERENT, unintended contract
-    # ("CRUDE OIL, LIGHT SWEET-WTI - ICE FUTURES EUROPE", a European
-    # venue) — meaning any COT data USOIL ever picked up since this
-    # feature's 2026-07-09 wiring was tracking the wrong exchange's
-    # positioning, not the intended NYMEX/US benchmark contract.
-    "USOIL":  "WTI FINANCIAL CRUDE OIL",
-    "BTCUSD": "BITCOIN",
+# Each symbol maps to a TUPLE of acceptable CFTC contract names, not one
+# string — CFTC has renamed several currency contracts to shorter names
+# over the decades (confirmed 2026-07-24, H012/registry.json: a 2025-only
+# probe made "NZ DOLLAR"/"BRITISH POUND" look complete, but a deep 1986-
+# present backfill showed GBPUSD/NZDUSD's history silently truncated to
+# 2022-02-08 onward — CFTC's pre-2022 names were "BRITISH POUND STERLING"
+# and "NEW ZEALAND DOLLAR" respectively). Every alias is tried per row
+# (scripts/download_cot.py::iter_cot_rows); only one should ever match a
+# given year's report. Single-name symbols are still 1-tuples for a
+# uniform iteration shape.
+COT_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "EURUSD": ("EURO FX",),
+    # Renamed by CFTC at some point between 2015 and 2022 (exact
+    # transition date not pinned down); both forms accepted.
+    "GBPUSD": ("BRITISH POUND", "BRITISH POUND STERLING"),
+    "USDJPY": ("JAPANESE YEN",),
+    "AUDUSD": ("AUSTRALIAN DOLLAR",),
+    "USDCAD": ("CANADIAN DOLLAR",),
+    "NZDUSD": ("NZ DOLLAR", "NEW ZEALAND DOLLAR"),
+    "USDCHF": ("SWISS FRANC",),
+    "XAUUSD": ("GOLD",),
+    "XAGUSD": ("SILVER",),
+    # CFTC's NYMEX WTI contract is listed as "WTI FINANCIAL CRUDE OIL"
+    # (not "CRUDE OIL, LIGHT SWEET") — confirmed 2026-07-24. The old
+    # single name only bare-prefix-matched a DIFFERENT, unintended
+    # contract ("CRUDE OIL, LIGHT SWEET-WTI - ICE FUTURES EUROPE", a
+    # European venue) — meaning any COT data USOIL ever picked up since
+    # this feature's 2026-07-09 wiring was tracking the wrong exchange's
+    # positioning, not the intended NYMEX/US benchmark contract. Deep
+    # history for this specific name only reaches back to 2019 (real
+    # limitation of the corrected contract, not investigated further —
+    # an even older NYMEX WTI name may exist pre-2019 but hasn't been
+    # confirmed).
+    "USOIL":  ("WTI FINANCIAL CRUDE OIL",),
+    "BTCUSD": ("BITCOIN",),
 }
 
 

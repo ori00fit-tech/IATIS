@@ -82,23 +82,34 @@ def test_iter_cot_rows_requires_the_dash_delimiter_not_a_bare_prefix():
     assert list(iter_cot_rows(text)) == []
 
 
-# ── Stale contract names, found via the same real 2025-archive probe
-# (H012/registry.json, 2026-07-24). NZDUSD matched zero rows all year
-# under "NEW ZEALAND DOLLAR"; the real 2025 contract name is "NZ DOLLAR".
+# ── Renamed CFTC contracts, found via real archive probes (H012/
+# registry.json, 2026-07-24). A 2025-only probe first found NZDUSD
+# matching zero rows under "NEW ZEALAND DOLLAR" and "NZ DOLLAR" looked
+# like the fix — but a full 1986-present backfill then showed
+# GBPUSD/NZDUSD's history silently truncated to 2022-02-08 onward: CFTC
+# renamed both contracts around then ("BRITISH POUND STERLING" ->
+# "BRITISH POUND", "NEW ZEALAND DOLLAR" -> "NZ DOLLAR"). COT_SYMBOLS now
+# maps each symbol to a tuple of accepted aliases so BOTH eras match.
 # USOIL's old name ("CRUDE OIL, LIGHT SWEET") only bare-prefix-matched a
 # DIFFERENT, unintended contract at ICE Futures Europe — the real NYMEX
 # WTI contract is listed as "WTI FINANCIAL CRUDE OIL". ──
 
-def test_nzdusd_matches_the_current_cftc_contract_name():
-    text = _row("NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000)
-    parsed = parse_cot_text(text)
-    assert "NZDUSD" in parsed
-    assert parsed["NZDUSD"]["large_spec_net"] == 2_000
+def test_nzdusd_matches_both_the_current_and_pre_2022_contract_name():
+    current = _row("NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000)
+    pre_2022 = _row("NEW ZEALAND DOLLAR - CHICAGO MERCANTILE EXCHANGE", 30000, 5000, 4000)
+    parsed_current = parse_cot_text(current)
+    parsed_pre_2022 = parse_cot_text(pre_2022)
+    assert parsed_current["NZDUSD"]["large_spec_net"] == 2_000
+    assert parsed_pre_2022["NZDUSD"]["large_spec_net"] == 1_000
 
 
-def test_nzdusd_old_stale_name_no_longer_matches_anything():
-    text = _row("NEW ZEALAND DOLLAR - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000)
-    assert parse_cot_text(text) == {}
+def test_gbpusd_matches_both_the_current_and_pre_2022_contract_name():
+    current = _row("BRITISH POUND - CHICAGO MERCANTILE EXCHANGE", 80000, 30000, 20000)
+    pre_2022 = _row("BRITISH POUND STERLING - CHICAGO MERCANTILE EXCHANGE", 70000, 25000, 15000)
+    parsed_current = parse_cot_text(current)
+    parsed_pre_2022 = parse_cot_text(pre_2022)
+    assert parsed_current["GBPUSD"]["large_spec_net"] == 10_000
+    assert parsed_pre_2022["GBPUSD"]["large_spec_net"] == 10_000
 
 
 def test_usoil_matches_the_nymex_contract_not_the_ice_europe_one():

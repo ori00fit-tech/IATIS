@@ -272,6 +272,94 @@ async def research_indicators(
     }
 
 
+# Dataset Builder / Scenario Testing config schema (2026-07-24) — describes
+# the REAL cost/scenario parameters backtest.runner.RunnerConfig and
+# backtesting.backtest_engine.BacktestConfig already accept, so the
+# frontend can build a form against actual fields instead of inventing
+# ones this system doesn't support. Two groups matter for interpreting a
+# scenario run:
+#   - cost/scenario fields: legitimate per-run overrides (spread via
+#     commission_pips, slippage_pips, swap, RR, sizing).
+#   - gate ablation flags: default ON because the backtest must simulate
+#     the SAME system that trades live; turning one off is an ABLATION
+#     STUDY, not a production tuning knob, and any result produced with a
+#     gate disabled must be labeled as an ablation in the result manifest
+#     (backtesting/backtest_engine.py's own docstring).
+_SCENARIO_CONFIG_FIELDS: list[dict[str, Any]] = [
+    {"field": "commission_pips", "group": "cost", "default": 0.5,
+     "description": "Spread/commission cost in pips, charged per trade. from_profile() defaults it to the REAL measured broker spread per symbol (REAL_SPREAD_PIPS) unless overridden."},
+    {"field": "slippage_pips", "group": "cost", "default": 0.5,
+     "description": "Slippage applied against the trader on entry and on SL exits (TP exits assumed filled at price). 0 disables it."},
+    {"field": "swap_pips_per_night", "group": "cost", "default": 0.0,
+     "description": "Rollover/financing cost in pips per UTC-day boundary held. Ships at 0.0 system-wide (data/swap_rates.json all zeros) until real per-symbol rates are filled in."},
+    {"field": "min_rr", "group": "risk", "default": 2.0,
+     "description": "Minimum reward:risk required for a setup to be taken. Aligned with production config.yaml risk.min_risk_reward."},
+    {"field": "sl_atr_multiplier", "group": "risk", "default": 2.5,
+     "description": "Stop-loss distance = ATR * this multiplier. Aligned with production config.yaml risk.sl_atr_multiplier."},
+    {"field": "risk_per_trade", "group": "risk", "default": 0.01,
+     "description": "Fraction of account balance risked per trade (fractional position sizing)."},
+    {"field": "initial_balance", "group": "risk", "default": 10000.0,
+     "description": "Starting simulated account balance."},
+    {"field": "warmup_bars", "group": "structural", "default": 210,
+     "description": "Bars consumed before the engine starts producing decisions (NNFX needs 210+ for EMA200)."},
+    {"field": "step_bars", "group": "structural", "default": 4,
+     "description": "Bar stride between simulated decision points."},
+    {"field": "asset_class", "group": "structural", "default": "forex",
+     "description": "Controls P&L math: 'forex' (pips*pip_size*lot*100000), 'metal'/'index' (price_diff*lot*dollar_per_point)."},
+    {"field": "start", "group": "dataset", "default": None,
+     "description": "Optional ISO date to slice the dataset's start (inclusive)."},
+    {"field": "end", "group": "dataset", "default": None,
+     "description": "Optional ISO date to slice the dataset's end (inclusive)."},
+]
+_SCENARIO_GATE_FLAGS: list[dict[str, Any]] = [
+    {"field": "use_mqs_gate", "default": True, "description": "Market Quality Score gate (session/volatility/day-of-week filter)."},
+    {"field": "use_regime_weights", "default": True, "description": "Regime-adaptive engine weighting. NOT the hard regime gate (features.regime_gate, OFF — H024 NULL)."},
+    {"field": "use_mtf_confirmation", "default": True, "description": "D1/H1 multi-timeframe alignment score adjustment."},
+    {"field": "use_reversal_veto", "default": True, "description": "H013 hard/soft reversal veto."},
+]
+# core/market_quality.py SESSIONS — the real session windows the MQS gate
+# scores against (UTC hour ranges, end < start means it crosses midnight).
+_SESSION_TEMPLATES: dict[str, dict[str, int]] = {
+    "Sydney": {"start_utc": 21, "end_utc": 6},
+    "Tokyo": {"start_utc": 23, "end_utc": 8},
+    "London": {"start_utc": 7, "end_utc": 16},
+    "NewYork": {"start_utc": 12, "end_utc": 21},
+}
+
+
+@router.get("/research/scenario-config")
+async def research_scenario_config(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Dataset Builder / Scenario Testing (2026-07-24): the real cost,
+    risk, and structural parameters a backtest scenario can vary
+    (backtest.runner.RunnerConfig / backtesting.backtest_engine.
+    BacktestConfig), the gate ablation flags (default ON — disabling one
+    is an ablation study, not a tuning knob), and the real session
+    templates the MQS gate scores against.
+
+    Two fields from the originally proposed field set are intentionally
+    absent because this system does not support them: tick-level data
+    (OHLC bars only, H1 native with H4/D1 resampled) and a configurable
+    timezone (every internal timestamp is UTC; SESSIONS below are how
+    session-of-day is actually derived). Data Provider / Data Quality are
+    already covered by /provider-chains and /research/symbols.
+    """
+    _check_auth(x_api_key, iatis_session)
+    return {
+        "scenario_fields": _SCENARIO_CONFIG_FIELDS,
+        "gate_flags": _SCENARIO_GATE_FLAGS,
+        "session_templates": _SESSION_TEMPLATES,
+        "data_mode": "ohlc_only",
+        "timezone": "UTC",
+        "not_supported": [
+            "tick_level_data — this system only ever simulates OHLC bars, no tick replay exists",
+            "configurable_timezone — every internal timestamp is UTC; use session_templates for session-of-day instead",
+        ],
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

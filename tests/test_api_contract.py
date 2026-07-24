@@ -1359,13 +1359,15 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
-    # /research/symbols, /research/engines, /research/indicators, and
-    # /research/integrity — all literal routes must still resolve to
-    # themselves, not be captured as hypothesis_id="manifests"/etc.
+    # /research/symbols, /research/engines, /research/indicators,
+    # /research/scenario-config, and /research/integrity — all literal
+    # routes must still resolve to themselves, not be captured as
+    # hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
+    assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1471,3 +1473,29 @@ def test_research_indicators_contract(client):
     assert {"atr_true_range", "atr_range_mean", "rsi_sma", "rsi_ewm", "macd"}.issubset(ids)
     for ind in body["indicators"]:
         assert {"id", "name", "category", "description", "default_params", "source", "used_by"}.issubset(ind.keys())
+
+
+def test_research_scenario_config_requires_auth(client):
+    assert client.get("/research/scenario-config").status_code == 401
+
+
+def test_research_scenario_config_contract(client):
+    r = client.get("/research/scenario-config", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"scenario_fields", "gate_flags", "session_templates", "data_mode", "timezone", "not_supported"}.issubset(body.keys())
+    assert body["timezone"] == "UTC"
+    assert body["data_mode"] == "ohlc_only"
+
+    field_names = {f["field"] for f in body["scenario_fields"]}
+    assert {"commission_pips", "slippage_pips", "swap_pips_per_night", "min_rr", "sl_atr_multiplier"}.issubset(field_names)
+
+    gate_names = {g["field"] for g in body["gate_flags"]}
+    assert gate_names == {"use_mqs_gate", "use_regime_weights", "use_mtf_confirmation", "use_reversal_veto"}
+    # Gates are production-parity defaults, ON — disabling any is an
+    # ablation study, not a tuning knob (backtesting/backtest_engine.py).
+    assert all(g["default"] is True for g in body["gate_flags"])
+
+    assert set(body["session_templates"]) == {"Sydney", "Tokyo", "London", "NewYork"}
+    for session in body["session_templates"].values():
+        assert {"start_utc", "end_utc"}.issubset(session.keys())

@@ -100,7 +100,35 @@ CLAUDE.md rule 6; an adopted delay would reset the prospective counter
 and therefore waits for it like H018). FROZEN like every open hypothesis.
 
 ## Status
-`PLANNED`
+`NULL`
+
+## Result (2026-07-24, VPS run)
+Validity check passed on every symbol (delay-0 replay reproduced arm A's
+captured trades exactly). Arm A pooled TEST PF=1.12, n=1187 — identical
+to H024's and H033's arm-A baseline on the same shared harness, a third
+independent confirmation of harness fidelity.
+
+| Delay | Test PF | n | dPF | Retention | Symbol win frac | Carriers PF |
+|---|---|---|---|---|---|---|
+| B(1) | 1.083 | 1060 | −0.037 | 0.893 | 0.579 | 1.230 |
+| B(2) | 1.041 | 1029 | −0.079 | 0.867 | 0.263 | 1.188 |
+| B(3) | 1.027 | 1006 | −0.093 | 0.848 | 0.316 | 1.085 |
+
+Applying the pre-registered rule literally: no delay reaches dPF ≥ +0.15
+(all three are negative), so none qualifies for ADOPT. All three
+|dPF| < 0.15 with retention ≥ 80% held on every delay → **NULL**: entry
+timing is immaterial at H4. Consistent with the direction predicted
+before running ("expected NULL or worse") — the null was not a surprise
+reframed after the fact. Note the *direction* is monotonically negative
+and worsening with longer delays (−0.037 → −0.079 → −0.093), and the
+symbol win fraction collapses well below the 60% cherry-pick guard at
+every delay (0.579/0.263/0.316) — waiting does not "buy a better entry"
+at H4; if anything the drift is mildly adverse, just not large enough to
+cross the ADOPT-or-FAILED threshold in either direction beyond NULL.
+
+Live/config unaffected: no feature flag was ever created (none is
+created unless ADOPT). Regardless of verdict this was measurement only
+(CLAUDE.md rule 6).
 
 ## Linked experiment
 `research/experiments/H037_decision_delay.py`

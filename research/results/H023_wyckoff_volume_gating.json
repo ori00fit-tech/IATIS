@@ -1,0 +1,89 @@
+{
+  "hypothesis": "H023",
+  "generated_at": "2026-07-24T04:01:31.925166+00:00",
+  "train_frac": 0.65,
+  "decision_rule": {
+    "min_pooled_fx_dPF": 0.1,
+    "min_pooled_fx_test_n": 100,
+    "min_symbol_sign_frac": 0.7142857142857143,
+    "max_control_degradation": 0.05
+  },
+  "pooled_fx_A": {
+    "test_PF": 0.981,
+    "test_n": 1089
+  },
+  "pooled_fx_B": {
+    "test_PF": 0.981,
+    "test_n": 1089
+  },
+  "pooled_controls_A": {
+    "test_PF": 1.35,
+    "test_n": 326
+  },
+  "pooled_controls_B": {
+    "test_PF": 1.35,
+    "test_n": 326
+  },
+  "per_symbol": {
+    "EURUSD": {
+      "test_n_A": 145,
+      "test_PF_A": 0.884,
+      "test_n_B": 145,
+      "test_PF_B": 0.884,
+      "dPF": 0.0
+    },
+    "GBPUSD": {
+      "test_n_A": 169,
+      "test_PF_A": 0.963,
+      "test_n_B": 169,
+      "test_PF_B": 0.963,
+      "dPF": 0.0
+    },
+    "USDJPY": {
+      "test_n_A": 168,
+      "test_PF_A": 1.089,
+      "test_n_B": 168,
+      "test_PF_B": 1.089,
+      "dPF": 0.0
+    },
+    "USDCHF": {
+      "test_n_A": 156,
+      "test_PF_A": 1.023,
+      "test_n_B": 156,
+      "test_PF_B": 1.023,
+      "dPF": 0.0
+    },
+    "EURJPY": {
+      "test_n_A": 155,
+      "test_PF_A": 0.932,
+      "test_n_B": 155,
+      "test_PF_B": 0.932,
+      "dPF": 0.0
+    },
+    "GBPJPY": {
+      "test_n_A": 143,
+      "test_PF_A": 0.777,
+      "test_n_B": 143,
+      "test_PF_B": 0.777,
+      "dPF": 0.0
+    },
+    "AUDJPY": {
+      "test_n_A": 153,
+      "test_PF_A": 1.125,
+      "test_n_B": 153,
+      "test_PF_B": 1.125,
+      "dPF": 0.0
+    }
+  },
+  "verdict": "NULL (Wyckoff FX volume mode immaterial at system level)",
+  "verdict_reasons": [
+    "pooled FX dPF=0.0 \u2014 below the +/-0.10 material threshold"
+  ],
+  "checks": {
+    "1_pooled_fx_dPF>=0.10": false,
+    "2_pooled_fx_test_n>=100": true,
+    "3_symbol_sign_frac>=5/7": true,
+    "4_controls_not_degraded": true
+  },
+  "note": "Verdict from the pre-registered rule (registry H023, 2026-07-18) applied literally. Measurement only (rule 6) \u2014 engines/wyckoff_engine.py and the live pipeline are untouched; arm B only zeroes FX volume in the harness's own injected DataFrame before run_pipeline() sees it."
+}

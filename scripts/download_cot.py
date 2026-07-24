@@ -82,9 +82,25 @@ def iter_cot_rows(text: str):
     annual.txt, same column layout). Callers decide how to combine
     multiple rows per symbol; this generator itself does no deduping.
 
-    Matching: the CFTC market name must START WITH the mapped contract
-    name (e.g. 'EURO FX - CHICAGO MERCANTILE EXCHANGE') and must not be a
-    micro/mini variant ('MICRO BITCOIN - ...' is a different contract).
+    Matching: the CFTC market name must be the mapped contract name
+    followed by CFTC's own " - " separator before the exchange name (e.g.
+    'EURO FX - CHICAGO MERCANTILE EXCHANGE') and must not be a micro/mini
+    variant ('MICRO BITCOIN - ...' is a different contract).
+
+    A bare startswith() (no delimiter) was tried first and found WRONG
+    2026-07-24 via a real yearly-archive probe (H012,
+    research/results/registry.json): 'EURO FX' also prefix-matches CFTC's
+    separately-reported cross-rate contracts ('EURO FX/BRITISH POUND
+    XRATE - ...', 'EURO FX/JAPANESE YEN XRATE - ...') and 'GOLD'
+    prefix-matches an unrelated Coinbase Derivatives contract ('GOLD -1
+    TROY OUNCE - COINBASE DERIVATIVES, LLC') alongside the real COMEX
+    contract — silently inflating a year's expected ~52 weekly rows to
+    120 for EURUSD. This bug predates this generator's extraction and was
+    already live in the weekly current-file collector (the same
+    COT_SYMBOLS/matching logic), not introduced by the yearly-archive
+    script that happened to surface it (a single current-week file's
+    dict-overwrite semantics hid the contamination — only a multi-week
+    row count made it visible).
     """
     reader = csv.reader(io.StringIO(text))
     for row in reader:
@@ -94,7 +110,7 @@ def iter_cot_rows(text: str):
         if market.startswith(_EXCLUDED_PREFIXES):
             continue
         for internal, contract in COT_SYMBOLS.items():
-            if not market.startswith(contract.upper()):
+            if not market.startswith(contract.upper() + " - "):
                 continue
             try:
                 oi = _to_int(row[_IDX_OI])

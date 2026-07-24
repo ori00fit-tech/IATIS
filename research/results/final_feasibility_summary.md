@@ -40,11 +40,22 @@ hypotheses are blocked by data availability today.**
 
 ## What actually needs doing (concrete, non-blocking)
 
-1. ~~Write a CFTC yearly-archive backfill script for H012~~ — **DONE
-   2026-07-24** (`scripts/download_cot_deep_history.py`). Remaining step:
-   run `--probe` on the VPS once to confirm the URL/zip-format assumptions
-   (verified against a working open-source library, not guessed, but not
-   yet hit against the real network) before trusting a full backfill.
+1. ~~Write a CFTC yearly-archive backfill script for H012~~ — **DONE AND
+   PROBED 2026-07-24** (`scripts/download_cot_deep_history.py`). The
+   `--probe` run against the real VPS network caught a genuine bug:
+   EURUSD returned 120 rows/year instead of ~52 because the shared
+   contract-matching logic (used by BOTH this script and the already-live
+   weekly collector) was also catching CFTC's EUR cross-rate contracts
+   and an unrelated Coinbase gold contract. **Fixed same day** (exact
+   CFTC field-delimiter match instead of a bare prefix), 3 regression
+   tests added reproducing the real market names found. The production
+   `data/cot/*.json` cache should be rebuilt fresh after the fix deploys.
+   Separately unresolved: NZDUSD isn't present under its mapped name in
+   the 2025 archive at all — flagged, not a matching bug, not investigated
+   further. This is exactly the kind of silent data-corruption class this
+   audit exists to catch, and it would not have surfaced without the
+   live VPS probe — see `data_feasibility_report.md` Part B.2's second
+   update for the full account.
 2. ~~Confirm `iatis-marketaux-collect.timer` is actually enabled~~ —
    **CONFIRMED 2026-07-24** on the VPS: timer active, 21 sentiment records
    already collected, next fire on schedule.

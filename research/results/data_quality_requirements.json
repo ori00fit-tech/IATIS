@@ -37,17 +37,17 @@
     "cot_h012": {
       "checks": {
         "missing_timestamps": {"implemented": false, "recommended": "no explicit check for a skipped weekly release (CFTC has delayed/skipped COT during past government shutdowns — a real, expected gap that should be distinguished from a scraper failure)"},
-        "duplicate_timestamps": {"implemented": "partial", "note": "current 12-week rolling cache structure implicitly avoids duplicates by construction; a new deep-archive backfill script would need its own explicit dedup on (symbol, report_date)"},
+        "duplicate_timestamps": {"implemented": true, "reference": "download_cot_deep_history.py::merge_into_history() dedupes on (symbol, report_date), tested (tests/test_cot_deep_history.py)"},
         "future_timestamps": {"implemented": false, "recommended": "not currently checked"},
         "holiday_gaps": {"implemented": "not applicable — weekly cadence, not daily"},
         "maintenance_gaps": {"implemented": "not applicable"},
         "outliers": {"implemented": false, "recommended": "large week-over-week net-positioning swings are not flagged; could indicate a parser misalignment against CFTC's fixed-width column layout rather than a real market event"},
-        "impossible_values": {"implemented": false, "recommended": "net position values inconsistent with total open interest for the same contract are not cross-checked"},
+        "impossible_values": {"implemented": "partial", "reference": "the pre-existing sanity check (nc_long/nc_short cannot exceed open interest) catches gross column-layout drift, but did NOT catch the cross-contract contamination found 2026-07-24 (contaminating rows had internally-consistent, plausible OI/long/short values of their own — the bug was matching the wrong contract entirely, not a malformed one)"},
         "negative_oi": {"implemented": "not applicable — COT reports net speculator positioning, not raw OI, though a sanity cross-check against total OI would be a reasonable addition"},
         "funding_spikes": {"implemented": "not applicable to this domain"},
         "corporate_actions": {"implemented": "not applicable"},
         "contract_rollovers": {"implemented": "not applicable — COT aggregates across all contract months for a given commodity"},
-        "exchange_migrations": {"implemented": false, "recommended": "CFTC occasionally renames/reclassifies instruments across years — a deep-archive backfill script must handle this explicitly or silently mis-map older records"}
+        "exchange_migrations": {"implemented": "partial — FOUND AND FIXED 2026-07-24", "reference": "real yearly-archive probe found a bare startswith() contract-name match silently pulling in CFTC's separately-listed EUR cross-rate contracts and an unrelated Coinbase gold contract into EURUSD/XAUUSD's data (research/results/registry.json H012 data_quality_bug_found_and_fixed). Fixed by requiring the exact ' - ' field delimiter CFTC's own format uses. This was live in BOTH the new deep-history script and the already-running weekly production collector (shared iter_cot_rows()) before the fix. UNRESOLVED separately: NZDUSD matched zero rows in the 2025 archive under its mapped contract name — not a matching bug (confirmed via a full-file substring search), the contract may have been renamed or is no longer reported; not investigated further."}
       }
     },
     "crypto_positioning_h019": {

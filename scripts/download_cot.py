@@ -209,7 +209,14 @@ def main() -> int:
 
     logger.info(f"Fetching {args.url}")
     try:
-        with urllib.request.urlopen(args.url, timeout=30) as resp:
+        # A User-Agent is required — confirmed 2026-07-24 on the VPS: a
+        # bare urlopen() (no headers) now gets HTTP 403 from cftc.gov,
+        # while the identical request with a User-Agent succeeds (410KB
+        # returned). This collector had no headers at all before; the
+        # yearly-archive script (scripts/download_cot_deep_history.py)
+        # already set one and never hit this.
+        req = urllib.request.Request(args.url, headers={"User-Agent": "IATIS-research/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
             text = resp.read().decode("utf-8", errors="replace")
     except Exception as exc:
         logger.error(f"COT fetch failed: {exc}")

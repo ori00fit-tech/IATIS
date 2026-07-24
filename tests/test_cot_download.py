@@ -82,6 +82,35 @@ def test_iter_cot_rows_requires_the_dash_delimiter_not_a_bare_prefix():
     assert list(iter_cot_rows(text)) == []
 
 
+# ── Stale contract names, found via the same real 2025-archive probe
+# (H012/registry.json, 2026-07-24). NZDUSD matched zero rows all year
+# under "NEW ZEALAND DOLLAR"; the real 2025 contract name is "NZ DOLLAR".
+# USOIL's old name ("CRUDE OIL, LIGHT SWEET") only bare-prefix-matched a
+# DIFFERENT, unintended contract at ICE Futures Europe — the real NYMEX
+# WTI contract is listed as "WTI FINANCIAL CRUDE OIL". ──
+
+def test_nzdusd_matches_the_current_cftc_contract_name():
+    text = _row("NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000)
+    parsed = parse_cot_text(text)
+    assert "NZDUSD" in parsed
+    assert parsed["NZDUSD"]["large_spec_net"] == 2_000
+
+
+def test_nzdusd_old_stale_name_no_longer_matches_anything():
+    text = _row("NEW ZEALAND DOLLAR - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000)
+    assert parse_cot_text(text) == {}
+
+
+def test_usoil_matches_the_nymex_contract_not_the_ice_europe_one():
+    text = "\n".join([
+        _row("WTI FINANCIAL CRUDE OIL - NEW YORK MERCANTILE EXCHANGE", 900000, 300000, 250000),
+        _row("CRUDE OIL, LIGHT SWEET-WTI - ICE FUTURES EUROPE", 200000, 60000, 55000),
+    ])
+    parsed = parse_cot_text(text)
+    assert parsed["USOIL"]["market"] == "WTI FINANCIAL CRUDE OIL - NEW YORK MERCANTILE EXCHANGE"
+    assert parsed["USOIL"]["large_spec_net"] == 50_000
+
+
 def test_update_caches_builds_history_and_4w_change(tmp_path, monkeypatch):
     monkeypatch.setenv("IATIS_COT_DIR", str(tmp_path))
     now = time.time()

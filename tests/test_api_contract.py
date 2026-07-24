@@ -900,7 +900,15 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # backtest added 2026-07-16 (operator request): the one parameterized
     # job — symbols are validated against the configured universe
     # server-side, so the argv is still never user-shaped.
-    assert ids == {"verify_data_integrity", "forward_review", "backup_d1", "backtest"}
+    # hypothesis_H019/H023/H024/H033/H037/H103 added 2026-07-24 (Research
+    # Workspace): existing, already-tested, pre-registered A/B runners,
+    # deliberately NOT parameterized — each always runs its own
+    # registered fixed method, never dashboard-chosen symbols/step.
+    assert ids == {
+        "verify_data_integrity", "forward_review", "backup_d1", "backtest",
+        "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
+        "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
+    }
 
 
 def test_experiment_job_catalog_categorizes_ops_vs_research(client):
@@ -1066,6 +1074,90 @@ def test_experiments_list_includes_started_jobs(client, monkeypatch):
     body = client.get("/experiments", headers=HDR).json()
     assert any(j["job_id"] == job_id for j in body["jobs"])
     _wait_for_job(client, job_id)  # drain before the test ends
+
+
+def test_experiments_cancel_requires_auth(client):
+    assert client.post("/experiments/some-job-id/cancel").status_code == 401
+
+
+def test_experiments_cancel_unknown_job_404s(client):
+    assert client.post("/experiments/nonexistent-job-id/cancel", headers=HDR).status_code == 404
+
+
+def test_experiments_cancel_a_queued_job(client, monkeypatch):
+    """A job that has not yet been picked up by a worker thread: cancel
+    must flip status to 'cancelled' via future.cancel() before _run_job
+    ever executes. Saturate the 2-worker pool with a slow job first so the
+    second submission stays queued long enough to cancel."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {
+        "blocker_job_a": [sys.executable, "-c", "import time; time.sleep(2)"],
+        "blocker_job_b": [sys.executable, "-c", "import time; time.sleep(2)"],
+        "queued_job": [sys.executable, "-c", "print('should not run')"],
+    })
+
+    r_a = client.post("/experiments/run", json={"job": "blocker_job_a"}, headers=HDR)
+    r_b = client.post("/experiments/run", json={"job": "blocker_job_b"}, headers=HDR)
+    assert r_a.status_code == 200 and r_b.status_code == 200
+
+    r_q = client.post("/experiments/run", json={"job": "queued_job"}, headers=HDR)
+    assert r_q.status_code == 200, r_q.text
+    job_id = r_q.json()["job_id"]
+    assert r_q.json()["status"] == "queued"
+
+    r_cancel = client.post(f"/experiments/{job_id}/cancel", headers=HDR)
+    assert r_cancel.status_code == 200, r_cancel.text
+    assert r_cancel.json()["status"] == "cancelled"
+
+    _wait_for_job(client, r_a.json()["job_id"])
+    _wait_for_job(client, r_b.json()["job_id"])
+
+    final = client.get(f"/experiments/{job_id}", headers=HDR).json()
+    assert final["status"] == "cancelled"
+    assert not any("should not run" in line for line in final["log"])
+
+
+def test_experiments_cancel_a_running_job(client, monkeypatch):
+    """A job actually mid-flight: cancel must kill the real subprocess and
+    _run_job()'s own checkpoints must leave status=='cancelled' alone
+    instead of overwriting it with 'finished'/'failed'/'timeout'."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {
+        "long_job": [sys.executable, "-c", "import time; time.sleep(10)"],
+    })
+
+    r = client.post("/experiments/run", json={"job": "long_job"}, headers=HDR)
+    job_id = r.json()["job_id"]
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if client.get(f"/experiments/{job_id}", headers=HDR).json()["status"] == "running":
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("job never reached running status")
+
+    r_cancel = client.post(f"/experiments/{job_id}/cancel", headers=HDR)
+    assert r_cancel.status_code == 200, r_cancel.text
+    assert r_cancel.json()["status"] == "cancelled"
+
+    body = _wait_for_job(client, job_id)
+    assert body["status"] == "cancelled", body
+
+
+def test_experiments_cancel_already_terminal_job_409s(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"finished_job": [sys.executable, "-c", "print('done')"]})
+
+    r = client.post("/experiments/run", json={"job": "finished_job"}, headers=HDR)
+    job_id = r.json()["job_id"]
+    _wait_for_job(client, job_id)
+
+    r_cancel = client.post(f"/experiments/{job_id}/cancel", headers=HDR)
+    assert r_cancel.status_code == 409
 
 
 # ---------------------------------------------------------------------------

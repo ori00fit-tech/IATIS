@@ -1358,10 +1358,12 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 
 
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
-    # /research/{hypothesis_id} is registered after /research/manifests
-    # and /research/integrity — both literal routes must still resolve
-    # to themselves, not be captured as hypothesis_id="manifests"/"integrity".
+    # /research/{hypothesis_id} is registered after /research/manifests,
+    # /research/symbols, and /research/integrity — all literal routes
+    # must still resolve to themselves, not be captured as
+    # hypothesis_id="manifests"/"symbols"/"integrity".
     assert client.get("/research/manifests", headers=HDR).status_code == 200
+    assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1399,3 +1401,33 @@ def test_research_manifests_contract(client):
     for m in body["manifests"]:
         assert {"file", "kind", "generated_at", "reproducible",
                 "git_commit", "datasets_count"}.issubset(m.keys())
+
+
+def test_research_symbols_requires_auth(client):
+    assert client.get("/research/symbols").status_code == 401
+
+
+def test_research_symbols_contract(client):
+    r = client.get("/research/symbols", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"asset_classes", "native_timeframes", "chains"}.issubset(body.keys())
+
+
+def test_research_symbols_includes_disabled_watchlist_entries(client):
+    # Symbol Manager must show the FULL universe (unlike /symbol-health and
+    # /provider-chains, which only report on live-enabled symbols) — e.g.
+    # the equity/etf WATCHLIST entries added 2026-07-24 are enabled:false.
+    r = client.get("/research/symbols", headers=HDR)
+    body = r.json()
+    equities = body["asset_classes"].get("equity", [])
+    assert any(s["internal"] == "AAPL" and s["enabled"] is False and s["status"] == "WATCHLIST" for s in equities)
+
+
+def test_research_symbols_groups_by_asset_class(client):
+    r = client.get("/research/symbols", headers=HDR)
+    body = r.json()
+    fx_majors = body["asset_classes"].get("fx_major", [])
+    assert any(s["internal"] == "EURUSD" for s in fx_majors)
+    carriers = body["asset_classes"].get("metals", [])
+    assert any(s["internal"] == "XAUUSD" for s in carriers)

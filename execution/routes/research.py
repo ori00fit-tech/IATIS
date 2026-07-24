@@ -48,6 +48,51 @@ async def research_manifests(
     return {"count": len(manifests), "manifests": manifests}
 
 
+@router.get("/research/symbols")
+async def research_symbols(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Symbol Manager + Timeframe Selector (Research Workspace, 2026-07-24):
+    the FULL symbol universe from config/symbols.yaml, grouped by asset
+    class, including disabled/WATCHLIST/RETIRED entries with their
+    governance metadata (status/status_reason) — unlike /symbol-health and
+    /provider-chains, which only report on the live-enabled subset. Also
+    surfaces each provider's native timeframe coverage so the frontend can
+    restrict the Timeframe Selector to what a chosen symbol can actually
+    serve.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from core.data_providers import DEFAULT_CHAINS, _NATIVE_TF, provider_chain_for, symbol_class
+
+    config = _get_config()
+    overrides = config.get("data", {}).get("provider_chains") or {}
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+
+    by_asset_class: dict[str, list[dict[str, Any]]] = {}
+    for s in symbols_cfg:
+        internal = s.get("internal", "")
+        entry = {
+            "internal": internal,
+            "symbol": s.get("symbol", internal),
+            "enabled": bool(s.get("enabled", False)),
+            "status": s.get("status", "UNKNOWN"),
+            "status_reason": s.get("status_reason", ""),
+            "status_since": s.get("status_since"),
+            "min_score": s.get("min_score"),
+            "rr": s.get("rr"),
+            "provider_chain": provider_chain_for(internal, overrides) if internal else [],
+        }
+        asset_class = s.get("asset_class") or symbol_class(internal) or "unknown"
+        by_asset_class.setdefault(asset_class, []).append(entry)
+
+    return {
+        "asset_classes": by_asset_class,
+        "native_timeframes": {p: sorted(tfs) for p, tfs in _NATIVE_TF.items()},
+        "chains": {cls: (overrides.get(cls) or chain) for cls, chain in DEFAULT_CHAINS.items()},
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

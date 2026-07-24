@@ -83,6 +83,26 @@ _PROCESS_LOCK_PATH = Path(__file__).resolve().parent.parent / "storage" / "ctrad
 _process_lock_file = None  # module-level: one lock per process, not per client instance
 
 
+_TRENDBAR_PERIOD_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30,
+                            "H1": 60, "H4": 240, "D1": 1440}
+
+
+def _trendbar_window(count: int, period: str, to_timestamp_ms: int | None,
+                     now_ms: int) -> tuple[int, int]:
+    """Pure window-math for get_trendbars(): (from_ms, to_ms) for a
+    request of up to `count` bars ending at `to_timestamp_ms` (or `now_ms`
+    if None). Split out of get_trendbars so backward-pagination arithmetic
+    (scripts/download_ctrader_fx_history.py) is unit-testable without a
+    live cTrader connection."""
+    period_minutes = _TRENDBAR_PERIOD_MINUTES.get(period, 240)
+    to_ms = int(to_timestamp_ms) if to_timestamp_ms is not None else now_ms
+    # Over-fetch the calendar window by ~1.5x: markets close nights/
+    # weekends, so `count` bars span more wall-clock than count*period.
+    # cTrader caps the returned count anyway, so a wider window is safe.
+    from_ms = to_ms - int(count * period_minutes * 60_000 * 1.6)
+    return from_ms, to_ms
+
+
 class DuplicateSessionError(Exception):
     """Raised when another OS process already holds the cTrader session lock."""
 
@@ -1267,12 +1287,20 @@ class CTraderClient:
             self._trendbar_event.set()
 
     def get_trendbars(self, symbol: str, period: str = "H4",
-                      count: int = 1000, timeout: float = 25.0) -> list[dict]:
+                      count: int = 1000, timeout: float = 25.0,
+                      to_timestamp_ms: int | None = None) -> list[dict]:
         """Fetch up to `count` historical bars for a symbol.
 
         `symbol` may be an IATIS name (EURUSD) or a raw broker name from
         list_symbols(). Returns a list of {timestamp, open, high, low,
         close, volume} dicts, oldest first. Empty list on failure.
+
+        `to_timestamp_ms`: end of the requested window in epoch
+        milliseconds. Defaults to None (now) — every existing caller keeps
+        its current behavior unchanged. Pass an explicit value to page
+        backward through history (e.g. the oldest bar's timestamp from the
+        previous batch), for deep multi-year downloads — see
+        scripts/download_ctrader_fx_history.py.
         """
         ct_symbol = IATIS_TO_CTRADER.get(symbol, symbol)
         with self._lock:
@@ -1287,13 +1315,8 @@ class CTraderClient:
             from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
 
             period_val = ProtoOATrendbarPeriod.Value(period)
-            period_minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30,
-                              "H1": 60, "H4": 240, "D1": 1440}.get(period, 240)
-            now_ms = int(time.time() * 1000)
-            # Over-fetch the calendar window by ~1.5x: markets close nights/
-            # weekends, so `count` bars span more wall-clock than count*period.
-            # cTrader caps the returned count anyway, so a wider window is safe.
-            from_ms = now_ms - int(count * period_minutes * 60_000 * 1.6)
+            from_ms, to_ms = _trendbar_window(
+                count, period, to_timestamp_ms, now_ms=int(time.time() * 1000))
 
             def send() -> None:
                 req = ProtoOAGetTrendbarsReq()
@@ -1301,7 +1324,7 @@ class CTraderClient:
                 req.symbolId = symbol_id
                 req.period = period_val
                 req.fromTimestamp = from_ms
-                req.toTimestamp = now_ms
+                req.toTimestamp = to_ms
                 d = self._client.send(req, responseTimeoutInSeconds=timeout)
                 d.addErrback(lambda f: (self._on_error("trendbars", f),
                                         self._trendbar_event.set()))

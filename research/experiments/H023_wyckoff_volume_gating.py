@@ -218,6 +218,23 @@ def main() -> None:
     t0 = time.monotonic()
 
     def discover(sym: str) -> Path | None:
+        # FX symbols MUST prefer the cTrader-sourced file (real tick-volume
+        # — scripts/download_ctrader_fx_history.py). The Yahoo-sourced
+        # *_H1_2y.csv/*_H1_5y.csv files have ZERO volume for every FX pair
+        # (confirmed 2026-07-23 on the VPS: load_from_csv(...)['volume']
+        # .describe() -> max 0.0), which made arm A and arm B identical by
+        # construction (both already price-only Wyckoff) — a false NULL,
+        # not a real measurement, on the first H023 run. Controls
+        # (metals/crypto) keep the existing Yahoo files: those DO carry
+        # real volume from Yahoo (futures/crypto, unlike FX).
+        if sym in FX_SYMBOLS:
+            ctrader_path = DATA_DIR / f"{sym}_H1_ctrader.csv"
+            if ctrader_path.exists():
+                return ctrader_path
+            print(f"  WARNING: no {ctrader_path.name} — falling back to the "
+                  f"Yahoo-sourced file, which has ZERO FX volume. This run "
+                  f"cannot measure anything for {sym}; run "
+                  f"scripts/download_ctrader_fx_history.py first.")
         return next((DATA_DIR / f"{sym}_H1_{s}.csv"
                      for s in ["2y", "5y"] if (DATA_DIR / f"{sym}_H1_{s}.csv").exists()), None)
 
@@ -239,6 +256,24 @@ def main() -> None:
             print("no CSV — skipped")
             continue
         df = load_from_csv(str(csv))
+
+        # Canary: if this is an FX symbol and its volume is still all/
+        # mostly zero even from the cTrader-sourced file, arm A and arm B
+        # would be identical again (the exact failure mode from the first
+        # H023 run) — abort loudly instead of producing another false
+        # NULL. Controls are exempt (Yahoo genuinely has zero volume for
+        # some of them is not expected, but they aren't the subject here).
+        if sym in FX_SYMBOLS and "volume" in df.columns:
+            nonzero_frac = (df["volume"] > 0).mean()
+            if nonzero_frac < 0.5:
+                print(f"ABORT: {sym}'s volume is still mostly zero "
+                      f"(nonzero fraction={nonzero_frac:.1%}) even from "
+                      f"{csv.name} — arm A/B would be identical again. "
+                      f"This symbol's data source does not actually carry "
+                      f"the condition H023 tests; do not trust a run that "
+                      f"includes it.")
+                continue
+
         splits[sym] = WARMUP + int((len(df) - WARMUP) * TRAIN_FRAC)
         csvs.append(str(csv))
 

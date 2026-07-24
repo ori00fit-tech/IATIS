@@ -23,6 +23,13 @@ This closes the Sentiment engine's placeholder gap (production audit
 Phase 4; philosophy audit engine table). The engine itself stays DISABLED
 (H012 RESEARCH) — real data is a prerequisite for evaluating it, not a
 license to enable it.
+
+Forward-only: this script's 12-week rolling cache (HISTORY_WEEKS) cannot
+support a chronological OOS backtest of H012 by itself
+(research/results/data_feasibility_report.md, Part B.2). For deep
+historical COT data needed to actually evaluate H012, see the companion
+script scripts/download_cot_deep_history.py, which reuses this module's
+iter_cot_rows() parser against CFTC's free yearly archive files.
 """
 
 from __future__ import annotations
@@ -68,14 +75,17 @@ def _to_int(s: str) -> int:
     return int(str(s).replace(",", "").strip() or 0)
 
 
-def parse_cot_text(text: str) -> dict[str, dict]:
-    """Parse deafut.txt into {internal_symbol: {name, date, net, oi}}.
+def iter_cot_rows(text: str):
+    """Yield (internal_symbol, record) for EVERY matching row in `text` —
+    one row per contract in the current-week file (deafut.txt), but one
+    row PER WEEK per contract in a yearly history archive (deacotYYYY.zip's
+    annual.txt, same column layout). Callers decide how to combine
+    multiple rows per symbol; this generator itself does no deduping.
 
     Matching: the CFTC market name must START WITH the mapped contract
     name (e.g. 'EURO FX - CHICAGO MERCANTILE EXCHANGE') and must not be a
     micro/mini variant ('MICRO BITCOIN - ...' is a different contract).
     """
-    out: dict[str, dict] = {}
     reader = csv.reader(io.StringIO(text))
     for row in reader:
         if len(row) <= _IDX_NC_SHORT:
@@ -100,7 +110,7 @@ def parse_cot_text(text: str) -> dict[str, dict]:
                     f"(long={nc_long} short={nc_short} oi={oi}) — layout drift? skipped"
                 )
                 continue
-            out[internal] = {
+            yield internal, {
                 "market": market,
                 "report_date": row[_IDX_DATE].strip(),
                 "large_spec_long": nc_long,
@@ -108,6 +118,18 @@ def parse_cot_text(text: str) -> dict[str, dict]:
                 "large_spec_net": nc_long - nc_short,
                 "open_interest": oi,
             }
+
+
+def parse_cot_text(text: str) -> dict[str, dict]:
+    """Parse deafut.txt (current-week file: one row per contract) into
+    {internal_symbol: {name, date, net, oi}} — last matching row wins per
+    symbol, which is correct for a file that only ever has one row per
+    contract. For a yearly history archive with multiple weeks per
+    contract, use iter_cot_rows() directly and keep every row (see
+    scripts/download_cot_deep_history.py)."""
+    out: dict[str, dict] = {}
+    for internal, rec in iter_cot_rows(text):
+        out[internal] = rec
     return out
 
 

@@ -20,9 +20,10 @@ hypotheses are blocked by data availability today.**
   evaluated:
   - **H007** (macro) — **PASS**. Official free sources (CBOE, FRED)
     already integrated.
-  - **H012** (COT) — **PASS WITH FALLBACK**. Live/forward data is real;
-    a deep-history backfill script does not exist yet (free CFTC
-    archive, ~1 day of work, not commercial).
+  - **H012** (COT) — **PASS**. Live/forward data is real; the deep-history
+    backfill script (`scripts/download_cot_deep_history.py`, free CFTC
+    yearly archive) was built 2026-07-24, pending a one-time `--probe`
+    verification run on the VPS (sandbox has no egress to `cftc.gov`).
   - **H019** (crypto positioning) — **PASS WITH FALLBACK, already
     resolved (FAILED)**. 2 of 3 legs (funding rate, Fear&Greed) were
     deep and clean; open interest was dropped per its own pre-registered
@@ -39,11 +40,14 @@ hypotheses are blocked by data availability today.**
 
 ## What actually needs doing (concrete, non-blocking)
 
-1. **Write a CFTC yearly-archive backfill script** for H012 — free
-   source, not yet automated. The only genuine "missing infrastructure"
-   finding in this whole audit.
-2. **Confirm `iatis-marketaux-collect.timer` is actually enabled** on the
-   VPS for H021 — last registry note left this unconfirmed.
+1. ~~Write a CFTC yearly-archive backfill script for H012~~ — **DONE
+   2026-07-24** (`scripts/download_cot_deep_history.py`). Remaining step:
+   run `--probe` on the VPS once to confirm the URL/zip-format assumptions
+   (verified against a working open-source library, not guessed, but not
+   yet hit against the real network) before trusting a full backfill.
+2. ~~Confirm `iatis-marketaux-collect.timer` is actually enabled~~ —
+   **CONFIRMED 2026-07-24** on the VPS: timer active, 21 sentiment records
+   already collected, next fire on schedule.
 3. **Optionally get a Tardis.dev quote** for H104 if the 3-month forward
    wait is judged too slow — the one commercial vendor in 17 researched
    whose product maps to a real, already-identified gap. Not a default

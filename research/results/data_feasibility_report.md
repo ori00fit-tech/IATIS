@@ -278,6 +278,23 @@ is a fallback-only source in every chain it appears in.
 
 ### B.2 — H012 (COT + retail sentiment)
 
+**Update (2026-07-24, same day): the gap identified below is now
+closed.** `scripts/download_cot_deep_history.py` was built, reusing
+`scripts/download_cot.py`'s row-matching logic (refactored into a shared
+`iter_cot_rows()` generator — the existing current-week collector's
+behavior and tests are unchanged) against CFTC's free yearly archive.
+19 new unit tests (`tests/test_cot_deep_history.py`) cover the pure
+parsing/merge/zip-extraction logic. **Not yet network-verified**: this
+sandbox cannot reach `cftc.gov` (same class of restriction hit for
+Binance/Bybit during H019's investigation — confirmed via a direct
+`curl` attempt, not assumed). The script ships a `--probe` mode
+(fetches one year, prints diagnostics, writes nothing) that must be run
+on the VPS before trusting a full 1986-present backfill — this is the
+same verify-before-trust discipline this report's own methodology
+section committed to. The analysis below is left as originally written
+(the "not yet built" framing) with this note on top, since it documents
+the reasoning that led to the fix, not a re-derived verdict.
+
 1. **Testable**: Partially — real data now flows into the engine
    (2026-07-09 wiring fix), but the **current collector only captures a
    rolling 12-week forward window**, not deep historical COT — this is a
@@ -562,7 +579,7 @@ rule 4 and is **not** relitigated by this report).
 | H009 | 6-engine confluence | PASSED (flagged) | A | PASS | Standard OHLCV; PROMOTION_CRITERIA gap is an evidence-sufficiency issue, not a data-feasibility one |
 | H010 | RSI/MACD Divergence | RESEARCH | A | PASS | Standard OHLCV |
 | H011 | Market Structure BOS/CHoCH | RESEARCH | A | PASS | Standard OHLCV |
-| H012 | COT + retail sentiment | RESEARCH | B.2 | PASS WITH FALLBACK | Deep-archive backfill script does not exist yet — see B.2 |
+| H012 | COT + retail sentiment | RESEARCH | B.2 | PASS (backfill script built 2026-07-24, pending VPS `--probe` verification) | Deep-archive backfill script now exists — see B.2 update note |
 | H013 | Reversal group agreement | PASSED (flagged) | A | PASS | Internal engine-output logic, no new data |
 | H014 | Engine Orthogonality | RESOLVED | A | PASS | Internal — engine vote correlations only |
 | H015 | Ablation — Minimum Engine Set | RESOLVED | A | PASS | Internal — same OHLCV backbone, 15-symbol universe |

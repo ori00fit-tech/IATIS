@@ -41,15 +41,15 @@
     "H012_cot": {
       "covers_hypotheses": ["H012"],
       "primary_forward": "cftc_cot_current (scripts/download_cot.py, weekly rolling 12-week cache)",
-      "primary_backfill_recommended_not_yet_built": "cftc_cot_yearly_archive — new script needed, e.g. scripts/download_cot_deep_history.py, reusing scripts/download_cot.py's existing column-layout parser against CFTC's yearly deacot archive files instead of the current-week file",
+      "primary_backfill": "cftc_cot_yearly_archive — BUILT 2026-07-24: scripts/download_cot_deep_history.py, reuses scripts/download_cot.py's row-matching logic (refactored into a shared iter_cot_rows() generator, existing behavior/tests unchanged) against CFTC's yearly deacot archive files instead of the current-week file. Writes to a separate data/cot/{SYMBOL}_deep_history.json file, never touching the live rolling cache. Has a --probe mode for one-year verification before a full backfill; NOT YET run against the real network (sandbox has no egress to cftc.gov) — must be probed from the VPS first.",
       "fallback": "none — CFTC is the sole authoritative source for this data by definition",
-      "merge_logic": "yearly-archive backfill would populate data/cot/{SYMBOL}.json's history array up to the point where the weekly rolling collector's own accumulated history takes over — no overlap-resolution needed if the backfill script stops exactly at the weekly collector's earliest cached week.",
+      "merge_logic": "the two collectors write to separate files by design (data/cot/{SYMBOL}.json vs data/cot/{SYMBOL}_deep_history.json) — no automatic merge exists yet; H012's actual A/B harness (not yet written) is responsible for combining both into one chronological series if/when it runs, and should dedupe on report_date at that point exactly as merge_into_history() already does within the backfill script itself.",
       "conflict_resolution": "not applicable — single source.",
-      "timestamp_normalization": "COT reports are published Fridays ~15:30 ET for the prior Tuesday's positioning; existing engine consumes report-date, not publish-date — must preserve this convention in any new backfill script to avoid a look-ahead mismatch against the live collector's semantics.",
+      "timestamp_normalization": "COT reports are published Fridays ~15:30 ET for the prior Tuesday's positioning; both collectors consume report-date, not publish-date — preserved consistently between them.",
       "timezone_normalization": "convert ET report dates to UTC consistently with the existing collector.",
-      "duplicate_removal": "dedupe on (symbol, report_date).",
-      "quality_checks_needed": "contract-name changes across years (CFTC occasionally renames/reclassifies instruments), missing weeks around government shutdowns (a real historical gap, not a bug), duplicate week detection.",
-      "known_gap_not_closed": "the backfill script itself does not exist yet — this is the plan's one concrete action item outside the OHLCV backbone."
+      "duplicate_removal": "dedupe on (symbol, report_date) — implemented in download_cot_deep_history.py's merge_into_history(), tested (tests/test_cot_deep_history.py).",
+      "quality_checks_needed": "contract-name changes across years (CFTC occasionally renames/reclassifies instruments) — NOT yet handled, iter_cot_rows()'s startswith-matching will simply fail to match a renamed contract for the years after a rename, producing a silent gap rather than an error; missing weeks around government shutdowns (a real historical gap, not a bug) — not distinguished from a scraper failure today.",
+      "known_gap_not_closed": "contract-rename handling across the full 1986-present range (see quality_checks_needed) — deferred, not blocking a first backfill/probe run."
     },
     "H019_crypto_positioning": {
       "covers_hypotheses": ["H019"],

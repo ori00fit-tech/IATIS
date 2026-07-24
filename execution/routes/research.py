@@ -360,6 +360,81 @@ async def research_scenario_config(
     }
 
 
+# Local historical-dataset directory (Dataset Builder — Date Range,
+# 2026-07-24). Matches backtest.runner.RunnerConfig.data_dir's default
+# and scripts/download_all_symbols.py's write location. Module-level so
+# tests can monkeypatch it instead of chdir()ing the whole process.
+_DATA_DIR = Path("data")
+
+
+@router.get("/research/datasets")
+async def research_datasets(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Dataset Builder — Date Range picker (2026-07-24): which local
+    historical CSVs actually exist for backtesting, and the real date
+    range/row count each one covers.
+
+    Reuses backtest.runner.load_symbol_data's exact read path (index_col=0,
+    parse_dates=True, tz-localize UTC if naive) rather than a new parser,
+    so the reported range matches what a real scenario run would see —
+    it does NOT run validate_ohlcv (that's a scenario-run-time concern,
+    not a listing concern), so a malformed file is reported per-entry
+    with readable=false instead of failing the whole endpoint.
+
+    Only matches the `{SYMBOL}_{TIMEFRAME}_*.csv` convention
+    find_symbol_csv()/download_all_symbols.py already use — the
+    headerless/tab-separated one-off format documented in data/README.md
+    is a different, non-standard loading path and is intentionally not
+    listed here.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import re
+
+    import pandas as pd
+
+    config = _get_config()
+    known_symbols = {
+        str(s.get("internal", "")).upper()
+        for s in config.get("data", {}).get("twelve_data_symbols", [])
+        if s.get("internal")
+    }
+
+    datasets: list[dict[str, Any]] = []
+    if _DATA_DIR.exists():
+        for path in sorted(_DATA_DIR.glob("*.csv")):
+            m = re.match(r"^([A-Z0-9]+)_(M1|M5|M15|M30|H1|H4|D1|W1)_", path.name)
+            if not m:
+                continue
+            symbol, timeframe = m.group(1), m.group(2)
+            entry: dict[str, Any] = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "file": path.name,
+                "size_bytes": path.stat().st_size,
+                "known_symbol": symbol in known_symbols,
+            }
+            try:
+                df = pd.read_csv(path, index_col=0, parse_dates=True)
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize("UTC")
+                entry["readable"] = True
+                entry["rows"] = int(len(df))
+                entry["start"] = df.index.min().isoformat() if len(df) else None
+                entry["end"] = df.index.max().isoformat() if len(df) else None
+            except Exception as exc:
+                entry["readable"] = False
+                entry["error"] = str(exc)
+            datasets.append(entry)
+
+    return {
+        "data_dir": str(_DATA_DIR),
+        "count": len(datasets),
+        "datasets": datasets,
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

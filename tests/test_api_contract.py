@@ -1360,14 +1360,15 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
     # /research/symbols, /research/engines, /research/indicators,
-    # /research/scenario-config, and /research/integrity — all literal
-    # routes must still resolve to themselves, not be captured as
-    # hypothesis_id="manifests"/etc.
+    # /research/scenario-config, /research/datasets, and
+    # /research/integrity — all literal routes must still resolve to
+    # themselves, not be captured as hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
+    assert client.get("/research/datasets", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1499,3 +1500,79 @@ def test_research_scenario_config_contract(client):
     assert set(body["session_templates"]) == {"Sydney", "Tokyo", "London", "NewYork"}
     for session in body["session_templates"].values():
         assert {"start_utc", "end_utc"}.issubset(session.keys())
+
+
+def test_research_datasets_requires_auth(client):
+    assert client.get("/research/datasets").status_code == 401
+
+
+def test_research_datasets_missing_dir_returns_empty_list(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path / "does_not_exist")
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"data_dir": str(tmp_path / "does_not_exist"), "count": 0, "datasets": []}
+
+
+def test_research_datasets_reports_symbol_timeframe_and_date_range(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_2y.csv").write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2026-01-01 00:00:00,1.1000,1.1010,1.0990,1.1005,1000\n"
+        "2026-01-01 01:00:00,1.1005,1.1020,1.1000,1.1015,1100\n"
+        "2026-01-01 02:00:00,1.1015,1.1030,1.1010,1.1025,1200\n"
+    )
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    entry = body["datasets"][0]
+    assert entry["symbol"] == "EURUSD"
+    assert entry["timeframe"] == "H1"
+    assert entry["known_symbol"] is True
+    assert entry["readable"] is True
+    assert entry["rows"] == 3
+    assert entry["start"].startswith("2026-01-01T00:00:00")
+    assert entry["end"].startswith("2026-01-01T02:00:00")
+
+
+def test_research_datasets_flags_unknown_symbol(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "ZZZFAKE_H1_2y.csv").write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2026-01-01 00:00:00,1.0,1.0,1.0,1.0,100\n"
+    )
+
+    body = client.get("/research/datasets", headers=HDR).json()
+    assert body["datasets"][0]["known_symbol"] is False
+
+
+def test_research_datasets_reports_unreadable_file_without_500(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_broken.csv").write_text("not,a,valid\ncsv\n")
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    entry = r.json()["datasets"][0]
+    assert entry["readable"] is False
+    assert "error" in entry
+
+
+def test_research_datasets_ignores_non_matching_filenames(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "README.md").write_text("not a dataset")
+    (tmp_path / "swap_rates.json").write_text("{}")
+    (tmp_path / "random_notes.csv").write_text("just,some,csv\n1,2,3\n")
+
+    body = client.get("/research/datasets", headers=HDR).json()
+    assert body["count"] == 0

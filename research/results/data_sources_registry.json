@@ -161,10 +161,10 @@
       "auth_required": false,
       "history_depth": "legacy futures-only since 1986; disaggregated since 2006 (this script targets legacy futures-only, matching COT_SYMBOLS/parse_cot_text's existing scope)",
       "rate_limit": "not characterized (bulk yearly file downloads, not a metered API); script applies a 1s polite delay between yearly requests regardless",
-      "known_gaps": ["NZDUSD matched zero rows in the 2025 archive under its mapped contract name ('NEW ZEALAND DOLLAR') — confirmed via a full-file substring search, not a matching bug; contract may be renamed or no longer separately reported, not investigated further"],
-      "code_reference": "scripts/download_cot_deep_history.py, tests/test_cot_deep_history.py (19 tests) + tests/test_cot_download.py (3 new regression tests for the cross-contract-contamination fix, all pure logic)",
-      "score": 92,
-      "score_breakdown": {"history_depth_vs_need": 25, "data_integrity_reliability": 18, "cost_accessibility": 15, "rate_limit_adequacy": 15, "institutional_grade_suitability": 15, "documentation_quality": 4},
+      "known_gaps": ["USOIL's contract mapping ('WTI FINANCIAL CRUDE OIL' vs. the previously-used, wrongly-matched 'CRUDE OIL, LIGHT SWEET-WTI - ICE FUTURES EUROPE') is a reviewable judgment call, not a certainty — see research/results/registry.json H012 for the full reasoning"],
+      "code_reference": "scripts/download_cot_deep_history.py, tests/test_cot_deep_history.py (19 tests) + tests/test_cot_download.py (6 regression tests total: 3 for cross-contract contamination, 1 for the NZDUSD rename, 1 confirming the old NZDUSD name no longer matches, 1 for the USOIL venue fix — all pure logic)",
+      "score": 95,
+      "score_breakdown": {"history_depth_vs_need": 25, "data_integrity_reliability": 20, "cost_accessibility": 15, "rate_limit_adequacy": 15, "institutional_grade_suitability": 15, "documentation_quality": 5},
       "note": "data_integrity_reliability at 18 not 20: real-network verification confirmed the format AND caught a real matching-logic bug (fixed same day) — a strong result, but the NZDUSD gap remains open, so 'fully clean, no known issues' isn't warranted yet."
     },
     "binance_funding_rate": {

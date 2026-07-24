@@ -56,11 +56,22 @@ COT_SYMBOLS = {
     "USDJPY": "JAPANESE YEN",
     "AUDUSD": "AUSTRALIAN DOLLAR",
     "USDCAD": "CANADIAN DOLLAR",
-    "NZDUSD": "NEW ZEALAND DOLLAR",
+    # CFTC's contract is listed as "NZ DOLLAR" (not "NEW ZEALAND DOLLAR")
+    # as of the 2025 archive — confirmed 2026-07-24 via a real yearly
+    # archive probe (H012, research/results/registry.json) after the old
+    # name matched zero rows all year.
+    "NZDUSD": "NZ DOLLAR",
     "USDCHF": "SWISS FRANC",
     "XAUUSD": "GOLD",
     "XAGUSD": "SILVER",
-    "USOIL":  "CRUDE OIL, LIGHT SWEET",
+    # CFTC's NYMEX WTI contract is now listed as "WTI FINANCIAL CRUDE
+    # OIL" (not "CRUDE OIL, LIGHT SWEET") — confirmed 2026-07-24. The old
+    # name only bare-prefix-matched a DIFFERENT, unintended contract
+    # ("CRUDE OIL, LIGHT SWEET-WTI - ICE FUTURES EUROPE", a European
+    # venue) — meaning any COT data USOIL ever picked up since this
+    # feature's 2026-07-09 wiring was tracking the wrong exchange's
+    # positioning, not the intended NYMEX/US benchmark contract.
+    "USOIL":  "WTI FINANCIAL CRUDE OIL",
     "BTCUSD": "BITCOIN",
 }
 

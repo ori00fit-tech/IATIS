@@ -88,13 +88,19 @@ def load_from_csv_positioning(path: Path):
     index_col=0, parse_dates=True alone does not reliably produce a
     DatetimeIndex for every ISO8601+offset format pandas can be handed
     (observed on the VPS 2026-07-24: it came back as a plain Index of
-    strings, which has no .tz attribute at all) — pd.to_datetime(...,
-    utc=True) on the raw index coerces any of naive/aware/string input
-    uniformly, rather than branching on an attribute that might not
-    exist."""
+    strings, which has no .tz attribute at all). Bare pd.to_datetime(...,
+    utc=True) fixed that but broke on real data the same day: Binance's
+    funding-rate timestamps mix whole-second and sub-second precision
+    row to row (e.g. "...08:00:00+00:00" next to "...08:00:00.001000
+    +00:00"), and pandas' single-format auto-detection locks onto
+    whichever format the first few rows look like, then fails the moment
+    a row doesn't match it. format="ISO8601" parses each value on its own
+    terms instead of inferring one fixed strptime pattern for the whole
+    column — verified against a mixed-precision sample locally before
+    this fix, not guessed."""
     import pandas as pd
     df = pd.read_csv(path, index_col=0)
-    df.index = pd.to_datetime(df.index, utc=True)
+    df.index = pd.to_datetime(df.index, format="ISO8601", utc=True)
     return df
 
 

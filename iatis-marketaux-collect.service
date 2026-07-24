@@ -1,0 +1,32 @@
+# IATIS MarketAux sentiment collector (fired by iatis-marketaux-collect.timer;
+# enable the .timer, not this unit). Appends one sentiment snapshot per
+# mapped symbol to data/marketaux_sentiment_log.jsonl — see
+# scripts/collect_marketaux_sentiment.py's module docstring for why this
+# has to accumulate over many runs rather than backfilling once (H021,
+# research/results/registry.json). Research-only: does not touch any live
+# decision path. Requires MARKETAUX_API_KEY in .env.
+[Unit]
+Description=IATIS MarketAux sentiment collection (oneshot; scheduled by iatis-marketaux-collect.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=iatis
+WorkingDirectory=/opt/iatis
+EnvironmentFile=-/opt/iatis/.env
+Environment=PATH=/opt/iatis/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/iatis/venv/bin/python3 -m scripts.collect_marketaux_sentiment
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/iatis/data
+MemoryMax=256M
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

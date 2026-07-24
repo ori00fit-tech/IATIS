@@ -202,7 +202,8 @@
    "status": "RESEARCH",
    "engine": "sentiment",
    "notes": "Paper trading. REAL COT now wired: scripts/download_cot.py fetches CFTC legacy futures-only weekly (free) into data/cot/{SYMBOL}.json which the engine already consumes; engine._symbol wired in main.build_active_engines (was 'UNKNOWN', so COT could never load). Engine stays DISABLED — real data is a prerequisite for evaluating H012, not a license to enable it.",
-   "last_updated": "2026-07-09"
+   "data_collection": "GAP IDENTIFIED 2026-07-24 (research/results/data_feasibility_report.md Part B.2): scripts/download_cot.py's 12-week rolling cache cannot support a chronological OOS split. CLOSED same day: scripts/download_cot_deep_history.py, same free official CFTC source (yearly deacotYYYY.zip archives, https://www.cftc.gov/files/dea/history/, URL pattern verified against the working open-source cot_reports library, not guessed), reuses download_cot.py's row-matching logic (refactored into a shared iter_cot_rows() generator so the existing current-week collector's behavior is unchanged — tests/test_cot_download.py still passes unmodified). Writes to data/cot/{SYMBOL}_deep_history.json, deliberately separate from the live rolling-cache file so the two collectors never fight. NOT YET LIVE-VERIFIED: this sandbox's network cannot reach cftc.gov (same class of restriction as H019's Binance/Bybit sandbox block — confirmed via a direct curl attempt, not assumed). Ships with a --probe mode (fetches one year, prints diagnostics, writes nothing) that MUST be run on the VPS before trusting a full 1986-present backfill — same verify-before-trust discipline as H019/H021's probe scripts. 19 new unit tests (tests/test_cot_deep_history.py) cover the pure parsing/merge/zip-extraction logic with synthetic fixtures; the network layer itself is untested pending the VPS probe run.",
+   "last_updated": "2026-07-24"
   },
   "H013": {
    "title": "Reversal Engine Group Agreement as Counter-Signal",

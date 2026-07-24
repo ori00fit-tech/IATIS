@@ -83,22 +83,26 @@ data:
     energy:  [ctrader, finnhub]
     indices: [ctrader, fcs_api, finnhub]
     fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub]
-    # stocks/etf (2026-07-24): NOT YET LIVE-VERIFIED. twelve_data's client
-    # is fully generic (no FX-specific logic) so plain equity tickers work
-    # with zero client changes; alpha_vantage/finnhub each needed a NEW
-    # code path (different endpoint + symbol format from their FX paths,
-    # see core/data_providers.py::_fetch_alpha_vantage_equity /
-    # _fetch_finnhub_equity) — built but not yet probed against the real
-    # APIs from this sandbox (no network egress). Run
-    # scripts/probe_equity_data_providers.py on the VPS before trusting
-    # this chain for anything beyond a syntax-level smoke test.
-    # alpaca added 2026-07-24 (operator request): already integrated for
-    # crypto (2026-07-16) but never wired for stocks despite its own
-    # code comment noting Alpaca "serves US stocks and crypto" — only
-    # the crypto half was ever built. Placed first: Alpaca is a
-    # broker-integrated data source (not a bolt-on API), plausibly the
-    # highest-quality/deepest free option of the four, though NOT YET
-    # live-verified like the rest of this chain.
+    # stocks/etf — LIVE-VERIFIED on the VPS 2026-07-24 (real probe, 4
+    # starter symbols, scripts/probe_equity_data_providers.py):
+    #   alpaca:        CONFIRMED WORKING after fixing a real bug — the
+    #                  first request returned only 1 (today's) bar
+    #                  instead of history because start/end were omitted;
+    #                  fixed by sending an explicit date window
+    #                  (core/data_providers.py::_fetch_alpaca_equity).
+    #                  Already integrated for crypto (2026-07-16); only
+    #                  the stock half was missing until 2026-07-24 despite
+    #                  its own code comment claiming both. Placed first —
+    #                  broker-integrated source, not a bolt-on API.
+    #   twelve_data:   CONFIRMED WORKING, 30 daily bars, no changes needed
+    #                  (client was already fully generic).
+    #   alpha_vantage: CONFIRMED WORKING, 30 daily bars via TIME_SERIES_DAILY.
+    #   finnhub:       CONFIRMED BROKEN — HTTP 403 on /stock/candle for
+    #                  all 4 symbols. Its own docstring's "Free tier
+    #                  supports... US stocks" claim predates this endpoint
+    #                  ever being called and is wrong for stock candles
+    #                  specifically (confirmed paid-plan-gated). Left in
+    #                  the chain (last) as a harmless no-op fallback.
     stocks:  [alpaca, twelve_data, alpha_vantage, finnhub]
     etf:     [alpaca, twelve_data, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).

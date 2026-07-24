@@ -392,7 +392,27 @@ def test_fetch_alpaca_equity_parses_response_and_hits_the_stock_bars_endpoint(mo
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     called_url = mock_get.call_args[0][0]
     assert called_url == "https://data.alpaca.markets/v2/stocks/AAPL/bars"
-    assert mock_get.call_args[1]["params"]["timeframe"] == "1Day"
+    called_params = mock_get.call_args[1]["params"]
+    assert called_params["timeframe"] == "1Day"
+    assert "start" in called_params and "end" in called_params  # regression: 2026-07-24 VPS
+    # probe found omitting start/end returns only 1 (today's) bar instead of history.
+
+
+def test_fetch_alpaca_equity_start_precedes_end_by_a_real_window(monkeypatch):
+    """The window must span real history (outputsize * bar-seconds * 2),
+    not just an instant — the exact bug the 2026-07-24 VPS probe caught."""
+    from datetime import datetime
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _alpaca_equity_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        _fetch_alpaca_equity("AAPL", "D1", outputsize=30)
+    params = mock_get.call_args[1]["params"]
+    start = datetime.strptime(params["start"], "%Y-%m-%dT%H:%M:%SZ")
+    end = datetime.strptime(params["end"], "%Y-%m-%dT%H:%M:%SZ")
+    assert (end - start).total_seconds() >= 30 * 86400  # at least 30 real days
 
 
 def test_fetch_alpaca_equity_raises_on_empty_bars(monkeypatch):

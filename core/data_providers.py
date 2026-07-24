@@ -347,13 +347,20 @@ def _fetch_alpha_vantage(
 def _fetch_finnhub_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     """Stocks/ETFs via Finnhub's /stock/candle endpoint — a genuinely
     DIFFERENT endpoint and symbol format from the FX/crypto path below
-    (plain ticker, e.g. 'AAPL', no OANDA:/BINANCE: prefix). NOT YET
-    verified free-tier access: Finnhub has, at various points, restricted
-    stock-candle history to paid plans while keeping forex/crypto candles
-    free — the docstring's 'Free tier supports... US stocks' claim
-    predates this module and has not been re-verified against the real
-    API for this specific endpoint. See
-    scripts/probe_equity_data_providers.py before trusting this path."""
+    (plain ticker, e.g. 'AAPL', no OANDA:/BINANCE: prefix).
+
+    CONFIRMED BROKEN on the free tier (2026-07-24, real VPS probe, all
+    4 starter symbols): HTTP 403 Forbidden. This module's own
+    'Free tier supports... US stocks' docstring claim predates this
+    endpoint ever being called and was wrong for stock CANDLES
+    specifically — Finnhub has, at various points, gated historical
+    stock candles behind a paid plan while keeping forex/crypto candles
+    free, and that gate is confirmed active now. Left in the chain (last
+    position, config.yaml) as a harmless no-op fallback — it fails fast
+    and cleanly to the next provider; not worth removing the code path
+    since the free-tier status could change again and re-probing is
+    cheap. Do not add a paid Finnhub plan on the strength of this
+    module's stale claim alone."""
     api_key = os.environ.get("FINNHUB_API_KEY", "")
     if not api_key:
         raise DataFetchError("FINNHUB_API_KEY not set — skipping Finnhub")
@@ -651,7 +658,9 @@ DEFAULT_CHAINS: dict[str, list[str]] = {
     "energy":  ["ctrader", "finnhub"],
     "indices": ["ctrader", "fcs_api", "finnhub"],
     "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
-    # 2026-07-24, NOT YET LIVE-VERIFIED — see config.yaml's stocks/etf note.
+    # 2026-07-24, LIVE-VERIFIED — see config.yaml's stocks/etf note
+    # (alpaca/twelve_data/alpha_vantage confirmed working, finnhub
+    # confirmed broken on the free tier, left in as a harmless fallback).
     "stocks":  ["alpaca", "twelve_data", "alpha_vantage", "finnhub"],
     "etf":     ["alpaca", "twelve_data", "alpha_vantage", "finnhub"],
 }
@@ -723,6 +732,12 @@ _ALPACA_TF_MAP = {
 }
 
 
+_ALPACA_TF_SECONDS = {
+    "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+    "H1": 3600, "H4": 14400, "D1": 86400,
+}
+
+
 def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     """Stocks/ETFs via Alpaca's stock bars endpoint (/v2/stocks/{symbol}/bars)
     — a genuinely different endpoint from the crypto path in _fetch_alpaca
@@ -732,8 +747,17 @@ def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.Data
     _ALPACA_TF_MAP. Added 2026-07-24 (operator request) — the
     'Alpaca serves US stocks and crypto only' comment on _fetch_alpaca
     predates this function; only the crypto half was ever wired in
-    before. NOT YET verified against the real API from this codebase —
-    see scripts/probe_equity_data_providers.py."""
+    before.
+
+    Sends an EXPLICIT start/end window rather than relying on `limit` +
+    `sort=desc` alone — confirmed by a real VPS probe (2026-07-24) that
+    omitting start/end returns only a single bar (today's date) instead
+    of real history, despite Alpaca's own docs listing `start` as merely
+    optional. Root cause not fully explained (a free-tier-specific
+    default, not documented behavior); the fix is to remove the
+    ambiguity entirely rather than rely on undocumented default
+    behavior. Re-verify with scripts/probe_equity_data_providers.py
+    after any change here."""
     api_key = os.environ.get("ALPACA_API_KEY", "")
     api_secret = os.environ.get("ALPACA_API_SECRET", "")
     if not (api_key and api_secret):
@@ -748,11 +772,22 @@ def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.Data
     except ImportError:
         raise DataFetchError("requests not installed")
 
+    from datetime import datetime, timedelta, timezone
+    seconds_per_bar = _ALPACA_TF_SECONDS.get(interval, 86400)
+    end_dt = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(seconds=outputsize * seconds_per_bar * 2)  # 2x buffer
+
     base = os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets").rstrip("/")
-    params = {"timeframe": tf, "limit": min(int(outputsize), 10000), "sort": "desc"}
+    params = {
+        "timeframe": tf,
+        "limit": min(int(outputsize), 10000),
+        "sort": "desc",
+        "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
     headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
 
-    logger.info(f"Alpaca (equity): fetching {symbol} @ {tf}")
+    logger.info(f"Alpaca (equity): fetching {symbol} @ {tf} ({params['start']} to {params['end']})")
     try:
         resp = requests.get(f"{base}/v2/stocks/{symbol}/bars",
                             params=params, headers=headers, timeout=15)

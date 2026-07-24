@@ -93,6 +93,185 @@ async def research_symbols(
     }
 
 
+# The frozen prod4 activation set (CLAUDE.md, config/engines.yaml): do not
+# read this as a suggestion to enable more — "Enabling more engines (any)"
+# is on the dead list (H015, run twice). This constant only labels what
+# /research/engines reports; it changes nothing about what runs.
+_PROD4_ENGINES = frozenset({"smc", "price_action", "nnfx", "wyckoff"})
+
+
+@router.get("/research/engines")
+async def research_engines(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Engine Selector (Research Workspace, 2026-07-24): every engine's
+    activation state, confluence weight, and version, sourced from
+    config/engines.yaml + confluence.weights — not reimplemented here.
+    Read-only: this endpoint reports the frozen prod4 configuration, it
+    does not let a caller toggle an engine (CLAUDE.md: enabling another
+    engine needs a new pre-registered hypothesis, not a dashboard click).
+    """
+    _check_auth(x_api_key, iatis_session)
+    config = _get_config()
+    engines_cfg = config.get("engines", {})
+    enabled = engines_cfg.get("enabled", {})
+    versions = engines_cfg.get("versions", {})
+    weights = config.get("confluence", {}).get("weights", {})
+
+    all_names = sorted(set(enabled) | set(versions) | set(weights))
+    return {
+        "engines": [
+            {
+                "name": name,
+                "enabled": bool(enabled.get(name, False)),
+                "prod4": name in _PROD4_ENGINES,
+                "weight": weights.get(name),
+                "version": versions.get(name),
+            }
+            for name in all_names
+        ],
+        "smc_full_spec": bool(engines_cfg.get("smc_full_spec", False)),
+        "crypto_positioning_modulator": bool(engines_cfg.get("crypto_positioning_modulator", False)),
+    }
+
+
+# Technical Indicator catalog (Dataset Builder, 2026-07-24) — a read-only
+# inventory of the indicator math that ALREADY exists in this codebase
+# (grep-verified against the source, not guessed), for the Dataset
+# Builder / Engine Selector UI to show what each engine's numbers are
+# actually built from. This does NOT compute anything new and does NOT
+# change any engine's live formula — see utils/indicators.py's own
+# consolidation note: two ATR variants are deliberately different
+# (range_atr is NOT a bug), and "upgrading" a variant is a strategy
+# change requiring a new pre-registered hypothesis (CLAUDE.md rule 6).
+# The two independent RSI implementations below (SMA-smoothed vs
+# EWM/Wilder-smoothed) are the same kind of intentional-until-measured
+# divergence — listed, not merged.
+_INDICATOR_CATALOG: list[dict[str, Any]] = [
+    {
+        "id": "atr_true_range",
+        "name": "ATR (true-range)",
+        "category": "volatility",
+        "description": "Rolling mean of true range (max of H-L, |H-prevC|, |L-prevC|) over `period` bars.",
+        "default_params": {"period": 14},
+        "source": "utils/indicators.py:atr",
+        "used_by": ["regimes/volatility_classifier.py:atr (re-export)", "quant_engine (_atr_percentile)", "nnfx_engine (_adx)"],
+    },
+    {
+        "id": "atr_range_mean",
+        "name": "ATR (simplified range mean)",
+        "category": "volatility",
+        "description": "Mean of (high-low) over the last `period` bars, as a scalar. NOT true ATR — ignores gaps via prev-close. Deliberately different from atr_true_range; frozen per prod4 measurement, see source docstring.",
+        "default_params": {"period": 14},
+        "source": "utils/indicators.py:range_atr",
+        "used_by": ["smc_engine", "wyckoff_engine", "price_action_engine"],
+    },
+    {
+        "id": "atr_percentile",
+        "name": "ATR percentile",
+        "category": "volatility",
+        "description": "Current ATR's percentile rank within its own recent history (lookback bars).",
+        "default_params": {"period": 14, "lookback": 100},
+        "source": "engines/quant_engine.py:_atr_percentile",
+        "used_by": ["quant_engine (disabled in prod4)"],
+    },
+    {
+        "id": "volatility_classification",
+        "name": "Volatility regime (low/normal/high/extreme)",
+        "category": "volatility",
+        "description": "Classifies each bar's ATR relative to its own recent history into 4 labels.",
+        "default_params": {"period": 14, "lookback": 100},
+        "source": "regimes/volatility_classifier.py:classify_volatility",
+        "used_by": ["regime layer (soft regime weighting only — features.regime_gate hard gate is OFF, H024 NULL)"],
+    },
+    {
+        "id": "rsi_sma",
+        "name": "RSI (SMA-smoothed gain/loss)",
+        "category": "momentum",
+        "description": "Classic RSI with a simple rolling mean of gains/losses.",
+        "default_params": {"period": 14},
+        "source": "engines/price_action_engine.py:_rsi (identical copy in engines/quant_engine.py:_rsi)",
+        "used_by": ["price_action_engine", "quant_engine (disabled in prod4)"],
+    },
+    {
+        "id": "rsi_ewm",
+        "name": "RSI (EWM/Wilder-style smoothed gain/loss)",
+        "category": "momentum",
+        "description": "RSI variant using exponentially-weighted (alpha=1/period) gain/loss smoothing instead of a simple rolling mean — a different number from rsi_sma on the same series.",
+        "default_params": {"period": 14},
+        "source": "engines/divergence_engine.py:_rsi",
+        "used_by": ["divergence_engine (disabled in prod4)"],
+    },
+    {
+        "id": "macd",
+        "name": "MACD (line + signal)",
+        "category": "momentum",
+        "description": "EMA(fast)-EMA(slow) as the MACD line, EMA(signal) of that line as the signal line.",
+        "default_params": {"fast": 12, "slow": 26, "signal": 9},
+        "source": "engines/divergence_engine.py:_macd",
+        "used_by": ["divergence_engine (disabled in prod4)"],
+    },
+    {
+        "id": "bollinger_bands",
+        "name": "Bollinger Bands",
+        "category": "volatility",
+        "description": "Rolling mean +/- (std_mult * rolling std).",
+        "default_params": {"period": 20, "std": 2.0},
+        "source": "engines/price_action_engine.py:_bollinger",
+        "used_by": ["price_action_engine"],
+    },
+    {
+        "id": "ema",
+        "name": "EMA (exponential moving average)",
+        "category": "trend",
+        "description": "Standard exponential moving average, span=period.",
+        "default_params": {"period": None},
+        "source": "engines/nnfx_engine.py:_ema",
+        "used_by": ["nnfx_engine"],
+    },
+    {
+        "id": "adx",
+        "name": "ADX (Average Directional Index)",
+        "category": "trend",
+        "description": "Trend-strength (not direction) from smoothed +DI/-DI derived from true range.",
+        "default_params": {"period": 14},
+        "source": "engines/nnfx_engine.py:_adx",
+        "used_by": ["nnfx_engine"],
+    },
+    {
+        "id": "roc",
+        "name": "ROC (rate of change)",
+        "category": "momentum",
+        "description": "Percent change over `period` bars.",
+        "default_params": {"period": 10},
+        "source": "engines/quant_engine.py:_roc",
+        "used_by": ["quant_engine (disabled in prod4)"],
+    },
+]
+
+
+@router.get("/research/indicators")
+async def research_indicators(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Technical Indicator catalog (Dataset Builder, 2026-07-24) — see
+    _INDICATOR_CATALOG's module comment: a read-only inventory of the
+    indicator math already implemented in this codebase, grouped by
+    category, for the Dataset Builder to let a researcher see/select
+    which indicators back a chosen engine. Adds no new computation."""
+    _check_auth(x_api_key, iatis_session)
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    for ind in _INDICATOR_CATALOG:
+        by_category.setdefault(ind["category"], []).append(ind)
+    return {
+        "count": len(_INDICATOR_CATALOG),
+        "categories": by_category,
+        "indicators": _INDICATOR_CATALOG,
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

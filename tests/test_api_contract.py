@@ -1359,11 +1359,13 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
-    # /research/symbols, and /research/integrity — all literal routes
-    # must still resolve to themselves, not be captured as
-    # hypothesis_id="manifests"/"symbols"/"integrity".
+    # /research/symbols, /research/engines, /research/indicators, and
+    # /research/integrity — all literal routes must still resolve to
+    # themselves, not be captured as hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
+    assert client.get("/research/engines", headers=HDR).status_code == 200
+    assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1431,3 +1433,41 @@ def test_research_symbols_groups_by_asset_class(client):
     assert any(s["internal"] == "EURUSD" for s in fx_majors)
     carriers = body["asset_classes"].get("metals", [])
     assert any(s["internal"] == "XAUUSD" for s in carriers)
+
+
+def test_research_engines_requires_auth(client):
+    assert client.get("/research/engines").status_code == 401
+
+
+def test_research_engines_reports_frozen_prod4_set(client):
+    # CLAUDE.md: engines enabled = smc, price_action, nnfx, wyckoff.
+    r = client.get("/research/engines", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_name = {e["name"]: e for e in body["engines"]}
+    for name in ("smc", "price_action", "nnfx", "wyckoff"):
+        assert by_name[name]["enabled"] is True, by_name[name]
+        assert by_name[name]["prod4"] is True
+    for name in ("divergence", "ict", "macro", "market_structure", "quant", "sentiment"):
+        assert by_name[name]["enabled"] is False, by_name[name]
+        assert by_name[name]["prod4"] is False
+    assert body["smc_full_spec"] is False  # H017 FAILED
+
+
+def test_research_indicators_requires_auth(client):
+    assert client.get("/research/indicators").status_code == 401
+
+
+def test_research_indicators_contract(client):
+    r = client.get("/research/indicators", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == len(body["indicators"])
+    assert body["count"] > 0
+    ids = {i["id"] for i in body["indicators"]}
+    # Both documented ATR variants and both RSI variants must be listed
+    # distinctly, per utils/indicators.py's own consolidation note — this
+    # endpoint must not silently merge them.
+    assert {"atr_true_range", "atr_range_mean", "rsi_sma", "rsi_ewm", "macd"}.issubset(ids)
+    for ind in body["indicators"]:
+        assert {"id", "name", "category", "description", "default_params", "source", "used_by"}.issubset(ind.keys())

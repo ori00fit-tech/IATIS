@@ -147,6 +147,11 @@ execution:
 # Every flag here maps to one real conditional; see the file:line noted.
 features:
   market_quality_gate: true      # main.py — MQS gate can block/allow trades
+  # H103 (research/results/registry.json, PLANNED): existing live gate —
+  # default TRUE preserves current behavior. Set false only inside the
+  # H103 A/B harness's arm B; do not flip live before the hypothesis
+  # resolves and is promoted (CLAUDE.md rule 6).
+  meta_decision_gate: true
   correlation_filter: true       # scheduler.py — portfolio correlation cap
   ai_weight_suggestions: true    # execution/api_server.py — POST /ai/optimize-weights
   # core/data_confidence.py — cross-provider close check, ONE symbol per

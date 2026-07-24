@@ -163,6 +163,86 @@ def test_meta_block_downgrade_carries_a_reason(monkeypatch):
     assert reason is not None and "Meta Decision blocked" in reason
 
 
+# ── H103 (research/results/registry.json, PLANNED): features.meta_decision_gate
+# toggle wiring. Default must preserve today's live behavior exactly (gate
+# active); arm B (gate=False) must let BLOCK through without downgrading,
+# while still computing meta so the A/B harness can compare both arms on
+# identical bars. ──
+
+def test_meta_decision_gate_defaults_to_active_when_key_absent(monkeypatch):
+    """No 'features' key at all in config (the exact shape _pipeline_config
+    produces) must behave identically to explicit meta_decision_gate=true —
+    this is the live-safety guarantee: H103 cannot silently change default
+    behavior."""
+    class _BlockingMeta:
+        verdict = "BLOCK"
+        reason = "Confidence=35% too low"
+    monkeypatch.setattr(main_mod, "evaluate_meta_decision",
+                        lambda **kw: _BlockingMeta())
+    cfg = _pipeline_config()
+    assert "features" not in cfg
+    verdict, meta, reason = _final_verdict(
+        cfg, _passing_conf(),
+        risk_pass=True, news_blocked=False, regime_state="TRENDING",
+        mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+    )
+    assert verdict == "NO_TRADE"
+    assert meta.verdict == "BLOCK"
+
+
+def test_meta_decision_gate_false_lets_block_through_but_still_computes_meta(monkeypatch):
+    class _BlockingMeta:
+        verdict = "BLOCK"
+        reason = "Confidence=35% too low"
+    monkeypatch.setattr(main_mod, "evaluate_meta_decision",
+                        lambda **kw: _BlockingMeta())
+    cfg = _pipeline_config()
+    cfg["features"] = {"meta_decision_gate": False}
+    verdict, meta, reason = _final_verdict(
+        cfg, _passing_conf(),
+        risk_pass=True, news_blocked=False, regime_state="TRENDING",
+        mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+    )
+    assert verdict == "EXECUTE"
+    assert reason is None
+    assert meta is not None and meta.verdict == "BLOCK"  # still computed for comparison
+
+
+def test_meta_decision_gate_true_explicit_matches_default(monkeypatch):
+    class _BlockingMeta:
+        verdict = "BLOCK"
+        reason = "x"
+    monkeypatch.setattr(main_mod, "evaluate_meta_decision",
+                        lambda **kw: _BlockingMeta())
+    cfg = _pipeline_config()
+    cfg["features"] = {"meta_decision_gate": True}
+    verdict, _, reason = _final_verdict(
+        cfg, _passing_conf(),
+        risk_pass=True, news_blocked=False, regime_state="TRENDING",
+        mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+    )
+    assert verdict == "NO_TRADE" and reason is not None
+
+
+def test_meta_decision_gate_false_does_not_affect_a_pass_verdict(monkeypatch):
+    """The gate only ever downgrades on BLOCK — a PASS verdict must be
+    unaffected by the flag in either state."""
+    class _PassingMeta:
+        verdict = "PASS"
+        reason = "ok"
+    monkeypatch.setattr(main_mod, "evaluate_meta_decision",
+                        lambda **kw: _PassingMeta())
+    for gate in (True, False):
+        cfg = _pipeline_config()
+        cfg["features"] = {"meta_decision_gate": gate}
+        verdict, meta, reason = _final_verdict(
+            cfg, _passing_conf(),
+            risk_pass=True, news_blocked=False, regime_state="TRENDING",
+            mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+        )
+        assert verdict == "EXECUTE" and reason is None
+
+
 def test_downgrade_reason_persisted_as_fail_reason(fake_d1):
     report = {
         "symbol": "EURUSD",

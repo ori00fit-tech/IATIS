@@ -517,7 +517,19 @@ def _final_verdict(
             )
             logger.info(f"{downgrade_reason} → NO_TRADE")
 
-    # Meta Decision Layer — confidence + stability + engine contributions
+    # Meta Decision Layer — confidence + stability + engine contributions.
+    # H103 (research/results/registry.json, PLANNED): tests whether this
+    # gate's downgrade is worth keeping, or double-counts information
+    # min_score_to_trade/min_engines_agreeing already gated. meta is ALWAYS
+    # computed (for logging/comparison in either arm); features.
+    # meta_decision_gate (default TRUE — this preserves exactly today's
+    # live behavior) controls only whether a BLOCK verdict is allowed to
+    # downgrade the decision. Default stays true until H103 resolves and
+    # is promoted through the normal process (CLAUDE.md rule 6) — this is
+    # NOT a new default-off mechanism like H024/H019, it's an A/B toggle on
+    # an EXISTING live gate, so removing it is the one-sided change that
+    # needs evidence, not adding it.
+    meta_decision_gate = features_cfg.get("meta_decision_gate", True)
     meta = None
     if final_verdict == "EXECUTE":
         try:
@@ -529,7 +541,7 @@ def _final_verdict(
                 report_context={"market_quality": mqs_result.to_dict()},
             )
             # Meta can downgrade EXECUTE to NO_TRADE if confidence too low
-            if meta.verdict == "BLOCK":
+            if meta.verdict == "BLOCK" and meta_decision_gate:
                 final_verdict = "NO_TRADE"
                 downgrade_reason = f"Meta Decision blocked: {meta.reason}"
                 logger.info(f"Meta Decision BLOCKED: {meta.reason}")

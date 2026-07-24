@@ -3,11 +3,12 @@
 # Split out of config.yaml (2026-07-12). Loaded and merged into the
 # top-level `engines` key by utils/helpers.py::load_config().
 #
-# CODE READS ONLY: engines.smc_full_spec, engines.enabled.<name> (bool).
-# `versions` below is metadata for humans only — nothing in main.py,
-# confluence/, or the individual engine modules reads it. It exists so
-# engine iterations can be compared over time without guessing which
-# code version produced which research/results manifest.
+# CODE READS ONLY: engines.smc_full_spec, engines.crypto_positioning_modulator,
+# engines.enabled.<name> (bool). `versions` below is metadata for humans
+# only — nothing in main.py, confluence/, or the individual engine
+# modules reads it. It exists so engine iterations can be compared over
+# time without guessing which code version produced which
+# research/results manifest.
 #
 # Frozen per CLAUDE.md: engines enabled = smc, price_action, nnfx,
 # wyckoff (prod4), kept by burden-of-proof (H015 closed: no robust
@@ -17,6 +18,15 @@
 # selection was shown to be universe-dependent noise.
 
 smc_full_spec: false   # H017 FAILED — detectors stay in the codebase for future re-tests only.
+
+# H019 (research/results/registry.json) — funding-rate/Fear&Greed squeeze-
+# risk penalty for BTCUSD/ETHUSD only (confluence/crypto_positioning_
+# modulator.py). Stays FALSE until the A/B backtest passes H019's own
+# pre-registered decision rule AND (separately) a live funding-rate/
+# Fear-Greed feed exists — main._crypto_positioning_adjustment only ever
+# reads an INJECTED context, never a live API call, so this flag is
+# already inert in live trading regardless of its value today.
+crypto_positioning_modulator: false
 
 enabled:
   divergence: false

@@ -45,8 +45,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
-from dotenv import load_dotenv
-load_dotenv()
+
+try:
+    from dotenv import load_dotenv
+    # Explicit path, not bare load_dotenv(): the no-arg form locates .env
+    # by walking up from the CALLING file's own directory (stack-frame
+    # inspection, not os.getcwd()) — that made scripts/close_orphaned_trades.py
+    # fail the same way on this VPS (D1_WORKER_URL is not set, 2026-07-23).
+    # Anchoring to the repo root removes that ambiguity, but NOT a genuine
+    # OS permission error (.env is 600, owned by the iatis service user) —
+    # that's a real "wrong user" condition, not a discovery bug, so it's
+    # caught explicitly below with an actionable message instead of a
+    # raw traceback.
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+except PermissionError:
+    _env_path = PROJECT_ROOT / ".env"
+    raise SystemExit(
+        f"Permission denied reading {_env_path} as the current user. "
+        f".env is owned by the iatis service user (600) — run this as "
+        f"that user instead:\n"
+        f"  sudo -u iatis {sys.executable} -m scripts.download_ctrader_fx_history ..."
+    )
 
 DATA_DIR = PROJECT_ROOT / "data"
 

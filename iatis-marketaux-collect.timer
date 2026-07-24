@@ -1,0 +1,13 @@
+# Fires iatis-marketaux-collect.service every 4 hours (6 runs/day x 14
+# mapped symbols = 84 req/day, under MarketAux free tier's 100/day budget
+# with headroom — see scripts/collect_marketaux_sentiment.py).
+#   systemctl enable --now iatis-marketaux-collect.timer
+[Unit]
+Description=Periodic IATIS MarketAux sentiment collection (H021 data accumulation)
+
+[Timer]
+OnCalendar=*-*-* 0/4:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

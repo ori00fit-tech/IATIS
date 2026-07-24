@@ -50,8 +50,9 @@ def test_symbol_class_routes_registered_equities_and_etfs():
 def test_provider_chain_for_stocks_and_etf():
     stocks_chain = dp.provider_chain_for("AAPL")
     etf_chain = dp.provider_chain_for("SPY")
-    assert stocks_chain[0] == "twelve_data"
-    assert etf_chain[0] == "twelve_data"
+    assert stocks_chain[0] == "alpaca"
+    assert etf_chain[0] == "alpaca"
+    assert "twelve_data" in stocks_chain
     assert "alpha_vantage" in stocks_chain and "finnhub" in stocks_chain
 
 

@@ -16,6 +16,8 @@ from core.data_providers import (
     _fetch_finnhub_equity,
     _fetch_alpha_vantage,
     _fetch_alpha_vantage_equity,
+    _fetch_alpaca,
+    _fetch_alpaca_equity,
 )
 
 
@@ -205,6 +207,20 @@ def test_is_equity_symbol():
     assert _is_equity_symbol("XAU/USD") is False
 
 
+def test_is_equity_symbol_rejects_slash_free_non_equity_fetch_names():
+    """Regression (2026-07-24): a bare 'no slash present' heuristic was
+    tried first and caught misrouting index/metal fetch-names that are
+    ALSO slash-free in some calling conventions -- test_alpaca_provider.py
+    caught Alpaca's equity path making a real network attempt for
+    'XAUUSD'. Only symbols explicitly registered in _STOCKS/_ETF may
+    route to an equity endpoint."""
+    assert _is_equity_symbol("XAUUSD") is False   # internal metal name, no slash
+    assert _is_equity_symbol("SPX500") is False   # internal index name, no slash
+    assert _is_equity_symbol("SPX") is False      # index fetch-name, no slash
+    assert _is_equity_symbol("DJI") is False      # index fetch-name, no slash
+    assert _is_equity_symbol("BTCUSD") is False   # internal crypto name, no slash
+
+
 def test_fetch_finnhub_dispatches_equity_symbols_to_the_equity_endpoint(monkeypatch):
     monkeypatch.setenv("FINNHUB_API_KEY", "test_key")
     with patch("core.data_providers._fetch_finnhub_equity", return_value=_make_df()) as mock_eq:
@@ -325,3 +341,66 @@ def test_fetch_alpha_vantage_equity_raises_on_premium_information_message(monkey
     with patch("requests.get", return_value=mock_resp):
         with pytest.raises(DataFetchError, match="premium endpoint"):
             _fetch_alpha_vantage_equity("AAPL", "D1", 10)
+
+
+# --- Alpaca equity path (2026-07-24) ---
+
+def test_fetch_alpaca_dispatches_equity_symbols_to_the_equity_endpoint(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    with patch("core.data_providers._fetch_alpaca_equity", return_value=_make_df()) as mock_eq:
+        _fetch_alpaca("AAPL", "D1", 10)
+    mock_eq.assert_called_once_with("AAPL", "D1", 10)
+
+
+def test_fetch_alpaca_still_refuses_non_crypto_non_equity_symbols(monkeypatch):
+    """The exact regression this session caught: XAUUSD/SPX500 (slash-free
+    internal names) must still be refused, not misrouted to Alpaca's
+    equity endpoint."""
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    for sym in ("XAUUSD", "SPX500", "EUR/USD"):
+        with pytest.raises(DataFetchError, match="crypto only"):
+            _fetch_alpaca(sym, "H4", 100)
+
+
+def test_fetch_alpaca_equity_raises_without_key(monkeypatch):
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    with pytest.raises(DataFetchError, match="ALPACA_API_KEY"):
+        _fetch_alpaca_equity("AAPL", "D1", 10)
+
+
+def _alpaca_equity_response(n=3):
+    bars = [
+        {"t": f"2026-07-{10 + i:02d}T00:00:00Z",
+         "o": 100.0 + i, "h": 101.0 + i, "l": 99.0 + i, "c": 100.5 + i, "v": 1_000_000.0}
+        for i in range(n)
+    ]
+    return {"bars": bars, "next_page_token": None}
+
+
+def test_fetch_alpaca_equity_parses_response_and_hits_the_stock_bars_endpoint(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _alpaca_equity_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        df = _fetch_alpaca_equity("AAPL", "D1", 10)
+    assert len(df) == 3
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    called_url = mock_get.call_args[0][0]
+    assert called_url == "https://data.alpaca.markets/v2/stocks/AAPL/bars"
+    assert mock_get.call_args[1]["params"]["timeframe"] == "1Day"
+
+
+def test_fetch_alpaca_equity_raises_on_empty_bars(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"bars": []}
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(DataFetchError, match="empty response"):
+            _fetch_alpaca_equity("AAPL", "D1", 10)

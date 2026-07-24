@@ -92,8 +92,15 @@ data:
     # APIs from this sandbox (no network egress). Run
     # scripts/probe_equity_data_providers.py on the VPS before trusting
     # this chain for anything beyond a syntax-level smoke test.
-    stocks:  [twelve_data, alpha_vantage, finnhub]
-    etf:     [twelve_data, alpha_vantage, finnhub]
+    # alpaca added 2026-07-24 (operator request): already integrated for
+    # crypto (2026-07-16) but never wired for stocks despite its own
+    # code comment noting Alpaca "serves US stocks and crypto" — only
+    # the crypto half was ever built. Placed first: Alpaca is a
+    # broker-integrated data source (not a bolt-on API), plausibly the
+    # highest-quality/deepest free option of the four, though NOT YET
+    # live-verified like the rest of this chain.
+    stocks:  [alpaca, twelve_data, alpha_vantage, finnhub]
+    etf:     [alpaca, twelve_data, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

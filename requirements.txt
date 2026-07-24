@@ -83,3 +83,9 @@ urllib3>=2.0.0,<3.0.0
 charset-normalizer>=3.3.0,<4.0.0
 httpcore>=1.0.0,<2.0.0
 h11>=0.14.0,<1.0.0
+
+# H104 (research/results/registry.json) — scripts/collect_binance_orderflow.py's
+# long-running WebSocket tick collector. Plain `websockets`, not ccxt.pro:
+# Binance's public aggTrade stream is simple enough to parse directly,
+# and this avoids any dependency on ccxt.pro's separate packaging/licensing.
+websockets>=12.0,<17.0

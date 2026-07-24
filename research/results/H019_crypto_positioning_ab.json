@@ -1,0 +1,36 @@
+{
+  "hypothesis": "H019",
+  "generated_at": "2026-07-24T06:59:35.252095+00:00",
+  "train_frac": 0.65,
+  "decision_rule": {
+    "min_mean_dPF": 0.05,
+    "max_losing_symbols": 0
+  },
+  "per_symbol": {
+    "BTCUSD": {
+      "test_n_A": 94,
+      "test_PF_A": 1.246,
+      "test_n_B": 96,
+      "test_PF_B": 1.115,
+      "dPF": -0.131
+    },
+    "ETHUSD": {
+      "test_n_A": 92,
+      "test_PF_A": 1.141,
+      "test_n_B": 91,
+      "test_PF_B": 1.199,
+      "dPF": 0.058
+    }
+  },
+  "verdict": "FAILED / NO CHANGE (modulator stays off)",
+  "verdict_reasons": [
+    "1_mean_dPF>=0.05 failed",
+    "2_zero_losing_symbols failed",
+    "losing symbol(s): ['BTCUSD']"
+  ],
+  "checks": {
+    "1_mean_dPF>=0.05": false,
+    "2_zero_losing_symbols": false
+  },
+  "note": "Verdict from the pre-registered rule (registry H019) applied literally. Measurement only (rule 6) \u2014 engines.crypto_positioning_modulator stays False in live config regardless of this result until a separate, explicit promotion decision."
+}

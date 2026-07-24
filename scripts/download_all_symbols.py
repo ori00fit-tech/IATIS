@@ -56,6 +56,11 @@ PIP_SIZE = {
     "USOIL":  0.01,
     "US30":   1.0,    "NAS100": 1.0,    "SPX500": 0.1,
     "BTCUSD": 1.0,    "ETHUSD": 0.01,
+    # Equities/ETFs (2026-07-24, starter universe): not load-bearing for
+    # calc_pnl (the "equity" branch below uses dollar_per_point only, not
+    # PIP_SIZE) — kept here at the smallest quoted increment (1 cent) for
+    # documentation consistency with every other symbol in this dict.
+    "AAPL": 0.01, "NVDA": 0.01, "SPY": 0.01, "QQQ": 0.01,
 }
 
 # Asset class for P&L calculation
@@ -67,6 +72,11 @@ ASSET_CLASS = {
     "USOIL":  "metal",
     "US30":   "index",  "NAS100": "index", "SPX500": "index",
     "BTCUSD": "crypto", "ETHUSD": "crypto",
+    # 2026-07-24, starter universe. Falls into calc_pnl's generic
+    # (non-forex, non-crypto) branch: size = risk_usd/(sl_dist*dpp),
+    # pnl = (exit-entry)*direction*size*dpp — with dpp=1.0 this is the
+    # standard $1-per-point-per-share equity P&L model.
+    "AAPL": "equity", "NVDA": "equity", "SPY": "equity", "QQQ": "equity",
 }
 
 # dollar_per_point for non-forex (per 0.01 lot or contract)
@@ -79,6 +89,7 @@ DOLLAR_PER_POINT = {
     "SPX500": 1.0,
     "BTCUSD": 1.0,
     "ETHUSD": 1.0,
+    "AAPL": 1.0, "NVDA": 1.0, "SPY": 1.0, "QQQ": 1.0,  # $1/point/share
 }
 
 

@@ -34,6 +34,27 @@ def test_symbol_class_routing():
     assert dp.symbol_class("EUR/USD") == "fx"
 
 
+def test_symbol_class_routes_registered_equities_and_etfs():
+    """2026-07-24: an unregistered ticker must NOT silently fall through
+    to 'fx' — only symbols explicitly listed in _STOCKS/_ETF route there;
+    everything else still defaults to fx (the pre-existing, documented
+    fallback), which then fails loudly (wrong chain, wrong endpoint)
+    rather than silently misrouting to a chain that can't serve it."""
+    assert dp.symbol_class("AAPL") == "stocks"
+    assert dp.symbol_class("NVDA") == "stocks"
+    assert dp.symbol_class("SPY") == "etf"
+    assert dp.symbol_class("QQQ") == "etf"
+    assert dp.symbol_class("TSLA") == "fx"  # not yet registered — falls through
+
+
+def test_provider_chain_for_stocks_and_etf():
+    stocks_chain = dp.provider_chain_for("AAPL")
+    etf_chain = dp.provider_chain_for("SPY")
+    assert stocks_chain[0] == "twelve_data"
+    assert etf_chain[0] == "twelve_data"
+    assert "alpha_vantage" in stocks_chain and "finnhub" in stocks_chain
+
+
 def test_provider_chain_defaults_and_overrides():
     assert dp.provider_chain_for("BTC/USD")[0] == "ccxt"
     assert dp.provider_chain_for("EUR/USD")[0] == "ctrader"

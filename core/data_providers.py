@@ -173,6 +173,87 @@ def _to_av_symbol(symbol: str) -> tuple[str, str]:
     return symbol[:3], symbol[3:]
 
 
+def _is_equity_symbol(symbol: str) -> bool:
+    """Every FX/metals/crypto symbol in this codebase is formatted with a
+    '/' (e.g. 'EUR/USD', 'XAU/USD', 'BTC/USD'); plain stock/ETF tickers
+    never contain one (e.g. 'AAPL', 'SPY'). Used to route the shared
+    'alpha_vantage'/'finnhub' provider-chain entries to the correct
+    endpoint without inventing new provider names."""
+    return "/" not in symbol
+
+
+def _fetch_alpha_vantage_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Stocks/ETFs via Alpha Vantage's core (non-premium) equity endpoints
+    — TIME_SERIES_INTRADAY for intraday intervals, TIME_SERIES_DAILY for
+    D1, TIME_SERIES_WEEKLY for W1. Unlike FX_INTRADAY (confirmed premium-
+    gated on the free tier — see _fetch_alpha_vantage), these are Alpha
+    Vantage's original, documented-free core product; NOT YET verified
+    against the real API from this codebase — see
+    scripts/probe_equity_data_providers.py."""
+    api_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+    if not api_key:
+        raise DataFetchError("ALPHA_VANTAGE_API_KEY not set — skipping Alpha Vantage")
+
+    try:
+        import requests
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    AV_INTRADAY_MAP = {
+        "M1": "1min", "M5": "5min", "M15": "15min", "M30": "30min",
+        "H1": "60min", "1h": "60min",
+    }
+    params: dict[str, str] = {"symbol": symbol, "apikey": api_key,
+                              "outputsize": "full" if outputsize > 100 else "compact"}
+    if interval in AV_INTRADAY_MAP:
+        params["function"] = "TIME_SERIES_INTRADAY"
+        params["interval"] = AV_INTRADAY_MAP[interval]
+        time_series_key = f"Time Series ({AV_INTRADAY_MAP[interval]})"
+    elif interval == "W1":
+        params["function"] = "TIME_SERIES_WEEKLY"
+        time_series_key = "Weekly Time Series"
+    else:  # D1 and anything else defaults to daily
+        params["function"] = "TIME_SERIES_DAILY"
+        time_series_key = "Time Series (Daily)"
+
+    url = "https://www.alphavantage.co/query"
+    logger.info(f"Alpha Vantage (equity): fetching {symbol} @ {params['function']}")
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Alpha Vantage equity request failed: {exc}")
+
+    if "Information" in data:
+        raise DataFetchError(f"Alpha Vantage equity: {data['Information'][:100]}")
+    if "Note" in data:
+        raise DataFetchError(f"Alpha Vantage equity rate limited: {data['Note'][:100]}")
+    if "Error Message" in data:
+        raise DataFetchError(f"Alpha Vantage equity error: {data['Error Message']}")
+    if time_series_key not in data:
+        raise DataFetchError(f"Alpha Vantage equity: unexpected response keys: {list(data.keys())}")
+
+    ts = data[time_series_key]
+    records = []
+    for ts_str, values in ts.items():
+        records.append({
+            "datetime": pd.Timestamp(ts_str, tz="UTC"),
+            "open":   float(values["1. open"]),
+            "high":   float(values["2. high"]),
+            "low":    float(values["3. low"]),
+            "close":  float(values["4. close"]),
+            "volume": float(values.get("5. volume", 0.0)),
+        })
+    if not records:
+        raise DataFetchError(f"Alpha Vantage equity: empty series for {symbol}")
+
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
+    df = df.tail(outputsize)
+    logger.info(f"Alpha Vantage (equity): {len(df)} bars for {symbol}")
+    return df
+
+
 def _fetch_alpha_vantage(
     symbol: str,
     interval: str,
@@ -182,7 +263,11 @@ def _fetch_alpha_vantage(
 
     Note: FX_INTRADAY requires Premium on Alpha Vantage free tier.
     Falls back gracefully if 'Information' key returned (premium required).
+    Equity/ETF symbols (no '/') route to _fetch_alpha_vantage_equity().
     """
+    if _is_equity_symbol(symbol):
+        return _fetch_alpha_vantage_equity(symbol, interval, outputsize)
+
     api_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
     if not api_key:
         raise DataFetchError("ALPHA_VANTAGE_API_KEY not set — skipping Alpha Vantage")
@@ -251,6 +336,76 @@ def _fetch_alpha_vantage(
     return df
 
 
+def _fetch_finnhub_equity(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Stocks/ETFs via Finnhub's /stock/candle endpoint — a genuinely
+    DIFFERENT endpoint and symbol format from the FX/crypto path below
+    (plain ticker, e.g. 'AAPL', no OANDA:/BINANCE: prefix). NOT YET
+    verified free-tier access: Finnhub has, at various points, restricted
+    stock-candle history to paid plans while keeping forex/crypto candles
+    free — the docstring's 'Free tier supports... US stocks' claim
+    predates this module and has not been re-verified against the real
+    API for this specific endpoint. See
+    scripts/probe_equity_data_providers.py before trusting this path."""
+    api_key = os.environ.get("FINNHUB_API_KEY", "")
+    if not api_key:
+        raise DataFetchError("FINNHUB_API_KEY not set — skipping Finnhub")
+
+    try:
+        import requests
+        import time as _time
+    except ImportError:
+        raise DataFetchError("requests not installed")
+
+    RESOLUTION_MAP = {
+        "M1": "1", "M5": "5", "M15": "15", "M30": "30",
+        "H1": "60", "1h": "60", "D1": "D", "W1": "W",
+    }
+    resolution = RESOLUTION_MAP.get(interval, "D")
+
+    end_ts = int(_time.time())
+    # Daily/weekly bars need a much wider lookback window than hourly ones
+    # to reach `outputsize` bars — approximate generously, Finnhub simply
+    # returns what exists in range.
+    seconds_per_bar = {"1": 60, "5": 300, "15": 900, "30": 1800,
+                       "60": 3600, "D": 86400, "W": 604800}.get(resolution, 86400)
+    start_ts = end_ts - outputsize * seconds_per_bar * 2  # 2x buffer
+
+    url = "https://finnhub.io/api/v1/stock/candle"
+    params = {"symbol": symbol, "resolution": resolution,
+              "from": start_ts, "to": end_ts, "token": api_key}
+
+    logger.info(f"Finnhub (equity): fetching {symbol} @ {resolution}")
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise DataFetchError(f"Finnhub equity request failed: {exc}")
+
+    if data.get("s") == "no_data":
+        raise DataFetchError(f"Finnhub equity: no data for {symbol}")
+    if data.get("s") != "ok":
+        raise DataFetchError(f"Finnhub equity: status={data.get('s')}, error={data.get('error', '?')}")
+
+    records = []
+    for i, ts in enumerate(data.get("t", [])):
+        records.append({
+            "datetime": pd.Timestamp(ts, unit="s", tz="UTC"),
+            "open":   float(data["o"][i]),
+            "high":   float(data["h"][i]),
+            "low":    float(data["l"][i]),
+            "close":  float(data["c"][i]),
+            "volume": float(data.get("v", [0] * len(data["t"]))[i]),
+        })
+    if not records:
+        raise DataFetchError(f"Finnhub equity: empty candles for {symbol}")
+
+    df = pd.DataFrame(records).set_index("datetime").sort_index()
+    df = df.tail(outputsize)
+    logger.info(f"Finnhub (equity): {len(df)} bars for {symbol}")
+    return df
+
+
 def _fetch_finnhub(
     symbol: str,
     interval: str,
@@ -260,7 +415,13 @@ def _fetch_finnhub(
 
     Requires FINNHUB_API_KEY in .env
     Free tier supports: OANDA FX pairs, crypto, US stocks
+    Equity/ETF symbols (no '/') route to _fetch_finnhub_equity(), a
+    genuinely different endpoint — see that function's docstring for
+    why the stock-candle path needs its own free-tier verification.
     """
+    if _is_equity_symbol(symbol):
+        return _fetch_finnhub_equity(symbol, interval, outputsize)
+
     api_key = os.environ.get("FINNHUB_API_KEY", "")
     if not api_key:
         raise DataFetchError("FINNHUB_API_KEY not set — skipping Finnhub")
@@ -482,12 +643,24 @@ DEFAULT_CHAINS: dict[str, list[str]] = {
     "energy":  ["ctrader", "finnhub"],
     "indices": ["ctrader", "fcs_api", "finnhub"],
     "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
+    # 2026-07-24, NOT YET LIVE-VERIFIED — see config.yaml's stocks/etf note.
+    "stocks":  ["twelve_data", "alpha_vantage", "finnhub"],
+    "etf":     ["twelve_data", "alpha_vantage", "finnhub"],
 }
 
 _CRYPTO = {"BTCUSD", "ETHUSD"}
 _METALS = {"XAUUSD", "XAGUSD"}
 _ENERGY = {"USOIL"}
 _INDICES = {"US30", "NAS100", "SPX500"}
+# Starter universe only (2026-07-24) — extend as real symbols are added to
+# config/symbols.yaml. Every equity/ETF ticker MUST be listed in one of
+# these two sets: symbol_class() has no generic equity-detection fallback
+# (unlike _is_equity_symbol()'s '/' heuristic used at the provider-fetch
+# layer) specifically so an unregistered new ticker fails loudly here
+# (falls through to "fx", which then 404s/mismatches obviously) rather
+# than silently misrouting to a provider chain that can't serve it.
+_STOCKS = {"AAPL", "NVDA"}
+_ETF = {"SPY", "QQQ"}
 
 # Fetch-symbol → internal name for the non-trivial cases (main._YF_ONLY
 # uses these fetch names for the Yahoo-only symbols).
@@ -508,6 +681,10 @@ def symbol_class(symbol: str) -> str:
         return "energy"
     if internal in _INDICES:
         return "indices"
+    if internal in _STOCKS:
+        return "stocks"
+    if internal in _ETF:
+        return "etf"
     return "fx"
 
 

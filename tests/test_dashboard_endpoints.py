@@ -53,7 +53,7 @@ def test_provider_chains_reports_classes_and_availability(client):
     r = client.get("/provider-chains", headers=HDR)
     assert r.status_code == 200
     body = r.json()
-    assert set(body["chains"]) == {"crypto", "metals", "energy", "indices", "fx"}
+    assert set(body["chains"]) == {"crypto", "metals", "energy", "indices", "fx", "stocks", "etf"}
     assert body["chains"]["crypto"][0] == "ccxt"
     # Test env strips credentials (conftest) → ctrader must show unavailable.
     assert body["availability"]["ctrader"] is False

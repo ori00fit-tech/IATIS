@@ -46,6 +46,10 @@ _EXPECTED_SYMBOLS = [
     (False, "SPX500", 55, 2.5, "SPX"),
     (True, "BTCUSD", 55, 2.5, "BTC/USD"),
     (True, "ETHUSD", 60, 2.0, "ETH/USD"),
+    (False, "AAPL", 60, 2.0, "AAPL"),
+    (False, "NVDA", 60, 2.0, "NVDA"),
+    (False, "SPY", 60, 2.0, "SPY"),
+    (False, "QQQ", 60, 2.0, "QQQ"),
 ]
 
 _EXPECTED_ENGINES_ENABLED = {

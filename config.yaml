@@ -83,6 +83,17 @@ data:
     energy:  [ctrader, finnhub]
     indices: [ctrader, fcs_api, finnhub]
     fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub]
+    # stocks/etf (2026-07-24): NOT YET LIVE-VERIFIED. twelve_data's client
+    # is fully generic (no FX-specific logic) so plain equity tickers work
+    # with zero client changes; alpha_vantage/finnhub each needed a NEW
+    # code path (different endpoint + symbol format from their FX paths,
+    # see core/data_providers.py::_fetch_alpha_vantage_equity /
+    # _fetch_finnhub_equity) — built but not yet probed against the real
+    # APIs from this sandbox (no network egress). Run
+    # scripts/probe_equity_data_providers.py on the VPS before trusting
+    # this chain for anything beyond a syntax-level smoke test.
+    stocks:  [twelve_data, alpha_vantage, finnhub]
+    etf:     [twelve_data, alpha_vantage, finnhub]
   # Valid values: twelve_data | ctrader | injected (backtests only).
   # synthetic is disallowed under system.mode=live — scheduler.py's main()
   # refuses to start rather than trade on fabricated bars (see the guard

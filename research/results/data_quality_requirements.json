@@ -1,0 +1,118 @@
+{
+  "_comment": "Integrity/validation checks per data domain, as required by the feasibility brief. 'implemented' checks already exist in the codebase (cited); 'recommended' checks do not exist yet and are new, small additions — not blockers to any current hypothesis.",
+  "generated": "2026-07-24",
+  "domains": {
+    "ohlcv_backbone": {
+      "checks": {
+        "missing_timestamps": {"implemented": true, "reference": "core/data_validator.validate_ohlcv() — monotonically increasing index check"},
+        "duplicate_timestamps": {"implemented": true, "reference": "core/data_validator.validate_ohlcv()"},
+        "future_timestamps": {"implemented": false, "recommended": "explicit check that no bar timestamp exceeds the fetch-time wall clock — currently relies on provider correctness, not independently verified"},
+        "holiday_gaps": {"implemented": false, "recommended": "FX/metals/indices weekend and holiday gaps are currently tolerated implicitly (no bar = no signal that day) rather than explicitly validated as expected-vs-anomalous; crypto trades 24/7 so any gap there IS an anomaly worth flagging"},
+        "maintenance_gaps": {"implemented": false, "recommended": "exchange maintenance windows (crypto) or broker feed outages (cTrader) are not distinguished from genuine data gaps today"},
+        "outliers": {"implemented": "partial", "reference": "core/data_confidence.py cross-checks independent providers on carrier symbols and flags disagreement"},
+        "impossible_values": {"implemented": true, "reference": "core/data_validator.validate_ohlcv() — malformed OHLC relationship check (e.g. low > high)"},
+        "negative_oi": {"implemented": "not applicable to this domain — see crypto_positioning domain"},
+        "funding_spikes": {"implemented": "not applicable to this domain — see crypto_positioning domain"},
+        "corporate_actions": {"implemented": "not applicable — FX/metals/crypto/index-CFDs have no corporate actions"},
+        "contract_rollovers": {"implemented": false, "recommended": "index CFDs (US30/NAS100/SPX500) may be subject to broker-side contract roll conventions this project has not audited for silent price-series discontinuities at roll dates"},
+        "exchange_migrations": {"implemented": true, "reference": "H023 IS a documented real instance of exactly this class of bug — cTrader's migration silently changed FX from zero-volume (Twelve Data era) to nonzero tick-volume, changing Wyckoff's live behavior undetected until code inspection caught it (2026-07-18)"}
+      }
+    },
+    "macro_h007": {
+      "checks": {
+        "missing_timestamps": {"implemented": "partial", "reference": "daily series, gaps are typically legitimate (weekends/holidays), not validated as anomalous vs. expected"},
+        "duplicate_timestamps": {"implemented": true, "reference": "shared loader validation path, core/alt_data_loader.py"},
+        "future_timestamps": {"implemented": false, "recommended": "not currently checked independently"},
+        "holiday_gaps": {"implemented": "expected", "note": "CBOE/FRED both follow US market holidays; not anomalies"},
+        "maintenance_gaps": {"implemented": "not applicable — daily batch series, no live maintenance window concept"},
+        "outliers": {"implemented": false, "recommended": "no explicit sanity bound on daily VIX/yield moves — a genuine data error (e.g. a FRED series revision glitch) would not currently be caught before entering the engine"},
+        "impossible_values": {"implemented": false, "recommended": "e.g. VIX < 0 or yields implausibly outside historical range are not explicitly rejected"},
+        "negative_oi": {"implemented": "not applicable to this domain"},
+        "funding_spikes": {"implemented": "not applicable to this domain"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable — index-level series, not futures contracts"},
+        "exchange_migrations": {"implemented": true, "reference": "2026-07-17 GLD Yahoo ETF proxy -> FRED GOLDAMGBD228NLBM LBMA gold fixing migration, done deliberately for correctness"}
+      }
+    },
+    "cot_h012": {
+      "checks": {
+        "missing_timestamps": {"implemented": false, "recommended": "no explicit check for a skipped weekly release (CFTC has delayed/skipped COT during past government shutdowns — a real, expected gap that should be distinguished from a scraper failure)"},
+        "duplicate_timestamps": {"implemented": "partial", "note": "current 12-week rolling cache structure implicitly avoids duplicates by construction; a new deep-archive backfill script would need its own explicit dedup on (symbol, report_date)"},
+        "future_timestamps": {"implemented": false, "recommended": "not currently checked"},
+        "holiday_gaps": {"implemented": "not applicable — weekly cadence, not daily"},
+        "maintenance_gaps": {"implemented": "not applicable"},
+        "outliers": {"implemented": false, "recommended": "large week-over-week net-positioning swings are not flagged; could indicate a parser misalignment against CFTC's fixed-width column layout rather than a real market event"},
+        "impossible_values": {"implemented": false, "recommended": "net position values inconsistent with total open interest for the same contract are not cross-checked"},
+        "negative_oi": {"implemented": "not applicable — COT reports net speculator positioning, not raw OI, though a sanity cross-check against total OI would be a reasonable addition"},
+        "funding_spikes": {"implemented": "not applicable to this domain"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable — COT aggregates across all contract months for a given commodity"},
+        "exchange_migrations": {"implemented": false, "recommended": "CFTC occasionally renames/reclassifies instruments across years — a deep-archive backfill script must handle this explicitly or silently mis-map older records"}
+      }
+    },
+    "crypto_positioning_h019": {
+      "checks": {
+        "missing_timestamps": {"implemented": true, "reference": "scripts/probe_crypto_positioning_data.py confirmed no gaps across 6,574 funding-rate records and 3,092 Fear&Greed records"},
+        "duplicate_timestamps": {"implemented": true, "reference": "_paginate_forward() tracks actual timestamp progress specifically to avoid the duplicate/stall failure mode found in Bybit's 200-cap-regardless-of-limit behavior"},
+        "future_timestamps": {"implemented": true, "reference": "causal_context_at() strictly filters to settlement/publish timestamps before the decision bar — enforced, tested (tests/test_crypto_positioning_modulator.py)"},
+        "holiday_gaps": {"implemented": "not applicable — crypto trades 24/7, funding settles on a fixed 8h schedule with no holiday exceptions"},
+        "maintenance_gaps": {"implemented": false, "recommended": "exchange maintenance windows on Binance could in principle produce a missed 8h funding settlement; not explicitly distinguished from a genuine data gap"},
+        "outliers": {"implemented": false, "recommended": "extreme funding-rate spikes (e.g. during a real squeeze event) are exactly the signal the modulator is designed to react to, not noise to filter — but an impossible value (e.g. funding rate outside Binance's own +/-0.75% cap) is not explicitly validated"},
+        "impossible_values": {"implemented": false, "recommended": "no explicit range check against Binance's documented funding-rate cap"},
+        "negative_oi": {"implemented": "not applicable — OI was dropped from H019 entirely"},
+        "funding_spikes": {"implemented": "by design, not filtered", "note": "compute_funding_zscore() is specifically built to react to these, not suppress them"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable — perpetual futures have no expiry/rollover"},
+        "exchange_migrations": {"implemented": "not applicable — single exchange (Binance) used throughout, no migration occurred"}
+      }
+    },
+    "news_sentiment_h021": {
+      "checks": {
+        "missing_timestamps": {"implemented": "not applicable — event-driven (article publication), no fixed schedule to have gaps against"},
+        "duplicate_timestamps": {"implemented": false, "recommended": "same story re-syndicated across sources can produce near-duplicate (symbol, published_at) rows — dedup logic should be verified/added before H021's actual evaluation run"},
+        "future_timestamps": {"implemented": false, "recommended": "not currently checked"},
+        "holiday_gaps": {"implemented": "not applicable — news publishes continuously"},
+        "maintenance_gaps": {"implemented": "not applicable"},
+        "outliers": {"implemented": false, "recommended": "no bound check on sentiment_score staying within MarketAux's documented -1..1 range"},
+        "impossible_values": {"implemented": false, "recommended": "same as outliers above"},
+        "negative_oi": {"implemented": "not applicable"},
+        "funding_spikes": {"implemented": "not applicable"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable"},
+        "exchange_migrations": {"implemented": "not applicable — single source (MarketAux) in use"}
+      }
+    },
+    "tick_orderflow_h104": {
+      "checks": {
+        "missing_timestamps": {"implemented": "by construction", "note": "bar_start_ms() floors every trade to its 15-min bar; a bar with zero trades is simply never emitted (DeltaAccumulator.is_empty()), not a gap to detect after the fact"},
+        "duplicate_timestamps": {"implemented": "not applicable — append-only stream, one bar per completed interval per symbol by construction"},
+        "future_timestamps": {"implemented": false, "recommended": "trade_ts_ms is trusted as-sent by Binance; no explicit sanity check against local wall-clock time"},
+        "holiday_gaps": {"implemented": "not applicable — crypto trades 24/7"},
+        "maintenance_gaps": {"implemented": "partial", "reference": "reconnect-with-backoff on any WebSocket drop (collect_symbol()); a genuine multi-minute Binance-side outage would show as a gap in the JSONL, not currently flagged/alerted separately from a normal quiet period"},
+        "outliers": {"implemented": false, "recommended": "no sanity bound on trade price/qty vs. a recent rolling range — a bad tick from the exchange would currently flow straight into the bar aggregate"},
+        "impossible_values": {"implemented": "partial", "reference": "parse_agg_trade() rejects malformed JSON/missing fields/non-numeric price via a try/except returning None; does not reject a syntactically valid but economically implausible value (e.g. price=0)"},
+        "negative_oi": {"implemented": "not applicable to this domain"},
+        "funding_spikes": {"implemented": "not applicable to this domain"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable — spot aggTrade stream, not a futures contract"},
+        "exchange_migrations": {"implemented": "not applicable — single exchange, single stream format"}
+      }
+    },
+    "execution_quality_h105": {
+      "checks": {
+        "missing_timestamps": {"implemented": "not applicable — one row per real fill, no fixed schedule"},
+        "duplicate_timestamps": {"implemented": true, "reference": "one row per real broker fill by construction; dry-run fills explicitly excluded (storage/execution_quality.py:30-32)"},
+        "future_timestamps": {"implemented": "not applicable — timestamps are set at write time from the live system clock"},
+        "holiday_gaps": {"implemented": "not applicable — gaps simply mean no trade occurred, not a data-quality issue"},
+        "maintenance_gaps": {"implemented": "not applicable"},
+        "outliers": {"implemented": false, "recommended": "no explicit bound on slippage_r magnitude — an extreme value could be a real adverse fill or a computation bug (e.g. a stale entry_price); worth a sanity range check before H105's Stage 1 analysis runs"},
+        "impossible_values": {"implemented": false, "recommended": "e.g. a fill price on the wrong side of the stated direction's intended price is not explicitly rejected before being averaged into the slippage distribution"},
+        "negative_oi": {"implemented": "not applicable"},
+        "funding_spikes": {"implemented": "not applicable"},
+        "corporate_actions": {"implemented": "not applicable"},
+        "contract_rollovers": {"implemented": "not applicable"},
+        "exchange_migrations": {"implemented": "not applicable — single broker (cTrader) throughout"}
+      }
+    }
+  }
+}

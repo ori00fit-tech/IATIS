@@ -1,0 +1,104 @@
+{
+  "_comment": "Per-domain collection strategy. 29 of 35 hypotheses share the 'ohlcv_backbone' plan; the 6 domain-specific hypotheses each get their own plan. See data_feasibility_report.md for the full reasoning behind each choice.",
+  "generated": "2026-07-24",
+  "plans": {
+    "ohlcv_backbone": {
+      "covers_hypotheses": ["H001","H002","H002b","H003","H004","H005","H006","H008","H008b","H008c","H009","H010","H011","H013","H014","H015","H016","H017","H018","H020","H022","H023","H024","H025","H033","H037","H101","H102","H103"],
+      "primary_by_asset_class": {
+        "crypto": "ccxt (Binance)",
+        "metals": "ctrader",
+        "energy": "ctrader",
+        "indices": "ctrader",
+        "fx": "ctrader"
+      },
+      "fallback_chain_by_asset_class": {
+        "crypto": ["alpaca", "twelve_data", "finnhub"],
+        "metals": ["twelve_data", "fcs_api", "finnhub"],
+        "energy": ["finnhub"],
+        "indices": ["fcs_api", "finnhub"],
+        "fx": ["twelve_data", "fcs_api", "alpha_vantage", "finnhub"]
+      },
+      "merge_logic": "fetch_with_failover() walks the chain in order, first successful provider wins for that request; no cross-provider merging within one fetch. _deepen_with_history() separately left-extends a short live-fetched frame with the on-disk deep-history archive when the live fetch alone doesn't cover the requested lookback.",
+      "conflict_resolution": "no automatic conflict resolution between providers exists today — core/data_confidence.py cross-checks independent providers on carrier symbols and flags disagreement for human review rather than silently picking one.",
+      "timestamp_normalization": "all providers normalized to UTC at the loader boundary (core/data_loader.py, core/data_providers.py).",
+      "timezone_normalization": "UTC throughout; no local-timezone data enters the pipeline.",
+      "duplicate_removal": "core/data_validator.validate_ohlcv() rejects duplicate timestamps.",
+      "quality_checks": "core/data_validator.validate_ohlcv() (nulls, duplicate timestamps, malformed OHLC relationships, monotonic index); main.py DATA STARVATION logging when NNFX's >=210-bar or the D1 MTF gate's >=50-bar floor is violated.",
+      "known_gap_not_closed": "FCS API's 300-candle/request cap is not paginated around — acceptable because FCS is fallback-only in every chain it appears in, never primary."
+    },
+    "H007_macro": {
+      "covers_hypotheses": ["H007"],
+      "primary": {"VIX": "cboe_vix", "DXY": "fred:DTWEXBGS", "SPY_proxy": "fred:SP500", "GLD_proxy": "fred:GOLDAMGBD228NLBM", "US10Y": "fred:DGS10", "US02Y": "fred:DGS2"},
+      "fallback": {"VIX": "fred:VIXCLS"},
+      "merge_logic": "load_macro_snapshot() (core/alt_data_loader.py) tries CBOE first for VIX, falls to FRED VIXCLS on failure; all other series go directly to FRED, no fallback needed (single official source per series).",
+      "conflict_resolution": "not applicable — one authoritative series per macro variable, no competing providers.",
+      "timestamp_normalization": "daily close series, UTC dates.",
+      "timezone_normalization": "UTC.",
+      "duplicate_removal": "handled by the same OHLCV-contract loader path (core/alt_data_loader.py: FRED/CBOE-style close series -> OHLCV contract).",
+      "quality_checks": "none beyond the shared loader validation today; recommended addition: flag any FRED series revision (rare, government data revises on defined schedules) rather than silently overwriting a prior value.",
+      "known_gap_not_closed": "none — this domain is fully served by free official sources."
+    },
+    "H012_cot": {
+      "covers_hypotheses": ["H012"],
+      "primary_forward": "cftc_cot_current (scripts/download_cot.py, weekly rolling 12-week cache)",
+      "primary_backfill_recommended_not_yet_built": "cftc_cot_yearly_archive — new script needed, e.g. scripts/download_cot_deep_history.py, reusing scripts/download_cot.py's existing column-layout parser against CFTC's yearly deacot archive files instead of the current-week file",
+      "fallback": "none — CFTC is the sole authoritative source for this data by definition",
+      "merge_logic": "yearly-archive backfill would populate data/cot/{SYMBOL}.json's history array up to the point where the weekly rolling collector's own accumulated history takes over — no overlap-resolution needed if the backfill script stops exactly at the weekly collector's earliest cached week.",
+      "conflict_resolution": "not applicable — single source.",
+      "timestamp_normalization": "COT reports are published Fridays ~15:30 ET for the prior Tuesday's positioning; existing engine consumes report-date, not publish-date — must preserve this convention in any new backfill script to avoid a look-ahead mismatch against the live collector's semantics.",
+      "timezone_normalization": "convert ET report dates to UTC consistently with the existing collector.",
+      "duplicate_removal": "dedupe on (symbol, report_date).",
+      "quality_checks_needed": "contract-name changes across years (CFTC occasionally renames/reclassifies instruments), missing weeks around government shutdowns (a real historical gap, not a bug), duplicate week detection.",
+      "known_gap_not_closed": "the backfill script itself does not exist yet — this is the plan's one concrete action item outside the OHLCV backbone."
+    },
+    "H019_crypto_positioning": {
+      "covers_hypotheses": ["H019"],
+      "status": "RESOLVED — hypothesis already FAILED; plan retained for the evidence chain, not for further action",
+      "primary": {"funding_rate": "binance_funding_rate", "fear_greed": "alternative_me_fear_greed"},
+      "dropped": {"open_interest": "dropped per H019's own pre-registered fallback rule — none of binance/bybit/okx reached institutional depth"},
+      "merge_logic": "no merge needed — funding rate and Fear&Greed are independent series, combined only at the modulator's scoring step (confluence/crypto_positioning_modulator.py), never at the data layer.",
+      "conflict_resolution": "not applicable.",
+      "timestamp_normalization": "funding rate keyed to settlement timestamp (00:00/08:00/16:00 UTC fixed schedule); Fear&Greed keyed to publish timestamp (daily).",
+      "timezone_normalization": "UTC throughout.",
+      "duplicate_removal": "handled at download time (scripts/download_crypto_positioning_history.py).",
+      "quality_checks": "causal_context_at() enforces strictly-before alignment for both series — the look-ahead guard this hypothesis's own pre-registration required before any code ran.",
+      "known_gap_not_closed": "none actionable — the hypothesis is resolved; OI would need a new hypothesis to revisit, not a plan update here."
+    },
+    "H021_marketaux_sentiment": {
+      "covers_hypotheses": ["H021"],
+      "primary": "marketaux (scripts/collect_marketaux_sentiment.py + iatis-marketaux-collect.timer)",
+      "fallback": "none adopted — NewsAPI.org and GDELT were evaluated as candidates (data_sources_registry.json) but a fallback swap mid-hypothesis would violate CLAUDE.md rule 6 (never change entries/data mid-sample); either could be a NEW pre-registered hypothesis if MarketAux's accumulated sample proves too thin",
+      "merge_logic": "not applicable — single source in use.",
+      "conflict_resolution": "not applicable.",
+      "timestamp_normalization": "published_at normalized to UTC at collection time.",
+      "timezone_normalization": "UTC.",
+      "duplicate_removal": "needed at the article level (same story often re-syndicated) — verify scripts/collect_marketaux_sentiment.py dedupes on (symbol, published_at, source) before H021's actual evaluation run.",
+      "quality_checks": "XAUUSD->GOLD entity-mapping correctness already caught and fixed 2026-07-24; verify no other symbol silently maps to a wrong/empty entity before evaluation.",
+      "known_gap_not_closed": "iatis-marketaux-collect.timer enablement status on the VPS was not confirmed as of the last registry note — verify it is actually running before assuming data is accumulating."
+    },
+    "H104_binance_orderflow": {
+      "covers_hypotheses": ["H104"],
+      "primary": "binance_aggtrade_ws (scripts/collect_binance_orderflow.py + iatis-orderflow-collector.service, confirmed connected and running 2026-07-24)",
+      "fallback_commercial_optional": "tardis_dev — could eliminate the 3-month forward-only wait via historical tick backfill; price unverified, treat as its own explicit purchase decision if the wait is judged unacceptable, not a default action",
+      "merge_logic": "not applicable — single forward-collecting source; a future Tardis.dev backfill (if purchased) would need explicit merge/dedup logic against the live-collected bars at the seam date, not yet designed since no purchase has been made.",
+      "conflict_resolution": "not applicable today.",
+      "timestamp_normalization": "trade_ts_ms floored to 15-minute bar boundaries via bar_start_ms(), UTC.",
+      "timezone_normalization": "UTC.",
+      "duplicate_removal": "not applicable — single append-only stream, one bar emitted per completed interval per symbol.",
+      "quality_checks": "parse_agg_trade() returns None (never raises) on malformed messages; reconnect-with-backoff on any drop; DeltaAccumulator.is_empty() suppresses zero-trade bars from being written.",
+      "known_gap_not_closed": "no historical backfill exists or can exist for the pre-collection period — this is an accepted, pre-registered constraint of the hypothesis itself, not a gap to close."
+    },
+    "H105_execution_quality": {
+      "covers_hypotheses": ["H105"],
+      "primary": "storage/execution_quality.py (first-party TCA ledger, live since 2026-07-16, Cloudflare D1-backed)",
+      "fallback": "none — no external vendor could substitute for this project's own real fills",
+      "merge_logic": "not applicable — single first-party source.",
+      "conflict_resolution": "not applicable.",
+      "timestamp_normalization": "already UTC, tagged with active session (regimes/session_context.py) at write time.",
+      "timezone_normalization": "UTC.",
+      "duplicate_removal": "not applicable — one row per real broker fill.",
+      "quality_checks": "dry-run fills excluded by design (would dilute the statistic); sign-convention documented and unit-consistent with the backtest engine's pip convention.",
+      "known_gap_not_closed": "none — purely time-gated on live trading volume accumulating past the pre-registered n>=100 floor."
+    }
+  }
+}

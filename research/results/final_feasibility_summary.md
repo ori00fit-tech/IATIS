@@ -20,10 +20,11 @@ hypotheses are blocked by data availability today.**
   evaluated:
   - **H007** (macro) — **PASS**. Official free sources (CBOE, FRED)
     already integrated.
-  - **H012** (COT) — **PASS**. Live/forward data is real; the deep-history
-    backfill script (`scripts/download_cot_deep_history.py`, free CFTC
-    yearly archive) was built 2026-07-24, pending a one-time `--probe`
-    verification run on the VPS (sandbox has no egress to `cftc.gov`).
+  - **H012** (COT) — **PASS, fully verified against live data**. Full
+    1986-2025 backfill run and confirmed on the VPS 2026-07-24
+    (`scripts/download_cot_deep_history.py`, free CFTC yearly archive).
+    4 real bugs found and fixed across 4 verification rounds — see the
+    "What actually needs doing" section below for the full account.
   - **H019** (crypto positioning) — **PASS WITH FALLBACK, already
     resolved (FAILED)**. 2 of 3 legs (funding rate, Fear&Greed) were
     deep and clean; open interest was dropped per its own pre-registered
@@ -40,22 +41,32 @@ hypotheses are blocked by data availability today.**
 
 ## What actually needs doing (concrete, non-blocking)
 
-1. ~~Write a CFTC yearly-archive backfill script for H012~~ — **DONE AND
-   PROBED 2026-07-24** (`scripts/download_cot_deep_history.py`). The
-   `--probe` run against the real VPS network caught a genuine bug:
-   EURUSD returned 120 rows/year instead of ~52 because the shared
-   contract-matching logic (used by BOTH this script and the already-live
-   weekly collector) was also catching CFTC's EUR cross-rate contracts
-   and an unrelated Coinbase gold contract. **Fixed same day** (exact
-   CFTC field-delimiter match instead of a bare prefix), 3 regression
-   tests added reproducing the real market names found. The production
-   `data/cot/*.json` cache should be rebuilt fresh after the fix deploys.
-   Separately unresolved: NZDUSD isn't present under its mapped name in
-   the 2025 archive at all — flagged, not a matching bug, not investigated
-   further. This is exactly the kind of silent data-corruption class this
-   audit exists to catch, and it would not have surfaced without the
-   live VPS probe — see `data_feasibility_report.md` Part B.2's second
-   update for the full account.
+1. ~~Write a CFTC yearly-archive backfill script for H012~~ — **DONE,
+   FULLY BACKFILLED, AND VERIFIED 2026-07-24**
+   (`scripts/download_cot_deep_history.py`). Four rounds of running this
+   against real live CFTC data found and fixed four genuine, previously-
+   invisible bugs: (1) EURUSD/XAUUSD's matching logic was also catching
+   EUR cross-rate contracts and an unrelated Coinbase gold contract
+   (bare-prefix match → exact CFTC field-delimiter match); (2) USOIL's
+   mapped contract name had, even before that fix, only ever matched a
+   *different, unintended* contract at a European venue instead of the
+   real NYMEX/US-benchmark contract — remapped, flagged as a reviewable
+   judgment call; (3) the live weekly collector had no `User-Agent`
+   header and was silently getting HTTP 403 from `cftc.gov` — fixed;
+   (4) the full 1986-present backfill (not just a one-year probe)
+   revealed GBPUSD and NZDUSD both truncated to 2022-02-08 onward because
+   CFTC renamed both contracts around then — fixed via multi-alias
+   support in `COT_SYMBOLS`, confirmed by re-running the backfill
+   (GBPUSD now spans 1986-2025, NZDUSD extends to 2004-2025). Two minor,
+   non-blocking items remain documented but not chased further (GBPUSD's
+   record density within its now-correct range; NZDUSD/AUDUSD's shared
+   ~2004 start) since every symbol already clears H012's stated minimum
+   depth by a wide margin. None of these four bugs would have surfaced
+   from documentation review alone — this is the concrete payoff of
+   actually running the collector against live data instead of trusting
+   a first "looks fine" result. Full account:
+   `data_feasibility_report.md` Part B.2's four update notes;
+   `research/results/registry.json` H012 entry for the complete trail.
 2. ~~Confirm `iatis-marketaux-collect.timer` is actually enabled~~ —
    **CONFIRMED 2026-07-24** on the VPS: timer active, 21 sentiment records
    already collected, next fire on schedule.

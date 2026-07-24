@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from confluence.contradiction_engine import check_contradictions
+from confluence.crypto_positioning_modulator import (
+    compute_funding_zscore, crypto_positioning_penalty,
+)
 from confluence.mtf_confirmation import check_mtf_confirmation
 from confluence.meta_decision import evaluate_meta_decision
 from confluence.regime_weights import apply_regime_weights
@@ -273,6 +276,39 @@ class _ConfluenceEval:
     passed: bool
     symbol_cfg: dict
     informative_weight_share: float = 1.0
+    positioning_result: Any = None
+
+
+def _crypto_positioning_adjustment(config: dict, winning_bias) -> tuple[float, Any]:
+    """H019 (research/results/registry.json, feasibility resolved
+    2026-07-24) — engines.crypto_positioning_modulator, default FALSE.
+    Only ever applies to BTCUSD/ETHUSD, and only ever REDUCES the score
+    (squeeze-risk penalty from crowded funding-rate positioning, never a
+    boost — confluence/crypto_positioning_modulator.py).
+
+    Reads an INJECTED context only — config["data"]["_crypto_positioning_
+    context"]: {"funding_rate_history": [...], "current_funding_rate":
+    float, "fear_greed_value": int | None}. Every value in it must already
+    be strictly prior to the decision bar — that causal look-ahead guard
+    is the CALLER's responsibility (the backtest A/B harness), not this
+    function's; it has no timestamps to check. No live data source exists
+    yet, so this stays inert in live trading (no context is ever injected
+    outside a backtest run) regardless of the flag, until a live funding-
+    rate/Fear-Greed feed is built AND this hypothesis passes its
+    pre-registered decision rule (CLAUDE.md rule 6)."""
+    if not config.get("engines", {}).get("crypto_positioning_modulator", False):
+        return 0.0, None
+    symbol = config.get("data", {}).get("symbol", "")
+    if symbol not in ("BTCUSD", "ETHUSD"):
+        return 0.0, None
+    ctx = config.get("data", {}).get("_crypto_positioning_context")
+    if not ctx:
+        return 0.0, None
+    z = compute_funding_zscore(
+        ctx.get("funding_rate_history", []), ctx.get("current_funding_rate", 0.0),
+    )
+    result = crypto_positioning_penalty(z, ctx.get("fear_greed_value"), winning_bias.value)
+    return result.score_adjustment, result
 
 
 def _evaluate_confluence(
@@ -302,8 +338,13 @@ def _evaluate_confluence(
         mtf_data=mtf_data,
         signal_tf=decision_timeframe(config),
     )
+    positioning_adj, positioning_result = _crypto_positioning_adjustment(
+        config, vote_result.winning_bias,
+    )
     adjusted_score = round(
-        max(0.0, min(100.0, score_result.final_score + mtf_result.score_adjustment)), 2
+        max(0.0, min(100.0,
+            score_result.final_score + mtf_result.score_adjustment + positioning_adj)),
+        2,
     )
 
     # Per-symbol min_score override
@@ -355,6 +396,7 @@ def _evaluate_confluence(
         passed=len(fail_reasons) == 0,
         symbol_cfg=symbol_cfg,
         informative_weight_share=round(info_share, 3),
+        positioning_result=positioning_result,
     )
 
 
@@ -570,6 +612,18 @@ def _build_report(
                 "confirming": mtf_result.confirming,
                 "reason": mtf_result.reason,
             },
+            # H019 — engines.crypto_positioning_modulator (default FALSE).
+            # None whenever the flag is off, symbol isn't BTCUSD/ETHUSD, or
+            # no context was injected (i.e. always None in live trading
+            # today — see main._crypto_positioning_adjustment).
+            "crypto_positioning": (
+                {
+                    "adjustment": conf.positioning_result.score_adjustment,
+                    "funding_z_score": conf.positioning_result.funding_z_score,
+                    "fear_greed_value": conf.positioning_result.fear_greed_value,
+                    "reason": conf.positioning_result.reason,
+                } if conf.positioning_result else None
+            ),
             "directional_score": score_result.directional_score,
             "contributions": score_result.contributions,
             "engines_participating": score_result.engines_participating,

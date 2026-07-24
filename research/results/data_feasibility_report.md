@@ -295,6 +295,33 @@ section committed to. The analysis below is left as originally written
 (the "not yet built" framing) with this note on top, since it documents
 the reasoning that led to the fix, not a re-derived verdict.
 
+**Second update, same day, from the actual VPS `--probe` run**: the
+verify-before-trust step paid off immediately. `--probe 2025` returned
+120 weekly rows for EURUSD (expected ~52) and an extra row for XAUUSD.
+Root cause: `iter_cot_rows()`'s original bare `market.startswith(contract)`
+match also caught CFTC's separately-listed EUR cross-rate contracts
+(`"EURO FX/BRITISH POUND XRATE - ..."`, `"EURO FX/JAPANESE YEN
+XRATE - ..."`) and an unrelated Coinbase Derivatives gold contract
+(`"GOLD -1 TROY OUNCE - COINBASE DERIVATIVES, LLC"`). **This bug was not
+new** — it lived in the shared matching function both the new
+deep-history script and the already-running weekly production collector
+call, meaning `data/cot/EURUSD.json`'s live cache (populated weekly since
+2026-07-09) may have silently held a contaminating contract's row
+instead of the real EURO FX net position, unnoticed because a single
+current-week file's dict-overwrite semantics hide a contamination that
+only becomes visible as a wrong row *count* across many weeks. No live
+trading decision was affected (the Sentiment engine has stayed DISABLED
+throughout), but this is exactly the class of finding the "always verify
+experimentally, never trust documentation" instruction in this report's
+own methodology exists to catch — and it would not have surfaced without
+running the real probe on the VPS. Fixed same day by requiring CFTC's
+actual field delimiter (`contract + " - "`) instead of a bare prefix;
+3 new regression tests reproduce it with the exact real market-name
+strings observed. Separately, unresolved: NZDUSD matched zero rows in
+the 2025 archive — not a matching bug (a full-file substring search for
+"NEW ZEALAND" found nothing), the contract is not present under its
+mapped name in this report; flagged, not investigated further.
+
 1. **Testable**: Partially — real data now flows into the engine
    (2026-07-09 wiring fix), but the **current collector only captures a
    rolling 12-week forward window**, not deep historical COT — this is a

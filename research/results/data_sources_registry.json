@@ -147,7 +147,7 @@
       "auth_required": false,
       "history_depth": "12-week rolling cache only (scripts/download_cot.py HISTORY_WEEKS=12) — insufficient for chronological OOS split",
       "rate_limit": "none published; weekly cadence by design",
-      "known_gaps": ["deep-archive backfill now built — see cftc_cot_yearly_archive"],
+      "known_gaps": ["deep-archive backfill now built — see cftc_cot_yearly_archive", "FOUND AND FIXED 2026-07-24: the matching logic this collector shares with the deep-history script (iter_cot_rows) was silently matching cross-rate/alt-venue contracts for EURUSD and XAUUSD until a real yearly-archive probe caught it — the live weekly cache should be rebuilt fresh post-fix rather than trusted as-is; no live decision was affected since the Sentiment engine has stayed disabled"],
       "code_reference": "scripts/download_cot.py",
       "score": 62,
       "score_breakdown": {"history_depth_vs_need": 8, "data_integrity_reliability": 20, "cost_accessibility": 15, "rate_limit_adequacy": 15, "institutional_grade_suitability": 15, "documentation_quality": 4}
@@ -156,15 +156,16 @@
       "domain": "COT positioning (H012) — deep history",
       "integrated": true,
       "role": "candidate primary for backtestable depth",
-      "verification": "documented_official (URL pattern + zip format verified against the working open-source cot_reports library, not guessed; NOT YET live-network-verified — sandbox cannot reach cftc.gov, same class of restriction as H019's Binance/Bybit sandbox block; a --probe run on the VPS is required before trusting a full backfill)",
+      "verification": "live_verified 2026-07-24 (VPS --probe run against the real 2025 archive succeeded, downloaded 2.39MB, extracted 17,317 lines — URL pattern and zip format confirmed correct)",
       "cost": "free, no key",
       "auth_required": false,
       "history_depth": "legacy futures-only since 1986; disaggregated since 2006 (this script targets legacy futures-only, matching COT_SYMBOLS/parse_cot_text's existing scope)",
       "rate_limit": "not characterized (bulk yearly file downloads, not a metered API); script applies a 1s polite delay between yearly requests regardless",
-      "known_gaps": ["not yet run against the real network from any environment with egress to cftc.gov — --probe mode built specifically to close this before a full backfill is trusted"],
-      "code_reference": "scripts/download_cot_deep_history.py, tests/test_cot_deep_history.py (19 tests, pure logic only)",
-      "score": 88,
-      "score_breakdown": {"history_depth_vs_need": 25, "data_integrity_reliability": 14, "cost_accessibility": 15, "rate_limit_adequacy": 15, "institutional_grade_suitability": 15, "documentation_quality": 4}
+      "known_gaps": ["NZDUSD matched zero rows in the 2025 archive under its mapped contract name ('NEW ZEALAND DOLLAR') — confirmed via a full-file substring search, not a matching bug; contract may be renamed or no longer separately reported, not investigated further"],
+      "code_reference": "scripts/download_cot_deep_history.py, tests/test_cot_deep_history.py (19 tests) + tests/test_cot_download.py (3 new regression tests for the cross-contract-contamination fix, all pure logic)",
+      "score": 92,
+      "score_breakdown": {"history_depth_vs_need": 25, "data_integrity_reliability": 18, "cost_accessibility": 15, "rate_limit_adequacy": 15, "institutional_grade_suitability": 15, "documentation_quality": 4},
+      "note": "data_integrity_reliability at 18 not 20: real-network verification confirmed the format AND caught a real matching-logic bug (fixed same day) — a strong result, but the NZDUSD gap remains open, so 'fully clean, no known issues' isn't warranted yet."
     },
     "binance_funding_rate": {
       "domain": "crypto positioning — funding rate (H019)",

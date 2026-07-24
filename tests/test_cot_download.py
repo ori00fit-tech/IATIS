@@ -12,7 +12,7 @@ import time
 import pandas as pd
 import pytest
 
-from scripts.download_cot import parse_cot_text, update_caches
+from scripts.download_cot import iter_cot_rows, parse_cot_text, update_caches
 from engines.sentiment_engine import SentimentEngine
 
 
@@ -42,6 +42,44 @@ def test_parse_sanity_check_rejects_layout_drift():
     bad = ('"EURO FX - CHICAGO MERCANTILE EXCHANGE",260706,"2026-07-06",099741,00,0,099,'
            "1000,220000,120000,0,0,0")
     assert parse_cot_text(bad) == {}
+
+
+# ── Cross-rate / alt-venue contamination regression (found 2026-07-24 via
+# a real CFTC yearly-archive probe, H012/registry.json: EURUSD returned
+# 120 rows/year instead of ~52 because a bare startswith() also matched
+# CFTC's separately-listed cross-rate and alt-exchange contracts). ──
+
+def _row(name: str, oi: int, nc_long: int, nc_short: int) -> str:
+    return (f'"{name}",260706,"2026-07-06",099741,00,0,099,'
+            f"{oi},{nc_long},{nc_short},15000,300000,410000,0,0,0,0")
+
+
+def test_parse_excludes_eur_cross_rate_contracts():
+    text = "\n".join([
+        _row("EURO FX - CHICAGO MERCANTILE EXCHANGE", 650000, 220000, 120000),
+        _row("EURO FX/BRITISH POUND XRATE - CHICAGO MERCANTILE EXCHANGE", 50000, 10000, 8000),
+        _row("EURO FX/JAPANESE YEN XRATE - CHICAGO MERCANTILE EXCHANGE", 40000, 9000, 7000),
+    ])
+    matched = [rec["market"] for _, rec in iter_cot_rows(text) if _ == "EURUSD"]
+    assert matched == ["EURO FX - CHICAGO MERCANTILE EXCHANGE"]
+    parsed = parse_cot_text(text)
+    assert parsed["EURUSD"]["large_spec_net"] == 100_000  # 220k − 120k, the real contract only
+
+
+def test_parse_excludes_unrelated_gold_contract_sharing_a_prefix():
+    text = "\n".join([
+        _row("GOLD - COMMODITY EXCHANGE INC.", 500000, 150000, 100000),
+        _row("GOLD -1 TROY OUNCE - COINBASE DERIVATIVES, LLC", 1000, 300, 200),
+    ])
+    matched = [rec["market"] for _, rec in iter_cot_rows(text) if _ == "XAUUSD"]
+    assert matched == ["GOLD - COMMODITY EXCHANGE INC."]
+
+
+def test_iter_cot_rows_requires_the_dash_delimiter_not_a_bare_prefix():
+    # A market name that merely starts with the contract text but has no
+    # ' - ' delimiter right after it must not match at all.
+    text = _row("EURO FXTRA WEIRD CONTRACT NAME - SOME EXCHANGE", 1000, 100, 50)
+    assert list(iter_cot_rows(text)) == []
 
 
 def test_update_caches_builds_history_and_4w_change(tmp_path, monkeypatch):

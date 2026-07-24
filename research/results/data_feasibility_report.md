@@ -317,10 +317,57 @@ own methodology exists to catch — and it would not have surfaced without
 running the real probe on the VPS. Fixed same day by requiring CFTC's
 actual field delimiter (`contract + " - "`) instead of a bare prefix;
 3 new regression tests reproduce it with the exact real market-name
-strings observed. Separately, unresolved: NZDUSD matched zero rows in
-the 2025 archive — not a matching bug (a full-file substring search for
-"NEW ZEALAND" found nothing), the contract is not present under its
-mapped name in this report; flagged, not investigated further.
+strings observed.
+
+**Third update, same day, from a re-probe after the delimiter fix**:
+EURUSD/XAUUSD both correctly returned exactly 52 rows — confirmed. That
+re-probe surfaced two further findings from real data. NZDUSD's mapped
+name (`"NEW ZEALAND DOLLAR"`) matched zero rows in 2025 — a broader
+substring search found CFTC's current name is `"NZ DOLLAR"`, a rename,
+not a matching bug; fixed by updating the mapping. Separately, USOIL's
+mapped name (`"CRUDE OIL, LIGHT SWEET"`) had, even before the delimiter
+fix, only ever been bare-prefix-matching a *different, unintended*
+contract at a different venue (`"CRUDE OIL, LIGHT SWEET-WTI - ICE
+FUTURES EUROPE"`), while the real NYMEX/US-benchmark WTI contract is
+listed as `"WTI FINANCIAL CRUDE OIL"` — meaning USOIL's COT data had
+been silently tracking European ICE positioning, not the US benchmark,
+since the feature's 2026-07-09 wiring. Remapped to the NYMEX name,
+flagged explicitly as a judgment call (no prior documentation specified
+which venue "USOIL" was meant to track). Also found in the same pass:
+the live weekly collector had no `User-Agent` header and was returning
+HTTP 403 from `cftc.gov` — confirmed via a direct real-network A/B test
+(identical request, only the header differed) — fixed by adding the
+same header the deep-history script already used.
+
+**Fourth update, from the full 1986-present backfill run**: running the
+actual backfill (not just a one-year probe) surfaced one more bug the
+2025-only probes couldn't have caught: GBPUSD and NZDUSD both came back
+with exactly 204 records, both starting on the *identical* date
+2022-02-08 — while every other symbol correctly spanned back to 1986 (or
+to their instrument's real inception date, for EUR/BTC). That identical
+count and identical date across two unrelated currencies was too
+specific to be coincidence. A targeted probe of an earlier year (2015)
+confirmed CFTC used longer contract names before renaming them at some
+point between 2015 and 2022 — `"BRITISH POUND STERLING"` (not `"BRITISH
+POUND"`) and `"NEW ZEALAND DOLLAR"` (the exact name already tried and
+discarded two paragraphs above, on the mistaken assumption it was simply
+stale rather than one of two valid eras). Fixed by restructuring
+`COT_SYMBOLS` from a single name per symbol to a tuple of accepted
+aliases, so both eras match. Re-running the backfill confirmed GBPUSD now
+spans 1986-2025 and NZDUSD extends to 2004-2025. Two minor, non-blocking
+items remain open and documented rather than chased further: GBPUSD's
+record density within its now-correct range (~64% of the other majors'
+count over the identical span), and NZDUSD/AUDUSD's shared ~2004 start
+(a weaker signal than the confirmed 2022 rename — no identical-date
+fingerprint — more likely a genuine reporting-start date than a further
+undiscovered alias). Neither blocks H012, since every symbol's depth
+still clears the hypothesis's stated minimum by a wide margin.
+
+Four real bugs found and fixed across four rounds of actually running
+this against live data, none of which would have been caught by
+documentation review alone — this is the concrete payoff of this
+report's "always verify experimentally" methodology commitment, not a
+hypothetical one.
 
 1. **Testable**: Partially — real data now flows into the engine
    (2026-07-09 wiring fix), but the **current collector only captures a
@@ -606,7 +653,7 @@ rule 4 and is **not** relitigated by this report).
 | H009 | 6-engine confluence | PASSED (flagged) | A | PASS | Standard OHLCV; PROMOTION_CRITERIA gap is an evidence-sufficiency issue, not a data-feasibility one |
 | H010 | RSI/MACD Divergence | RESEARCH | A | PASS | Standard OHLCV |
 | H011 | Market Structure BOS/CHoCH | RESEARCH | A | PASS | Standard OHLCV |
-| H012 | COT + retail sentiment | RESEARCH | B.2 | PASS (backfill script built 2026-07-24, pending VPS `--probe` verification) | Deep-archive backfill script now exists — see B.2 update note |
+| H012 | COT + retail sentiment | RESEARCH | B.2 | PASS (full 1986-2025 backfill run and verified on real CFTC data, 2026-07-24 — 4 real bugs found and fixed across 4 verification rounds) | Deep-archive backfill script built, tested against live data, all 11 symbols now cover their real available history — see B.2 update notes |
 | H013 | Reversal group agreement | PASSED (flagged) | A | PASS | Internal engine-output logic, no new data |
 | H014 | Engine Orthogonality | RESOLVED | A | PASS | Internal — engine vote correlations only |
 | H015 | Ablation — Minimum Engine Set | RESOLVED | A | PASS | Internal — same OHLCV backbone, 15-symbol universe |

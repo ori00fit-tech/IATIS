@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from execution.ctrader_client import (
     IATIS_TO_CTRADER, CTRADER_TO_IATIS, ASSET_CLASS,
-    RECOMMENDED_LEVERAGE, CTraderClient, CTraderOrder, CTraderResult
+    RECOMMENDED_LEVERAGE, CTraderClient, CTraderOrder, CTraderResult,
+    _trendbar_window,
 )
 from execution.trade_executor import TradeExecutor
 
@@ -315,3 +316,43 @@ def test_connect_refuses_when_lock_is_held_by_another_process(monkeypatch):
     assert c.connect(timeout=1) is False
 
     holder_fh.close()
+
+
+# ─── _trendbar_window (backward-pagination arithmetic) ────────────────────────
+
+def test_trendbar_window_defaults_to_now_when_to_timestamp_is_none():
+    now = 1_700_000_000_000
+    from_ms, to_ms = _trendbar_window(count=1000, period="H1", to_timestamp_ms=None, now_ms=now)
+    assert to_ms == now  # unchanged existing behavior — every current caller keeps it
+
+
+def test_trendbar_window_uses_explicit_to_timestamp_for_pagination():
+    now = 1_700_000_000_000
+    explicit_to = now - 1_000_000_000  # some earlier point, e.g. oldest bar of a prior batch
+    from_ms, to_ms = _trendbar_window(count=1000, period="H1", to_timestamp_ms=explicit_to, now_ms=now)
+    assert to_ms == explicit_to
+    assert to_ms != now
+
+
+def test_trendbar_window_spans_more_than_count_times_period_minutes():
+    # the 1.6x over-fetch must always cover at least count*period_minutes
+    # of wall-clock, or paginated downloads would silently skip bars
+    now = 1_700_000_000_000
+    from_ms, to_ms = _trendbar_window(count=1000, period="H1", to_timestamp_ms=None, now_ms=now)
+    span_ms = to_ms - from_ms
+    assert span_ms >= 1000 * 60 * 60_000  # count * period_minutes(H1=60) * ms-per-minute
+
+
+def test_trendbar_window_scales_with_period():
+    now = 1_700_000_000_000
+    _, to_h1 = _trendbar_window(1000, "H1", None, now)
+    from_h1, _ = _trendbar_window(1000, "H1", None, now)
+    from_d1, _ = _trendbar_window(1000, "D1", None, now)
+    assert (now - from_d1) > (now - from_h1)  # D1 bars span far more wall-clock than H1
+
+
+def test_trendbar_window_unknown_period_defaults_to_h4_span():
+    now = 1_700_000_000_000
+    from_h4, _ = _trendbar_window(1000, "H4", None, now)
+    from_unknown, _ = _trendbar_window(1000, "NOT_A_PERIOD", None, now)
+    assert from_h4 == from_unknown

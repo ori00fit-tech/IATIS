@@ -32,15 +32,20 @@ logger = get_logger(__name__)
 BASE_URL = "https://api.marketaux.com/v1/news/all"
 
 # IATIS internal symbol -> MarketAux "symbols" param. Verified against the
-# live API for fx majors/crosses and crypto only; metals/energy/indices
-# use different entity naming on MarketAux's side and are not mapped here
-# until confirmed — better to return "no signal" than a wrong mapping.
+# live API for fx majors/crosses and crypto; energy/indices use different
+# entity naming on MarketAux's side and are not mapped here until
+# confirmed — better to return "no signal" than a wrong mapping.
 MARKETAUX_SYMBOL_MAP = {
     "EURUSD": "EURUSD", "GBPUSD": "GBPUSD", "USDJPY": "USDJPY",
     "USDCHF": "USDCHF", "AUDUSD": "AUDUSD", "USDCAD": "USDCAD",
     "NZDUSD": "NZDUSD", "EURJPY": "EURJPY", "GBPJPY": "GBPJPY",
     "AUDJPY": "AUDJPY", "EURGBP": "EURGBP", "EURCHF": "EURCHF",
     "BTCUSD": "BTCUSD", "ETHUSD": "ETHUSD",
+    # Confirmed 2026-07-24 via scripts/collect_marketaux_sentiment.py
+    # --probe-xauusd against the live API: "GOLD" returned real entity
+    # matches (3/3); "XAUUSD", "XAU/USD", "XAU" all returned zero — those
+    # candidates do not exist as MarketAux entities.
+    "XAUUSD": "GOLD",
 }
 
 

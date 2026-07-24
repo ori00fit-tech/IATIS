@@ -32,7 +32,20 @@ def test_returns_none_without_api_key(monkeypatch):
 
 def test_returns_none_for_unmapped_symbol(monkeypatch):
     monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
-    assert get_news_sentiment("XAUUSD") is None  # not in MARKETAUX_SYMBOL_MAP yet
+    assert get_news_sentiment("USOIL") is None  # energy/indices not mapped yet
+
+
+def test_xauusd_maps_to_the_confirmed_gold_entity(monkeypatch):
+    """XAUUSD -> "GOLD" confirmed 2026-07-24 via --probe-xauusd against
+    the live API (3/3 real entity matches; XAUUSD/XAU/XAU-USD all
+    returned zero). Regression pin: get_news_sentiment must actually
+    query MarketAux for XAUUSD now, not silently return None."""
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    data = {"meta": {}, "data": [_article(symbol="GOLD", sentiment=0.5, hours_ago=1)]}
+    with patch("requests.get", return_value=_mock_response(data)) as mocked:
+        result = get_news_sentiment("XAUUSD")
+    assert mocked.call_args.kwargs["params"]["symbols"] == "GOLD"
+    assert result["article_count"] == 1
 
 
 def test_aggregates_sentiment_from_recent_articles(monkeypatch):

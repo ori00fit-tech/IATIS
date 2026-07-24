@@ -904,11 +904,20 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # Workspace): existing, already-tested, pre-registered A/B runners,
     # deliberately NOT parameterized — each always runs its own
     # registered fixed method, never dashboard-chosen symbols/step.
+    # walk_forward/robustness added 2026-07-24 (Phase 4): parameterized
+    # like backtest — --symbols validated server-side.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
+        "walk_forward", "robustness",
     }
+
+
+def test_experiment_job_catalog_requires_symbols_matches_parameterized_set(client):
+    r = client.get("/experiments/jobs", headers=HDR)
+    requires_symbols = {j["id"] for j in r.json()["jobs"] if j["requires_symbols"]}
+    assert requires_symbols == {"backtest", "walk_forward", "robustness"}
 
 
 def test_experiment_job_catalog_categorizes_ops_vs_research(client):
@@ -926,6 +935,51 @@ def test_experiments_run_requires_auth(client):
 def test_experiments_run_rejects_unknown_job(client):
     r = client.post("/experiments/run", json={"job": "rm -rf /"}, headers=HDR)
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_parameterized_jobs_require_symbols(client, job):
+    r = client.post("/experiments/run", json={"job": job}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "at least one symbol" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_parameterized_jobs_reject_unknown_symbol(client, job):
+    r = client.post("/experiments/run", json={"job": job, "symbols": ["ZZZFAKE"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "Unknown symbol" in r.json()["detail"]
+
+
+def test_experiments_run_non_parameterized_job_rejects_symbols(client):
+    r = client.post("/experiments/run", json={"job": "verify_data_integrity", "symbols": ["EURUSD"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "takes no symbols" in r.json()["detail"]
+
+
+def test_experiments_run_walk_forward_builds_expected_argv(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "walk_forward": ["echo", "wf"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post("/experiments/run", json={"job": "walk_forward", "symbols": ["eurusd"]}, headers=HDR)
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", "wf", "--symbols", "EURUSD"]
 
 
 def test_experiments_status_unknown_job_404s(client):
@@ -1360,15 +1414,17 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
     # /research/symbols, /research/engines, /research/indicators,
-    # /research/scenario-config, /research/datasets, and
-    # /research/integrity — all literal routes must still resolve to
-    # themselves, not be captured as hypothesis_id="manifests"/etc.
+    # /research/scenario-config, /research/datasets,
+    # /research/validation-config, and /research/integrity — all literal
+    # routes must still resolve to themselves, not be captured as
+    # hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/datasets", headers=HDR).status_code == 200
+    assert client.get("/research/validation-config", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1576,3 +1632,30 @@ def test_research_datasets_ignores_non_matching_filenames(client, tmp_path, monk
 
     body = client.get("/research/datasets", headers=HDR).json()
     assert body["count"] == 0
+
+
+def test_research_validation_config_requires_auth(client):
+    assert client.get("/research/validation-config").status_code == 401
+
+
+def test_research_validation_config_contract(client):
+    r = client.get("/research/validation-config", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"walk_forward", "monte_carlo", "robustness", "promotion_criteria"}.issubset(body.keys())
+
+    wf = body["walk_forward"]
+    assert wf["n_windows"] == 3
+    assert wf["min_pf"] == 1.5
+
+    rob = body["robustness"]
+    assert set(rob["params"]) == {"sl_atr_multiplier", "commission_pips", "slippage_pips", "min_rr"}
+    assert 1.0 in rob["multipliers"]
+
+    # research/edge_gate.py PROMOTION_CRITERIA — the codified promotion
+    # bar CLAUDE.md rule 3 says is code, not prose.
+    promo = body["promotion_criteria"]
+    assert promo["min_trades"] == 300
+    assert promo["min_oos_pf"] == 1.2
+    assert promo["require_walk_forward"] is True
+    assert promo["require_monte_carlo"] is True

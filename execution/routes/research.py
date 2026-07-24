@@ -435,6 +435,51 @@ async def research_datasets(
     }
 
 
+@router.get("/research/validation-config")
+async def research_validation_config(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Walk-Forward / Monte Carlo / Robustness (Phase 4, 2026-07-24): the
+    real default parameters backtest.walk_forward.WalkForwardConfig and
+    backtest.robustness.RobustnessConfig ship with, backtest.monte_carlo's
+    defaults (already run automatically inside the `backtest` job — no
+    separate Monte Carlo job exists), and the codified promotion bar
+    (research/edge_gate.py PROMOTION_CRITERIA) these measurements exist
+    to feed. A PASSED hypothesis without evidence meeting this bar is
+    flagged at every boot (CLAUDE.md rule 3) — this endpoint is what a
+    Walk-Forward/Robustness UI panel checks a fresh run's numbers against.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS
+    from backtest.walk_forward import WalkForwardConfig
+    from research.edge_gate import PROMOTION_CRITERIA
+
+    wf_defaults = WalkForwardConfig()
+    return {
+        "walk_forward": {
+            "n_windows": wf_defaults.n_windows,
+            "min_pf": wf_defaults.min_pf,
+            "min_trades_per_window": wf_defaults.min_trades_per_window,
+            "warmup_bars": wf_defaults.warmup_bars,
+            "methodology": "Disjoint chronological OOS windows with an untraded warmup embargo. Fixed production parameters — no per-window optimization.",
+        },
+        "monte_carlo": {
+            "n_simulations": 1000,
+            "ruin_threshold": 0.50,
+            "note": "Runs automatically inside the `backtest` job (backtest.runner, run_mc=True by default) — no separate Monte Carlo job exists.",
+        },
+        "robustness": {
+            "params": list(SWEEP_PARAMS),
+            "multipliers": list(DEFAULT_MULTIPLIERS),
+            "min_trades": 10,
+            "stable_band_pct": 30,
+            "methodology": "Parameter-perturbation sensitivity screen, NOT out-of-sample validation. Does not itself justify changing a live parameter.",
+        },
+        "promotion_criteria": PROMOTION_CRITERIA,
+    }
+
+
 @router.get("/research")
 async def research_center(
     x_api_key: str | None = Header(default=None),

@@ -86,7 +86,12 @@ def _connect_client():
     """One shared cTrader session for the whole download, reusing the
     exact same credential/connect path as live trading
     (execution/ctrader_client.py) — nothing broker-specific is
-    reimplemented here."""
+    reimplemented here. read_only=True: this script only ever calls
+    get_trendbars()/get_account_info() (never places an order), so it
+    can safely run alongside the live scheduler's own session — the
+    single-session process lock (P0-3) exists specifically to prevent
+    duplicate REAL ORDER submission, which a read_only client is
+    hard-blocked from doing (see CTraderClient.place_market_order)."""
     import os
     from execution.ctrader_client import CTraderClient
 
@@ -96,6 +101,7 @@ def _connect_client():
         account_id=int(os.environ["CTRADER_ACCOUNT_ID"]),
         access_token=os.environ["CTRADER_ACCESS_TOKEN"],
         environment=os.environ.get("CTRADER_ENVIRONMENT", "demo"),
+        read_only=True,
     )
     if not client.connect(timeout=30):
         raise SystemExit("Could not connect to cTrader — check .env credentials and network.")

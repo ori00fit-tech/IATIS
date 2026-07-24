@@ -231,3 +231,49 @@
   status: ACTIVE
   status_reason: "Carrier asset — core of the measured trend-capture edge (H4/D1, carriers @ RR>=2). See docs/STRATEGY_EVIDENCE_2026-07.md."
   status_since: "2026-07-12"
+
+# Equities/ETFs (2026-07-24) — starter universe for the new stocks/etf
+# provider chains (config.yaml, core/data_providers.py). WATCHLIST: no
+# hypothesis has been registered or backtested for this asset class yet
+# — existence of the data path is infrastructure, not evidence
+# (CLAUDE.md). enabled: false until a dedicated pre-registered hypothesis
+# clears the same OOS bar as every other symbol in this file.
+- enabled: false
+  internal: AAPL
+  min_score: 60
+  rr: 2.0
+  symbol: AAPL
+  asset_class: equity
+  status: WATCHLIST
+  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified (sandbox has no network egress; see scripts/probe_equity_data_providers.py). No hypothesis registered."
+  status_since: "2026-07-24"
+
+- enabled: false
+  internal: NVDA
+  min_score: 60
+  rr: 2.0
+  symbol: NVDA
+  asset_class: equity
+  status: WATCHLIST
+  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_since: "2026-07-24"
+
+- enabled: false
+  internal: SPY
+  min_score: 60
+  rr: 2.0
+  symbol: SPY
+  asset_class: etf
+  status: WATCHLIST
+  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_since: "2026-07-24"
+
+- enabled: false
+  internal: QQQ
+  min_score: 60
+  rr: 2.0
+  symbol: QQQ
+  asset_class: etf
+  status: WATCHLIST
+  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_since: "2026-07-24"

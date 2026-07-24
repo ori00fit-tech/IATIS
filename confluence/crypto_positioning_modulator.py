@@ -67,6 +67,49 @@ def compute_funding_zscore(prior_funding_rates: list[float], current_rate: float
     return (current_rate - mean) / stdev
 
 
+def causal_context_at(
+    funding_df, fear_greed_df, as_of_ms: int, history_window: int = 30,
+) -> dict | None:
+    """Build the injectable context dict (main.py's config["data"]["_crypto_
+    positioning_context"]) for a decision bar closing at `as_of_ms` epoch
+    milliseconds — the ONE place the look-ahead guard H019's own registered
+    notes require is actually enforced: only funding-rate settlements and
+    Fear & Greed values with a timestamp STRICTLY before `as_of_ms` are
+    used, full stop. Everything upstream (crypto_positioning_penalty,
+    compute_funding_zscore) trusts whatever it's handed and has no
+    timestamps to check — this function is where that trust has to be
+    earned.
+
+    `funding_df`: DataFrame indexed by datetime with columns
+    [funding_rate, settlement_ts_ms] — see
+    scripts/download_crypto_positioning_history.py::download_funding_rate.
+    `fear_greed_df`: DataFrame indexed by datetime with columns
+    [value, published_ts_s], or None if unavailable (Fear & Greed degrades
+    to "no amplification," never blocks the funding-rate leg).
+
+    Returns None if there is no funding-rate observation strictly before
+    `as_of_ms` at all — nothing to compute a penalty from at this point in
+    history (e.g. the very start of the backtest window)."""
+    prior = funding_df[funding_df["settlement_ts_ms"] < as_of_ms]
+    if prior.empty:
+        return None
+
+    current_rate = float(prior["funding_rate"].iloc[-1])
+    history = prior["funding_rate"].iloc[:-1].tail(history_window).tolist()
+
+    fear_greed_value = None
+    if fear_greed_df is not None and not fear_greed_df.empty:
+        fg_prior = fear_greed_df[fear_greed_df["published_ts_s"].astype("int64") * 1000 < as_of_ms]
+        if not fg_prior.empty:
+            fear_greed_value = int(fg_prior["value"].iloc[-1])
+
+    return {
+        "funding_rate_history": history,
+        "current_funding_rate": current_rate,
+        "fear_greed_value": fear_greed_value,
+    }
+
+
 def crypto_positioning_penalty(
     funding_z: float | None,
     fear_greed_value: int | None,

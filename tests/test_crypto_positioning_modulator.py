@@ -5,11 +5,14 @@ look-ahead guard itself is the A/B harness's responsibility, not tested
 here (this module has no timestamps to check)."""
 from __future__ import annotations
 
+import pandas as pd
+
 from confluence.crypto_positioning_modulator import (
     FEAR_GREED_EXTREME_HIGH,
     FEAR_GREED_EXTREME_LOW,
     MAX_PENALTY,
     Z_SCORE_THRESHOLD,
+    causal_context_at,
     compute_funding_zscore,
     crypto_positioning_penalty,
 )
@@ -136,3 +139,64 @@ def test_neutral_fear_greed_value_does_not_amplify():
     baseline = crypto_positioning_penalty(2.0, None, "BULLISH")
     neutral_fg = crypto_positioning_penalty(2.0, 50, "BULLISH")
     assert neutral_fg.score_adjustment == baseline.score_adjustment
+
+
+# ── causal_context_at (the look-ahead guard enforcement point) ──────────
+
+def _funding_df(rates_and_ts_ms: list[tuple[float, int]]) -> pd.DataFrame:
+    idx = pd.to_datetime([t for _, t in rates_and_ts_ms], unit="ms", utc=True)
+    return pd.DataFrame(
+        {"funding_rate": [r for r, _ in rates_and_ts_ms],
+         "settlement_ts_ms": [t for _, t in rates_and_ts_ms]},
+        index=idx,
+    )
+
+
+def _fg_df(values_and_ts_s: list[tuple[int, int]]) -> pd.DataFrame:
+    idx = pd.to_datetime([t for _, t in values_and_ts_s], unit="s", utc=True)
+    return pd.DataFrame(
+        {"value": [v for v, _ in values_and_ts_s],
+         "published_ts_s": [t for _, t in values_and_ts_s]},
+        index=idx,
+    )
+
+
+def test_causal_context_excludes_settlements_at_or_after_as_of():
+    # settlements at t=100,200,300 (ms); as_of=250 -> only 100,200 count
+    df = _funding_df([(0.0001, 100), (0.0002, 200), (0.0003, 300)])
+    ctx = causal_context_at(df, None, as_of_ms=250)
+    assert ctx["current_funding_rate"] == 0.0002  # the latest STRICTLY before 250
+    assert ctx["funding_rate_history"] == [0.0001]
+
+
+def test_causal_context_boundary_is_strict_not_inclusive():
+    # a settlement exactly AT as_of_ms must NOT be used (no look-ahead)
+    df = _funding_df([(0.0001, 100), (0.0002, 200)])
+    ctx = causal_context_at(df, None, as_of_ms=200)
+    assert ctx["current_funding_rate"] == 0.0001
+    assert ctx["funding_rate_history"] == []
+
+
+def test_causal_context_none_when_nothing_prior_exists():
+    df = _funding_df([(0.0001, 500)])
+    assert causal_context_at(df, None, as_of_ms=100) is None
+
+
+def test_causal_context_history_window_caps_length():
+    rates = [(i * 0.0001, i * 100) for i in range(1, 51)]  # 50 settlements
+    df = _funding_df(rates)
+    ctx = causal_context_at(df, None, as_of_ms=50 * 100 + 1, history_window=10)
+    assert len(ctx["funding_rate_history"]) == 10
+
+
+def test_causal_context_fear_greed_also_causally_aligned():
+    funding = _funding_df([(0.0001, 1_000_000)])
+    fg = _fg_df([(20, 500), (80, 1500)])  # seconds -> ms: 500_000, 1_500_000
+    ctx = causal_context_at(funding, fg, as_of_ms=1_000_001)
+    assert ctx["fear_greed_value"] == 20  # only the 500s (500_000ms) row is prior
+
+
+def test_causal_context_fear_greed_none_when_missing_or_empty():
+    funding = _funding_df([(0.0001, 100)])
+    assert causal_context_at(funding, None, as_of_ms=200)["fear_greed_value"] is None
+    assert causal_context_at(funding, pd.DataFrame(), as_of_ms=200)["fear_greed_value"] is None

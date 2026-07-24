@@ -83,10 +83,18 @@ def _load_positioning_data(symbol: str):
 def load_from_csv_positioning(path: Path):
     """Positioning CSVs (funding rate / Fear & Greed) have their own
     schema (settlement_ts_ms / published_ts_s columns) — core.data_loader.
-    load_from_csv assumes an OHLCV shape, so this reads them directly."""
+    load_from_csv assumes an OHLCV shape, so this reads them directly.
+
+    index_col=0, parse_dates=True alone does not reliably produce a
+    DatetimeIndex for every ISO8601+offset format pandas can be handed
+    (observed on the VPS 2026-07-24: it came back as a plain Index of
+    strings, which has no .tz attribute at all) — pd.to_datetime(...,
+    utc=True) on the raw index coerces any of naive/aware/string input
+    uniformly, rather than branching on an attribute that might not
+    exist."""
     import pandas as pd
-    df = pd.read_csv(path, index_col=0, parse_dates=True)
-    df.index = df.index.tz_convert("UTC") if df.index.tz else df.index.tz_localize("UTC")
+    df = pd.read_csv(path, index_col=0)
+    df.index = pd.to_datetime(df.index, utc=True)
     return df
 
 

@@ -396,6 +396,25 @@ def test_fetch_alpaca_equity_parses_response_and_hits_the_stock_bars_endpoint(mo
     assert called_params["timeframe"] == "1Day"
     assert "start" in called_params and "end" in called_params  # regression: 2026-07-24 VPS
     # probe found omitting start/end returns only 1 (today's) bar instead of history.
+    assert called_params["feed"] == "iex"  # regression: SIP feed 403s within the last 15min
+
+
+def test_fetch_alpaca_equity_end_stays_outside_the_15min_sip_restriction(monkeypatch):
+    """Second regression, same day: end=now() 403'd once start/end were
+    added, because the free plan's SIP feed forbids querying the last 15
+    minutes. end must be pulled back well past that window."""
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _alpaca_equity_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        _fetch_alpaca_equity("AAPL", "D1", 10)
+    end = datetime.strptime(mock_get.call_args[1]["params"]["end"], "%Y-%m-%dT%H:%M:%SZ")
+    end = end.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    assert (now - end) >= timedelta(minutes=15)
 
 
 def test_fetch_alpaca_equity_start_precedes_end_by_a_real_window(monkeypatch):

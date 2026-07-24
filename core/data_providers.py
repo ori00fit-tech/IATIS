@@ -749,15 +749,20 @@ def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.Data
     predates this function; only the crypto half was ever wired in
     before.
 
-    Sends an EXPLICIT start/end window rather than relying on `limit` +
-    `sort=desc` alone — confirmed by a real VPS probe (2026-07-24) that
-    omitting start/end returns only a single bar (today's date) instead
-    of real history, despite Alpaca's own docs listing `start` as merely
-    optional. Root cause not fully explained (a free-tier-specific
-    default, not documented behavior); the fix is to remove the
-    ambiguity entirely rather than rely on undocumented default
-    behavior. Re-verify with scripts/probe_equity_data_providers.py
-    after any change here."""
+    TWO real bugs found and fixed across two rounds of VPS probing
+    (2026-07-24), neither guessable from docs alone:
+    (1) Sends an EXPLICIT start/end window rather than relying on
+        `limit`+`sort=desc` alone — omitting start/end returned only a
+        single (today's) bar instead of real history.
+    (2) `end` defaulting to "now" 403'd once start/end were added — the
+        free plan's SIP feed forbids querying the last 15 minutes of
+        data, confirmed via Alpaca's own documented FAQ. Fixed by
+        requesting `feed=iex` explicitly (the feed the free plan
+        actually has rights to) AND pulling `end` back 20 minutes (a
+        5-minute margin past the documented 15) so the request never
+        touches the restricted window regardless of feed selection.
+    Re-verify with scripts/probe_equity_data_providers.py after any
+    change here."""
     api_key = os.environ.get("ALPACA_API_KEY", "")
     api_secret = os.environ.get("ALPACA_API_SECRET", "")
     if not (api_key and api_secret):
@@ -774,7 +779,17 @@ def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.Data
 
     from datetime import datetime, timedelta, timezone
     seconds_per_bar = _ALPACA_TF_SECONDS.get(interval, 86400)
-    end_dt = datetime.now(timezone.utc)
+    # Confirmed by a real VPS probe (2026-07-24, second round): the
+    # start/end fix above still 403'd. Root cause per Alpaca's own docs
+    # (not guessed — see the explicit search that led here): the free
+    # plan's SIP feed forbids querying the last 15 minutes of data, and
+    # `end` defaulting to "now" always fell inside that window. Two-part
+    # fix: (1) `feed=iex` explicitly requests the feed the free plan
+    # actually has rights to, rather than relying on default feed
+    # selection; (2) `end` is pulled back 20 minutes (5-minute safety
+    # margin past the documented 15) so the request never touches the
+    # restricted window regardless of feed.
+    end_dt = datetime.now(timezone.utc) - timedelta(minutes=20)
     start_dt = end_dt - timedelta(seconds=outputsize * seconds_per_bar * 2)  # 2x buffer
 
     base = os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets").rstrip("/")
@@ -784,6 +799,7 @@ def _fetch_alpaca_equity(symbol: str, interval: str, outputsize: int) -> pd.Data
         "sort": "desc",
         "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "feed": "iex",
     }
     headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret}
 

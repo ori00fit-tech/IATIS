@@ -318,6 +318,47 @@ def test_connect_refuses_when_lock_is_held_by_another_process(monkeypatch):
     holder_fh.close()
 
 
+# ─── read_only clients (research/data tools alongside the live scheduler) ──
+
+def test_place_market_order_refuses_unconditionally_on_a_read_only_client():
+    c = CTraderClient(client_id="test", client_secret="test",
+                      account_id=12345, access_token="test", read_only=True)
+    order = CTraderOrder(symbol="EURUSD", direction="BUY", volume=100_000,
+                         stop_loss=1.08, take_profit=1.10)
+    result = c.place_market_order(order)
+    assert result.success is False
+    assert "read_only" in result.error.lower()
+
+
+def test_connect_skips_the_process_lock_for_a_read_only_client(monkeypatch):
+    """A read_only client must never even attempt the single-session lock —
+    that's what makes it safe to run alongside the live scheduler's own
+    session (P0-3). connect() will still fail past this point in a test
+    environment (no real reactor/network) — only the lock call is asserted."""
+    import execution.ctrader_client as m
+
+    calls: list[bool] = []
+    monkeypatch.setattr(m, "_acquire_process_lock", lambda *a, **kw: calls.append(True))
+
+    c = CTraderClient(client_id="test", client_secret="test",
+                      account_id=12345, access_token="test", read_only=True)
+    c.connect(timeout=0.1)
+    assert calls == []
+
+
+def test_connect_still_acquires_the_process_lock_for_a_normal_client(monkeypatch):
+    """The default (read_only=False) path must be completely unaffected —
+    every existing live-trading caller still goes through the lock."""
+    import execution.ctrader_client as m
+
+    calls: list[bool] = []
+    monkeypatch.setattr(m, "_acquire_process_lock", lambda *a, **kw: calls.append(True))
+
+    c = _mk_client()  # read_only=False (default)
+    c.connect(timeout=0.1)
+    assert calls == [True]
+
+
 # ─── _trendbar_window (backward-pagination arithmetic) ────────────────────────
 
 def test_trendbar_window_defaults_to_now_when_to_timestamp_is_none():

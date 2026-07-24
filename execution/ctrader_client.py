@@ -308,7 +308,20 @@ class CTraderClient:
         account_id: int | None = None,
         access_token: str | None = None,
         environment: str | None = None,
+        read_only: bool = False,
     ) -> None:
+        # read_only: skips the single-session process lock on connect() (see
+        # _acquire_process_lock) — safe ONLY because place_market_order()
+        # unconditionally refuses to run when this is set (see its own
+        # guard). Exists for research/data tools (e.g.
+        # scripts/download_ctrader_fx_history.py) that need historical
+        # trendbars/account info while the live scheduler already holds
+        # the trading lock: the P0-3 risk that lock guards against
+        # (duplicate real-order submission from two concurrent sessions)
+        # structurally cannot occur for a client that can never place an
+        # order. Default False — every existing caller (live trading,
+        # reconciliation) is completely unaffected.
+        self._read_only = read_only
         self.client_id = client_id or os.environ.get("CTRADER_CLIENT_ID", "")
         self.client_secret = client_secret or os.environ.get("CTRADER_CLIENT_SECRET", "")
         self.account_id = int(account_id or os.environ.get("CTRADER_ACCOUNT_ID", 0))
@@ -983,7 +996,8 @@ class CTraderClient:
         # any future unplanned drop of *this* connection.
         self._intentional_disconnect = False
         try:
-            _acquire_process_lock()
+            if not self._read_only:
+                _acquire_process_lock()
 
             from ctrader_open_api import Client, TcpProtocol
             from twisted.internet import reactor
@@ -1370,6 +1384,15 @@ class CTraderClient:
 
     def place_market_order(self, order: CTraderOrder) -> CTraderResult:
         """Place a market order with absolute SL/TP prices."""
+        if self._read_only:
+            # Hard, unconditional refusal — this is what makes it safe for
+            # a read_only client to skip the single-session process lock
+            # in connect(). Never relax this without re-examining that
+            # lock-skip too.
+            return CTraderResult(
+                success=False, symbol=order.symbol,
+                error="Refusing: this is a read_only CTraderClient (no order placement).",
+            )
         if self._state != ConnectionState.READY:
             return CTraderResult(
                 success=False, symbol=order.symbol,

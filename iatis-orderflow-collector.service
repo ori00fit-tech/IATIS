@@ -1,0 +1,37 @@
+# IATIS Binance order-flow collector (H104, research/results/registry.json).
+# Long-running WebSocket collector, NOT a timer-fired job — it holds one
+# persistent aggTrade connection per symbol (BTCUSD/ETHUSD) and reconnects
+# on its own on any drop; enable and start this unit directly. Appends one
+# bar per symbol per completed 15-minute interval to
+# data/{SYMBOL}_orderflow_15min.jsonl — see
+# scripts/collect_binance_orderflow.py's module docstring. Research-only:
+# no live decision path reads this data. No API key needed (Binance's
+# aggTrade stream is public, unauthenticated). H104's own decision rule
+# needs ~3 months of accumulated bars before any verdict is possible —
+# starting this service starts that clock, nothing more.
+[Unit]
+Description=IATIS Binance order-flow collector (H104)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iatis
+WorkingDirectory=/opt/iatis
+Environment=PATH=/opt/iatis/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/iatis/venv/bin/python3 -m scripts.collect_binance_orderflow
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/iatis/data
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

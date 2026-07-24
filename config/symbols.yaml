@@ -245,7 +245,7 @@
   symbol: AAPL
   asset_class: equity
   status: WATCHLIST
-  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified (sandbox has no network egress; see scripts/probe_equity_data_providers.py). No hypothesis registered."
+  status_reason: "New asset class (2026-07-24) — data path built and LIVE-VERIFIED on the VPS (alpaca/twelve_data/alpha_vantage confirmed working; finnhub confirmed broken free-tier, harmless fallback). No hypothesis registered — still enabled:false/WATCHLIST until one exists."
   status_since: "2026-07-24"
 
 - enabled: false
@@ -255,7 +255,7 @@
   symbol: NVDA
   asset_class: equity
   status: WATCHLIST
-  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_reason: "New asset class (2026-07-24) — data path built and LIVE-VERIFIED on the VPS (alpaca/twelve_data/alpha_vantage confirmed working; finnhub confirmed broken free-tier, harmless fallback). No hypothesis registered — still enabled:false/WATCHLIST until one exists."
   status_since: "2026-07-24"
 
 - enabled: false
@@ -265,7 +265,7 @@
   symbol: SPY
   asset_class: etf
   status: WATCHLIST
-  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_reason: "New asset class (2026-07-24) — data path built and LIVE-VERIFIED on the VPS (alpaca/twelve_data/alpha_vantage confirmed working; finnhub confirmed broken free-tier, harmless fallback). No hypothesis registered — still enabled:false/WATCHLIST until one exists."
   status_since: "2026-07-24"
 
 - enabled: false
@@ -275,5 +275,5 @@
   symbol: QQQ
   asset_class: etf
   status: WATCHLIST
-  status_reason: "New asset class (2026-07-24) — data path built and NOT YET live-verified. No hypothesis registered."
+  status_reason: "New asset class (2026-07-24) — data path built and LIVE-VERIFIED on the VPS (alpaca/twelve_data/alpha_vantage confirmed working; finnhub confirmed broken free-tier, harmless fallback). No hypothesis registered — still enabled:false/WATCHLIST until one exists."
   status_since: "2026-07-24"

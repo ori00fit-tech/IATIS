@@ -21,6 +21,7 @@ import {
   getAiDailyReport,
   getMarketHealth,
   getReconciliation,
+  exposureOk,
   type MarketHealth,
   type ReconciliationResult,
   type SymbolHealthEntry,
@@ -194,6 +195,8 @@ export function MissionControl() {
   const dataHealth = usePolling(getDataHealth, POLL_MS * 2, markUnauthenticated)
 
   const hf = healthFull.data
+  const rawExposure = hf?.exposure_estimate
+  const exp = exposureOk(rawExposure) ? rawExposure : null
   const creditsColor = (budget.data?.remaining_today ?? 0) > 400 ? 'green' : (budget.data?.remaining_today ?? 0) > 100 ? 'amber' : 'red'
 
   const symbolColumns: Column<SymbolHealthEntry>[] = [
@@ -272,28 +275,28 @@ export function MissionControl() {
         />
       </div>
 
-      {hf?.exposure_estimate && (
+      {exp && (
         <div
           className="flex items-center gap-3 px-3.5 py-2.5 rounded-md border border-border bg-surface text-[0.8em]"
-          title={hf.exposure_estimate.note}
+          title={exp.note}
         >
           <span className="text-muted uppercase text-[0.72em] tracking-[0.8px] shrink-0">Exposure (est., upper bound)</span>
           <div className="flex-1 h-1.5 rounded-full bg-bg border border-border overflow-hidden max-w-[220px]">
             <div
               className={`h-full ${
-                (hf.exposure_estimate.utilization_pct ?? 0) >= 90
+                (exp.utilization_pct ?? 0) >= 90
                   ? 'bg-red'
-                  : (hf.exposure_estimate.utilization_pct ?? 0) >= 50
+                  : (exp.utilization_pct ?? 0) >= 50
                     ? 'bg-amber'
                     : 'bg-green'
               }`}
-              style={{ width: `${Math.min(100, hf.exposure_estimate.utilization_pct ?? 0)}%` }}
+              style={{ width: `${Math.min(100, exp.utilization_pct ?? 0)}%` }}
             />
           </div>
           <span className="font-bold shrink-0">
-            {hf.exposure_estimate.estimated_pct.toFixed(1)}% / {hf.exposure_estimate.max_exposure_pct.toFixed(1)}%
+            {exp.estimated_pct.toFixed(1)}% / {exp.max_exposure_pct.toFixed(1)}%
           </span>
-          <span className="text-muted shrink-0">{hf.exposure_estimate.open_positions} open</span>
+          <span className="text-muted shrink-0">{exp.open_positions} open</span>
         </div>
       )}
 

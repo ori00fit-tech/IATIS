@@ -8,6 +8,7 @@
 // must never drive a headline health light.
 import type { HealthFull } from './api'
 import type { MarketHealth, ReconciliationResult } from './api'
+import { exposureOk } from './api'
 import type { DataHealthResponse } from '../data-center/api'
 import type { PhilosophyAuditResponse, ResearchIntegrityResponse } from '../system-audit/api'
 
@@ -81,7 +82,7 @@ export function dataQualityScore(dh: DataHealthResponse | null): Score {
 export function riskStatusScore(hf: HealthFull | null, rec: ReconciliationResult | null): Score {
   if (!hf) return { value: null, why: 'awaiting /health/full' }
   const exp = hf.exposure_estimate
-  if (!exp) return { value: null, why: 'no exposure estimate' }
+  if (!exposureOk(exp)) return { value: null, why: 'no exposure estimate' }
   const util = exp.utilization_pct ?? 0
   let s = 100 - util // headroom: full cap used → 0
   const notes: string[] = [`${util.toFixed(0)}% of cap used`]

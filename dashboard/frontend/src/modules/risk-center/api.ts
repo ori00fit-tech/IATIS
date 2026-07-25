@@ -9,10 +9,12 @@ export {
   getHealthFull,
   getSymbolHealth,
   getReconciliation,
+  exposureOk,
   type HealthFull,
   type SymbolHealthEntry,
   type SymbolHealthResponse,
   type ReconciliationResult,
+  type ExposureEstimate,
 } from '../mission-control/api'
 
 /** One row of the outcomes table (storage/outcome_tracker.py schema). */

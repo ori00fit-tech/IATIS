@@ -9,6 +9,7 @@ import {
   getSymbolHealth,
   getReconciliation,
   getOutcomesFull,
+  exposureOk,
   type OutcomeRow,
   type RiskSummary,
   type SymbolHealthEntry,
@@ -118,7 +119,8 @@ export function RiskCenter() {
   const symbolHealth = usePolling(getSymbolHealth, POLL_MS, markUnauthenticated)
   const reconciliation = usePolling(getReconciliation, POLL_MS * 2, markUnauthenticated)
 
-  const exp = healthFull.data?.exposure_estimate
+  const rawExposure = healthFull.data?.exposure_estimate
+  const exp = exposureOk(rawExposure) ? rawExposure : null
   const s = outcomes.data?.summary
   const open = outcomes.data?.open_signals ?? []
   const util = exp?.utilization_pct ?? 0

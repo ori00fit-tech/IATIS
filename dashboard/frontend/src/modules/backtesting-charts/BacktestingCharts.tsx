@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, createSeriesMarkers, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
-import { usePolling } from '../../lib/usePolling'
+import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
@@ -527,9 +527,21 @@ function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t:
     { header: 'Dir', render: (t) => <Badge tone={t.direction === 'BUY' ? 'exec' : 'no-trade'}>{t.direction}</Badge> },
     { header: 'Entry', render: (t) => t.entry_price.toFixed(5), align: 'right' },
     { header: 'Exit', render: (t) => (t.exit_price != null ? t.exit_price.toFixed(5) : '—'), align: 'right' },
-    { header: 'PnL', render: (t) => <span className={t.is_win ? 'text-green' : 'text-red'}>{t.pnl_usd >= 0 ? '+' : ''}{t.pnl_usd.toFixed(2)}</span>, align: 'right' },
+    {
+      header: 'PnL',
+      render: (t) => <span className={t.is_win ? 'text-green' : 'text-red'}>{t.pnl_usd >= 0 ? '+' : ''}{t.pnl_usd.toFixed(2)}</span>,
+      align: 'right',
+      accessorFn: (t) => t.pnl_usd,
+      sortingFn: 'basic',
+    },
     { header: 'Regime', render: (t) => t.regime ?? '—' },
-    { header: 'Score', render: (t) => (t.cf_score != null ? t.cf_score.toFixed(0) : '—'), align: 'right' },
+    {
+      header: 'Score',
+      render: (t) => (t.cf_score != null ? t.cf_score.toFixed(0) : '—'),
+      align: 'right',
+      accessorFn: (t) => t.cf_score ?? -Infinity,
+      sortingFn: 'basic',
+    },
     {
       header: 'Decision',
       render: (t) => (
@@ -803,7 +815,7 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
 
 function QueueManagerRuns() {
   const { markUnauthenticated } = useAuth()
-  const reports = usePolling(getRunReports, POLL_MS, markUnauthenticated)
+  const reports = useApiQuery(['run-reports'], getRunReports, POLL_MS, markUnauthenticated)
 
   const all = reports.data?.reports ?? []
   const chartEntries = all.filter((r) => r.kind === 'chart_data' && r.readable !== false)
@@ -841,8 +853,8 @@ function QueueManagerRuns() {
 
 export function BacktestingCharts() {
   const { markUnauthenticated } = useAuth()
-  const backtests = usePolling(getBacktestResults, POLL_MS, markUnauthenticated)
-  const outcomes = usePolling(getOutcomesCalibration, POLL_MS, markUnauthenticated)
+  const backtests = useApiQuery(['backtest-results'], getBacktestResults, POLL_MS, markUnauthenticated)
+  const outcomes = useApiQuery(['outcomes-calibration'], getOutcomesCalibration, POLL_MS, markUnauthenticated)
   const [selected, setSelected] = useState<string | null>(null)
 
   const runs = backtests.data?.results ?? []

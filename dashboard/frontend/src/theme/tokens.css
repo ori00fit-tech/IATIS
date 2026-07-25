@@ -15,4 +15,21 @@
   --text: #e2e8f0;
   --muted: #64748b;
   --card-bg: #111827;
+
+  /* Structural tokens for the sidebar/bottom-panel shell (institutional
+   * redesign Phase 1) — additive only, no change to the palette above.
+   * Distinct from --surface/--card-bg (content-panel backgrounds): the
+   * sidebar/header chrome sits on its own, slightly more elevated layer. */
+  --panel-bg: #0a0f1a;
+  --panel-border: #1e293b;
+  --glass-bg: rgba(14, 20, 32, 0.72);
+  --glass-blur: 12px;
+  --shadow-sm-raw: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md-raw: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg-raw: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --sidebar-w-expanded: 240px;
+  --sidebar-w-collapsed: 56px;
+  --bottom-panel-h-default: 280px;
+  --bottom-panel-h-min: 120px;
+  --bottom-panel-h-max: 70vh;
 }

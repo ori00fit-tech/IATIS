@@ -14,6 +14,16 @@
   --color-muted: var(--muted);
   --color-card: var(--card-bg);
   --font-mono: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* Shell chrome tokens (Phase 1) — see theme/tokens.css for the raw values. */
+  --color-panel: var(--panel-bg);
+  --color-panel-border: var(--panel-border);
+  --color-glass: var(--glass-bg);
+  --shadow-sm: var(--shadow-sm-raw);
+  --shadow-md: var(--shadow-md-raw);
+  --shadow-lg: var(--shadow-lg-raw);
+  --spacing-sidebar-expanded: var(--sidebar-w-expanded);
+  --spacing-sidebar-collapsed: var(--sidebar-w-collapsed);
 }
 
 body {

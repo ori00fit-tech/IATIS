@@ -1,42 +1,10 @@
-import { useEffect, useState } from 'react'
-import { usePolling } from '../../lib/usePolling'
-import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
-import { getLogs, getLogSources, type LogSource } from './api'
+import { useLiveLogs, levelClass } from '../../lib/useLiveLogs'
 
-const POLL_MS = 10_000
-const DEFAULT_SOURCE = 'api'
 const input = 'bg-surface border border-border rounded px-2 py-1.5 text-[0.82em] text-text placeholder:text-muted'
 
-function levelClass(line: string) {
-  const upper = line.toUpperCase()
-  if (upper.includes('ERROR') || upper.includes('CRITICAL')) return 'text-red'
-  if (upper.includes('WARN')) return 'text-amber'
-  return 'text-text'
-}
-
 export function LiveLogs() {
-  const { markUnauthenticated } = useAuth()
-  const [sources, setSources] = useState<LogSource[]>([])
-  const [source, setSource] = useState(DEFAULT_SOURCE)
-  const [lines, setLines] = useState(200)
-  const [search, setSearch] = useState('')
-  const [appliedSearch, setAppliedSearch] = useState('')
-
-  useEffect(() => {
-    getLogSources()
-      .then((r) => setSources(r.sources))
-      .catch(() => {})
-  }, [])
-
-  const logs = usePolling(() => getLogs(source, lines, appliedSearch), POLL_MS, markUnauthenticated)
-
-  useEffect(() => {
-    logs.refetch()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, lines, appliedSearch])
-
-  const sourceOptions = sources.length ? sources : [{ id: DEFAULT_SOURCE, label: 'api', kind: 'journal' as const }]
+  const { logs, sources: sourceOptions, source, setSource, lines, setLines, search, setSearch, setAppliedSearch } = useLiveLogs(200)
 
   return (
     <div className="flex flex-col gap-4">

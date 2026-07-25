@@ -1,10 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { queryClient } from './lib/queryClient'
 import { AuthProvider, useAuth } from './lib/auth'
 import { Login } from './pages/Login'
 import { TABS, type TabId } from './lib/tabs'
 import { useHashTab } from './lib/useHashTab'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { CommandPalette } from './components/CommandPalette'
+import { Sidebar } from './components/Sidebar'
+import { BottomPanel } from './components/BottomPanel'
 import { MissionControl } from './modules/mission-control/MissionControl'
 import { LiveSignals } from './modules/live-signals/LiveSignals'
 import { DataCenter } from './modules/data-center/DataCenter'
@@ -104,8 +108,8 @@ function Shell() {
   }, [])
 
   return (
-    <div className="min-h-screen">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-gradient-to-r from-bg to-[#0d1829]">
+    <div className="h-screen flex flex-col">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-gradient-to-r from-bg to-[#0d1829] shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-gradient-to-br from-accent to-accent2 rounded-lg flex items-center justify-center text-[18px]">
             ⚡
@@ -132,26 +136,16 @@ function Shell() {
         </div>
       </header>
 
-      <nav className="flex gap-1 px-6 pt-3 border-b border-border overflow-x-auto" aria-label="Modules">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id as TabId)}
-            aria-current={tab === t.id ? 'page' : undefined}
-            className={`px-3 py-2 text-[0.78em] whitespace-nowrap border-b-2 -mb-px transition-colors ${
-              tab === t.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-text'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="px-6 py-5 max-w-[1400px] mx-auto">
-        <ErrorBoundary key={tab} moduleName={TABS.find((t) => t.id === tab)?.label ?? tab}>
-          {MODULES[tab]()}
-        </ErrorBoundary>
-      </main>
+      <div className="flex flex-1 min-h-0">
+        <Sidebar tab={tab} setTab={setTab} />
+        <BottomPanel>
+          <main className="px-6 py-5 max-w-[1400px] mx-auto">
+            <ErrorBoundary key={tab} moduleName={TABS.find((t) => t.id === tab)?.label ?? tab}>
+              {MODULES[tab]()}
+            </ErrorBoundary>
+          </main>
+        </BottomPanel>
+      </div>
 
       <CommandPalette open={paletteOpen} activeTab={tab} onSelect={setTab} onClose={() => setPaletteOpen(false)} />
     </div>
@@ -167,8 +161,10 @@ function Root() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Root />
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Root />
+      </AuthProvider>
+    </QueryClientProvider>
   )
 }

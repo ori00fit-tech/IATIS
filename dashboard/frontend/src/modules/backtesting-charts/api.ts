@@ -72,6 +72,43 @@ export const getRunReports = () => apiGet<RunReportsResponse>('/research/run-rep
 
 // backtest/report.py's chart_data sidecar — one per symbol, written
 // alongside every HTML backtest report.
+// Interactive Chart entry/exit markers + per-trade decision panel
+// (2026-07-25) — real per-engine bias/score captured at entry time
+// (backtesting.backtest_engine.py's decision snapshot), not synthesized
+// client-side. engine_votes/cf_score/regime are null for trades that
+// predate that change or came from a Trade built outside run_backtest.
+export interface ChartEngineVote {
+  engine: string
+  bias: string
+  score: number
+  reasons: string[]
+}
+
+export interface ChartTrade {
+  trade_id: string
+  direction: string
+  entry_time: number | null // unix seconds
+  exit_time: number | null
+  entry_price: number
+  exit_price: number | null
+  stop_loss: number
+  take_profit: number
+  pnl_usd: number
+  is_win: boolean
+  exit_reason: string
+  regime: string | null
+  cf_score: number | null
+  engine_votes: Record<string, ChartEngineVote> | null
+}
+
+export interface ChartCandle {
+  time: number // unix seconds
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
 export interface ChartDataFile {
   symbol: string
   timeframe: string
@@ -82,6 +119,8 @@ export interface ChartDataFile {
   by_symbol: Record<string, unknown>
   by_direction: Record<string, unknown>
   by_session: Record<string, unknown>
+  candles: ChartCandle[] | null
+  trades: ChartTrade[]
   monte_carlo: {
     median_return: number
     p5_return: number
@@ -102,4 +141,63 @@ export async function getChartDataFile(file: string): Promise<ChartDataFile> {
     throw new Error(res.error ?? `${file}: empty content`)
   }
   return JSON.parse(res.content) as ChartDataFile
+}
+
+// Parameter Sweep full detail (2026-07-25) — backtest/robustness.py's
+// complete per-point output, not the lightweight verdict-only highlights
+// /research/run-reports returns. Every point is here; there is no
+// "winner" field anywhere in this shape by design.
+// profit_factor is Infinity whenever a point has zero losing trades — a
+// real, correct value (backtest/metrics.py's own definition), not a bug.
+// The backend sanitizes it to the string "Infinity"/"-Infinity"/"NaN"
+// before serializing (bare Infinity is not valid JSON), so this is a
+// real union, not defensive typing for a case that can't happen.
+export type PossiblyInfinite = number | 'Infinity' | '-Infinity' | 'NaN'
+
+export function formatPossiblyInfinite(v: PossiblyInfinite, digits = 2): string {
+  if (v === 'Infinity') return '∞'
+  if (v === '-Infinity') return '-∞'
+  if (v === 'NaN') return '—'
+  return v.toFixed(digits)
+}
+
+export interface RobustnessSweepPoint {
+  multiplier: number
+  value: number
+  trades: number
+  profit_factor: PossiblyInfinite
+  win_rate: number
+  max_drawdown_pct: number
+  sufficient: boolean
+}
+
+export interface RobustnessSweep {
+  param: string
+  baseline_value: number
+  baseline_pf: PossiblyInfinite
+  verdict: string
+  points: RobustnessSweepPoint[]
+}
+
+export interface RobustnessSymbolResult {
+  min_trades: number
+  multipliers: number[]
+  sweeps: RobustnessSweep[]
+}
+
+export interface RobustnessReportFile {
+  generated_utc: string
+  all_params_stable: number
+  evaluated: number
+  note: string
+  engine_overrides: Record<string, unknown>
+  symbols: Record<string, RobustnessSymbolResult>
+}
+
+export async function getRobustnessReportFile(file: string): Promise<RobustnessReportFile> {
+  const res = await getFileContent(`reports/${file}`)
+  if (res.error || res.content == null) {
+    throw new Error(res.error ?? `${file}: empty content`)
+  }
+  return JSON.parse(res.content) as RobustnessReportFile
 }

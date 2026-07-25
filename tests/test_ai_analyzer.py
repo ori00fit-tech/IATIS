@@ -260,6 +260,31 @@ def test_ai_analyzer_generate_research_summary_ok(monkeypatch):
     assert "13 hypotheses" in result["text"]
 
 
+def test_ai_analyzer_answer_research_question_disabled():
+    analyzer = AIAnalyzer(_config(enabled=False))
+    result = analyzer.answer_research_question("{}", "Why did PF drop?")
+    assert result["status"] == "disabled"
+
+
+def test_ai_analyzer_answer_research_question_rejects_empty_question(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    result = analyzer.answer_research_question("{}", "   ")
+    assert result["status"] == "error"
+    assert "empty" in result["error"].lower()
+
+
+def test_ai_analyzer_answer_research_question_ok(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(GeminiProvider, "_chat", return_value="PF dropped because of a losing streak in H1."):
+        result = analyzer.answer_research_question(
+            '{"pf": 1.1, "trades": 120}', "Why did PF drop?"
+        )
+    assert result["status"] == "ok"
+    assert "PF dropped" in result["text"]
+
+
 def test_ai_analyzer_generate_daily_report_still_works_after_refactor(monkeypatch):
     # Regression guard: generate_daily_report and generate_research_summary
     # now share _summarize_text() — make sure the refactor didn't change

@@ -39,6 +39,22 @@ export interface OutcomesSummary {
   recent?: ClosedOutcomeRow[]
 }
 
+export type ExposureEstimate =
+  | {
+      open_positions: number
+      estimated_pct: number
+      max_exposure_pct: number
+      utilization_pct: number | null
+      note: string
+    }
+  | { status: 'error'; error: string }
+
+export function exposureOk(
+  exp: ExposureEstimate | undefined
+): exp is Extract<ExposureEstimate, { estimated_pct: number }> {
+  return exp != null && !('status' in exp)
+}
+
 export interface HealthFull {
   status: 'healthy' | 'degraded'
   issues: string[]
@@ -65,13 +81,12 @@ export interface HealthFull {
   // Upper-bound estimate, not the live risk-engine figure — see the
   // `note` field and execution/api_server.py's /health/full docstring
   // for why the real number is unreachable from this process.
-  exposure_estimate?: {
-    open_positions: number
-    estimated_pct: number
-    max_exposure_pct: number
-    utilization_pct: number | null
-    note: string
-  }
+  // Same {status: 'error', error} degradation as every other `checks[...]`
+  // entry in execution/routes/health.py — a real shape this endpoint
+  // sends, not defensive typing for a case that can't happen (it crashed
+  // both Mission Control and Risk Center's .toFixed() calls before this
+  // type was widened to admit it).
+  exposure_estimate?: ExposureEstimate
   data_providers?: Record<string, string>
   ctrader?: { configured: boolean; account_id: string; environment: string }
 }

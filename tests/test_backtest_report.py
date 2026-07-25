@@ -120,3 +120,93 @@ def test_chart_data_monte_carlo_summary_when_provided(reports_dir):
         "median_return", "p5_return", "p95_return",
         "median_max_dd", "worst_max_dd", "risk_of_ruin", "probability_profit",
     }
+
+
+def _ohlcv_df(n: int) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    close = 1.10 + pd.Series(range(n)).astype(float) * 0.0001
+    return pd.DataFrame(
+        {"open": close, "high": close + 0.0005, "low": close - 0.0005, "close": close, "volume": 1000.0},
+        index=idx,
+    )
+
+
+def test_chart_data_candles_is_none_without_df(reports_dir):
+    from backtest.report import generate_html_report
+
+    trades = _trades()
+    metrics = calculate_metrics(trades)
+    html_path = generate_html_report(metrics, trades, symbol="EURUSD", timeframe="H1")
+    chart_path = html_path.with_name(html_path.stem + "_chart_data.json")
+    payload = json.loads(chart_path.read_text())
+    assert payload["candles"] is None
+
+
+def test_chart_data_candles_present_and_shaped_when_df_provided(reports_dir):
+    from backtest.report import generate_html_report
+
+    trades = _trades()
+    metrics = calculate_metrics(trades)
+    df = _ohlcv_df(300)
+    html_path = generate_html_report(metrics, trades, symbol="EURUSD", timeframe="H1", df=df)
+    chart_path = html_path.with_name(html_path.stem + "_chart_data.json")
+    payload = json.loads(chart_path.read_text())
+
+    candles = payload["candles"]
+    assert candles is not None
+    assert 0 < len(candles) <= 300
+    for c in candles[:3]:
+        assert {"time", "open", "high", "low", "close"}.issubset(c.keys())
+    # strictly increasing time (lightweight-charts requires this)
+    times = [c["time"] for c in candles]
+    assert times == sorted(times)
+    assert len(times) == len(set(times))
+
+
+def test_chart_data_candles_downsampled_to_cap(reports_dir):
+    from backtest.report import generate_html_report, _MAX_CANDLES
+
+    trades = _trades()
+    metrics = calculate_metrics(trades)
+    df = _ohlcv_df(_MAX_CANDLES * 3)
+    html_path = generate_html_report(metrics, trades, symbol="EURUSD", timeframe="H1", df=df)
+    chart_path = html_path.with_name(html_path.stem + "_chart_data.json")
+    payload = json.loads(chart_path.read_text())
+    assert len(payload["candles"]) <= _MAX_CANDLES
+
+
+def test_chart_data_trades_carries_entry_exit_sl_tp_and_decision_fields(reports_dir):
+    from backtest.report import generate_html_report
+
+    trades = _trades()
+    metrics = calculate_metrics(trades)
+    html_path = generate_html_report(metrics, trades, symbol="EURUSD", timeframe="H1")
+    chart_path = html_path.with_name(html_path.stem + "_chart_data.json")
+    payload = json.loads(chart_path.read_text())
+
+    chart_trades = payload["trades"]
+    assert len(chart_trades) == len(trades)
+    t0 = chart_trades[0]
+    assert {"trade_id", "direction", "entry_time", "exit_time", "entry_price", "exit_price",
+            "stop_loss", "take_profit", "pnl_usd", "is_win", "exit_reason", "regime",
+            "cf_score", "engine_votes"}.issubset(t0.keys())
+    assert t0["regime"] == "trending"
+    # These fixtures never set engine_votes/cf_score -> falsy fields stay None.
+    assert t0["engine_votes"] is None
+    assert t0["cf_score"] is None
+
+
+def test_chart_data_trades_include_real_decision_snapshot_when_present(reports_dir):
+    from backtest.report import generate_html_report
+
+    trade = _trade(0, 120.0, True)
+    trade.cf_score = 87.5
+    trade.engine_votes = {"smc": {"engine": "smc", "bias": "BULLISH", "score": 82.0, "reasons": []}}
+    metrics = calculate_metrics([trade])
+    html_path = generate_html_report(metrics, [trade], symbol="EURUSD", timeframe="H1")
+    chart_path = html_path.with_name(html_path.stem + "_chart_data.json")
+    payload = json.loads(chart_path.read_text())
+
+    t0 = payload["trades"][0]
+    assert t0["cf_score"] == 87.5
+    assert t0["engine_votes"]["smc"]["score"] == 82.0

@@ -17,6 +17,36 @@ import pandas as pd
 import numpy as np
 
 
+def json_safe(obj: object) -> object:
+    """Recursively replaces bare inf/-inf/nan floats with JSON-standard
+    string sentinels before serialization.
+
+    profit_factor below is float('inf') by definition whenever a sample
+    has zero losing trades (no denominator) — a real, correct value, not
+    a bug. But json.dumps happily emits the bare token `Infinity` for it
+    by default, which is NOT valid JSON: any strict JSON.parse() (every
+    browser's fetch().json() included) throws on a report file containing
+    one. Used by backtest/robustness.py and backtest/walk_forward.py,
+    whose sweep/window payloads can carry this same profit_factor at
+    arbitrary nesting depth; execution/api_shared_helpers.py's
+    _forward_rule_progress() hit the identical failure mode for a single
+    known field and sanitizes it inline the same way.
+    """
+    if isinstance(obj, float):
+        if obj == float("inf"):
+            return "Infinity"
+        if obj == float("-inf"):
+            return "-Infinity"
+        if obj != obj:  # NaN != NaN is the standard way to detect it
+            return "NaN"
+        return obj
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_safe(v) for v in obj]
+    return obj
+
+
 @dataclass
 class TradeRecord:
     """Single trade record with full context."""

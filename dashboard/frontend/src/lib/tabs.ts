@@ -19,6 +19,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'engine-monitor', label: 'Engine Monitor', hint: 'Per-engine votes, accuracy, weights', glyph: '⚙' },
   { id: 'ai-decision-center', label: 'AI Decision Center', hint: 'Decision anatomy + explain-only AI narration', glyph: '❋' },
   { id: 'research', label: 'Research & Backtests', hint: 'Hypothesis registry, backtest runs, regime matrix', glyph: '⌕' },
+  { id: 'backtesting-lab', label: 'Backtesting Lab', hint: 'Step-by-step experiment builder — dataset, symbols, strategy, execution', glyph: '🧪' },
   { id: 'backtesting-charts', label: 'Backtesting Charts', hint: 'Equity curve, per-symbol comparison, score calibration', glyph: '📈' },
   { id: 'system-audit', label: 'System Audit', hint: 'Philosophy audit + research integrity checks', glyph: '✓' },
   { id: 'logs', label: 'Live Logs', hint: 'Whitelisted journalctl / file log tail', glyph: '≣' },

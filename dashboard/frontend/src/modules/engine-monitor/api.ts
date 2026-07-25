@@ -7,7 +7,11 @@ export interface EngineStat {
   bullish_pct: number
   bearish_pct: number
   agreement_rate: number | null
-  avg_score_when_voting: number
+  // SQLite AVG() over "score WHEN bias != 'NEUTRAL' ELSE NULL" (storage/
+  // engine_tracker.py) — NULL, not 0, when every vote in the window was
+  // NEUTRAL. ai/dynamic_weights.py and storage/calibration.py both treat
+  // this as possibly-None already; the frontend hadn't.
+  avg_score_when_voting: number | null
 }
 
 export interface EngineAttribution {

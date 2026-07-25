@@ -100,8 +100,9 @@ websockets>=12.0,<17.0
 python-multipart>=0.0.9,<0.1.0
 
 # Phase 4a (2026-07-25) — reads uploaded .parquet OHLCV datasets in
-# backtest/runner.py. Floor at the first version with a stable pandas 2.x
-# read_parquet/to_parquet engine API; ceiling at the next major, same
-# recent-floor-no-wide-ceiling pattern as the other additions above (to
-# avoid repeating the 2026-07-14 "resolution-too-deep" failures).
-pyarrow>=18.0.0,<20.0.0
+# backtest/runner.py. Originally floored at 18.0.0, but CI's pip-audit
+# (PR #152, 2026-07-25) caught 19.0.1 as vulnerable (PYSEC-2026-113) —
+# floor raised to the fixed release, same policy as the cryptography floor
+# above: bump the floor if pip-audit flags it again. Ceiling kept at the
+# next major past the fix version to bound the resolver search space.
+pyarrow>=23.0.1,<26.0.0

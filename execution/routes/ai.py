@@ -235,6 +235,42 @@ async def ai_research_summary(
         raise HTTPException(status_code=500, detail="Internal error.")
 
 
+@router.post("/ai/research-question")
+async def ai_research_question(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """AI Research Assistant (Backtesting Lab priority #5) — free-form
+    Q&A grounded in whatever research/backtest context the frontend
+    already has loaded (hypothesis registry, KPIs, sweep results,
+    comparison table). Never a second data-fetching path: the caller
+    supplies the context, this endpoint only forwards it to the model.
+    Expected body: {context: object, question: string}.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+        import json as _json
+
+        body = await request.json()
+        context = body.get("context") or {}
+        question = str(body.get("question") or "").strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="question is required.")
+        if len(question) > 500:
+            raise HTTPException(status_code=400, detail="question: at most 500 characters.")
+        context_text = _json.dumps(context, indent=2, default=str)[:8000]
+
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.answer_research_question(context_text, question)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"AI research question error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
 @router.get("/ai/daily-report")
 async def ai_daily_report(
     x_api_key: str | None = Header(default=None),

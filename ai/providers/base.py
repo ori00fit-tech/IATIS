@@ -175,3 +175,7 @@ class AIProvider(ABC):
     def summarize(self, text: str) -> str:
         prompt = load_prompt("summarize", text=text)
         return self._chat(prompt).strip()
+
+    def answer_question(self, context: str, question: str) -> str:
+        prompt = load_prompt("research_qa", context=context, question=question)
+        return self._chat(prompt).strip()

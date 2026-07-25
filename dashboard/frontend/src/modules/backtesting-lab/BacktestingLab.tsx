@@ -4,6 +4,7 @@ import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
+import { AiResearchAssistant } from '../../components/AiResearchAssistant'
 import {
   getResearchDatasets,
   getResearchSymbols,
@@ -441,10 +442,19 @@ function SweepConfig({
   )
 }
 
-function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: () => void }) {
+function ExecutionStep({
+  state,
+  job,
+  setJob,
+  onFinished,
+}: {
+  state: WizardState
+  job: JobDetail | null
+  setJob: (j: JobDetail | null) => void
+  onFinished: () => void
+}) {
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [job, setJob] = useState<JobDetail | null>(null)
   const requiresSymbols = ['backtest', 'walk_forward', 'robustness'].includes(state.jobId)
   const isRobustness = state.jobId === 'robustness'
 
@@ -464,6 +474,7 @@ function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: 
       getJobDetail(job.job_id).then(setJob).catch(() => {})
     }, 3000)
     return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job])
 
   const start = async () => {
@@ -524,19 +535,37 @@ function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: 
 }
 
 // ── Step 8: Results ──────────────────────────────────────────────────────
-function ResultsStep() {
+function ResultsStep({ state, job }: { state: WizardState; job: JobDetail | null }) {
+  const context = job
+    ? {
+        job_id: job.job_id,
+        job_kind: state.jobId,
+        symbols: state.selectedSymbols,
+        status: job.status,
+        returncode: job.returncode ?? null,
+        log_tail: job.log.slice(-60),
+      }
+    : null
+
   return (
-    <Panel title="Results">
-      <div className="p-4 flex flex-col gap-3 text-[0.85em]">
-        <p className="text-muted">
-          The full Result Explorer (equity curves, walk-forward/robustness verdicts, Monte Carlo) lives in the
-          Backtesting Charts tab — it reads the same reports/ output this run just wrote.
-        </p>
-        <a href="#/backtesting-charts" className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 font-bold">
-          Open Backtesting Charts →
-        </a>
-      </div>
-    </Panel>
+    <div className="flex flex-col gap-4">
+      <Panel title="Results">
+        <div className="p-4 flex flex-col gap-3 text-[0.85em]">
+          <p className="text-muted">
+            The full Result Explorer (equity curves, walk-forward/robustness verdicts, Monte Carlo) lives in the
+            Backtesting Charts tab — it reads the same reports/ output this run just wrote.
+          </p>
+          <a href="#/backtesting-charts" className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 font-bold">
+            Open Backtesting Charts →
+          </a>
+        </div>
+      </Panel>
+      <AiResearchAssistant
+        context={context}
+        emptyHint="Run a job in the Execution step first — the assistant answers from that run's own status and log, nothing else."
+        examples={['Did this run finish successfully?', 'Summarize what happened in this run.', 'Were there any errors in the log?']}
+      />
+    </div>
   )
 }
 
@@ -544,6 +573,7 @@ export function BacktestingLab() {
   const [step, setStep] = useState<StepIndex>(0)
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
   const [state, setState] = useState<WizardState>({ selectedSymbols: [], jobId: 'backtest' })
+  const [job, setJob] = useState<JobDetail | null>(null)
 
   const goTo = (i: StepIndex) => {
     setStep(i)
@@ -574,8 +604,15 @@ export function BacktestingLab() {
       {step === 3 && <StrategyStep />}
       {step === 4 && <IndicatorsStep />}
       {step === 5 && <HypothesesStep state={state} setState={setState} />}
-      {step === 6 && <ExecutionStep state={state} onFinished={() => setMaxReached((m) => (m < 7 ? (7 as StepIndex) : m))} />}
-      {step === 7 && <ResultsStep />}
+      {step === 6 && (
+        <ExecutionStep
+          state={state}
+          job={job}
+          setJob={setJob}
+          onFinished={() => setMaxReached((m) => (m < 7 ? (7 as StepIndex) : m))}
+        />
+      )}
+      {step === 7 && <ResultsStep state={state} job={job} />}
 
       <div className="flex items-center justify-between">
         <button

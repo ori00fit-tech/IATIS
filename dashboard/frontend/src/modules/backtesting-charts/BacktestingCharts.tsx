@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
+import { AiResearchAssistant } from '../../components/AiResearchAssistant'
 import {
   getBacktestResults,
   getOutcomesCalibration,
@@ -292,6 +293,10 @@ function RobustnessDetail({ file }: { file: string }) {
           ))}
         </div>
       ))}
+      <AiResearchAssistant
+        context={state.data}
+        examples={['Which parameter is least stable?', 'Is the baseline value the best choice here?', 'Summarize the sweep verdicts.']}
+      />
     </div>
   )
 }
@@ -750,41 +755,49 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
   ]
 
   return (
-    <Panel title="Experiment Comparison" right={`select 2-${MAX_COMPARED} runs · ${entries.length} available`}>
-      <div className="p-4 flex flex-col gap-3">
-        <div className="flex flex-wrap gap-1.5">
-          {entries.map((e) => {
-            const isSelected = selected.has(e.file)
-            return (
-              <button
-                key={e.file}
-                onClick={() => toggle(e.file)}
-                title={e.file}
-                className={`px-2.5 py-1 rounded text-[0.78em] font-mono border ${
-                  isSelected ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
-                }`}
-              >
-                {String(e.highlights.symbol ?? e.file)}
-              </button>
-            )
-          })}
+    <div className="flex flex-col gap-4">
+      <Panel title="Experiment Comparison" right={`select 2-${MAX_COMPARED} runs · ${entries.length} available`}>
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {entries.map((e) => {
+              const isSelected = selected.has(e.file)
+              return (
+                <button
+                  key={e.file}
+                  onClick={() => toggle(e.file)}
+                  title={e.file}
+                  className={`px-2.5 py-1 rounded text-[0.78em] font-mono border ${
+                    isSelected ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
+                  }`}
+                >
+                  {String(e.highlights.symbol ?? e.file)}
+                </button>
+              )
+            })}
+          </div>
+          <button
+            onClick={compare}
+            disabled={selected.size < 2 || loading}
+            className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
+          >
+            {loading ? 'Comparing…' : `Compare Selected (${selected.size})`}
+          </button>
+          {error && <span className="text-red text-[0.8em]">{error}</span>}
         </div>
-        <button
-          onClick={compare}
-          disabled={selected.size < 2 || loading}
-          className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
-        >
-          {loading ? 'Comparing…' : `Compare Selected (${selected.size})`}
-        </button>
-        {error && <span className="text-red text-[0.8em]">{error}</span>}
-      </div>
+        {kpis.length > 0 && (
+          <>
+            <DataTable columns={columns} rows={kpis} rowKey={(k) => k.file} />
+            <ExperimentOverlayChart kpis={kpis} />
+          </>
+        )}
+      </Panel>
       {kpis.length > 0 && (
-        <>
-          <DataTable columns={columns} rows={kpis} rowKey={(k) => k.file} />
-          <ExperimentOverlayChart kpis={kpis} />
-        </>
+        <AiResearchAssistant
+          context={kpis}
+          examples={['Which experiment had the best profit factor?', 'Why might the drawdowns differ between these runs?', 'Summarize the comparison.']}
+        />
       )}
-    </Panel>
+    </div>
   )
 }
 

@@ -364,3 +364,25 @@ class AIAnalyzer:
             f"Regime performance matrix: {stats.get('regime_matrix')}."
         )
         return self._summarize_text(text_blob)
+
+    def answer_research_question(self, context_text: str, question: str) -> dict:
+        """Free-form Q&A grounded in already-computed research/backtest
+        data (Backtesting Lab, AI Research Assistant) — the caller
+        supplies both the question and the context (hypothesis registry,
+        KPIs, sweep results, whatever's already loaded in the current
+        dashboard view), so this never re-derives numbers none of
+        AIAnalyzer's other methods trust upstream either. Same
+        never-a-live-decision boundary as every method in this class:
+        the prompt template itself instructs the model not to recommend
+        changing a live parameter.
+        """
+        if not self.available:
+            return {"status": "disabled", "provider": self.provider_name, "text": ""}
+        if not question.strip():
+            return {"status": "error", "provider": self.provider_name, "error": "Question is empty.", "text": ""}
+        try:
+            answer = self._provider.answer_question(context_text, question)
+            return {"status": "ok", "provider": self._provider.name, "text": answer}
+        except AIProviderError as exc:
+            logger.warning(f"AIAnalyzer.answer_research_question failed: {exc}")
+            return {"status": "error", "provider": self.provider_name, "error": _user_safe_error(exc), "text": ""}

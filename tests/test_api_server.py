@@ -220,6 +220,35 @@ def test_ai_research_summary_requires_auth(client):
     assert r.status_code == 401
 
 
+def test_ai_research_question_disabled_by_default(client):
+    r = client.post(
+        "/ai/research-question",
+        json={"context": {"pf": 1.3, "trades": 120}, "question": "Why did PF drop?"},
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+
+
+def test_ai_research_question_requires_auth(client):
+    r = client.post("/ai/research-question", json={"question": "x"})
+    assert r.status_code == 401
+
+
+def test_ai_research_question_rejects_empty_question(client):
+    r = client.post("/ai/research-question", json={"context": {}, "question": "   "}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_ai_research_question_rejects_overlong_question(client):
+    r = client.post(
+        "/ai/research-question",
+        json={"context": {}, "question": "x" * 501},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

@@ -100,6 +100,22 @@ export const getAiResearchSummary = (body: {
   regime_matrix: RegimeRow[]
 }) => apiPost<AiResearchSummary>('/ai/research-summary', body)
 
+// AI Research Assistant (Backtesting Lab priority #5) — free-form Q&A
+// grounded in whatever the caller already has in memory (hypothesis
+// registry, KPIs, sweep results, comparison table). The backend never
+// re-fetches or re-derives — `context` here IS the entire evidence the
+// model sees, so it can only answer, never invent live-decision advice
+// (ai/prompts/research_qa.txt enforces that boundary in the prompt itself).
+export interface AiResearchAnswer {
+  status: 'ok' | 'disabled' | 'error'
+  text: string
+  provider: string
+  error?: string
+}
+
+export const askResearchQuestion = (context: unknown, question: string) =>
+  apiPost<AiResearchAnswer>('/ai/research-question', { context, question })
+
 // Git-tracked evidence manifests (research/manifest.py, audit item H2):
 // each binds a research run to a git commit, config hash, and dataset
 // SHA256 fingerprints — the system's auditable evidence trail.

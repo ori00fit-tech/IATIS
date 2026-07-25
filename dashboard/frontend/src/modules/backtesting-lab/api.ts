@@ -5,6 +5,7 @@ import {
   getResearchIndicators,
   getResearch,
   getValidationConfig,
+  askResearchQuestion,
   type SymbolsResponse,
   type SymbolEntry,
   type EnginesResponse,
@@ -14,6 +15,7 @@ import {
   type ResearchResponse,
   type Hypothesis,
   type ValidationConfigResponse,
+  type AiResearchAnswer,
 } from '../research-backtests/api'
 import {
   getJobCatalog, runJob, getJobDetail, runRobustnessJob,
@@ -31,6 +33,7 @@ export {
   getResearchIndicators,
   getResearch,
   getValidationConfig,
+  askResearchQuestion,
   getJobCatalog,
   runJob,
   runRobustnessJob,
@@ -46,6 +49,7 @@ export type {
   ResearchResponse,
   Hypothesis,
   ValidationConfigResponse,
+  AiResearchAnswer,
   JobCatalogResponse,
   JobDescriptor,
   JobSummary,

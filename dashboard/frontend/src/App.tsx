@@ -1,4 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { queryClient } from './lib/queryClient'
 import { AuthProvider, useAuth } from './lib/auth'
 import { Login } from './pages/Login'
 import { TABS, type TabId } from './lib/tabs'
@@ -159,8 +161,10 @@ function Root() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Root />
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Root />
+      </AuthProvider>
+    </QueryClientProvider>
   )
 }

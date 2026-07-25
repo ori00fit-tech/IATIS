@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { usePolling } from '../../lib/usePolling'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
@@ -61,18 +62,27 @@ function Stepper({ current, onJump, maxReached }: { current: StepIndex; onJump: 
             <button
               onClick={() => reachable && onJump(idx)}
               disabled={!reachable}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[0.78em] font-bold border transition-colors ${
+              className={`relative flex items-center gap-2 px-3 py-1.5 rounded-full text-[0.78em] font-bold border transition-colors ${
                 active
-                  ? 'border-accent text-accent bg-accent/10'
+                  ? 'border-accent text-accent'
                   : reachable
                     ? 'border-border text-text hover:border-accent/50 hover:text-accent'
                     : 'border-border text-muted/50 cursor-not-allowed'
               }`}
             >
-              <span className={`flex items-center justify-center w-4 h-4 rounded-full text-[0.85em] ${active ? 'bg-accent text-bg' : 'bg-border text-muted'}`}>
+              {active && (
+                <motion.span
+                  layoutId="stepper-active-pill"
+                  className="absolute inset-0 rounded-full bg-accent/10"
+                  transition={{ duration: 0.15, ease: 'easeInOut' }}
+                />
+              )}
+              <span
+                className={`relative z-10 flex items-center justify-center w-4 h-4 rounded-full text-[0.85em] ${active ? 'bg-accent text-bg' : 'bg-border text-muted'}`}
+              >
                 {i + 1}
               </span>
-              {label}
+              <span className="relative z-10">{label}</span>
             </button>
             {i < STEPS.length - 1 && <span className="text-muted text-[0.8em]">→</span>}
           </div>
@@ -85,7 +95,7 @@ function Stepper({ current, onJump, maxReached }: { current: StepIndex; onJump: 
 // ── Step 1: Dataset Explorer ────────────────────────────────────────────
 function DatasetStep() {
   const { markUnauthenticated } = useAuth()
-  const datasets = usePolling(getResearchDatasets, POLL_MS, markUnauthenticated)
+  const datasets = useApiQuery(['research-datasets'], getResearchDatasets, POLL_MS, markUnauthenticated)
 
   const columns: Column<DatasetEntry>[] = [
     { header: 'Symbol', render: (d) => <span className="font-bold text-accent">{d.symbol}</span> },
@@ -117,7 +127,7 @@ function DatasetStep() {
 // ── Step 2: Symbol Picker ───────────────────────────────────────────────
 function SymbolsStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
-  const symbols = usePolling(getResearchSymbols, POLL_MS, markUnauthenticated)
+  const symbols = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
   const [search, setSearch] = useState('')
 
   const allEntries: SymbolEntry[] = symbols.data ? Object.values(symbols.data.asset_classes).flat() : []
@@ -199,14 +209,24 @@ function SymbolsStep({ state, setState }: { state: WizardState; setState: (s: Wi
           <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1.5">Selected ({state.selectedSymbols.length})</div>
           {state.selectedSymbols.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
-              {state.selectedSymbols.map((sym) => (
-                <span key={sym} className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 border border-accent/30 text-accent text-[0.78em] font-mono">
-                  {sym}
-                  <button onClick={() => toggle(sym)} className="hover:text-red">
-                    ✕
-                  </button>
-                </span>
-              ))}
+              <AnimatePresence initial={false}>
+                {state.selectedSymbols.map((sym) => (
+                  <motion.span
+                    key={sym}
+                    layout
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    transition={{ duration: 0.12, ease: 'easeInOut' }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 border border-accent/30 text-accent text-[0.78em] font-mono"
+                  >
+                    {sym}
+                    <button onClick={() => toggle(sym)} className="hover:text-red">
+                      ✕
+                    </button>
+                  </motion.span>
+                ))}
+              </AnimatePresence>
             </div>
           ) : (
             <Empty>No symbols selected yet — pick at least one to continue.</Empty>
@@ -220,7 +240,7 @@ function SymbolsStep({ state, setState }: { state: WizardState; setState: (s: Wi
 // ── Step 3: Timeframe Matrix (informational — see module docstring) ─────
 function TimeframesStep() {
   const { markUnauthenticated } = useAuth()
-  const symbols = usePolling(getResearchSymbols, POLL_MS, markUnauthenticated)
+  const symbols = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
 
   // Only providers actually referenced by a live asset-class chain — e.g.
   // yahoo_finance still has a _NATIVE_TF entry server-side (kept for
@@ -265,7 +285,7 @@ function TimeframesStep() {
 // ── Step 4: Strategy (Engine Selector, read-only) ───────────────────────
 function StrategyStep() {
   const { markUnauthenticated } = useAuth()
-  const engines = usePolling(getResearchEngines, POLL_MS, markUnauthenticated)
+  const engines = useApiQuery(['research-engines'], getResearchEngines, POLL_MS, markUnauthenticated)
 
   return (
     <Panel title="Strategy" right="read-only — a new hypothesis is required to change engine activation or weights">
@@ -298,7 +318,7 @@ function StrategyStep() {
 // ── Step 5: Indicators (catalog, read-only) ─────────────────────────────
 function IndicatorsStep() {
   const { markUnauthenticated } = useAuth()
-  const indicators = usePolling(getResearchIndicators, POLL_MS, markUnauthenticated)
+  const indicators = useApiQuery(['research-indicators'], getResearchIndicators, POLL_MS, markUnauthenticated)
 
   return (
     <Panel title="Indicators" right="catalog of what each engine already computes — not an editor">
@@ -321,8 +341,8 @@ function IndicatorsStep() {
 // ── Step 6: Hypotheses ───────────────────────────────────────────────────
 function HypothesesStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
-  const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
-  const catalog = usePolling(getJobCatalog, POLL_MS, markUnauthenticated)
+  const research = useApiQuery(['research-registry'], getResearch, POLL_MS, markUnauthenticated)
+  const catalog = useApiQuery(['job-catalog'], getJobCatalog, POLL_MS, markUnauthenticated)
 
   const hypothesisJobs = (catalog.data?.jobs ?? []).filter((j: JobDescriptor) => j.id.startsWith('hypothesis_'))
   const registryById = new Map((research.data?.hypotheses ?? []).map((h) => [h.id, h]))
@@ -393,7 +413,7 @@ function SweepConfig({
   onMultipliersChange: (m: number[]) => void
 }) {
   const { markUnauthenticated } = useAuth()
-  const validation = usePolling(getValidationConfig, POLL_MS, markUnauthenticated)
+  const validation = useApiQuery(['validation-config'], getValidationConfig, POLL_MS, markUnauthenticated)
   const allParams = validation.data?.robustness.params ?? params
   const [multipliersText, setMultipliersText] = useState(multipliers.join(', '))
 
@@ -410,7 +430,7 @@ function SweepConfig({
   }
 
   return (
-    <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-border bg-surface/40">
+    <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-panel-border bg-panel shadow-md">
       <div className="text-[0.72em] text-muted uppercase tracking-[1px]">Parameter Sweep — which points to measure, never which one wins</div>
       <div className="flex flex-wrap gap-1.5">
         {allParams.map((p) => (
@@ -459,7 +479,7 @@ function ExecutionStep({
   const isRobustness = state.jobId === 'robustness'
 
   const { markUnauthenticated } = useAuth()
-  const validation = usePolling(getValidationConfig, POLL_MS, markUnauthenticated)
+  const validation = useApiQuery(['validation-config'], getValidationConfig, POLL_MS, markUnauthenticated)
   const [sweepParams, setSweepParams] = useState<string[]>([])
   const [sweepMultipliers, setSweepMultipliers] = useState<number[]>([])
   useEffect(() => {
@@ -525,7 +545,7 @@ function ExecutionStep({
           </div>
         )}
         {job && job.log.length > 0 && (
-          <pre className="p-3 bg-bg/60 rounded text-[0.72em] overflow-auto max-h-[280px] whitespace-pre-wrap break-words font-mono">
+          <pre className="p-3 bg-panel shadow-sm border border-panel-border rounded-lg text-[0.72em] overflow-auto max-h-[280px] whitespace-pre-wrap break-words font-mono">
             {job.log.slice(-150).join('\n')}
           </pre>
         )}

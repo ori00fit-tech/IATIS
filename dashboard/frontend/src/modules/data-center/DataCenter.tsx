@@ -28,6 +28,7 @@ const JOB_BADGE: Record<JobStatus, 'exec' | 'no-trade' | 'good' | 'marginal' | '
   finished: 'exec',
   failed: 'no-trade',
   timeout: 'no-trade',
+  cancelled: 'no-trade',
 }
 
 function VerifyAndExport() {

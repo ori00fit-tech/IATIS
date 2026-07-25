@@ -17,6 +17,7 @@ const STATUS_TONE: Record<JobStatus, 'exec' | 'no-trade' | 'good' | 'marginal' |
   finished: 'exec',
   failed: 'no-trade',
   timeout: 'no-trade',
+  cancelled: 'no-trade',
 }
 
 function DiagnosticsPanel() {

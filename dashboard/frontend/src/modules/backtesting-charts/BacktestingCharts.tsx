@@ -1,8 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
-import { getBacktestResults, getOutcomesCalibration, type BacktestRun, type CalibrationBucket } from './api'
+import { Badge } from '../../components/Badge'
+import {
+  getBacktestResults,
+  getOutcomesCalibration,
+  getRunReports,
+  getChartDataFile,
+  type BacktestRun,
+  type CalibrationBucket,
+  type RunReportEntry,
+  type ChartDataFile,
+} from './api'
 
 const POLL_MS = 60_000
 
@@ -95,7 +105,6 @@ function drawdownSeries(curve: number[]): { maxDD: number; ddAt: number } {
 
 function EquityCurve({ run }: { run: BacktestRun }) {
   const curve = run.equity_curve ?? []
-  const { maxDD, ddAt } = drawdownSeries(curve) // ≤500 points, cheap enough to run inline
   if (curve.length < 2) {
     return (
       <Empty>
@@ -104,6 +113,11 @@ function EquityCurve({ run }: { run: BacktestRun }) {
       </Empty>
     )
   }
+  return <EquityCurveSvg curve={curve} />
+}
+
+function EquityCurveSvg({ curve }: { curve: number[] }) {
+  const { maxDD, ddAt } = drawdownSeries(curve) // ≤500 points, cheap enough to run inline
   const W = 800
   const H = 240
   const min = Math.min(...curve)
@@ -177,6 +191,156 @@ function CalibrationChart({ buckets }: { buckets: CalibrationBucket[] }) {
   )
 }
 
+// ── Queue Manager runs (Phase 5/6, 2026-07-24) — real backtest.runner /
+// backtest.walk_forward / backtest.robustness job output from the
+// Experiment Runner tab, distinct from the legacy /backtest-results
+// pipeline scans above. Verdicts here are the ones those modules'
+// docstrings define: STABLE/SENSITIVE/INSUFFICIENT (robustness) and
+// CONSISTENT/INCONSISTENT/INSUFFICIENT (walk-forward) — neither is
+// evidence of edge either; see the Forward Demo tab for that.
+const VERDICT_TONE: Record<string, 'exec' | 'no-trade' | 'marginal' | 'neutral'> = {
+  STABLE: 'exec',
+  CONSISTENT: 'exec',
+  SENSITIVE: 'no-trade',
+  INCONSISTENT: 'no-trade',
+  INSUFFICIENT: 'marginal',
+}
+
+function VerdictBadge({ verdict }: { verdict: string }) {
+  return <Badge tone={VERDICT_TONE[verdict] ?? 'neutral'}>{verdict}</Badge>
+}
+
+function WalkForwardRobustnessPanel({ entry }: { entry: RunReportEntry }) {
+  const title = entry.kind === 'walk_forward' ? 'Walk-Forward' : 'Robustness'
+  const highlights = entry.highlights as Record<string, unknown>
+
+  return (
+    <div className="p-4 flex flex-col gap-2 text-[0.82em]">
+      <div className="flex items-center gap-3 flex-wrap text-muted">
+        <span className="font-bold text-text">{title}</span>
+        <span>{entry.file}</span>
+        {entry.evaluated != null && <span>{entry.evaluated} symbols evaluated</span>}
+        {entry.generated_utc && <span>{entry.generated_utc}</span>}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {Object.entries(highlights).map(([symbol, verdict]) => (
+          <div key={symbol} className="flex items-center gap-2 flex-wrap">
+            <span className="w-20 shrink-0 font-bold text-accent">{symbol}</span>
+            {typeof verdict === 'string' ? (
+              <VerdictBadge verdict={verdict} />
+            ) : verdict && typeof verdict === 'object' ? (
+              Object.entries(verdict as Record<string, string>).map(([param, v]) => (
+                <span key={param} className="flex items-center gap-1">
+                  <span className="text-muted text-[0.85em]">{param}</span>
+                  <VerdictBadge verdict={v} />
+                </span>
+              ))
+            ) : (
+              <span className="text-muted">—</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function QueueManagerCharts({ entries }: { entries: RunReportEntry[] }) {
+  const [selected, setSelected] = useState<string | null>(entries[0]?.file ?? null)
+  const [chart, setChart] = useState<{ loading: boolean; error: string | null; data: ChartDataFile | null }>({
+    loading: false,
+    error: null,
+    data: null,
+  })
+
+  useEffect(() => {
+    if (!selected) return
+    let cancelled = false
+    setChart({ loading: true, error: null, data: null })
+    getChartDataFile(selected)
+      .then((data) => !cancelled && setChart({ loading: false, error: null, data }))
+      .catch((err) => !cancelled && setChart({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [selected])
+
+  const curve = chart.data?.equity_curve.map((p) => p.y) ?? []
+
+  return (
+    <Panel
+      title="Queue Manager Equity Curve"
+      right={
+        <div className="flex gap-1 flex-wrap">
+          {entries.map((e) => (
+            <button
+              key={e.file}
+              onClick={() => setSelected(e.file)}
+              className={`px-2 py-0.5 rounded text-[0.9em] ${selected === e.file ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+            >
+              {String(e.highlights.symbol ?? e.file)}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      {chart.loading ? (
+        <Empty>Loading…</Empty>
+      ) : chart.error ? (
+        <Empty>Failed: {chart.error}</Empty>
+      ) : curve.length >= 2 ? (
+        <EquityCurveSvg curve={curve} />
+      ) : (
+        <Empty>Select a run</Empty>
+      )}
+      {chart.data?.monte_carlo && (
+        <div className="px-4 pb-4 flex gap-4 flex-wrap text-[0.78em] text-muted">
+          <span>MC median return <b className="text-text">{chart.data.monte_carlo.median_return.toFixed(1)}%</b></span>
+          <span>MC risk of ruin <b className="text-red">{chart.data.monte_carlo.risk_of_ruin.toFixed(1)}%</b></span>
+          <span>MC worst DD <b className="text-red">{chart.data.monte_carlo.worst_max_dd.toFixed(1)}%</b></span>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+function QueueManagerRuns() {
+  const { markUnauthenticated } = useAuth()
+  const reports = usePolling(getRunReports, POLL_MS, markUnauthenticated)
+
+  const all = reports.data?.reports ?? []
+  const chartEntries = all.filter((r) => r.kind === 'chart_data' && r.readable !== false)
+  const wfEntries = all.filter((r) => r.kind === 'walk_forward' && r.readable !== false)
+  const robustnessEntries = all.filter((r) => r.kind === 'robustness' && r.readable !== false)
+
+  if (all.length === 0) {
+    return (
+      <Panel title="Queue Manager Runs" right="from the Experiment Runner tab">
+        <Empty>
+          {reports.loading
+            ? 'Loading…'
+            : 'No completed backtest / walk_forward / robustness jobs yet — run one from the Experiment Runner tab.'}
+        </Empty>
+      </Panel>
+    )
+  }
+
+  return (
+    <>
+      {chartEntries.length > 0 && <QueueManagerCharts entries={chartEntries} />}
+      {(wfEntries.length > 0 || robustnessEntries.length > 0) && (
+        <Panel title="Walk-Forward / Robustness Verdicts" right={`${wfEntries.length + robustnessEntries.length} runs`}>
+          <div className="divide-y divide-border">
+            {[...wfEntries, ...robustnessEntries].map((e) => (
+              <WalkForwardRobustnessPanel key={e.file} entry={e} />
+            ))}
+          </div>
+        </Panel>
+      )}
+    </>
+  )
+}
+
 export function BacktestingCharts() {
   const { markUnauthenticated } = useAuth()
   const backtests = usePolling(getBacktestResults, POLL_MS, markUnauthenticated)
@@ -195,6 +359,8 @@ export function BacktestingCharts() {
         <code className="text-accent2">/outcomes</code> already compute. In-sample backtests are not evidence of edge —
         see the Forward Demo tab for the live counter that is.
       </p>
+
+      <QueueManagerRuns />
 
       {runs.length === 0 ? (
         <Panel title="Backtest Runs">

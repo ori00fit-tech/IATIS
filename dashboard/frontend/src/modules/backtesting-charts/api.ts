@@ -1,4 +1,5 @@
 import { apiGet } from '../../lib/api'
+import { getFileContent } from '../file-explorer/api'
 
 // Backtesting Charts is a visualization layer over data other endpoints
 // already produce: /backtest-results (per-run metrics + an optional legacy
@@ -41,3 +42,64 @@ export interface OutcomesCalibration {
 
 export const getBacktestResults = () => apiGet<BacktestResultsResponse>('/backtest-results')
 export const getOutcomesCalibration = () => apiGet<OutcomesCalibration>('/outcomes', { limit: 1 })
+
+// ── Queue Manager run reports (Phase 5/6, 2026-07-24) — completed
+// backtest/walk_forward/robustness job outputs, a separate data source
+// from the legacy /backtest-results above (in-sample pipeline scans).
+// These come from real Queue Manager runs (Experiment Runner tab) and
+// carry actual chart-ready series data, not just aggregate metrics.
+
+export type RunReportKind = 'backtest' | 'walk_forward' | 'robustness' | 'chart_data' | 'unknown'
+
+export interface RunReportEntry {
+  kind: RunReportKind
+  file: string
+  size_bytes: number
+  readable?: boolean
+  error?: string
+  generated_utc?: string | null
+  evaluated?: number | null
+  highlights: Record<string, unknown>
+}
+
+export interface RunReportsResponse {
+  reports_dir: string
+  count: number
+  reports: RunReportEntry[]
+}
+
+export const getRunReports = () => apiGet<RunReportsResponse>('/research/run-reports')
+
+// backtest/report.py's chart_data sidecar — one per symbol, written
+// alongside every HTML backtest report.
+export interface ChartDataFile {
+  symbol: string
+  timeframe: string
+  equity_curve: { x: string; y: number }[]
+  monthly_returns: Record<string, number>
+  yearly_returns: Record<string, number>
+  by_regime: Record<string, unknown>
+  by_symbol: Record<string, unknown>
+  by_direction: Record<string, unknown>
+  by_session: Record<string, unknown>
+  monte_carlo: {
+    median_return: number
+    p5_return: number
+    p95_return: number
+    median_max_dd: number
+    worst_max_dd: number
+    risk_of_ruin: number
+    probability_profit: number
+  } | null
+}
+
+/** Fetches a *_chart_data.json sidecar's full content via the File
+ * Explorer's generic, repo-confined /files/read — /research/run-reports
+ * only returns lightweight highlights, never the full series. */
+export async function getChartDataFile(file: string): Promise<ChartDataFile> {
+  const res = await getFileContent(`reports/${file}`)
+  if (res.error || res.content == null) {
+    throw new Error(res.error ?? `${file}: empty content`)
+  }
+  return JSON.parse(res.content) as ChartDataFile
+}

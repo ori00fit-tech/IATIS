@@ -823,7 +823,7 @@ def test_survivorship_report_shape():
 # Reports (module 10) — on-demand snapshots, Markdown or JSON.
 # ---------------------------------------------------------------------------
 
-REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward", "data_quality"]
+REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward", "data_quality", "dashboard_summary"]
 
 
 def test_reports_requires_auth(client):
@@ -904,11 +904,20 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # Workspace): existing, already-tested, pre-registered A/B runners,
     # deliberately NOT parameterized — each always runs its own
     # registered fixed method, never dashboard-chosen symbols/step.
+    # walk_forward/robustness added 2026-07-24 (Phase 4): parameterized
+    # like backtest — --symbols validated server-side.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
+        "walk_forward", "robustness",
     }
+
+
+def test_experiment_job_catalog_requires_symbols_matches_parameterized_set(client):
+    r = client.get("/experiments/jobs", headers=HDR)
+    requires_symbols = {j["id"] for j in r.json()["jobs"] if j["requires_symbols"]}
+    assert requires_symbols == {"backtest", "walk_forward", "robustness"}
 
 
 def test_experiment_job_catalog_categorizes_ops_vs_research(client):
@@ -926,6 +935,51 @@ def test_experiments_run_requires_auth(client):
 def test_experiments_run_rejects_unknown_job(client):
     r = client.post("/experiments/run", json={"job": "rm -rf /"}, headers=HDR)
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_parameterized_jobs_require_symbols(client, job):
+    r = client.post("/experiments/run", json={"job": job}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "at least one symbol" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_parameterized_jobs_reject_unknown_symbol(client, job):
+    r = client.post("/experiments/run", json={"job": job, "symbols": ["ZZZFAKE"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "Unknown symbol" in r.json()["detail"]
+
+
+def test_experiments_run_non_parameterized_job_rejects_symbols(client):
+    r = client.post("/experiments/run", json={"job": "verify_data_integrity", "symbols": ["EURUSD"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "takes no symbols" in r.json()["detail"]
+
+
+def test_experiments_run_walk_forward_builds_expected_argv(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "walk_forward": ["echo", "wf"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post("/experiments/run", json={"job": "walk_forward", "symbols": ["eurusd"]}, headers=HDR)
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", "wf", "--symbols", "EURUSD"]
 
 
 def test_experiments_status_unknown_job_404s(client):
@@ -1360,14 +1414,21 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
     # /research/symbols, /research/engines, /research/indicators,
-    # /research/scenario-config, and /research/integrity — all literal
-    # routes must still resolve to themselves, not be captured as
+    # /research/scenario-config, /research/datasets, /research/run-reports,
+    # /research/dashboard-summary, /research/validation-config,
+    # /research/compare, and /research/integrity — all literal routes must
+    # still resolve to themselves, not be captured as
     # hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
+    assert client.get("/research/datasets", headers=HDR).status_code == 200
+    assert client.get("/research/run-reports", headers=HDR).status_code == 200
+    assert client.get("/research/dashboard-summary", headers=HDR).status_code == 200
+    assert client.get("/research/validation-config", headers=HDR).status_code == 200
+    assert client.get("/research/compare?ids=H015", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1388,6 +1449,63 @@ def test_research_hypothesis_detail_includes_result_files_with_existence_check(c
     body = r.json()
     assert body["result_files"]
     assert all({"path", "exists"}.issubset(rf.keys()) for rf in body["result_files"])
+
+
+def test_research_compare_requires_auth(client):
+    assert client.get("/research/compare?ids=H015").status_code == 401
+
+
+def test_research_compare_requires_at_least_one_id(client):
+    r = client.get("/research/compare?ids=", headers=HDR)
+    assert r.status_code == 400
+
+
+def test_research_compare_rejects_more_than_ten_ids(client):
+    ids = ",".join(f"H{i:03d}" for i in range(11))
+    r = client.get(f"/research/compare?ids={ids}", headers=HDR)
+    assert r.status_code == 400
+
+
+def test_research_compare_matches_single_hypothesis_detail(client):
+    # /research/compare?ids=H015 must return the exact same detail as
+    # /research/H015 — same shared _hypothesis_detail() helper.
+    single = client.get("/research/H015", headers=HDR).json()
+    compared = client.get("/research/compare?ids=H015", headers=HDR).json()
+
+    assert compared["count"] == 1
+    entry = compared["hypotheses"][0]
+    assert entry["found"] is True
+    assert entry["id"] == single["id"]
+    assert entry["hypothesis"] == single["hypothesis"]
+    assert entry["manifests"] == single["manifests"]
+    assert entry["result_files"] == single["result_files"]
+
+
+def test_research_compare_reports_multiple_hypotheses_side_by_side(client):
+    r = client.get("/research/compare?ids=H013,H015", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    ids = [h["id"] for h in body["hypotheses"]]
+    assert ids == ["H013", "H015"]
+    assert all(h["found"] is True for h in body["hypotheses"])
+
+
+def test_research_compare_reports_unknown_id_without_failing_the_batch(client):
+    r = client.get("/research/compare?ids=H015,H999_DOES_NOT_EXIST", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_id = {h["id"]: h for h in body["hypotheses"]}
+    assert by_id["H015"]["found"] is True
+    assert by_id["H999_DOES_NOT_EXIST"] == {"id": "H999_DOES_NOT_EXIST", "found": False}
+
+
+def test_research_compare_is_case_insensitive_and_dedupes_whitespace(client):
+    r = client.get("/research/compare?ids= h015 , H013 ", headers=HDR)
+    body = r.json()
+    ids = [h["id"] for h in body["hypotheses"]]
+    assert ids == ["H015", "H013"]
+    assert all(h["found"] is True for h in body["hypotheses"])
 
 
 def test_research_manifests_requires_auth(client):
@@ -1499,3 +1617,302 @@ def test_research_scenario_config_contract(client):
     assert set(body["session_templates"]) == {"Sydney", "Tokyo", "London", "NewYork"}
     for session in body["session_templates"].values():
         assert {"start_utc", "end_utc"}.issubset(session.keys())
+
+
+def test_research_datasets_requires_auth(client):
+    assert client.get("/research/datasets").status_code == 401
+
+
+def test_research_datasets_missing_dir_returns_empty_list(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path / "does_not_exist")
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"data_dir": str(tmp_path / "does_not_exist"), "count": 0, "datasets": []}
+
+
+def test_research_datasets_reports_symbol_timeframe_and_date_range(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_2y.csv").write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2026-01-01 00:00:00,1.1000,1.1010,1.0990,1.1005,1000\n"
+        "2026-01-01 01:00:00,1.1005,1.1020,1.1000,1.1015,1100\n"
+        "2026-01-01 02:00:00,1.1015,1.1030,1.1010,1.1025,1200\n"
+    )
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    entry = body["datasets"][0]
+    assert entry["symbol"] == "EURUSD"
+    assert entry["timeframe"] == "H1"
+    assert entry["known_symbol"] is True
+    assert entry["readable"] is True
+    assert entry["rows"] == 3
+    assert entry["start"].startswith("2026-01-01T00:00:00")
+    assert entry["end"].startswith("2026-01-01T02:00:00")
+
+
+def test_research_datasets_flags_unknown_symbol(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "ZZZFAKE_H1_2y.csv").write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2026-01-01 00:00:00,1.0,1.0,1.0,1.0,100\n"
+    )
+
+    body = client.get("/research/datasets", headers=HDR).json()
+    assert body["datasets"][0]["known_symbol"] is False
+
+
+def test_research_datasets_reports_unreadable_file_without_500(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_broken.csv").write_text("not,a,valid\ncsv\n")
+
+    r = client.get("/research/datasets", headers=HDR)
+    assert r.status_code == 200, r.text
+    entry = r.json()["datasets"][0]
+    assert entry["readable"] is False
+    assert "error" in entry
+
+
+def test_research_datasets_ignores_non_matching_filenames(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_DATA_DIR", tmp_path)
+
+    (tmp_path / "README.md").write_text("not a dataset")
+    (tmp_path / "swap_rates.json").write_text("{}")
+    (tmp_path / "random_notes.csv").write_text("just,some,csv\n1,2,3\n")
+
+    body = client.get("/research/datasets", headers=HDR).json()
+    assert body["count"] == 0
+
+
+def test_research_run_reports_requires_auth(client):
+    assert client.get("/research/run-reports").status_code == 401
+
+
+def test_research_run_reports_missing_dir_returns_empty_list(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path / "does_not_exist")
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reports_dir": str(tmp_path / "does_not_exist"), "count": 0, "reports": []}
+
+
+def test_research_run_reports_parses_backtest_summary(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_120000",
+        "symbols": {
+            "EURUSD": {"trades": 42, "win_rate": 0.55, "profit_factor": 1.6, "max_drawdown_pct": 12.0},
+        },
+    }
+    (tmp_path / "backtest_summary_20260724_120000.json").write_text(_json.dumps(payload))
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    entry = body["reports"][0]
+    assert entry["kind"] == "backtest"
+    assert entry["readable"] is True
+    assert entry["generated_utc"] == "20260724_120000"
+    assert entry["highlights"]["EURUSD"] == {"trades": 42, "win_rate": 0.55, "profit_factor": 1.6, "max_drawdown_pct": 12.0}
+
+
+def test_research_run_reports_parses_walk_forward_verdicts(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_130000",
+        "consistent": 1,
+        "evaluated": 2,
+        "symbols": {
+            "EURUSD": {"verdict": "CONSISTENT"},
+            "GBPUSD": {"verdict": "INCONSISTENT"},
+        },
+    }
+    (tmp_path / "walk_forward_20260724_130000.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "walk_forward"
+    assert entry["evaluated"] == 2
+    assert entry["highlights"] == {"EURUSD": "CONSISTENT", "GBPUSD": "INCONSISTENT"}
+
+
+def test_research_run_reports_parses_robustness_verdicts(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_140000",
+        "evaluated": 1,
+        "symbols": {
+            "EURUSD": {"sweeps": [
+                {"param": "sl_atr_multiplier", "verdict": "STABLE"},
+                {"param": "min_rr", "verdict": "SENSITIVE"},
+            ]},
+        },
+    }
+    (tmp_path / "robustness_20260724_140000.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "robustness"
+    assert entry["highlights"] == {"EURUSD": {"sl_atr_multiplier": "STABLE", "min_rr": "SENSITIVE"}}
+
+
+def test_research_run_reports_unknown_prefix_reports_kind_unknown(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "some_other_report_20260724.json").write_text("{}")
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    assert body["reports"][0]["kind"] == "unknown"
+    assert body["reports"][0]["highlights"] == {}
+
+
+def test_research_run_reports_unreadable_file_without_500(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "backtest_summary_broken.json").write_text("not valid json{{{")
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    entry = r.json()["reports"][0]
+    assert entry["readable"] is False
+    assert "error" in entry
+
+
+def test_research_run_reports_ignores_non_json_files(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_2026.html").write_text("<html></html>")
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    assert body["count"] == 0
+
+
+def test_research_run_reports_detects_chart_data_sidecar(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "symbol": "EURUSD", "timeframe": "H1",
+        "equity_curve": [{"x": "Start", "y": 10000.0}, {"x": "t1", "y": 10120.0}],
+        "monte_carlo": None,
+    }
+    (tmp_path / "EURUSD_H1_20260724_chart_data.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "chart_data"
+    assert entry["highlights"] == {
+        "symbol": "EURUSD", "timeframe": "H1",
+        "equity_curve_points": 2, "has_monte_carlo": False,
+    }
+
+
+def test_research_dashboard_summary_requires_auth(client):
+    assert client.get("/research/dashboard-summary").status_code == 401
+
+
+def test_research_dashboard_summary_contract(client):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()  # outcomes table exists in prod before this is ever called
+    r = client.get("/research/dashboard-summary", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"generated_at", "hypotheses", "symbols", "engines", "evidence", "forward_review", "run_reports"}.issubset(body.keys())
+
+    # 35 hypotheses in the real registry.json shipped with this repo.
+    assert body["hypotheses"]["total"] >= 30
+    assert sum(body["hypotheses"]["by_status"].values()) == body["hypotheses"]["total"]
+
+    # Real symbol universe: carriers (XAUUSD/BTCUSD/ETHUSD) always enabled.
+    assert body["symbols"]["total"] >= 20
+    assert body["symbols"]["enabled"] >= 3
+    assert "metals" in body["symbols"]["by_asset_class"]
+
+    # Frozen prod4 set: exactly 4 engines enabled.
+    assert body["engines"]["enabled"] == 4
+
+    assert body["evidence"]["manifests_total"] >= 0
+    assert body["evidence"]["manifests_reproducible"] <= body["evidence"]["manifests_total"]
+
+    assert body["forward_review"]["rules_total"] >= 1
+    assert body["forward_review"]["rules_triggered"] <= body["forward_review"]["rules_total"]
+
+    assert body["run_reports"]["total"] == sum(body["run_reports"]["by_kind"].values())
+
+
+def test_research_dashboard_summary_counts_run_reports_by_kind(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "backtest_summary_1.json").write_text(_json.dumps({"symbols": {}}))
+    (tmp_path / "walk_forward_1.json").write_text(_json.dumps({"symbols": {}}))
+    (tmp_path / "EURUSD_H1_1_chart_data.json").write_text(_json.dumps({"equity_curve": []}))
+
+    body = client.get("/research/dashboard-summary", headers=HDR).json()
+    assert body["run_reports"]["total"] == 3
+    assert body["run_reports"]["by_kind"] == {"backtest": 1, "walk_forward": 1, "chart_data": 1}
+
+
+def test_research_dashboard_summary_is_the_data_reports_dashboard_summary_wraps(client):
+    summary = client.get("/research/dashboard-summary", headers=HDR).json()
+    report = client.get("/reports/dashboard_summary?format=json", headers=HDR).json()
+    assert report["kind"] == "dashboard_summary"
+    # generated_at will differ by microseconds between the two calls —
+    # compare everything else.
+    assert {k: v for k, v in report["data"].items() if k != "generated_at"} == \
+        {k: v for k, v in summary.items() if k != "generated_at"}
+
+
+def test_research_validation_config_requires_auth(client):
+    assert client.get("/research/validation-config").status_code == 401
+
+
+def test_research_validation_config_contract(client):
+    r = client.get("/research/validation-config", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"walk_forward", "monte_carlo", "robustness", "promotion_criteria"}.issubset(body.keys())
+
+    wf = body["walk_forward"]
+    assert wf["n_windows"] == 3
+    assert wf["min_pf"] == 1.5
+
+    rob = body["robustness"]
+    assert set(rob["params"]) == {"sl_atr_multiplier", "commission_pips", "slippage_pips", "min_rr"}
+    assert 1.0 in rob["multipliers"]
+
+    # research/edge_gate.py PROMOTION_CRITERIA — the codified promotion
+    # bar CLAUDE.md rule 3 says is code, not prose.
+    promo = body["promotion_criteria"]
+    assert promo["min_trades"] == 300
+    assert promo["min_oos_pf"] == 1.2
+    assert promo["require_walk_forward"] is True
+    assert promo["require_monte_carlo"] is True

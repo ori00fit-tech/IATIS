@@ -71,6 +71,16 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     "hypothesis_H033": [sys.executable, "-m", "research.experiments.H033_meta_confidence_gate", "--all", "--step", "8"],
     "hypothesis_H037": [sys.executable, "-m", "research.experiments.H037_decision_delay", "--all", "--step", "8"],
     "hypothesis_H103": [sys.executable, "-m", "research.experiments.H103_meta_decision_gate_ab", "--all", "--step", "8"],
+    # Walk-Forward / Robustness (Research Workspace Phase 4, 2026-07-24) —
+    # same parameterization pattern as `backtest`: --symbols validated
+    # against the configured universe before touching argv. Both reuse the
+    # SAME production-aligned engine (backtesting.backtest_engine) as
+    # `backtest`, just with a different evaluation methodology layered on
+    # top — walk_forward.py does disjoint chronological OOS windows,
+    # robustness.py does a parameter-perturbation sensitivity sweep. See
+    # each module's docstring for what it does and does NOT claim.
+    "walk_forward": [sys.executable, "-m", "backtest.walk_forward"],
+    "robustness": [sys.executable, "-m", "backtest.robustness"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -83,6 +93,8 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "hypothesis_H033": "H033 (meta-confidence gate) A/B — FAILED, committed 2026-07-22.",
     "hypothesis_H037": "H037 (decision delay) A/B — NULL, committed 2026-07-24.",
     "hypothesis_H103": "H103 (meta_decision gate removal) A/B — PLANNED, not yet run. Only still-open hypothesis job in this whitelist.",
+    "walk_forward": "Disjoint chronological OOS window consistency test (backtest/walk_forward.py). Requires --symbols. Fixed production parameters, no per-window optimization.",
+    "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -99,6 +111,8 @@ _JOB_CATEGORIES: dict[str, str] = {
     "hypothesis_H033": "research",
     "hypothesis_H037": "research",
     "hypothesis_H103": "research",
+    "walk_forward": "research",
+    "robustness": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -111,7 +125,18 @@ _JOB_TIMEOUTS: dict[str, int] = {
     "hypothesis_H033": 1800,
     "hypothesis_H037": 1800,
     "hypothesis_H103": 1800,
+    # Both run several full backtest passes per symbol (walk_forward: one
+    # per window; robustness: one per param x multiplier — up to 20 with
+    # the default 4 params x 5 multipliers) — costlier than a single
+    # `backtest` run.
+    "walk_forward": 2400,
+    "robustness": 2400,
 }
+
+# Jobs that take a --symbols argv extension, validated server-side against
+# the configured universe before being appended (security-equivalent to a
+# whitelist member, per `backtest`'s original 2026-07-16 precedent).
+_PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
 
 _job_executor = ThreadPoolExecutor(max_workers=2)
 _jobs: dict[str, "_Job"] = {}
@@ -259,7 +284,7 @@ async def experiment_job_catalog(
                 "category": _JOB_CATEGORIES.get(k, "research"),
                 # The frontend needs to know to collect symbols BEFORE
                 # posting — running "backtest" bare is a guaranteed 400.
-                "requires_symbols": k == "backtest",
+                "requires_symbols": k in _PARAMETERIZED_JOBS,
             }
             for k in _JOB_COMMANDS
         ]
@@ -277,12 +302,12 @@ async def experiments_run(
         raise HTTPException(status_code=400, detail=f"Unknown job '{body.job}'. See /experiments/jobs.")
 
     argv = list(_JOB_COMMANDS[body.job])
-    if body.job == "backtest":
+    if body.job in _PARAMETERIZED_JOBS:
         symbols = [str(s).upper().strip() for s in (body.symbols or []) if str(s).strip()]
         if not symbols:
-            raise HTTPException(status_code=400, detail="backtest requires at least one symbol.")
+            raise HTTPException(status_code=400, detail=f"{body.job} requires at least one symbol.")
         if len(symbols) > 20:
-            raise HTTPException(status_code=400, detail="backtest: at most 20 symbols per run.")
+            raise HTTPException(status_code=400, detail=f"{body.job}: at most 20 symbols per run.")
         universe = _configured_symbol_universe()
         unknown = sorted(set(symbols) - universe)
         if unknown:
@@ -307,7 +332,7 @@ async def experiments_run(
     from storage.audit_log import log_action
     log_action(
         "experiment_run", x_api_key=x_api_key, session_id=iatis_session,
-        detail=f"{body.job} ({job_id})" + (f" symbols={body.symbols}" if body.job == "backtest" else ""),
+        detail=f"{body.job} ({job_id})" + (f" symbols={body.symbols}" if body.job in _PARAMETERIZED_JOBS else ""),
     )
 
     job.future = _job_executor.submit(_run_job, job)

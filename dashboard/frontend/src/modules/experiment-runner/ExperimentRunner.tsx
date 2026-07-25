@@ -4,7 +4,7 @@ import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
-import { getJobCatalog, getJobList, getJobDetail, runJob, type JobCatalogResponse, type JobSummary, type JobDetail, type JobStatus } from './api'
+import { getJobCatalog, getJobList, getJobDetail, runJob, cancelJob, type JobCatalogResponse, type JobSummary, type JobDetail, type JobStatus } from './api'
 
 const POLL_MS = 3_000
 
@@ -14,6 +14,7 @@ const STATUS_TONE: Record<JobStatus, 'exec' | 'no-trade' | 'good' | 'marginal' |
   finished: 'exec',
   failed: 'no-trade',
   timeout: 'no-trade',
+  cancelled: 'no-trade',
 }
 
 export function ExperimentRunner() {
@@ -23,6 +24,7 @@ export function ExperimentRunner() {
   const [error, setError] = useState<string | null>(null)
   const [viewing, setViewing] = useState<string | null>(null)
   const [detail, setDetail] = useState<JobDetail | null>(null)
+  const [cancelling, setCancelling] = useState<string | null>(null)
 
   const jobs = usePolling(() => getJobList(), POLL_MS, markUnauthenticated)
 
@@ -66,6 +68,20 @@ export function ExperimentRunner() {
     }
   }
 
+  const cancel = async (runId: string) => {
+    setCancelling(runId)
+    setError(null)
+    try {
+      const summary = await cancelJob(runId)
+      jobs.refetch()
+      if (viewing === runId) setDetail((d) => (d ? { ...d, status: summary.status } : d))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCancelling(null)
+    }
+  }
+
   const columns: Column<JobSummary>[] = [
     { header: 'Job', render: (j) => <span className="font-bold text-accent">{j.job}</span> },
     { header: 'Status', render: (j) => <Badge tone={STATUS_TONE[j.status]}>{j.status}</Badge> },
@@ -75,9 +91,20 @@ export function ExperimentRunner() {
     {
       header: 'Log',
       render: (j) => (
-        <button onClick={() => setViewing(j.job_id)} className="text-accent hover:text-accent2 text-[0.85em] underline decoration-dotted">
-          View
-        </button>
+        <div className="flex items-center gap-3 justify-end">
+          {(j.status === 'queued' || j.status === 'running') && (
+            <button
+              onClick={() => cancel(j.job_id)}
+              disabled={cancelling === j.job_id}
+              className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50"
+            >
+              {cancelling === j.job_id ? 'Cancelling…' : 'Cancel'}
+            </button>
+          )}
+          <button onClick={() => setViewing(j.job_id)} className="text-accent hover:text-accent2 text-[0.85em] underline decoration-dotted">
+            View
+          </button>
+        </div>
       ),
       align: 'right',
     },
@@ -141,8 +168,17 @@ export function ExperimentRunner() {
         <Panel
           title={`Log — ${detail.job} (${detail.job_id})`}
           right={
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <Badge tone={STATUS_TONE[detail.status]}>{detail.status}</Badge>
+              {(detail.status === 'queued' || detail.status === 'running') && (
+                <button
+                  onClick={() => cancel(detail.job_id)}
+                  disabled={cancelling === detail.job_id}
+                  className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50"
+                >
+                  {cancelling === detail.job_id ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
               <button onClick={() => setViewing(null)} className="text-muted hover:text-text">
                 ✕ close
               </button>

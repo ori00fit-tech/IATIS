@@ -12,7 +12,7 @@ export interface JobCatalogResponse {
   jobs: JobDescriptor[]
 }
 
-export type JobStatus = 'queued' | 'running' | 'finished' | 'failed' | 'timeout'
+export type JobStatus = 'queued' | 'running' | 'finished' | 'failed' | 'timeout' | 'cancelled'
 
 export interface JobSummary {
   job_id: string
@@ -37,3 +37,4 @@ export const getJobCatalog = () => apiGet<JobCatalogResponse>('/experiments/jobs
 export const getJobList = () => apiGet<JobListResponse>('/experiments')
 export const getJobDetail = (jobId: string) => apiGet<JobDetail>(`/experiments/${jobId}`)
 export const runJob = (job: string, symbols?: string[]) => apiPost<JobSummary>('/experiments/run', { job, symbols })
+export const cancelJob = (jobId: string) => apiPost<JobSummary>(`/experiments/${jobId}/cancel`)

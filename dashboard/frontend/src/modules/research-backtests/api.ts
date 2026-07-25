@@ -134,3 +134,81 @@ export interface HypothesisDetailResponse {
 }
 
 export const getHypothesisDetail = (id: string) => apiGet<HypothesisDetailResponse>(`/research/${encodeURIComponent(id)}`)
+
+// ── Research Workspace, Phases 2-6 (2026-07-24/25) ──────────────────────────
+
+// Symbol Manager: the FULL symbol universe (including disabled/WATCHLIST/
+// RETIRED entries /symbol-health and /provider-chains omit), grouped by
+// asset class.
+export interface SymbolEntry {
+  internal: string
+  symbol: string
+  enabled: boolean
+  status: string
+  status_reason: string
+  status_since: string | null
+  min_score: number | null
+  rr: number | null
+  provider_chain: string[]
+}
+
+export interface SymbolsResponse {
+  asset_classes: Record<string, SymbolEntry[]>
+  native_timeframes: Record<string, string[]>
+  chains: Record<string, string[]>
+}
+
+export const getResearchSymbols = () => apiGet<SymbolsResponse>('/research/symbols')
+
+// Engine Selector: activation state is read-only here — toggling an
+// engine needs a new pre-registered hypothesis (CLAUDE.md), not a
+// dashboard click, so there is no corresponding POST.
+export interface EngineEntry {
+  name: string
+  enabled: boolean
+  prod4: boolean
+  weight: number | null
+  version: string | null
+}
+
+export interface EnginesResponse {
+  engines: EngineEntry[]
+  smc_full_spec: boolean
+  crypto_positioning_modulator: boolean
+}
+
+export const getResearchEngines = () => apiGet<EnginesResponse>('/research/engines')
+
+// Technical Indicator catalog: what's actually implemented, not a
+// selector that changes anything.
+export interface IndicatorEntry {
+  id: string
+  name: string
+  category: string
+  description: string
+  default_params: Record<string, unknown>
+  source: string
+  used_by: string[]
+}
+
+export interface IndicatorsResponse {
+  count: number
+  categories: Record<string, IndicatorEntry[]>
+  indicators: IndicatorEntry[]
+}
+
+export const getResearchIndicators = () => apiGet<IndicatorsResponse>('/research/indicators')
+
+// Dashboard Summary: one fast landing-page aggregation, same pattern
+// /health/full uses for the ops dashboard.
+export interface DashboardSummaryResponse {
+  generated_at: string
+  hypotheses: { total: number; by_status: Record<string, number> }
+  symbols: { total: number; enabled: number; by_asset_class: Record<string, number> }
+  engines: { total: number; enabled: number }
+  evidence: { manifests_total: number; manifests_reproducible: number; note: string }
+  forward_review: { rules_total: number; rules_triggered: number }
+  run_reports: { total: number; by_kind: Record<string, number> }
+}
+
+export const getDashboardSummary = () => apiGet<DashboardSummaryResponse>('/research/dashboard-summary')

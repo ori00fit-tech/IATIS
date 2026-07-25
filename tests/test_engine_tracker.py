@@ -2,7 +2,7 @@
 Analytics, Mission Control module 8)."""
 from __future__ import annotations
 
-from storage.engine_tracker import engine_trade_attribution, record_engine_votes
+from storage.engine_tracker import engine_stats, engine_trade_attribution, record_engine_votes
 from storage.outcome_tracker import close_signal, log_signal
 
 
@@ -110,3 +110,22 @@ def test_attribution_trade_without_engine_votes_is_unmatched_not_crashed():
     assert result["total_closed_trades"] == 1
     assert result["matched_trades"] == 0
     assert result["engines"] == []
+
+
+def test_engine_stats_avg_score_when_voting_is_none_for_an_all_neutral_engine():
+    # storage/engine_tracker.py's SQL: AVG(CASE WHEN bias != 'NEUTRAL' THEN
+    # score ELSE NULL END) — an engine that voted NEUTRAL on every one of
+    # its recorded votes has an all-NULL CASE column, so SQLite's AVG()
+    # returns NULL, not 0. Two callers (ai/dynamic_weights.py,
+    # storage/calibration.py) already guard against this with `.get(...,
+    # 0)` / `row[...] or 50` — this regression test is for the frontend
+    # consumer (engine-monitor/EngineMonitor.tsx), which didn't.
+    for _ in range(5):
+        record_engine_votes(_report(engines=[
+            {"engine": "AllNeutral", "bias": "NEUTRAL", "score": 0},
+        ]))
+
+    stats = {s["engine"]: s for s in engine_stats(min_votes=5)}
+    assert "AllNeutral" in stats
+    assert stats["AllNeutral"]["total_votes"] == 5
+    assert stats["AllNeutral"]["avg_score_when_voting"] is None

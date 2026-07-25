@@ -161,7 +161,7 @@ export function EngineMonitor() {
                 </div>
                 <div className="flex justify-between text-[0.78em]">
                   <span className="text-muted">Avg score</span>
-                  <span>{e.avg_score_when_voting.toFixed(0)}</span>
+                  <span>{e.avg_score_when_voting != null ? e.avg_score_when_voting.toFixed(0) : '—'}</span>
                 </div>
                 <div className="flex justify-between text-[0.78em]">
                   <span className="text-muted">Weight (current → suggested)</span>

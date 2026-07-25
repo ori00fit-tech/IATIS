@@ -13,12 +13,19 @@ import {
   getManifests,
   getAiResearchSummary,
   getHypothesisDetail,
+  getResearchSymbols,
+  getResearchEngines,
+  getResearchIndicators,
+  getDashboardSummary,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
   type EvidenceManifest,
   type AiResearchSummary,
   type HypothesisDetailResponse,
+  type SymbolEntry,
+  type EngineEntry,
+  type IndicatorEntry,
 } from './api'
 import { getJobDetail, runJob, type JobDetail } from '../experiment-runner/api'
 
@@ -288,12 +295,171 @@ function BacktestRunner() {
   )
 }
 
+// ── Symbol Manager (Research Workspace, 2026-07-24) ─────────────────────────
+// Governance metadata for the FULL symbol universe, including disabled/
+// WATCHLIST/RETIRED entries other tabs (Symbol Health, Provider Chains)
+// deliberately omit because they only report the live-enabled subset.
+function statusBadgeTone(status: string): 'exec' | 'no-trade' | 'marginal' | 'neutral' {
+  if (status === 'ACTIVE') return 'exec'
+  if (status === 'RETIRED') return 'no-trade'
+  if (status === 'PAUSED') return 'marginal'
+  return 'neutral' // WATCHLIST / EXPERIMENTAL / UNKNOWN
+}
+
+function SymbolManagerPanel() {
+  const { markUnauthenticated } = useAuth()
+  const symbols = usePolling(getResearchSymbols, POLL_MS, markUnauthenticated)
+  const assetClasses = symbols.data ? Object.keys(symbols.data.asset_classes).sort() : []
+  const [filter, setFilter] = useState<string | null>(null)
+
+  const rows: SymbolEntry[] = symbols.data
+    ? Object.entries(symbols.data.asset_classes)
+        .filter(([ac]) => !filter || ac === filter)
+        .flatMap(([, entries]) => entries)
+    : []
+
+  const columns: Column<SymbolEntry>[] = [
+    { header: 'Symbol', render: (s) => <span className="font-bold text-accent">{s.internal}</span> },
+    { header: 'Enabled', render: (s) => (s.enabled ? <Badge tone="exec">yes</Badge> : <Badge tone="neutral">no</Badge>) },
+    { header: 'Status', render: (s) => <Badge tone={statusBadgeTone(s.status)}>{s.status}</Badge> },
+    { header: 'Reason', render: (s) => <span className="text-muted text-[0.85em]" title={s.status_reason}>{s.status_reason.slice(0, 80)}{s.status_reason.length > 80 ? '…' : ''}</span> },
+    { header: 'Min Score', render: (s) => s.min_score ?? '—', align: 'right' },
+    { header: 'RR', render: (s) => s.rr ?? '—', align: 'right' },
+    { header: 'Provider Chain', render: (s) => <span className="text-muted text-[0.8em]">{s.provider_chain.join(' → ')}</span> },
+  ]
+
+  return (
+    <Panel
+      title="Symbol Manager"
+      right={
+        symbols.data ? (
+          <div className="flex gap-1 flex-wrap">
+            <button
+              onClick={() => setFilter(null)}
+              className={`px-2 py-0.5 rounded text-[0.9em] ${filter === null ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+            >
+              All ({Object.values(symbols.data.asset_classes).reduce((n, e) => n + e.length, 0)})
+            </button>
+            {assetClasses.map((ac) => (
+              <button
+                key={ac}
+                onClick={() => setFilter(ac)}
+                className={`px-2 py-0.5 rounded text-[0.9em] ${filter === ac ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+              >
+                {ac} ({symbols.data!.asset_classes[ac].length})
+              </button>
+            ))}
+          </div>
+        ) : undefined
+      }
+    >
+      {rows.length > 0 ? (
+        <DataTable columns={columns} rows={rows} rowKey={(s) => s.internal} />
+      ) : (
+        <Empty>{symbols.loading ? 'Loading...' : 'No symbols configured'}</Empty>
+      )}
+    </Panel>
+  )
+}
+
+// ── Engine Selector (Research Workspace, 2026-07-24) ─────────────────────────
+// Read-only: the frozen prod4 activation set (CLAUDE.md) — enabling
+// another engine needs a new pre-registered hypothesis, not a dashboard
+// toggle, so there is no control here, only visibility.
+function EngineSelectorPanel() {
+  const { markUnauthenticated } = useAuth()
+  const engines = usePolling(getResearchEngines, POLL_MS, markUnauthenticated)
+
+  const columns: Column<EngineEntry>[] = [
+    { header: 'Engine', render: (e) => <span className="font-bold text-accent">{e.name}</span> },
+    { header: 'Enabled', render: (e) => (e.enabled ? <Badge tone="exec">yes</Badge> : <Badge tone="neutral">no</Badge>) },
+    { header: 'prod4', render: (e) => (e.prod4 ? <Badge tone="good">frozen</Badge> : <span className="text-muted">—</span>) },
+    { header: 'Weight', render: (e) => (e.weight != null ? e.weight.toFixed(4) : '—'), align: 'right' },
+    { header: 'Version', render: (e) => e.version ?? '—', align: 'right' },
+  ]
+
+  return (
+    <Panel
+      title="Engine Selector"
+      right={
+        engines.data
+          ? `${engines.data.engines.filter((e) => e.enabled).length}/${engines.data.engines.length} enabled · smc_full_spec ${engines.data.smc_full_spec ? 'on' : 'off'}`
+          : undefined
+      }
+    >
+      {engines.data && engines.data.engines.length > 0 ? (
+        <DataTable columns={columns} rows={engines.data.engines} rowKey={(e) => e.name} />
+      ) : (
+        <Empty>{engines.loading ? 'Loading...' : 'No engines configured'}</Empty>
+      )}
+    </Panel>
+  )
+}
+
+// ── Technical Indicator Catalog (Research Workspace, 2026-07-24) ────────────
+// A read-only inventory of the indicator math already implemented across
+// engines/ and utils/indicators.py — not a selector that computes
+// anything new. Two ATR and two RSI variants are listed distinctly
+// (deliberately different numbers, see utils/indicators.py), never merged.
+function IndicatorCatalogPanel() {
+  const { markUnauthenticated } = useAuth()
+  const indicators = usePolling(getResearchIndicators, POLL_MS, markUnauthenticated)
+  const categories = indicators.data ? Object.keys(indicators.data.categories).sort() : []
+  const [filter, setFilter] = useState<string | null>(null)
+
+  const rows: IndicatorEntry[] = indicators.data
+    ? indicators.data.indicators.filter((i) => !filter || i.category === filter)
+    : []
+
+  const columns: Column<IndicatorEntry>[] = [
+    { header: 'Indicator', render: (i) => <span className="font-bold text-accent">{i.name}</span> },
+    { header: 'Category', render: (i) => <Badge tone="neutral">{i.category}</Badge> },
+    { header: 'Description', render: (i) => <span className="text-muted text-[0.85em]">{i.description}</span> },
+    { header: 'Params', render: (i) => <span className="text-muted text-[0.8em] font-mono">{JSON.stringify(i.default_params)}</span> },
+    { header: 'Source', render: (i) => <span className="text-muted text-[0.78em] font-mono">{i.source}</span> },
+  ]
+
+  return (
+    <Panel
+      title="Technical Indicators"
+      right={
+        indicators.data ? (
+          <div className="flex gap-1 flex-wrap">
+            <button
+              onClick={() => setFilter(null)}
+              className={`px-2 py-0.5 rounded text-[0.9em] ${filter === null ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+            >
+              All ({indicators.data.count})
+            </button>
+            {categories.map((c) => (
+              <button
+                key={c}
+                onClick={() => setFilter(c)}
+                className={`px-2 py-0.5 rounded text-[0.9em] ${filter === c ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+              >
+                {c} ({indicators.data!.categories[c].length})
+              </button>
+            ))}
+          </div>
+        ) : undefined
+      }
+    >
+      {rows.length > 0 ? (
+        <DataTable columns={columns} rows={rows} rowKey={(i) => i.id} />
+      ) : (
+        <Empty>{indicators.loading ? 'Loading...' : 'No indicators catalogued'}</Empty>
+      )}
+    </Panel>
+  )
+}
+
 export function ResearchBacktests() {
   const { markUnauthenticated } = useAuth()
   const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
   const backtests = usePolling(getBacktestResults, POLL_MS, markUnauthenticated)
   const meta = usePolling(getMetaAnalysis, POLL_MS, markUnauthenticated)
   const manifests = usePolling(getManifests, POLL_MS, markUnauthenticated)
+  const dashboardSummary = usePolling(getDashboardSummary, POLL_MS, markUnauthenticated)
 
   const hs = research.data?.hypothesis_summary
   const [ai, setAi] = useState<{ loading: boolean; error: string | null; data: AiResearchSummary | null }>({
@@ -397,9 +563,29 @@ export function ResearchBacktests() {
         <KpiCard value={hs?.failed ?? '—'} label="Failed" color="red" />
         <KpiCard value={hs?.research ?? '—'} label="In Research" color="amber" />
         <KpiCard value={research.data?.latest_backtest?.avg_pf?.toFixed(2) ?? '—'} label="Avg PF (latest BT)" color="purple" />
+        <KpiCard
+          value={dashboardSummary.data ? `${dashboardSummary.data.symbols.enabled}/${dashboardSummary.data.symbols.total}` : '—'}
+          label="Symbols Enabled"
+          color="blue"
+        />
+        <KpiCard value={dashboardSummary.data?.engines.enabled ?? '—'} label="Engines Active" color="purple" />
+        <KpiCard
+          value={dashboardSummary.data ? `${dashboardSummary.data.evidence.manifests_reproducible}/${dashboardSummary.data.evidence.manifests_total}` : '—'}
+          label="Manifests Reproducible"
+          color="green"
+        />
+        <KpiCard
+          value={dashboardSummary.data ? `${dashboardSummary.data.forward_review.rules_triggered}/${dashboardSummary.data.forward_review.rules_total}` : '—'}
+          label="Forward Rules Triggered"
+          color="amber"
+        />
       </div>
 
       <BacktestRunner />
+
+      <SymbolManagerPanel />
+      <EngineSelectorPanel />
+      <IndicatorCatalogPanel />
 
       <Panel
         title="AI Research Summary"

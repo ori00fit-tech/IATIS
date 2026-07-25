@@ -524,6 +524,181 @@ function QueueManagerCharts({ entries }: { entries: RunReportEntry[] }) {
   )
 }
 
+// ── Experiment Comparison (Backtesting Lab priority #3, 2026-07-25) ─────
+// Reuses getChartDataFile — no new backend endpoint needed. KPIs are
+// computed client-side from the `trades`/`equity_curve` arrays chart_data
+// already carries (added for the Interactive Chart work); nothing here
+// is a new source of truth, just a different view over the same file.
+const EXPERIMENT_COLORS = ['#00d4ff', '#7c5cfc', '#00e676', '#ffab40', '#ff5252', '#64748b']
+const MAX_COMPARED = 6
+
+interface ExperimentKpi {
+  file: string
+  symbol: string
+  trades: number
+  winRate: number
+  profitFactor: number
+  maxDrawdownPct: number
+  totalReturnPct: number
+  curve: number[]
+}
+
+function computeExperimentKpi(file: string, data: ChartDataFile): ExperimentKpi {
+  const trades = data.trades
+  const wins = trades.filter((t) => t.is_win)
+  const losses = trades.filter((t) => !t.is_win)
+  const grossProfit = wins.reduce((s, t) => s + t.pnl_usd, 0)
+  const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl_usd, 0))
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0
+  const winRate = trades.length > 0 ? (wins.length / trades.length) * 100 : 0
+  const curve = data.equity_curve.map((p) => p.y)
+  const { maxDD } = drawdownSeries(curve.length > 0 ? curve : [0])
+  const start = curve[0] ?? 10_000
+  const end = curve[curve.length - 1] ?? start
+  const totalReturnPct = start !== 0 ? ((end - start) / start) * 100 : 0
+  return { file, symbol: data.symbol, trades: trades.length, winRate, profitFactor, maxDrawdownPct: maxDD, totalReturnPct, curve }
+}
+
+function pfTone(pf: number): 'exec' | 'marginal' | 'no-trade' {
+  if (pf >= 1.5) return 'exec'
+  if (pf >= 1.0) return 'marginal'
+  return 'no-trade'
+}
+
+// Overlaid % return from each experiment's own starting balance — index-
+// normalized x-axis (same convention EquityCurveSvg already uses for a
+// single curve) since experiments can have different trade counts and
+// date ranges; a shared time axis across genuinely different runs would
+// be more misleading than an honest "progress through the run" axis.
+function ExperimentOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
+  const W = 800
+  const H = 240
+  const series = kpis.map((k) => (k.curve.length > 0 ? k.curve.map((v) => ((v - k.curve[0]) / (k.curve[0] || 1)) * 100) : [0]))
+  const allValues = series.flat()
+  const min = Math.min(0, ...allValues)
+  const max = Math.max(0, ...allValues)
+  const range = max - min || 1
+  const x = (i: number, len: number) => (i / Math.max(1, len - 1)) * W
+  const y = (v: number) => H - ((v - min) / range) * H
+  const zeroY = y(0)
+
+  return (
+    <div className="px-4 pb-4">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-[240px]">
+        <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke="#1a2236" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        {series.map((s, idx) => {
+          const path = s.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i, s.length).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+          return (
+            <path
+              key={kpis[idx].file}
+              d={path}
+              fill="none"
+              stroke={EXPERIMENT_COLORS[idx % EXPERIMENT_COLORS.length]}
+              strokeWidth="1.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          )
+        })}
+      </svg>
+      <div className="flex gap-4 flex-wrap mt-2 text-[0.78em]">
+        {kpis.map((k, idx) => (
+          <span key={k.file} className="flex items-center gap-1.5 text-muted">
+            <span className="w-2.5 h-2.5 rounded-full inline-block shrink-0" style={{ background: EXPERIMENT_COLORS[idx % EXPERIMENT_COLORS.length] }} />
+            {k.symbol}
+          </span>
+        ))}
+      </div>
+      <p className="text-[0.72em] text-muted mt-2">% return from each experiment's own starting balance, plotted by trade sequence (not calendar time) — runs may cover different date ranges.</p>
+    </div>
+  )
+}
+
+function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [kpis, setKpis] = useState<ExperimentKpi[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const toggle = (file: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(file)) next.delete(file)
+      else if (next.size < MAX_COMPARED) next.add(file)
+      return next
+    })
+  }
+
+  const compare = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const files = Array.from(selected)
+      const datas = await Promise.all(files.map((f) => getChartDataFile(f)))
+      setKpis(files.map((f, i) => computeExperimentKpi(f, datas[i])))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setKpis([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const columns: Column<ExperimentKpi>[] = [
+    { header: 'Experiment', render: (k) => <span className="font-bold text-accent">{k.symbol}</span> },
+    { header: 'Trades', render: (k) => k.trades, align: 'right' },
+    { header: 'WR%', render: (k) => `${k.winRate.toFixed(1)}%`, align: 'right' },
+    {
+      header: 'PF',
+      render: (k) => <Badge tone={pfTone(k.profitFactor)}>{Number.isFinite(k.profitFactor) ? k.profitFactor.toFixed(2) : '∞'}</Badge>,
+      align: 'right',
+    },
+    { header: 'Max DD%', render: (k) => <span className="text-red">{k.maxDrawdownPct.toFixed(1)}%</span>, align: 'right' },
+    {
+      header: 'Return%',
+      render: (k) => <span className={k.totalReturnPct >= 0 ? 'text-green' : 'text-red'}>{k.totalReturnPct >= 0 ? '+' : ''}{k.totalReturnPct.toFixed(1)}%</span>,
+      align: 'right',
+    },
+  ]
+
+  return (
+    <Panel title="Experiment Comparison" right={`select 2-${MAX_COMPARED} runs · ${entries.length} available`}>
+      <div className="p-4 flex flex-col gap-3">
+        <div className="flex flex-wrap gap-1.5">
+          {entries.map((e) => {
+            const isSelected = selected.has(e.file)
+            return (
+              <button
+                key={e.file}
+                onClick={() => toggle(e.file)}
+                title={e.file}
+                className={`px-2.5 py-1 rounded text-[0.78em] font-mono border ${
+                  isSelected ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
+                }`}
+              >
+                {String(e.highlights.symbol ?? e.file)}
+              </button>
+            )
+          })}
+        </div>
+        <button
+          onClick={compare}
+          disabled={selected.size < 2 || loading}
+          className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
+        >
+          {loading ? 'Comparing…' : `Compare Selected (${selected.size})`}
+        </button>
+        {error && <span className="text-red text-[0.8em]">{error}</span>}
+      </div>
+      {kpis.length > 0 && (
+        <>
+          <DataTable columns={columns} rows={kpis} rowKey={(k) => k.file} />
+          <ExperimentOverlayChart kpis={kpis} />
+        </>
+      )}
+    </Panel>
+  )
+}
+
 function QueueManagerRuns() {
   const { markUnauthenticated } = useAuth()
   const reports = usePolling(getRunReports, POLL_MS, markUnauthenticated)
@@ -548,6 +723,7 @@ function QueueManagerRuns() {
   return (
     <>
       {chartEntries.length > 0 && <QueueManagerCharts entries={chartEntries} />}
+      {chartEntries.length >= 2 && <ExperimentComparisonPanel entries={chartEntries} />}
       {(wfEntries.length > 0 || robustnessEntries.length > 0) && (
         <Panel title="Walk-Forward / Robustness Verdicts" right={`${wfEntries.length + robustnessEntries.length} runs`}>
           <div className="divide-y divide-border">

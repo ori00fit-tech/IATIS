@@ -53,6 +53,33 @@ def generate_html_report(
                 "y": round(bal, 2)
             })
 
+    # Interactive Charts (Phase 5, 2026-07-24) — the equity curve above is
+    # otherwise only ever embedded as inline JS inside the HTML string
+    # below, unreadable by anything except a browser. Persisting it (plus
+    # the aggregate breakdowns metrics.py already computed) as a JSON
+    # sidecar with the SAME base filename lets a dashboard chart fetch
+    # real series data directly (File Explorer's GET /files/read already
+    # generically serves any reports/ path) instead of scraping HTML.
+    chart_data = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "equity_curve": equity_data,
+        "monthly_returns": metrics.monthly_returns,
+        "yearly_returns": metrics.yearly_returns,
+        "by_regime": metrics.by_regime,
+        "by_symbol": metrics.by_symbol,
+        "by_direction": metrics.by_direction,
+        "by_session": metrics.by_session,
+        "monte_carlo": (
+            {
+                "median_return": mc.median_return, "p5_return": mc.p5_return, "p95_return": mc.p95_return,
+                "median_max_dd": mc.median_max_dd, "worst_max_dd": mc.worst_max_dd,
+                "risk_of_ruin": mc.risk_of_ruin, "probability_profit": mc.probability_profit,
+            }
+            if mc else None
+        ),
+    }
+
     monthly_rows = ""
     for month, pnl in sorted(metrics.monthly_returns.items()):
         color = _color(pnl)
@@ -236,4 +263,7 @@ new Chart(ctx, {{
     date_str = datetime.now().strftime("%Y%m%d")
     out_path = REPORTS_DIR / f"{symbol}_{timeframe}_{date_str}.html"
     out_path.write_text(html, encoding="utf-8")
+
+    chart_path = REPORTS_DIR / f"{symbol}_{timeframe}_{date_str}_chart_data.json"
+    chart_path.write_text(json.dumps(chart_data, indent=2, default=str), encoding="utf-8")
     return out_path

@@ -1414,17 +1414,19 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
     # /research/symbols, /research/engines, /research/indicators,
-    # /research/scenario-config, /research/datasets,
-    # /research/validation-config, and /research/integrity — all literal
-    # routes must still resolve to themselves, not be captured as
-    # hypothesis_id="manifests"/etc.
+    # /research/scenario-config, /research/datasets, /research/run-reports,
+    # /research/validation-config, /research/compare, and
+    # /research/integrity — all literal routes must still resolve to
+    # themselves, not be captured as hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/datasets", headers=HDR).status_code == 200
+    assert client.get("/research/run-reports", headers=HDR).status_code == 200
     assert client.get("/research/validation-config", headers=HDR).status_code == 200
+    assert client.get("/research/compare?ids=H015", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
 
 
@@ -1445,6 +1447,63 @@ def test_research_hypothesis_detail_includes_result_files_with_existence_check(c
     body = r.json()
     assert body["result_files"]
     assert all({"path", "exists"}.issubset(rf.keys()) for rf in body["result_files"])
+
+
+def test_research_compare_requires_auth(client):
+    assert client.get("/research/compare?ids=H015").status_code == 401
+
+
+def test_research_compare_requires_at_least_one_id(client):
+    r = client.get("/research/compare?ids=", headers=HDR)
+    assert r.status_code == 400
+
+
+def test_research_compare_rejects_more_than_ten_ids(client):
+    ids = ",".join(f"H{i:03d}" for i in range(11))
+    r = client.get(f"/research/compare?ids={ids}", headers=HDR)
+    assert r.status_code == 400
+
+
+def test_research_compare_matches_single_hypothesis_detail(client):
+    # /research/compare?ids=H015 must return the exact same detail as
+    # /research/H015 — same shared _hypothesis_detail() helper.
+    single = client.get("/research/H015", headers=HDR).json()
+    compared = client.get("/research/compare?ids=H015", headers=HDR).json()
+
+    assert compared["count"] == 1
+    entry = compared["hypotheses"][0]
+    assert entry["found"] is True
+    assert entry["id"] == single["id"]
+    assert entry["hypothesis"] == single["hypothesis"]
+    assert entry["manifests"] == single["manifests"]
+    assert entry["result_files"] == single["result_files"]
+
+
+def test_research_compare_reports_multiple_hypotheses_side_by_side(client):
+    r = client.get("/research/compare?ids=H013,H015", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    ids = [h["id"] for h in body["hypotheses"]]
+    assert ids == ["H013", "H015"]
+    assert all(h["found"] is True for h in body["hypotheses"])
+
+
+def test_research_compare_reports_unknown_id_without_failing_the_batch(client):
+    r = client.get("/research/compare?ids=H015,H999_DOES_NOT_EXIST", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_id = {h["id"]: h for h in body["hypotheses"]}
+    assert by_id["H015"]["found"] is True
+    assert by_id["H999_DOES_NOT_EXIST"] == {"id": "H999_DOES_NOT_EXIST", "found": False}
+
+
+def test_research_compare_is_case_insensitive_and_dedupes_whitespace(client):
+    r = client.get("/research/compare?ids= h015 , H013 ", headers=HDR)
+    body = r.json()
+    ids = [h["id"] for h in body["hypotheses"]]
+    assert ids == ["H015", "H013"]
+    assert all(h["found"] is True for h in body["hypotheses"])
 
 
 def test_research_manifests_requires_auth(client):
@@ -1632,6 +1691,144 @@ def test_research_datasets_ignores_non_matching_filenames(client, tmp_path, monk
 
     body = client.get("/research/datasets", headers=HDR).json()
     assert body["count"] == 0
+
+
+def test_research_run_reports_requires_auth(client):
+    assert client.get("/research/run-reports").status_code == 401
+
+
+def test_research_run_reports_missing_dir_returns_empty_list(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path / "does_not_exist")
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"reports_dir": str(tmp_path / "does_not_exist"), "count": 0, "reports": []}
+
+
+def test_research_run_reports_parses_backtest_summary(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_120000",
+        "symbols": {
+            "EURUSD": {"trades": 42, "win_rate": 0.55, "profit_factor": 1.6, "max_drawdown_pct": 12.0},
+        },
+    }
+    (tmp_path / "backtest_summary_20260724_120000.json").write_text(_json.dumps(payload))
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    entry = body["reports"][0]
+    assert entry["kind"] == "backtest"
+    assert entry["readable"] is True
+    assert entry["generated_utc"] == "20260724_120000"
+    assert entry["highlights"]["EURUSD"] == {"trades": 42, "win_rate": 0.55, "profit_factor": 1.6, "max_drawdown_pct": 12.0}
+
+
+def test_research_run_reports_parses_walk_forward_verdicts(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_130000",
+        "consistent": 1,
+        "evaluated": 2,
+        "symbols": {
+            "EURUSD": {"verdict": "CONSISTENT"},
+            "GBPUSD": {"verdict": "INCONSISTENT"},
+        },
+    }
+    (tmp_path / "walk_forward_20260724_130000.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "walk_forward"
+    assert entry["evaluated"] == 2
+    assert entry["highlights"] == {"EURUSD": "CONSISTENT", "GBPUSD": "INCONSISTENT"}
+
+
+def test_research_run_reports_parses_robustness_verdicts(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "generated_utc": "20260724_140000",
+        "evaluated": 1,
+        "symbols": {
+            "EURUSD": {"sweeps": [
+                {"param": "sl_atr_multiplier", "verdict": "STABLE"},
+                {"param": "min_rr", "verdict": "SENSITIVE"},
+            ]},
+        },
+    }
+    (tmp_path / "robustness_20260724_140000.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "robustness"
+    assert entry["highlights"] == {"EURUSD": {"sl_atr_multiplier": "STABLE", "min_rr": "SENSITIVE"}}
+
+
+def test_research_run_reports_unknown_prefix_reports_kind_unknown(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "some_other_report_20260724.json").write_text("{}")
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    assert body["reports"][0]["kind"] == "unknown"
+    assert body["reports"][0]["highlights"] == {}
+
+
+def test_research_run_reports_unreadable_file_without_500(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "backtest_summary_broken.json").write_text("not valid json{{{")
+
+    r = client.get("/research/run-reports", headers=HDR)
+    assert r.status_code == 200, r.text
+    entry = r.json()["reports"][0]
+    assert entry["readable"] is False
+    assert "error" in entry
+
+
+def test_research_run_reports_ignores_non_json_files(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "EURUSD_H1_2026.html").write_text("<html></html>")
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    assert body["count"] == 0
+
+
+def test_research_run_reports_detects_chart_data_sidecar(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {
+        "symbol": "EURUSD", "timeframe": "H1",
+        "equity_curve": [{"x": "Start", "y": 10000.0}, {"x": "t1", "y": 10120.0}],
+        "monte_carlo": None,
+    }
+    (tmp_path / "EURUSD_H1_20260724_chart_data.json").write_text(_json.dumps(payload))
+
+    body = client.get("/research/run-reports", headers=HDR).json()
+    entry = body["reports"][0]
+    assert entry["kind"] == "chart_data"
+    assert entry["highlights"] == {
+        "symbol": "EURUSD", "timeframe": "H1",
+        "equity_curve_points": 2, "has_monte_carlo": False,
+    }
 
 
 def test_research_validation_config_requires_auth(client):

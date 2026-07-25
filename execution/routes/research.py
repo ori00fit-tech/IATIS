@@ -435,6 +435,116 @@ async def research_datasets(
     }
 
 
+# Where Queue Manager jobs write their run reports (backtest.runner.
+# write_summary, backtest.walk_forward.run_walk_forward_suite,
+# backtest.robustness.run_robustness_suite all default to this). Matches
+# backtest/report.py's REPORTS_DIR. Module-level so tests can monkeypatch
+# it instead of chdir()ing the process — same pattern as _DATA_DIR above.
+_REPORTS_DIR = Path("reports")
+
+
+def _backtest_summary_highlights(payload: dict) -> dict[str, Any]:
+    return {
+        sym: {
+            "trades": s.get("trades"),
+            "win_rate": s.get("win_rate"),
+            "profit_factor": s.get("profit_factor"),
+            "max_drawdown_pct": s.get("max_drawdown_pct"),
+        }
+        for sym, s in payload.get("symbols", {}).items()
+    }
+
+
+def _walk_forward_highlights(payload: dict) -> dict[str, Any]:
+    return {sym: s.get("verdict") for sym, s in payload.get("symbols", {}).items()}
+
+
+def _robustness_highlights(payload: dict) -> dict[str, Any]:
+    return {
+        sym: {sw.get("param"): sw.get("verdict") for sw in s.get("sweeps", [])}
+        for sym, s in payload.get("symbols", {}).items()
+    }
+
+
+def _chart_data_highlights(payload: dict) -> dict[str, Any]:
+    # backtest/report.py's Interactive Charts sidecar — one per symbol,
+    # not a multi-symbol suite file, so highlights describe itself rather
+    # than a {symbol: ...} map like the other three kinds.
+    return {
+        "symbol": payload.get("symbol"),
+        "timeframe": payload.get("timeframe"),
+        "equity_curve_points": len(payload.get("equity_curve") or []),
+        "has_monte_carlo": payload.get("monte_carlo") is not None,
+    }
+
+
+# filename prefix -> (kind label, highlights extractor). Order matters:
+# checked longest-prefix-first isn't needed since these three don't
+# collide, but keep it a tuple (not a dict) so a future kind can't
+# silently shadow another by dict-key overwrite. chart_data is matched by
+# SUFFIX separately (see research_run_reports) since its filename is
+# {symbol}_{timeframe}_{date}_chart_data.json — no shared prefix.
+_RUN_REPORT_KINDS: tuple[tuple[str, str, Any], ...] = (
+    ("backtest_summary_", "backtest", _backtest_summary_highlights),
+    ("walk_forward_", "walk_forward", _walk_forward_highlights),
+    ("robustness_", "robustness", _robustness_highlights),
+)
+
+
+@router.get("/research/run-reports")
+async def research_run_reports(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Result Explorer (Phase 5, 2026-07-24): the completed run reports
+    Queue Manager jobs actually wrote to reports/ — backtest_summary_*
+    (backtest.runner), walk_forward_* (backtest.walk_forward),
+    robustness_* (backtest.robustness), and *_chart_data.json (backtest.
+    report's Interactive Charts sidecar, one per symbol). A lightweight
+    "highlights" summary only (trades/PF/WR/verdict, not the full nested
+    payload — window/sweep detail, HTML report paths, the full equity
+    curve) so a listing stays small; the frontend fetches a specific
+    file's full content via the File Explorer (GET /files/read?path=
+    reports/<file>), which already generically and safely serves any
+    repo-confined path — this endpoint does not re-implement that.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+
+    reports: list[dict[str, Any]] = []
+    if _REPORTS_DIR.exists():
+        for path in sorted(_REPORTS_DIR.glob("*.json"), reverse=True):
+            kind, highlights_fn = "unknown", None
+            if path.name.endswith("_chart_data.json"):
+                kind, highlights_fn = "chart_data", _chart_data_highlights
+            else:
+                for prefix, label, fn in _RUN_REPORT_KINDS:
+                    if path.name.startswith(prefix):
+                        kind, highlights_fn = label, fn
+                        break
+            entry: dict[str, Any] = {
+                "kind": kind,
+                "file": path.name,
+                "size_bytes": path.stat().st_size,
+            }
+            try:
+                payload = _json.loads(path.read_text())
+                entry["readable"] = True
+                entry["generated_utc"] = payload.get("generated_utc")
+                entry["evaluated"] = payload.get("evaluated")
+                entry["highlights"] = highlights_fn(payload) if highlights_fn else {}
+            except Exception as exc:
+                entry["readable"] = False
+                entry["error"] = str(exc)
+            reports.append(entry)
+
+    return {
+        "reports_dir": str(_REPORTS_DIR),
+        "count": len(reports),
+        "reports": reports,
+    }
+
+
 @router.get("/research/validation-config")
 async def research_validation_config(
     x_api_key: str | None = Header(default=None),
@@ -736,16 +846,13 @@ async def research_integrity(
     return await loop.run_in_executor(_executor, _run)
 
 
-@router.get("/research/{hypothesis_id}")
-async def research_hypothesis_detail(
-    hypothesis_id: str,
-    x_api_key: str | None = Header(default=None),
-    iatis_session: str | None = Cookie(default=None),
-) -> dict[str, Any]:
-    """Research Center drill-down (module 4) — the complete registry.json
-    entry for one hypothesis (untruncated, unlike /research's summary
-    list) plus every manifest linked to it and its declared result
-    file(s).
+def _hypothesis_detail(hypothesis_id: str, hypotheses_raw: dict, manifests: list[dict]) -> dict[str, Any] | None:
+    """The complete registry.json entry for one hypothesis (untruncated,
+    unlike /research's summary list) plus every manifest linked to it and
+    its declared result file(s). Shared by /research/{hypothesis_id} (one
+    ID) and /research/compare (several IDs at once) so the linking logic
+    — see the two-source manifest matching note below — exists in exactly
+    one place. Returns None if the ID isn't in the registry.
 
     Manifest linking uses two sources, kept separate and labeled rather
     than merged into one list pretending to be equally certain:
@@ -756,25 +863,11 @@ async def research_hypothesis_detail(
         the hypothesis ID as a case-insensitive substring. A guess, not
         a fact — many manifest kinds (crypto_volume_experiment,
         ctrader_spread_measurement) don't embed a hypothesis ID at all.
-
-    MUST stay registered after /research/manifests and /research/integrity
-    (both literal paths) — Starlette/FastAPI match routes in registration
-    order, so a path-param route registered earlier would silently shadow
-    them (hit exactly this bug once while building this route; pinned by
-    tests/test_api_contract.py::test_research_hypothesis_detail_route_does_not_shadow_literal_routes).
     """
-    _check_auth(x_api_key, iatis_session)
-    import json as _json
-
-    registry_path = Path("research/results/registry.json")
-    if not registry_path.exists():
-        raise HTTPException(status_code=404, detail="Registry not found.")
-    hypotheses_raw = _json.loads(registry_path.read_text()).get("hypotheses", {})
     hyp = hypotheses_raw.get(hypothesis_id)
     if hyp is None:
-        raise HTTPException(status_code=404, detail=f"Hypothesis '{hypothesis_id}' not found.")
+        return None
 
-    manifests = _load_manifests()
     declared_manifest = hyp.get("manifest")
     declared_name = Path(declared_manifest).name if declared_manifest else None
 
@@ -804,6 +897,77 @@ async def research_hypothesis_detail(
             for p in result_paths
         ],
     }
+
+
+def _load_registry_hypotheses() -> dict:
+    import json as _json
+
+    registry_path = Path("research/results/registry.json")
+    if not registry_path.exists():
+        return {}
+    return _json.loads(registry_path.read_text()).get("hypotheses", {})
+
+
+@router.get("/research/compare")
+async def research_compare(
+    ids: str = Query(..., description="Comma-separated hypothesis IDs, e.g. H013,H015,H017"),
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Hypothesis Comparison (Result Explorer, 2026-07-24): the same full,
+    untruncated detail /research/{hypothesis_id} returns for one
+    hypothesis, for several at once — so a comparison table doesn't need
+    N sequential round trips. MUST stay registered before
+    /research/{hypothesis_id} (Starlette matches routes in registration
+    order; "compare" would otherwise be captured as a hypothesis_id).
+    An unknown ID is reported per-entry (found: false), not a 404 for the
+    whole batch — a comparison should still render the IDs that exist.
+    """
+    _check_auth(x_api_key, iatis_session)
+    requested = [i.strip().upper() for i in ids.split(",") if i.strip()]
+    if not requested:
+        raise HTTPException(status_code=400, detail="ids must contain at least one hypothesis ID.")
+    if len(requested) > 10:
+        raise HTTPException(status_code=400, detail="compare: at most 10 hypothesis IDs per request.")
+
+    hypotheses_raw = _load_registry_hypotheses()
+    manifests = _load_manifests()
+
+    results = []
+    for h_id in requested:
+        detail = _hypothesis_detail(h_id, hypotheses_raw, manifests)
+        if detail is None:
+            results.append({"id": h_id, "found": False})
+        else:
+            results.append({**detail, "found": True})
+    return {"count": len(results), "hypotheses": results}
+
+
+@router.get("/research/{hypothesis_id}")
+async def research_hypothesis_detail(
+    hypothesis_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Research Center drill-down (module 4) — see _hypothesis_detail for
+    the shared logic (also used by /research/compare).
+
+    MUST stay registered after /research/manifests and /research/integrity
+    (both literal paths) — Starlette/FastAPI match routes in registration
+    order, so a path-param route registered earlier would silently shadow
+    them (hit exactly this bug once while building this route; pinned by
+    tests/test_api_contract.py::test_research_hypothesis_detail_route_does_not_shadow_literal_routes).
+    """
+    _check_auth(x_api_key, iatis_session)
+    hypotheses_raw = _load_registry_hypotheses()
+    if not hypotheses_raw and not Path("research/results/registry.json").exists():
+        raise HTTPException(status_code=404, detail="Registry not found.")
+
+    manifests = _load_manifests()
+    detail = _hypothesis_detail(hypothesis_id, hypotheses_raw, manifests)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Hypothesis '{hypothesis_id}' not found.")
+    return detail
 
 
 # ---------------------------------------------------------------------------

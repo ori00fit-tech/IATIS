@@ -6,6 +6,7 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { AiResearchAssistant } from '../../components/AiResearchAssistant'
+import { DatasetUpload } from './DatasetUpload'
 import {
   getResearchDatasets,
   getResearchSymbols,
@@ -107,6 +108,7 @@ function DatasetStep() {
 
   return (
     <Panel title="Dataset Explorer" right={datasets.data ? `${datasets.data.count} local datasets · ${datasets.data.data_dir}` : undefined}>
+      <DatasetUpload />
       {datasets.data && datasets.data.datasets.length > 0 ? (
         <DataTable columns={columns} rows={datasets.data.datasets} rowKey={(d) => d.file} />
       ) : (

@@ -43,7 +43,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from execution.telegram_bot import send_raw, send_signal
-from storage.outcome_tracker import auto_close_outcomes
+from storage.outcome_tracker import auto_close_outcomes, log_signal as log_outcome_signal
 from execution.trade_executor import TradeExecutor
 from main import run_pipeline
 from risk.correlation_engine import (
@@ -200,16 +200,33 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                 allow_live_trading=exec_cfg.get("allow_live_trading", False),
                             )
                             exec_result = executor.execute_from_report(report)
-                            if exec_result.executed and not exec_result.dry_run:
+                            if exec_result.executed:
+                                # Outcome tracker only ever records a signal
+                                # that was actually attempted — a real fill
+                                # or an intentional dry-run simulation
+                                # (moved here from main.py, 2026-07-25: see
+                                # main.py's comment at the old call site for
+                                # why logging on the bare EXECUTE verdict
+                                # created permanently orphaned "open" rows).
+                                try:
+                                    log_outcome_signal(report)
+                                except Exception as exc:
+                                    logger.warning(f"Outcome tracker log failed (non-fatal): {exc}")
+                                if not exec_result.dry_run:
+                                    logger.info(
+                                        f"✅ TRADE EXECUTED: {exec_result.direction} "
+                                        f"{exec_result.symbol} trade_id={exec_result.trade_id}"
+                                    )
+                                    # TCA: record intended-vs-fill for every real
+                                    # broker fill (storage/execution_quality.py).
+                                    # Never raises; dry-run is excluded inside.
+                                    from storage.execution_quality import log_fill
+                                    log_fill(report, exec_result, broker=broker)
+                            else:
                                 logger.info(
-                                    f"✅ TRADE EXECUTED: {exec_result.direction} "
-                                    f"{exec_result.symbol} trade_id={exec_result.trade_id}"
+                                    f"Signal for {internal} not logged to outcome tracker: "
+                                    f"execution declined ({exec_result.skip_reason})"
                                 )
-                                # TCA: record intended-vs-fill for every real
-                                # broker fill (storage/execution_quality.py).
-                                # Never raises; dry-run is excluded inside.
-                                from storage.execution_quality import log_fill
-                                log_fill(report, exec_result, broker=broker)
                         except Exception as exc:
                             logger.warning(f"Trade execution skipped for {internal}: {exc}")
             except Exception as exc:

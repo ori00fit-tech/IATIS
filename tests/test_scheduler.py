@@ -136,6 +136,93 @@ def test_run_once_continues_after_one_symbol_fails(synthetic_config):
 
 
 # ---------------------------------------------------------------------------
+# outcome-tracker logging — gated on TradeExecutor's real result (reconciliation
+# mismatch root-cause fix, 2026-07-25). Previously main.py logged an "open"
+# outcome_tracker row unconditionally on the EXECUTE verdict, before knowing
+# whether TradeExecutor would actually place an order — any decline/failure
+# left a permanently orphaned row. These tests pin the fix at its new home.
+# ---------------------------------------------------------------------------
+
+def _fake_execute_report(symbol="EUR/USD"):
+    return {
+        "symbol": symbol,
+        "final_verdict": "EXECUTE",
+        "entry_price": 1.0850,
+        "stop_loss": 1.0920,
+        "take_profit": 1.0640,
+        "confluence": {"score": 72.0, "vote": {"winning_bias": "BEARISH"}},
+        "regime": {"state": "TRENDING"},
+        "news": {"news_risk_score": 5.0},
+        "engine_outputs": [],
+    }
+
+
+def test_run_once_logs_outcome_on_dry_run_execute(synthetic_config):
+    """A dry-run 'would execute' result is a legitimate paper trade and
+    must still be logged — dry-run is intentional simulation, not a
+    decline."""
+    from scheduler import run_once
+    from execution.trade_executor import ExecutionResult
+    from storage.outcome_tracker import get_open_signals
+
+    synthetic_config["execution"] = {"dry_run": True, "ctrader_enabled": False, "oanda_enabled": False}
+    fake_result = ExecutionResult(
+        executed=True, symbol="EURUSD", direction="SELL", dry_run=True, trade_id="DRY_RUN",
+    )
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor:
+        MockExecutor.return_value.execute_from_report.return_value = fake_result
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    open_signals = get_open_signals()
+    assert len(open_signals) == 1
+    assert open_signals[0]["symbol"] == "EUR/USD"
+
+
+def test_run_once_does_not_log_outcome_when_execution_declined(synthetic_config):
+    """The bug fix: if TradeExecutor declines (broker rejection, max_open_
+    trades, missing prices, an exception, ...), no outcome_tracker row may
+    be created — previously this is exactly how orphaned 'open' rows were
+    created."""
+    from scheduler import run_once
+    from execution.trade_executor import ExecutionResult
+    from storage.outcome_tracker import get_open_signals
+
+    synthetic_config["execution"] = {"dry_run": True, "ctrader_enabled": False, "oanda_enabled": False}
+    fake_result = ExecutionResult(
+        executed=False, symbol="EURUSD", skip_reason="Max open trades (5/5)", dry_run=True,
+    )
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor:
+        MockExecutor.return_value.execute_from_report.return_value = fake_result
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert get_open_signals() == []
+
+
+def test_run_once_does_not_log_outcome_when_broker_path_unconfigured(synthetic_config):
+    """dry_run=False and no broker enabled → TradeExecutor is never even
+    instantiated (existing behavior) — must also mean no outcome_tracker
+    row (the fix; previously main.py logged one regardless)."""
+    from scheduler import run_once
+    from storage.outcome_tracker import get_open_signals
+
+    synthetic_config["execution"] = {"dry_run": False, "ctrader_enabled": False, "oanda_enabled": False}
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor:
+        run_once(synthetic_config, symbols=["EUR/USD"])
+        MockExecutor.assert_not_called()
+
+    assert get_open_signals() == []
+
+
+# ---------------------------------------------------------------------------
 # startup message
 # ---------------------------------------------------------------------------
 

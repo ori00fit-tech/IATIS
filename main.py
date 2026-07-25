@@ -51,7 +51,6 @@ from risk.risk_engine import RiskInputs, evaluate_risk
 from storage.decision_log import log_decision
 from storage.decision_db import log_decision_db, execute_alert_exists_for_bar
 from storage.engine_tracker import record_engine_votes
-from storage.outcome_tracker import log_signal as log_outcome_signal
 from storage.experience_db import record_experience, find_similar
 from fundamentals.news_risk import assess_news_risk, risk_level_icon
 from execution.telegram_bot import send_signal as telegram_send
@@ -866,12 +865,18 @@ def run_pipeline(config: dict) -> dict:
     except Exception as exc:
         logger.debug(f"Experience DB recording skipped: {exc}")
 
-    # Log EXECUTE signals to outcome tracker (for calibration + regime matrix)
-    if final_verdict == "EXECUTE":
-        try:
-            log_outcome_signal(report)
-        except Exception as exc:
-            logger.warning(f"Outcome tracker log failed (non-fatal): {exc}")
+    # Outcome-tracker logging moved to scheduler.py's run_once() (2026-07-25):
+    # logging here unconditionally on the EXECUTE verdict — before knowing
+    # whether TradeExecutor would actually place a real order — created
+    # permanently orphaned "open" rows whenever real execution failed or was
+    # declined downstream (broker rejection, max_open_trades, an exception,
+    # or the broker path simply not being configured). Those orphans
+    # inflated risk/live_portfolio_state.py's open-risk exposure (the live
+    # risk gate reads outcome_tracker directly) and fired unresolvable
+    # execution/reconciliation.py mismatches for positions that never
+    # existed at the broker. scheduler.py now logs only when
+    # TradeExecutor.execute_from_report()'s result is `executed=True`
+    # (covers both a real fill and an intentional dry-run simulation).
 
     # Telegram: EXECUTE signals only — no NO_TRADE spam
     # 9 symbols × 12 runs/day = 108 msgs/day if all sent → filter to EXECUTE only

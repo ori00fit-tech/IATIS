@@ -12,6 +12,7 @@ import { ProviderEval } from './modules/provider-eval/ProviderEval'
 import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
 import { AiDecisionCenter } from './modules/ai-decision-center/AiDecisionCenter'
 import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
+import { BacktestingLab } from './modules/backtesting-lab/BacktestingLab'
 import { BacktestingCharts } from './modules/backtesting-charts/BacktestingCharts'
 import { SystemAudit } from './modules/system-audit/SystemAudit'
 import { LiveLogs } from './modules/live-logs/LiveLogs'
@@ -38,6 +39,7 @@ const MODULES: Record<TabId, () => ReactNode> = {
   'engine-monitor': () => <EngineMonitor />,
   'ai-decision-center': () => <AiDecisionCenter />,
   research: () => <ResearchBacktests />,
+  'backtesting-lab': () => <BacktestingLab />,
   'backtesting-charts': () => <BacktestingCharts />,
   'system-audit': () => <SystemAudit />,
   logs: () => <LiveLogs />,

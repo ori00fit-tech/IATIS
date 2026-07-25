@@ -96,6 +96,38 @@ def test_adapter_gap_exit_worse_than_stop_reflected_in_rr():
     assert rec.rr_actual < -1.0
 
 
+def test_adapter_propagates_decision_snapshot_into_engine_votes_cf_score_regime():
+    # Interactive Charts (2026-07-25): the entry-time decision snapshot
+    # (per-engine bias/score, adjusted score, regime) must survive the
+    # Trade -> TradeRecord adapter, keyed by engine name for O(1) lookup.
+    decision = {
+        "engines": [
+            {"engine": "smc", "bias": "BULLISH", "score": 82.0, "reasons": ["BOS confirmed"]},
+            {"engine": "nnfx", "bias": "BULLISH", "score": 91.0, "reasons": []},
+        ],
+        "winning_bias": "BULLISH",
+        "agree_count": 2,
+        "score": 85.0,
+        "adjusted_score": 87.0,
+        "regime": "TRENDING",
+    }
+    rec = trade_to_record(_trade(decision=decision), "EURUSD")
+    assert rec.cf_score == 87.0
+    assert rec.regime == "TRENDING"
+    assert set(rec.engine_votes) == {"smc", "nnfx"}
+    assert rec.engine_votes["smc"]["score"] == 82.0
+    assert rec.engine_votes["nnfx"]["score"] == 91.0
+
+
+def test_adapter_handles_missing_decision_gracefully():
+    # Trade objects built outside run_backtest's loop (older manifests,
+    # hand-built test fixtures) carry decision=None — must not crash.
+    rec = trade_to_record(_trade(decision=None), "EURUSD")
+    assert rec.engine_votes == {}
+    assert rec.cf_score == 0.0
+    assert rec.regime == ""
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Runner: data loading
 # ─────────────────────────────────────────────────────────────────────────
@@ -222,6 +254,28 @@ def test_end_to_end_walk_forward_runs_and_reports(tmp_path):
     assert result.verdict in SymbolVerdict
     d = result.to_dict()
     assert d["symbol"] == "EURUSD" and len(d["windows"]) == 3
+
+
+def test_run_backtest_attaches_real_decision_snapshot_to_every_trade():
+    # Interactive Charts (2026-07-25): run_backtest's own engine panel
+    # must populate Trade.decision — not just the adapter test above,
+    # which only proves the adapter *would* propagate it if present.
+    from backtesting.backtest_engine import BacktestConfig, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    assert len(result.trades) > 0, "need at least one trade to assert on"
+    for t in result.trades:
+        assert t.decision is not None
+        assert t.decision["winning_bias"] in ("BULLISH", "BEARISH")
+        assert t.decision["agree_count"] >= 1
+        assert isinstance(t.decision["engines"], list) and len(t.decision["engines"]) > 0
+        engine_names = {e["engine"] for e in t.decision["engines"]}
+        # NNFX/PriceAction are always-on per config/engines.yaml's prod4 set
+        # (engine_name is each class's own `name` attr, not the config key).
+        assert {"NNFX", "PriceAction"}.issubset(engine_names)
+        for e in t.decision["engines"]:
+            assert {"engine", "bias", "score", "reasons"}.issubset(e.keys())
 
 
 def test_from_profile_uses_real_spread_as_commission():

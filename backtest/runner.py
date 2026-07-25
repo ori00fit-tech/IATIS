@@ -187,6 +187,12 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
         )
         rr_actual = signed / risk
 
+    # Entry-time decision snapshot (Interactive Charts, 2026-07-25) — was
+    # always computed to gate the trade, previously discarded. Absent for
+    # Trades built outside run_backtest's loop (e.g. unit-test fixtures).
+    decision = trade.decision or {}
+    engine_votes = {e["engine"]: e for e in decision.get("engines", [])}
+
     return TradeRecord(
         trade_id=f"{symbol}-{trade.entry_bar}",
         symbol=symbol,
@@ -205,6 +211,9 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
         holding_bars=max(trade.exit_bar - trade.entry_bar, 0),
         exit_reason=trade.exit_reason,
         is_win=trade.pnl_usd > 0,
+        regime=decision.get("regime") or "",
+        cf_score=decision.get("adjusted_score", 0.0),
+        engine_votes=engine_votes,
     )
 
 
@@ -237,7 +246,7 @@ def run_symbol(
 
     html: Path | None = None
     if runner_config.write_html:
-        html = generate_html_report(metrics, records, mc=mc, symbol=symbol)
+        html = generate_html_report(metrics, records, mc=mc, symbol=symbol, df=df)
 
     return SymbolRunResult(
         symbol=symbol,

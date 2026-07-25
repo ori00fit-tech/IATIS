@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+import pandas as pd
 from backtest.metrics import BacktestMetrics, TradeRecord
 from backtest.monte_carlo import MonteCarloResult
 
@@ -32,6 +33,56 @@ def _color(val: float, good_positive: bool = True) -> str:
         return "#ff5252" if val > 0 else "#00e676" if val < 0 else "#ffffff"
 
 
+_MAX_CANDLES = 500  # same downsampling cap execution/routes/experience.py uses for legacy equity curves
+_MAX_CHART_TRADES = 200  # same cap the HTML trade table below already applies
+
+
+def _candles_for_chart(df: pd.DataFrame) -> list[dict]:
+    """Downsample OHLC to <= _MAX_CANDLES bars via a fixed stride — the
+    established convention in this codebase (see execution/routes/
+    experience.py's equity-curve downsampling) rather than resampling to
+    a coarser timeframe, which would silently change the bar shape."""
+    stride = max(1, len(df) // _MAX_CANDLES + 1)
+    sampled = df.iloc[::stride]
+    return [
+        {
+            "time": int(ts.timestamp()),
+            "open": round(float(row["open"]), 6),
+            "high": round(float(row["high"]), 6),
+            "low": round(float(row["low"]), 6),
+            "close": round(float(row["close"]), 6),
+        }
+        for ts, row in sampled.iterrows()
+    ]
+
+
+def _trades_for_chart(trades: list[TradeRecord]) -> list[dict]:
+    """Full per-trade detail for the Interactive Chart's entry/exit
+    markers and per-trade decision panel — engine_votes/cf_score/regime
+    only carry real data since backtesting.backtest_engine started
+    attaching a decision snapshot at entry (2026-07-25); older trades
+    (or Trade objects built outside run_backtest) fall back to empty."""
+    out = []
+    for t in sorted(trades, key=lambda x: x.entry_time)[:_MAX_CHART_TRADES]:
+        out.append({
+            "trade_id": t.trade_id,
+            "direction": t.direction,
+            "entry_time": int(t.entry_time.timestamp()) if t.entry_time is not None else None,
+            "exit_time": int(t.exit_time.timestamp()) if t.exit_time is not None else None,
+            "entry_price": t.entry_price,
+            "exit_price": t.exit_price,
+            "stop_loss": t.stop_loss,
+            "take_profit": t.take_profit,
+            "pnl_usd": round(t.pnl_usd, 2),
+            "is_win": t.is_win,
+            "exit_reason": t.exit_reason,
+            "regime": t.regime or None,
+            "cf_score": t.cf_score or None,
+            "engine_votes": t.engine_votes or None,
+        })
+    return out
+
+
 def generate_html_report(
     metrics: BacktestMetrics,
     trades: list[TradeRecord],
@@ -39,6 +90,7 @@ def generate_html_report(
     symbol: str = "ALL",
     timeframe: str = "H1",
     config: dict | None = None,
+    df: pd.DataFrame | None = None,
 ) -> Path:
     """Generate HTML report and save to reports/ directory."""
 
@@ -70,6 +122,12 @@ def generate_html_report(
         "by_symbol": metrics.by_symbol,
         "by_direction": metrics.by_direction,
         "by_session": metrics.by_session,
+        # Interactive Chart entry/exit markers + per-trade decision panel
+        # (2026-07-25). candles is None when the caller doesn't have the
+        # OHLCV frame handy (e.g. walk-forward's per-window calls never
+        # pass one today) — the frontend falls back to the equity curve.
+        "candles": _candles_for_chart(df) if df is not None else None,
+        "trades": _trades_for_chart(trades),
         "monte_carlo": (
             {
                 "median_return": mc.median_return, "p5_return": mc.p5_return, "p95_return": mc.p95_return,

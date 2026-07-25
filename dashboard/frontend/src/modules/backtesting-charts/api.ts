@@ -72,6 +72,43 @@ export const getRunReports = () => apiGet<RunReportsResponse>('/research/run-rep
 
 // backtest/report.py's chart_data sidecar — one per symbol, written
 // alongside every HTML backtest report.
+// Interactive Chart entry/exit markers + per-trade decision panel
+// (2026-07-25) — real per-engine bias/score captured at entry time
+// (backtesting.backtest_engine.py's decision snapshot), not synthesized
+// client-side. engine_votes/cf_score/regime are null for trades that
+// predate that change or came from a Trade built outside run_backtest.
+export interface ChartEngineVote {
+  engine: string
+  bias: string
+  score: number
+  reasons: string[]
+}
+
+export interface ChartTrade {
+  trade_id: string
+  direction: string
+  entry_time: number | null // unix seconds
+  exit_time: number | null
+  entry_price: number
+  exit_price: number | null
+  stop_loss: number
+  take_profit: number
+  pnl_usd: number
+  is_win: boolean
+  exit_reason: string
+  regime: string | null
+  cf_score: number | null
+  engine_votes: Record<string, ChartEngineVote> | null
+}
+
+export interface ChartCandle {
+  time: number // unix seconds
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
 export interface ChartDataFile {
   symbol: string
   timeframe: string
@@ -82,6 +119,8 @@ export interface ChartDataFile {
   by_symbol: Record<string, unknown>
   by_direction: Record<string, unknown>
   by_session: Record<string, unknown>
+  candles: ChartCandle[] | null
+  trades: ChartTrade[]
   monte_carlo: {
     median_return: number
     p5_return: number

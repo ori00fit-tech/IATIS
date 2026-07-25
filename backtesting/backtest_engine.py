@@ -161,6 +161,12 @@ class Trade:
     pnl_pips: float = 0.0
     pnl_usd: float = 0.0
     exit_reason: str = ""
+    # Entry-time decision snapshot (Interactive Charts / Backtesting Lab,
+    # 2026-07-25): per-engine bias+confidence, vote tally, and score —
+    # exactly what was already computed to gate this trade, just captured
+    # instead of discarded. None for any Trade built outside this loop
+    # (e.g. test fixtures) — callers must not assume it's present.
+    decision: dict | None = None
 
 
 def check_exit(trade: "Trade", bar, slip: float) -> tuple[float, str] | None:
@@ -588,11 +594,25 @@ def run_backtest(
             risk_amount = balance * config.risk_per_trade
             size = _calc_position_size(sl_dist, risk_amount, entry)
 
+            # Decision snapshot (Interactive Charts / Backtesting Lab,
+            # 2026-07-25): the per-engine votes/score that already gated
+            # this trade above, captured instead of discarded — every
+            # value here was computed either way, this only keeps it.
+            decision = {
+                "engines": [o.to_dict() for o in outputs],
+                "winning_bias": vote.winning_bias.value,
+                "agree_count": vote.agree_count,
+                "score": round(score.final_score, 2),
+                "adjusted_score": adjusted_score,
+                "regime": regime.regime.value if config.use_regime_weights else None,
+            }
+
             open_trade = Trade(
                 entry_bar=i+1, entry_time=next_bar.name,
                 direction="BUY" if direction == "BULLISH" else "SELL",
                 entry_price=entry, stop_loss=sl, take_profit=tp,
                 risk_pct=config.risk_per_trade, position_size=size,
+                decision=decision,
             )
             result.execute_count += 1
 

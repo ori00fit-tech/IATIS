@@ -256,6 +256,29 @@ def close_signal(
     return True
 
 
+def delete_signal(signal_id: str) -> bool:
+    """Remove a signal row entirely — for a row that was never actually
+    executed at the broker (no real economic event to record as win/loss/
+    breakeven). Unlike ``close_signal()``, this doesn't invent an outcome.
+
+    Used by ``scripts/purge_unexecuted_outcomes.py`` to clean up rows
+    created before the 2026-07-25 fix that logged EXECUTE-verdict signals
+    unconditionally, before knowing whether TradeExecutor actually placed
+    the order. Returns False if the signal isn't found.
+    """
+    _init_db()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT 1 FROM outcomes WHERE signal_id=?", (signal_id,)
+        ).fetchone()
+        if not row:
+            logger.warning(f"Signal {signal_id} not found in outcome_tracker")
+            return False
+        con.execute("DELETE FROM outcomes WHERE signal_id=?", (signal_id,))
+    logger.info(f"Outcome tracker: deleted never-executed signal {signal_id}")
+    return True
+
+
 # ─── Read ──────────────────────────────────────────────────────────────────
 
 def get_open_signals() -> list[dict]:

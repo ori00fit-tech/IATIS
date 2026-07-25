@@ -12,6 +12,7 @@ venv/
 
 # Real historical datasets (large, regenerable from source — see data/README.md)
 data/*.csv
+data/*.parquet
 !data/README.md
 
 # Runtime artifacts

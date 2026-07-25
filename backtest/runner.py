@@ -103,18 +103,21 @@ class SymbolRunResult:
 # ─────────────────────────────────────────────────────────────────────────
 
 def find_symbol_csv(symbol: str, data_dir: Path) -> Path:
-    """Locate the H1 CSV for ``symbol`` under ``data_dir``.
+    """Locate the H1 dataset for ``symbol`` under ``data_dir``.
 
     Matches the ``{SYMBOL}_H1_*.csv`` pattern written by
-    ``scripts/download_all_symbols.py``. If several files match
-    (e.g. 1y and 2y downloads), the largest file is chosen and the
-    choice is logged.
+    ``scripts/download_all_symbols.py`` AND ``{SYMBOL}_H1_*.parquet``
+    (Phase 4a upload endpoint, ``execution/routes/research.py``'s
+    ``upload_dataset``) — both extensions are considered together. If
+    several files match (e.g. 1y and 2y downloads, or a CSV and an
+    uploaded Parquet), the largest file is chosen and the choice is
+    logged.
 
     Raises:
         FileNotFoundError: with the exact expected pattern, so a missing
             dataset is an actionable error rather than a silent skip.
     """
-    matches = sorted(data_dir.glob(f"{symbol}_H1_*.csv"))
+    matches = sorted(data_dir.glob(f"{symbol}_H1_*.csv")) + sorted(data_dir.glob(f"{symbol}_H1_*.parquet"))
     if not matches:
         raise FileNotFoundError(
             f"No dataset for {symbol}: expected '{data_dir}/{symbol}_H1_*.csv' "
@@ -142,7 +145,13 @@ def load_symbol_data(
         ValueError: on schema problems or an empty post-slice frame.
     """
     path = find_symbol_csv(symbol, data_dir)
-    df = pd.read_csv(path, index_col=0, parse_dates=True)
+    # Phase 4a: an uploaded dataset may be Parquet — branch the read call
+    # on suffix, everything downstream (tz-localize, sort, validate) is
+    # identical for both formats.
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path)
+    else:
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
 
     missing = [c for c in _REQUIRED_COLUMNS if c not in df.columns]
     if missing:

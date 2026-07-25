@@ -10,13 +10,16 @@ docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-1).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Cookie, Header, HTTPException, Query
+from fastapi import APIRouter, Cookie, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from starlette.formparsers import MultiPartException, MultiPartParser
 
+from core.data_validator import DataValidationError, validate_ohlcv
 from execution.api_core import _check_auth, _executor, _get_config, logger
 from execution.api_shared_helpers import _data_health_snapshot, _forward_rule_progress, _load_manifests
 # /reports/{kind} calls these other routers' handlers directly as plain
@@ -403,7 +406,11 @@ async def research_datasets(
 
     datasets: list[dict[str, Any]] = []
     if _DATA_DIR.exists():
-        for path in sorted(_DATA_DIR.glob("*.csv")):
+        # Phase 4a: uploaded datasets may also be .parquet — same naming
+        # convention, read path branches on suffix (matches
+        # backtest.runner.load_symbol_data's Parquet-awareness).
+        paths = sorted(_DATA_DIR.glob("*.csv")) + sorted(_DATA_DIR.glob("*.parquet"))
+        for path in paths:
             m = re.match(r"^([A-Z0-9]+)_(M1|M5|M15|M30|H1|H4|D1|W1)_", path.name)
             if not m:
                 continue
@@ -416,7 +423,10 @@ async def research_datasets(
                 "known_symbol": symbol in known_symbols,
             }
             try:
-                df = pd.read_csv(path, index_col=0, parse_dates=True)
+                if path.suffix == ".parquet":
+                    df = pd.read_parquet(path)
+                else:
+                    df = pd.read_csv(path, index_col=0, parse_dates=True)
                 if df.index.tz is None:
                     df.index = df.index.tz_localize("UTC")
                 entry["readable"] = True
@@ -432,6 +442,146 @@ async def research_datasets(
         "data_dir": str(_DATA_DIR),
         "count": len(datasets),
         "datasets": datasets,
+    }
+
+
+# Phase 4a (2026-07-25) — max upload size and minimum usable row count for
+# POST /research/datasets/upload. 50MB comfortably covers any real single-
+# symbol H1/H4/D1 OHLCV file; 50 rows keeps a technically-valid but useless
+# near-empty upload from silently becoming a "dataset."
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_MIN_UPLOAD_ROWS = 50
+
+
+async def _size_capped_stream(request: Request, cap: int) -> AsyncGenerator[bytes, None]:
+    """Wrap ``request.stream()``, raising 413 mid-stream once ``cap`` is
+    exceeded.
+
+    Required because FastAPI's own ``File()``/``Form()`` convenience layer
+    resolves to ``starlette.formparsers.MultiPartParser``, whose
+    ``on_part_data()`` only enforces ``max_part_size`` on plain form fields
+    (the ``if self._current_part.file is None`` branch) — the actual
+    uploaded-file branch has NO size enforcement at all, so the "obvious"
+    ``UploadFile = File(...)`` pattern would buffer an arbitrarily large
+    body before any handler code runs. Constructing ``MultiPartParser``
+    directly over this counting generator is the only way to actually cap
+    upload size (verified against the installed starlette==1.3.1 source).
+    """
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(status_code=413, detail=f"Upload exceeds {cap // (1024 * 1024)}MB limit")
+        yield chunk
+
+
+@router.post("/research/datasets/upload")
+async def upload_dataset(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """CSV/Parquet dataset upload (Phase 4a, 2026-07-25) — lets an operator
+    add a local historical OHLCV dataset through the Backtesting Lab UI
+    instead of only via scripts/download_all_symbols.py.
+
+    Security notes:
+    - Size-capped via `_size_capped_stream` (see its docstring) — never
+      goes through FastAPI's `File()`/`Form()`.
+    - The client's filename is NEVER used for path construction. The
+      written path is fully server-constructed from separately-validated
+      `symbol`/`timeframe` fields: `data/{SYMBOL}_{TIMEFRAME}_uploaded.
+      {csv|parquet}` — deterministic, so re-uploading the same symbol/
+      timeframe is a meaningful overwrite decision, not a new file every
+      time.
+    - Format is detected from the actual bytes (Parquet's `PAR1` magic
+      prefix/suffix), never from the declared filename extension or
+      Content-Type header — both are attacker-controlled.
+    - Runs the exact same `core.data_validator.validate_ohlcv` schema check
+      a real backtest run would apply, so a stored dataset can't silently
+      be unusable/malformed.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import io
+    import re
+
+    import pandas as pd
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isdigit() and int(content_length) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Upload exceeds {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit")
+
+    parser = MultiPartParser(
+        request.headers,
+        _size_capped_stream(request, _MAX_UPLOAD_BYTES),
+        max_files=1,
+        max_fields=8,
+        max_part_size=_MAX_UPLOAD_BYTES,
+    )
+    try:
+        form = await parser.parse()
+    except MultiPartException as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+
+    symbol = str(form.get("symbol", "")).strip().upper()
+    timeframe = str(form.get("timeframe", "")).strip().upper()
+    overwrite = str(form.get("overwrite", "")).strip().lower() == "true"
+    upload = form.get("file")
+
+    if not re.match(r"^[A-Z0-9]+$", symbol):
+        raise HTTPException(status_code=400, detail=f"Invalid symbol: {symbol!r}")
+    if timeframe not in {"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"}:
+        raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe!r}")
+    if not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Missing 'file' upload field")
+
+    data = await upload.read()
+    is_parquet = data[:4] == b"PAR1" or data[-4:] == b"PAR1"
+
+    try:
+        if is_parquet:
+            df = pd.read_parquet(io.BytesIO(data))
+        else:
+            df = pd.read_csv(io.BytesIO(data), index_col=0, parse_dates=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse uploaded file: {exc}") from exc
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise HTTPException(status_code=400, detail="Uploaded file's first column/index must be parseable as datetimes")
+
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
+    df = df.sort_index()
+
+    try:
+        validate_ohlcv(df)
+    except DataValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if len(df) < _MIN_UPLOAD_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Uploaded dataset has only {len(df)} rows (minimum {_MIN_UPLOAD_ROWS})",
+        )
+
+    ext = "parquet" if is_parquet else "csv"
+    target = _DATA_DIR / f"{symbol}_{timeframe}_uploaded.{ext}"
+    if target.exists() and not overwrite:
+        raise HTTPException(status_code=409, detail=f"{target.name} already exists — pass overwrite=true to replace it")
+
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if is_parquet:
+        df.to_parquet(target)
+    else:
+        df.to_csv(target)
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "file": target.name,
+        "rows": int(len(df)),
+        "start": df.index.min().isoformat() if len(df) else None,
+        "end": df.index.max().isoformat() if len(df) else None,
     }
 
 

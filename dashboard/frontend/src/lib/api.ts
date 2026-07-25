@@ -7,11 +7,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // FormData bodies (Phase 4a dataset upload) must never get an explicit
+  // Content-Type — the browser sets its own multipart boundary, which we
+  // can't reproduce by hand.
+  const isFormData = init?.body instanceof FormData
   const res = await fetch(path, {
     credentials: 'include',
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...init?.headers,
     },
   })
@@ -43,6 +47,11 @@ export function apiGet<T>(path: string, params?: Record<string, string | number 
 
 export function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+}
+
+/** POST a multipart/form-data body (Phase 4a dataset upload). */
+export function apiPostFormData<T>(path: string, form: FormData): Promise<T> {
+  return request<T>(path, { method: 'POST', body: form })
 }
 
 /** GET a text/plain endpoint (the Prometheus /metrics exposition). */

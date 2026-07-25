@@ -89,3 +89,19 @@ h11>=0.14.0,<1.0.0
 # Binance's public aggTrade stream is simple enough to parse directly,
 # and this avoids any dependency on ccxt.pro's separate packaging/licensing.
 websockets>=12.0,<17.0
+
+# Phase 4a (2026-07-25) — POST /research/datasets/upload constructs
+# starlette.formparsers.MultiPartParser directly (verified against the
+# installed starlette source that FastAPI's own File()/Form() layer does
+# not size-limit actual file parts, only plain form fields). This is the
+# parser package starlette delegates multipart bytes to. Pinned below its
+# next major since the on-the-wire multipart grammar handling is exactly
+# the kind of thing a major bump could silently change.
+python-multipart>=0.0.9,<0.1.0
+
+# Phase 4a (2026-07-25) — reads uploaded .parquet OHLCV datasets in
+# backtest/runner.py. Floor at the first version with a stable pandas 2.x
+# read_parquet/to_parquet engine API; ceiling at the next major, same
+# recent-floor-no-wide-ceiling pattern as the other additions above (to
+# avoid repeating the 2026-07-14 "resolution-too-deep" failures).
+pyarrow>=18.0.0,<20.0.0

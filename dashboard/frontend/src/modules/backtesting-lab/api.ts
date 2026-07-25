@@ -1,4 +1,4 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPostFormData } from '../../lib/api'
 import {
   getResearchSymbols,
   getResearchEngines,
@@ -79,3 +79,17 @@ export interface DatasetsResponse {
 }
 
 export const getResearchDatasets = () => apiGet<DatasetsResponse>('/research/datasets')
+
+// Dataset upload (Phase 4a, 2026-07-25) — CSV/Parquet import, server-
+// constructed filename (data/{SYMBOL}_{TIMEFRAME}_uploaded.{csv|parquet}),
+// content-sniffed format, validated via core.data_validator.validate_ohlcv.
+export interface UploadDatasetResponse {
+  symbol: string
+  timeframe: string
+  file: string
+  rows: number
+  start: string | null
+  end: string | null
+}
+
+export const uploadDataset = (form: FormData) => apiPostFormData<UploadDatasetResponse>('/research/datasets/upload', form)

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
@@ -14,6 +15,10 @@ import {
   type RiskSummary,
   type SymbolHealthEntry,
 } from './api'
+
+// Lazy: keeps echarts' JS out of the main bundle until a user actually
+// visits this tab (Phase 3 institutional redesign — bundle-size mitigation).
+const RMultipleHistogram = lazy(() => import('./RMultipleHistogram').then((m) => ({ default: m.RMultipleHistogram })))
 
 const POLL_MS = 20_000
 
@@ -39,7 +44,7 @@ function plannedRR(r: OutcomeRow): number | null {
  * entry/stop/exit with the exact formula storage/outcome_tracker.py uses, so
  * this panel and the backend summary can never silently disagree.
  */
-function realizedR(r: OutcomeRow): number | null {
+export function realizedR(r: OutcomeRow): number | null {
   if (r.entry_price == null || r.stop_loss == null || r.exit_price == null) return null
   const risk = Math.abs(r.entry_price - r.stop_loss)
   if (risk <= 0) return null
@@ -71,46 +76,6 @@ function pfColor(pf: RiskSummary['profit_factor'], n: number): 'green' | 'amber'
   return 'red'
 }
 
-// Realized-R histogram buckets — the shape of the return distribution is the
-// honest read on tail risk that a single average hides.
-const R_BUCKETS: { label: string; test: (r: number) => boolean; tone: string }[] = [
-  { label: '≤ −1R', test: (r) => r <= -1, tone: 'bg-red' },
-  { label: '−1…0R', test: (r) => r > -1 && r < 0, tone: 'bg-red/60' },
-  { label: '0…1R', test: (r) => r >= 0 && r < 1, tone: 'bg-amber/70' },
-  { label: '1…2R', test: (r) => r >= 1 && r < 2, tone: 'bg-green/60' },
-  { label: '2…3R', test: (r) => r >= 2 && r < 3, tone: 'bg-green' },
-  { label: '≥ 3R', test: (r) => r >= 3, tone: 'bg-accent' },
-]
-
-function RDistribution({ rows }: { rows: OutcomeRow[] }) {
-  const rs = rows
-    .filter((r) => r.outcome !== 'open')
-    .map(realizedR)
-    .filter((r): r is number => r != null)
-  if (rs.length === 0) return <Empty>No closed trades with a computable R-multiple yet</Empty>
-  const counts = R_BUCKETS.map((b) => rs.filter((r) => b.test(r)).length)
-  const max = Math.max(...counts, 1)
-  const avg = rs.reduce((a, b) => a + b, 0) / rs.length
-  return (
-    <div className="p-4 flex flex-col gap-2">
-      <div className="flex items-baseline gap-3 mb-1">
-        <span className="text-[0.78em] text-muted">n = {rs.length} closed</span>
-        <span className="text-[0.82em]">
-          mean <b className={avg >= 0 ? 'text-green' : 'text-red'}>{avg >= 0 ? '+' : ''}{avg.toFixed(2)}R</b>
-        </span>
-      </div>
-      {R_BUCKETS.map((b, i) => (
-        <div key={b.label} className="flex items-center gap-2 text-[0.78em]">
-          <span className="w-14 text-right text-muted shrink-0">{b.label}</span>
-          <div className="flex-1 h-4 bg-surface rounded overflow-hidden">
-            <div className={`h-full ${b.tone}`} style={{ width: `${(counts[i] / max) * 100}%` }} />
-          </div>
-          <span className="w-8 text-right tabular-nums shrink-0">{counts[i]}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 export function RiskCenter() {
   const { markUnauthenticated } = useAuth()
@@ -277,7 +242,13 @@ export function RiskCenter() {
         </Panel>
 
         <Panel title="Realized R-Multiple Distribution" right="from closed outcomes">
-          {outcomes.data ? <RDistribution rows={outcomes.data.recent} /> : <Empty>{outcomes.loading ? 'Loading…' : 'No outcome data'}</Empty>}
+          {outcomes.data ? (
+            <Suspense fallback={<Empty>Loading chart…</Empty>}>
+              <RMultipleHistogram rows={outcomes.data.recent} />
+            </Suspense>
+          ) : (
+            <Empty>{outcomes.loading ? 'Loading…' : 'No outcome data'}</Empty>
+          )}
         </Panel>
       </div>
 

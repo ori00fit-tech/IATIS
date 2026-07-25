@@ -823,7 +823,7 @@ def test_survivorship_report_shape():
 # Reports (module 10) — on-demand snapshots, Markdown or JSON.
 # ---------------------------------------------------------------------------
 
-REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward", "data_quality"]
+REPORT_KINDS = ["research", "manifest_summary", "system", "provider", "forward", "data_quality", "dashboard_summary"]
 
 
 def test_reports_requires_auth(client):
@@ -1415,9 +1415,10 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     # /research/{hypothesis_id} is registered after /research/manifests,
     # /research/symbols, /research/engines, /research/indicators,
     # /research/scenario-config, /research/datasets, /research/run-reports,
-    # /research/validation-config, /research/compare, and
-    # /research/integrity — all literal routes must still resolve to
-    # themselves, not be captured as hypothesis_id="manifests"/etc.
+    # /research/dashboard-summary, /research/validation-config,
+    # /research/compare, and /research/integrity — all literal routes must
+    # still resolve to themselves, not be captured as
+    # hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
@@ -1425,6 +1426,7 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/datasets", headers=HDR).status_code == 200
     assert client.get("/research/run-reports", headers=HDR).status_code == 200
+    assert client.get("/research/dashboard-summary", headers=HDR).status_code == 200
     assert client.get("/research/validation-config", headers=HDR).status_code == 200
     assert client.get("/research/compare?ids=H015", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
@@ -1829,6 +1831,64 @@ def test_research_run_reports_detects_chart_data_sidecar(client, tmp_path, monke
         "symbol": "EURUSD", "timeframe": "H1",
         "equity_curve_points": 2, "has_monte_carlo": False,
     }
+
+
+def test_research_dashboard_summary_requires_auth(client):
+    assert client.get("/research/dashboard-summary").status_code == 401
+
+
+def test_research_dashboard_summary_contract(client):
+    from storage.outcome_tracker import _init_db
+
+    _init_db()  # outcomes table exists in prod before this is ever called
+    r = client.get("/research/dashboard-summary", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"generated_at", "hypotheses", "symbols", "engines", "evidence", "forward_review", "run_reports"}.issubset(body.keys())
+
+    # 35 hypotheses in the real registry.json shipped with this repo.
+    assert body["hypotheses"]["total"] >= 30
+    assert sum(body["hypotheses"]["by_status"].values()) == body["hypotheses"]["total"]
+
+    # Real symbol universe: carriers (XAUUSD/BTCUSD/ETHUSD) always enabled.
+    assert body["symbols"]["total"] >= 20
+    assert body["symbols"]["enabled"] >= 3
+    assert "metals" in body["symbols"]["by_asset_class"]
+
+    # Frozen prod4 set: exactly 4 engines enabled.
+    assert body["engines"]["enabled"] == 4
+
+    assert body["evidence"]["manifests_total"] >= 0
+    assert body["evidence"]["manifests_reproducible"] <= body["evidence"]["manifests_total"]
+
+    assert body["forward_review"]["rules_total"] >= 1
+    assert body["forward_review"]["rules_triggered"] <= body["forward_review"]["rules_total"]
+
+    assert body["run_reports"]["total"] == sum(body["run_reports"]["by_kind"].values())
+
+
+def test_research_dashboard_summary_counts_run_reports_by_kind(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    (tmp_path / "backtest_summary_1.json").write_text(_json.dumps({"symbols": {}}))
+    (tmp_path / "walk_forward_1.json").write_text(_json.dumps({"symbols": {}}))
+    (tmp_path / "EURUSD_H1_1_chart_data.json").write_text(_json.dumps({"equity_curve": []}))
+
+    body = client.get("/research/dashboard-summary", headers=HDR).json()
+    assert body["run_reports"]["total"] == 3
+    assert body["run_reports"]["by_kind"] == {"backtest": 1, "walk_forward": 1, "chart_data": 1}
+
+
+def test_research_dashboard_summary_is_the_data_reports_dashboard_summary_wraps(client):
+    summary = client.get("/research/dashboard-summary", headers=HDR).json()
+    report = client.get("/reports/dashboard_summary?format=json", headers=HDR).json()
+    assert report["kind"] == "dashboard_summary"
+    # generated_at will differ by microseconds between the two calls —
+    # compare everything else.
+    assert {k: v for k, v in report["data"].items() if k != "generated_at"} == \
+        {k: v for k, v in summary.items() if k != "generated_at"}
 
 
 def test_research_validation_config_requires_auth(client):

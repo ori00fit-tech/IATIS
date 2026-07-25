@@ -18,7 +18,7 @@ from fastapi import APIRouter, Cookie, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from execution.api_core import _check_auth, _executor, _get_config, logger
-from execution.api_shared_helpers import _data_health_snapshot, _load_manifests
+from execution.api_shared_helpers import _data_health_snapshot, _forward_rule_progress, _load_manifests
 # /reports/{kind} calls these other routers' handlers directly as plain
 # in-process function calls (not HTTP) to reuse their logic — imported
 # here rather than reimplemented. No circular import: none of these
@@ -545,6 +545,96 @@ async def research_run_reports(
     }
 
 
+@router.get("/research/dashboard-summary")
+async def research_dashboard_summary(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Dashboard Summary (Phase 6, 2026-07-24): one lightweight call for
+    the Research Workspace landing page, same aggregation pattern as
+    /health/full (module 1) — a single fast round trip instead of the
+    frontend firing 8 parallel requests just to paint the home screen.
+
+    Deliberately EXCLUDES the slow checks (research/guards/static_scan.py
+    AST-scans every research/scripts file; research/survivorship_checker.py
+    reads config + registry) — those stay behind their own on-demand
+    button (GET /research/integrity), same reasoning /philosophy-audit
+    already documents for why it isn't folded into /health/full either.
+    Evidence here is manifest COUNTS only (already-cheap glob+parse via
+    _load_manifests(), shared with /research/manifests) — the full
+    Evidence Center detail (leakage guard, survivorship, manifest
+    validator, trust-audit warnings) lives at /research/integrity and
+    /research (trust_audit), same summary-then-drill-down shape as
+    /research's hypothesis list pointing to /research/{id}.
+    """
+    _check_auth(x_api_key, iatis_session)
+    hypotheses_raw = _load_registry_hypotheses()
+    status_counts: dict[str, int] = {}
+    for h in hypotheses_raw.values():
+        status_counts[h.get("status", "UNKNOWN")] = status_counts.get(h.get("status", "UNKNOWN"), 0) + 1
+
+    config = _get_config()
+    symbols_cfg = config.get("data", {}).get("twelve_data_symbols", [])
+    by_asset_class: dict[str, int] = {}
+    enabled_count = 0
+    for s in symbols_cfg:
+        ac = s.get("asset_class", "unknown")
+        by_asset_class[ac] = by_asset_class.get(ac, 0) + 1
+        if s.get("enabled"):
+            enabled_count += 1
+
+    engines_cfg = config.get("engines", {})
+    engine_enabled = engines_cfg.get("enabled", {})
+
+    manifests = _load_manifests()
+    reproducible = sum(1 for m in manifests if m.get("reproducible"))
+
+    try:
+        rules = _forward_rule_progress()
+        triggered = sum(1 for r in rules if r.get("triggered"))
+    except Exception:
+        rules, triggered = [], 0
+
+    run_report_kinds: dict[str, int] = {}
+    if _REPORTS_DIR.exists():
+        for path in _REPORTS_DIR.glob("*.json"):
+            if path.name.endswith("_chart_data.json"):
+                kind = "chart_data"
+            else:
+                kind = next((label for prefix, label, _fn in _RUN_REPORT_KINDS if path.name.startswith(prefix)), "unknown")
+            run_report_kinds[kind] = run_report_kinds.get(kind, 0) + 1
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "hypotheses": {
+            "total": len(hypotheses_raw),
+            "by_status": status_counts,
+        },
+        "symbols": {
+            "total": len(symbols_cfg),
+            "enabled": enabled_count,
+            "by_asset_class": by_asset_class,
+        },
+        "engines": {
+            "total": len(engine_enabled),
+            "enabled": sum(1 for v in engine_enabled.values() if v),
+        },
+        "evidence": {
+            "manifests_total": len(manifests),
+            "manifests_reproducible": reproducible,
+            "note": "Counts only — full checks at /research/integrity, warnings at /research (trust_audit).",
+        },
+        "forward_review": {
+            "rules_total": len(rules),
+            "rules_triggered": triggered,
+        },
+        "run_reports": {
+            "total": sum(run_report_kinds.values()),
+            "by_kind": run_report_kinds,
+        },
+    }
+
+
 @router.get("/research/validation-config")
 async def research_validation_config(
     x_api_key: str | None = Header(default=None),
@@ -985,6 +1075,7 @@ _REPORT_TITLES: dict[str, str] = {
     "provider": "IATIS Data Provider Report",
     "forward": "IATIS Forward Demo Report",
     "data_quality": "IATIS Data Quality Report",
+    "dashboard_summary": "IATIS Research Workspace Dashboard Summary",
 }
 
 
@@ -1047,6 +1138,9 @@ async def generate_report(
         markdown = _dict_to_md(title, data, generated_at)
     elif kind == "data_quality":
         data = _data_health_snapshot()
+        markdown = _dict_to_md(title, data, generated_at)
+    elif kind == "dashboard_summary":
+        data = await research_dashboard_summary(x_api_key, iatis_session)
         markdown = _dict_to_md(title, data, generated_at)
     else:  # "forward"
         data = {

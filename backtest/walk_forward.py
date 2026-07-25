@@ -44,7 +44,7 @@ from typing import Protocol
 
 import pandas as pd
 
-from backtest.metrics import calculate_metrics
+from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
 from backtesting.backtest_engine import BacktestConfig, run_backtest
 from utils.logger import get_logger
@@ -284,7 +284,7 @@ def run_walk_forward_suite(
             "engine_overrides": wf_config.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
-        path.write_text(json.dumps(payload, indent=2))
+        path.write_text(json.dumps(json_safe(payload), indent=2))
         logger.info(
             f"Walk-forward report: {path} — {consistent}/{len(out)} CONSISTENT"
         )

@@ -38,3 +38,10 @@ export const getJobList = () => apiGet<JobListResponse>('/experiments')
 export const getJobDetail = (jobId: string) => apiGet<JobDetail>(`/experiments/${jobId}`)
 export const runJob = (job: string, symbols?: string[]) => apiPost<JobSummary>('/experiments/run', { job, symbols })
 export const cancelJob = (jobId: string) => apiPost<JobSummary>(`/experiments/${jobId}/cancel`)
+
+// robustness only (Parameter Sweep, 2026-07-25) — server validates params
+// against backtest.robustness.SWEEP_PARAMS and requires 1.0 in multipliers;
+// this never lets the caller pick a "winning" value, only which points to
+// measure.
+export const runRobustnessJob = (symbols: string[], params?: string[], multipliers?: number[]) =>
+  apiPost<JobSummary>('/experiments/run', { job: 'robustness', symbols, params, multipliers })

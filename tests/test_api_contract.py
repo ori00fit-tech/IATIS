@@ -982,6 +982,93 @@ def test_experiments_run_walk_forward_builds_expected_argv(client, monkeypatch):
     assert _FakeProc.captured_argv == ["echo", "wf", "--symbols", "EURUSD"]
 
 
+def test_experiments_run_robustness_builds_expected_argv_with_params_and_multipliers(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "robustness": ["echo", "rob"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": "robustness", "symbols": ["eurusd"],
+            "params": ["sl_atr_multiplier", "min_rr"],
+            "multipliers": [0.5, 1.0, 1.5],
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == [
+        "echo", "rob", "--symbols", "EURUSD",
+        "--params", "sl_atr_multiplier", "min_rr",
+        "--multipliers", "0.5", "1.0", "1.5",
+    ]
+
+
+def test_experiments_run_robustness_rejects_unknown_param(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "robustness", "symbols": ["EURUSD"], "params": ["not_a_real_param"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown sweep param" in r.json()["detail"]
+
+
+def test_experiments_run_robustness_rejects_multipliers_without_baseline(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "robustness", "symbols": ["EURUSD"], "multipliers": [0.5, 1.5]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "baseline" in r.json()["detail"]
+
+
+def test_experiments_run_robustness_rejects_non_positive_multiplier(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "robustness", "symbols": ["EURUSD"], "multipliers": [1.0, -0.5]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "positive" in r.json()["detail"]
+
+
+def test_experiments_run_robustness_rejects_too_many_multipliers(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "robustness", "symbols": ["EURUSD"], "multipliers": [1.0] + [1.0 + i * 0.01 for i in range(1, 11)]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "1-10 values" in r.json()["detail"]
+
+
+def test_experiments_run_non_robustness_job_rejects_params_and_multipliers(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "params": ["min_rr"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no params/multipliers" in r.json()["detail"]
+
+
 def test_experiments_status_unknown_job_404s(client):
     assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
 

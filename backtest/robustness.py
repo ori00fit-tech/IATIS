@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backtest.metrics import calculate_metrics
+from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
 from backtesting.backtest_engine import BacktestConfig, run_backtest
 from utils.logger import get_logger
@@ -217,7 +217,7 @@ def run_robustness_suite(
             "engine_overrides": rc.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
-        path.write_text(json.dumps(payload, indent=2))
+        path.write_text(json.dumps(json_safe(payload), indent=2))
         logger.info(f"Robustness report: {path} — {stable}/{len(out)} all-STABLE")
     return out
 

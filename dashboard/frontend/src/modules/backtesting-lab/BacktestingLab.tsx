@@ -10,8 +10,10 @@ import {
   getResearchEngines,
   getResearchIndicators,
   getResearch,
+  getValidationConfig,
   getJobCatalog,
   runJob,
+  runRobustnessJob,
   getJobDetail,
   type DatasetEntry,
   type SymbolEntry,
@@ -373,11 +375,88 @@ function statusToneFor(status: string): 'exec' | 'no-trade' | 'neutral' {
 }
 
 // ── Step 7: Execution ────────────────────────────────────────────────────
+// Parameter Sweep config (2026-07-25, Backtesting Lab priority #4) — only
+// shown for the robustness job. Deliberately NO "pick the best value"
+// control anywhere: the operator chooses which parameters and which
+// multipliers to MEASURE, never which one wins. Matches the guardrail
+// backtest/robustness.py's own module docstring commits to (STABLE/
+// SENSITIVE/INSUFFICIENT verdicts, never an auto-selected winner) — see
+// the Backtesting Charts tab for how the resulting per-point sweep table
+// is displayed after the run.
+function SweepConfig({
+  params, multipliers, onParamsChange, onMultipliersChange,
+}: {
+  params: string[]
+  multipliers: number[]
+  onParamsChange: (p: string[]) => void
+  onMultipliersChange: (m: number[]) => void
+}) {
+  const { markUnauthenticated } = useAuth()
+  const validation = usePolling(getValidationConfig, POLL_MS, markUnauthenticated)
+  const allParams = validation.data?.robustness.params ?? params
+  const [multipliersText, setMultipliersText] = useState(multipliers.join(', '))
+
+  const toggleParam = (p: string) => {
+    onParamsChange(params.includes(p) ? params.filter((x) => x !== p) : [...params, p])
+  }
+
+  const applyMultipliers = () => {
+    const parsed = multipliersText
+      .split(',')
+      .map((s) => Number.parseFloat(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    onMultipliersChange(parsed)
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-border bg-surface/40">
+      <div className="text-[0.72em] text-muted uppercase tracking-[1px]">Parameter Sweep — which points to measure, never which one wins</div>
+      <div className="flex flex-wrap gap-1.5">
+        {allParams.map((p) => (
+          <button
+            key={p}
+            onClick={() => toggleParam(p)}
+            className={`px-2.5 py-1 rounded text-[0.78em] font-mono border ${
+              params.includes(p) ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
+            }`}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[0.78em] text-muted">multipliers (1.0 required as baseline):</span>
+        <input
+          value={multipliersText}
+          onChange={(e) => setMultipliersText(e.target.value)}
+          onBlur={applyMultipliers}
+          placeholder="0.5, 0.8, 1.0, 1.2, 1.5"
+          className="px-2.5 py-1 text-[0.78em] rounded border border-border bg-bg text-text font-mono w-64"
+        />
+      </div>
+      {!multipliers.includes(1.0) && (
+        <span className="text-amber text-[0.75em]">1.0 is missing — add it back before running (the server rejects a sweep with no baseline).</span>
+      )}
+    </div>
+  )
+}
+
 function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: () => void }) {
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<JobDetail | null>(null)
   const requiresSymbols = ['backtest', 'walk_forward', 'robustness'].includes(state.jobId)
+  const isRobustness = state.jobId === 'robustness'
+
+  const { markUnauthenticated } = useAuth()
+  const validation = usePolling(getValidationConfig, POLL_MS, markUnauthenticated)
+  const [sweepParams, setSweepParams] = useState<string[]>([])
+  const [sweepMultipliers, setSweepMultipliers] = useState<number[]>([])
+  useEffect(() => {
+    if (validation.data && sweepParams.length === 0) setSweepParams(validation.data.robustness.params)
+    if (validation.data && sweepMultipliers.length === 0) setSweepMultipliers(validation.data.robustness.multipliers)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validation.data])
 
   useEffect(() => {
     if (!job || job.status === 'finished' || job.status === 'failed' || job.status === 'timeout' || job.status === 'cancelled') return
@@ -391,7 +470,9 @@ function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: 
     setStarting(true)
     setError(null)
     try {
-      const summary = await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined)
+      const summary = isRobustness
+        ? await runRobustnessJob(state.selectedSymbols, sweepParams.length > 0 ? sweepParams : undefined, sweepMultipliers.length > 0 ? sweepMultipliers : undefined)
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -406,15 +487,21 @@ function ExecutionStep({ state, onFinished }: { state: WizardState; onFinished: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal])
 
+  const sweepInvalid = isRobustness && (sweepParams.length === 0 || !sweepMultipliers.includes(1.0))
+
   return (
     <Panel title="Execution" right={`job: ${state.jobId}`}>
       <div className="p-4 flex flex-col gap-3">
         <div className="text-[0.82em] text-muted">
           Symbols: {state.selectedSymbols.length > 0 ? state.selectedSymbols.join(', ') : requiresSymbols ? 'none selected' : 'n/a — fixed method'}
         </div>
+        {isRobustness && (
+          <SweepConfig params={sweepParams} multipliers={sweepMultipliers} onParamsChange={setSweepParams} onMultipliersChange={setSweepMultipliers} />
+        )}
         <button
           onClick={start}
-          disabled={starting || (job != null && !terminal) || (requiresSymbols && state.selectedSymbols.length === 0)}
+          disabled={starting || (job != null && !terminal) || (requiresSymbols && state.selectedSymbols.length === 0) || sweepInvalid}
+          title={sweepInvalid ? 'Pick at least one parameter and keep 1.0 in the multipliers' : undefined}
           className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
         >
           {starting ? 'Starting…' : job && !terminal ? 'Running…' : 'Run'}

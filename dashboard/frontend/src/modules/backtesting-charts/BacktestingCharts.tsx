@@ -10,12 +10,16 @@ import {
   getOutcomesCalibration,
   getRunReports,
   getChartDataFile,
+  getRobustnessReportFile,
+  formatPossiblyInfinite,
   type BacktestRun,
   type CalibrationBucket,
   type RunReportEntry,
   type ChartDataFile,
   type ChartTrade,
   type ChartCandle,
+  type RobustnessReportFile,
+  type RobustnessSweep,
 } from './api'
 
 const POLL_MS = 60_000
@@ -214,9 +218,88 @@ function VerdictBadge({ verdict }: { verdict: string }) {
   return <Badge tone={VERDICT_TONE[verdict] ?? 'neutral'}>{verdict}</Badge>
 }
 
+// Full per-point sweep table (Parameter Sweep, 2026-07-25, Backtesting
+// Lab priority #4) — every measured point, sorted by multiplier. NO
+// "winner" row, no highlighted best cell: the operator reads the numbers
+// and decides, same guardrail agreed for this feature (backtest/
+// robustness.py's own module docstring: STABLE/SENSITIVE/INSUFFICIENT
+// verdicts only, never an auto-selected value).
+function SweepTable({ sweep }: { sweep: RobustnessSweep }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-bold text-accent">{sweep.param}</span>
+        <VerdictBadge verdict={sweep.verdict} />
+        <span className="text-muted text-[0.78em]">baseline value {sweep.baseline_value} → PF {formatPossiblyInfinite(sweep.baseline_pf)}</span>
+      </div>
+      <table className="w-full text-[0.78em] border-collapse">
+        <thead>
+          <tr className="text-muted uppercase text-[0.72em] tracking-[0.5px]">
+            <th className="text-left py-1 px-2">Multiplier</th>
+            <th className="text-right py-1 px-2">Value</th>
+            <th className="text-right py-1 px-2">Trades</th>
+            <th className="text-right py-1 px-2">PF</th>
+            <th className="text-right py-1 px-2">WR%</th>
+            <th className="text-right py-1 px-2">Max DD%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sweep.points.map((p) => (
+            <tr key={p.multiplier} className={p.multiplier === 1.0 ? 'bg-accent/[0.06]' : ''}>
+              <td className="py-1 px-2 font-mono">{p.multiplier.toFixed(2)}{p.multiplier === 1.0 && <span className="text-muted"> (baseline)</span>}</td>
+              <td className="py-1 px-2 text-right font-mono">{p.value}</td>
+              <td className="py-1 px-2 text-right">{p.trades}</td>
+              <td className={`py-1 px-2 text-right font-mono ${!p.sufficient ? 'text-muted' : ''}`}>{formatPossiblyInfinite(p.profit_factor)}</td>
+              <td className="py-1 px-2 text-right">{p.win_rate.toFixed(1)}%</td>
+              <td className="py-1 px-2 text-right text-red">{p.max_drawdown_pct.toFixed(1)}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {sweep.points.some((p) => !p.sufficient) && (
+        <span className="text-[0.72em] text-muted">Greyed PF values had fewer trades than the run's min_trades floor — not enough to judge.</span>
+      )}
+    </div>
+  )
+}
+
+function RobustnessDetail({ file }: { file: string }) {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: RobustnessReportFile | null }>({
+    loading: true, error: null, data: null,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    getRobustnessReportFile(file)
+      .then((data) => !cancelled && setState({ loading: false, error: null, data }))
+      .catch((err) => !cancelled && setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [file])
+
+  if (state.loading) return <Empty>Loading full sweep…</Empty>
+  if (state.error) return <Empty>Failed: {state.error}</Empty>
+  if (!state.data) return null
+
+  return (
+    <div className="flex flex-col gap-4 pt-2">
+      {Object.entries(state.data.symbols).map(([symbol, result]) => (
+        <div key={symbol} className="flex flex-col gap-2">
+          <span className="font-bold text-text">{symbol}</span>
+          {result.sweeps.map((sweep) => (
+            <SweepTable key={sweep.param} sweep={sweep} />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function WalkForwardRobustnessPanel({ entry }: { entry: RunReportEntry }) {
   const title = entry.kind === 'walk_forward' ? 'Walk-Forward' : 'Robustness'
   const highlights = entry.highlights as Record<string, unknown>
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div className="p-4 flex flex-col gap-2 text-[0.82em]">
@@ -225,6 +308,11 @@ function WalkForwardRobustnessPanel({ entry }: { entry: RunReportEntry }) {
         <span>{entry.file}</span>
         {entry.evaluated != null && <span>{entry.evaluated} symbols evaluated</span>}
         {entry.generated_utc && <span>{entry.generated_utc}</span>}
+        {entry.kind === 'robustness' && (
+          <button onClick={() => setExpanded((v) => !v)} className="text-accent hover:text-accent2 underline decoration-dotted ml-auto">
+            {expanded ? 'Hide full sweep' : 'View full sweep'}
+          </button>
+        )}
       </div>
       <div className="flex flex-col gap-1.5">
         {Object.entries(highlights).map(([symbol, verdict]) => (
@@ -245,6 +333,7 @@ function WalkForwardRobustnessPanel({ entry }: { entry: RunReportEntry }) {
           </div>
         ))}
       </div>
+      {expanded && entry.kind === 'robustness' && <RobustnessDetail file={entry.file} />}
     </div>
   )
 }

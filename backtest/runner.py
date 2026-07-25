@@ -35,7 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from backtest.metrics import BacktestMetrics, TradeRecord, calculate_metrics
+from backtest.metrics import BacktestMetrics, TradeRecord, calculate_metrics, json_safe
 from backtest.monte_carlo import MonteCarloResult, run_monte_carlo
 from backtest.report import generate_html_report
 from backtesting.backtest_engine import (
@@ -332,7 +332,7 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
             for s, r in results.items()
         },
     }
-    path.write_text(json.dumps(payload, indent=2, default=str))
+    path.write_text(json.dumps(json_safe(payload), indent=2, default=str))
     logger.info(f"Summary written: {path}")
     return path
 

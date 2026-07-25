@@ -4,6 +4,7 @@ import {
   getResearchEngines,
   getResearchIndicators,
   getResearch,
+  getValidationConfig,
   type SymbolsResponse,
   type SymbolEntry,
   type EnginesResponse,
@@ -12,8 +13,12 @@ import {
   type IndicatorEntry,
   type ResearchResponse,
   type Hypothesis,
+  type ValidationConfigResponse,
 } from '../research-backtests/api'
-import { getJobCatalog, runJob, getJobDetail, type JobCatalogResponse, type JobDescriptor, type JobSummary, type JobDetail } from '../experiment-runner/api'
+import {
+  getJobCatalog, runJob, getJobDetail, runRobustnessJob,
+  type JobCatalogResponse, type JobDescriptor, type JobSummary, type JobDetail,
+} from '../experiment-runner/api'
 
 // Backtesting Lab (Research Workbench, 2026-07-25) reuses the SAME
 // endpoints the Research & Backtests monitoring tab already calls — this
@@ -25,8 +30,10 @@ export {
   getResearchEngines,
   getResearchIndicators,
   getResearch,
+  getValidationConfig,
   getJobCatalog,
   runJob,
+  runRobustnessJob,
   getJobDetail,
 }
 export type {
@@ -38,6 +45,7 @@ export type {
   IndicatorEntry,
   ResearchResponse,
   Hypothesis,
+  ValidationConfigResponse,
   JobCatalogResponse,
   JobDescriptor,
   JobSummary,

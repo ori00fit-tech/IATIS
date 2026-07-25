@@ -212,3 +212,16 @@ export interface DashboardSummaryResponse {
 }
 
 export const getDashboardSummary = () => apiGet<DashboardSummaryResponse>('/research/dashboard-summary')
+
+// Walk-Forward / Monte Carlo / Robustness real defaults + the codified
+// promotion bar (research/edge_gate.py PROMOTION_CRITERIA) — what a
+// Parameter Sweep / Grid Search UI configures against, not invented
+// client-side.
+export interface ValidationConfigResponse {
+  walk_forward: { n_windows: number; min_pf: number; min_trades_per_window: number; warmup_bars: number; methodology: string }
+  monte_carlo: { n_simulations: number; ruin_threshold: number; note: string }
+  robustness: { params: string[]; multipliers: number[]; min_trades: number; stable_band_pct: number; methodology: string }
+  promotion_criteria: Record<string, number | boolean>
+}
+
+export const getValidationConfig = () => apiGet<ValidationConfigResponse>('/research/validation-config')

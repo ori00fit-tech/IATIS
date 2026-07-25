@@ -142,3 +142,62 @@ export async function getChartDataFile(file: string): Promise<ChartDataFile> {
   }
   return JSON.parse(res.content) as ChartDataFile
 }
+
+// Parameter Sweep full detail (2026-07-25) — backtest/robustness.py's
+// complete per-point output, not the lightweight verdict-only highlights
+// /research/run-reports returns. Every point is here; there is no
+// "winner" field anywhere in this shape by design.
+// profit_factor is Infinity whenever a point has zero losing trades — a
+// real, correct value (backtest/metrics.py's own definition), not a bug.
+// The backend sanitizes it to the string "Infinity"/"-Infinity"/"NaN"
+// before serializing (bare Infinity is not valid JSON), so this is a
+// real union, not defensive typing for a case that can't happen.
+export type PossiblyInfinite = number | 'Infinity' | '-Infinity' | 'NaN'
+
+export function formatPossiblyInfinite(v: PossiblyInfinite, digits = 2): string {
+  if (v === 'Infinity') return '∞'
+  if (v === '-Infinity') return '-∞'
+  if (v === 'NaN') return '—'
+  return v.toFixed(digits)
+}
+
+export interface RobustnessSweepPoint {
+  multiplier: number
+  value: number
+  trades: number
+  profit_factor: PossiblyInfinite
+  win_rate: number
+  max_drawdown_pct: number
+  sufficient: boolean
+}
+
+export interface RobustnessSweep {
+  param: string
+  baseline_value: number
+  baseline_pf: PossiblyInfinite
+  verdict: string
+  points: RobustnessSweepPoint[]
+}
+
+export interface RobustnessSymbolResult {
+  min_trades: number
+  multipliers: number[]
+  sweeps: RobustnessSweep[]
+}
+
+export interface RobustnessReportFile {
+  generated_utc: string
+  all_params_stable: number
+  evaluated: number
+  note: string
+  engine_overrides: Record<string, unknown>
+  symbols: Record<string, RobustnessSymbolResult>
+}
+
+export async function getRobustnessReportFile(file: string): Promise<RobustnessReportFile> {
+  const res = await getFileContent(`reports/${file}`)
+  if (res.error || res.content == null) {
+    throw new Error(res.error ?? `${file}: empty content`)
+  }
+  return JSON.parse(res.content) as RobustnessReportFile
+}

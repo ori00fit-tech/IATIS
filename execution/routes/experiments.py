@@ -255,6 +255,16 @@ class _RunJobRequest(BaseModel):
     job: str
     # backtest only: symbols validated against the configured universe.
     symbols: list[str] | None = None
+    # robustness only (Parameter Sweep, 2026-07-25): which cost/risk
+    # parameters to sweep and what relative multipliers to apply around
+    # each one's real frozen production value — validated against
+    # backtest.robustness.SWEEP_PARAMS/DEFAULT_MULTIPLIERS server-side, the
+    # exact same guardrail backtest/robustness.py's CLI already enforces
+    # (1.0 baseline required, no arbitrary parameter names). Never lets a
+    # caller choose a "winning" value — the job always reports every
+    # point, same as running it from the CLI.
+    params: list[str] | None = None
+    multipliers: list[float] | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -319,6 +329,31 @@ async def experiments_run(
     elif body.symbols:
         raise HTTPException(status_code=400, detail=f"'{body.job}' takes no symbols.")
 
+    if body.job == "robustness":
+        from backtest.robustness import SWEEP_PARAMS
+
+        if body.params is not None:
+            params = [str(p).strip() for p in body.params if str(p).strip()]
+            unknown_params = sorted(set(params) - set(SWEEP_PARAMS))
+            if unknown_params:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown sweep param(s) {unknown_params} — choose from {sorted(SWEEP_PARAMS)}.",
+                )
+            if not params:
+                raise HTTPException(status_code=400, detail="params, if provided, must not be empty.")
+            argv += ["--params", *params]
+        if body.multipliers is not None:
+            if 1.0 not in body.multipliers:
+                raise HTTPException(status_code=400, detail="multipliers must include 1.0 as the baseline point.")
+            if not (1 <= len(body.multipliers) <= 10):
+                raise HTTPException(status_code=400, detail="multipliers: 1-10 values per run.")
+            if any(m <= 0 for m in body.multipliers):
+                raise HTTPException(status_code=400, detail="multipliers must all be positive.")
+            argv += ["--multipliers", *[str(m) for m in body.multipliers]]
+    elif body.params is not None or body.multipliers is not None:
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no params/multipliers.")
+
     with _jobs_lock:
         already_running = any(
             j.name == body.job and j.status in ("queued", "running") for j in _jobs.values()
@@ -330,10 +365,15 @@ async def experiments_run(
         _jobs[job_id] = job
 
     from storage.audit_log import log_action
-    log_action(
-        "experiment_run", x_api_key=x_api_key, session_id=iatis_session,
-        detail=f"{body.job} ({job_id})" + (f" symbols={body.symbols}" if body.job in _PARAMETERIZED_JOBS else ""),
-    )
+    detail = f"{body.job} ({job_id})"
+    if body.job in _PARAMETERIZED_JOBS:
+        detail += f" symbols={body.symbols}"
+    if body.job == "robustness":
+        if body.params is not None:
+            detail += f" params={body.params}"
+        if body.multipliers is not None:
+            detail += f" multipliers={body.multipliers}"
+    log_action("experiment_run", x_api_key=x_api_key, session_id=iatis_session, detail=detail)
 
     job.future = _job_executor.submit(_run_job, job)
     return _job_summary(job)

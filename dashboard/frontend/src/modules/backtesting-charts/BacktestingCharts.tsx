@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, lazy, Suspense } from 'react'
 import { createChart, CandlestickSeries, createSeriesMarkers, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
@@ -22,6 +22,10 @@ import {
   type RobustnessReportFile,
   type RobustnessSweep,
 } from './api'
+
+// Lazy: keeps echarts' JS out of the main bundle until a user actually
+// visits this tab (Phase 3 institutional redesign — bundle-size mitigation).
+const MonthlyReturnsHeatmap = lazy(() => import('./MonthlyReturnsHeatmap').then((m) => ({ default: m.MonthlyReturnsHeatmap })))
 
 const POLL_MS = 60_000
 
@@ -618,6 +622,16 @@ function QueueManagerCharts({ entries }: { entries: RunReportEntry[] }) {
           </div>
         )}
       </Panel>
+
+      {chart.data && Object.keys(chart.data.monthly_returns).length > 0 && (
+        <Panel title="Monthly PnL" right="from monthly_returns — one cell per month with a closed trade">
+          <div className="p-4">
+            <Suspense fallback={<Empty>Loading chart…</Empty>}>
+              <MonthlyReturnsHeatmap monthlyReturns={chart.data.monthly_returns} />
+            </Suspense>
+          </div>
+        </Panel>
+      )}
 
       {trades.length > 0 && (
         <Panel title="Trades" right={`${trades.length} closed`}>

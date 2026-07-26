@@ -695,6 +695,38 @@ async def research_run_reports(
     }
 
 
+@router.get("/research/run-reports/{filename}")
+async def research_run_report_content(
+    filename: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Full content of one run-report file — chart_data.json/robustness/
+    walk_forward/backtest_summary. _REPORTS_DIR is backend-generated and
+    server-controlled (unlike data/ or an arbitrary repo path), so unlike
+    GET /files/read this has no byte cap: a growing chart_data.json
+    (more trades, more equity points) must never silently stop rendering
+    (2026-07-26, XAUUSD hit the 512KB File Explorer read cap in
+    production — /files/read's cap is correct for browsing arbitrary
+    repo files, just the wrong fit for this trusted, typed data). Confined
+    to _REPORTS_DIR only — no path traversal, no arbitrary repo path.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import json as _json
+
+    target = (_REPORTS_DIR / filename).resolve()
+    try:
+        target.relative_to(_REPORTS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Report not found.")
+    try:
+        return _json.loads(target.read_text())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not parse report: {exc}")
+
+
 @router.get("/research/dashboard-summary")
 async def research_dashboard_summary(
     x_api_key: str | None = Header(default=None),

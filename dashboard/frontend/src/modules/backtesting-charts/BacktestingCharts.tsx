@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, lazy, Suspense } from 'react'
+import { useEffect, useRef, useState, lazy, Suspense, type MouseEvent } from 'react'
 import { createChart, CandlestickSeries, createSeriesMarkers, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
@@ -751,9 +751,40 @@ function ExperimentOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
   const y = (v: number) => H - ((v - min) / range) * H
   const zeroY = y(0)
 
+  // Hover crosshair + tooltip (Phase 7, 2026-07-26) — the chart's own
+  // x-axis is index-normalized per series (trade sequence, not calendar
+  // time, since experiments can have different trade counts), so the
+  // nearest point is looked up per-series against that series' own
+  // length, not a single shared index.
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [hoverX, setHoverX] = useState<number | null>(null)
+
+  const handleMove = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0) return
+    setHoverX(Math.max(0, Math.min(W, ((e.clientX - rect.left) / rect.width) * W)))
+  }
+
+  const hoverPoints =
+    hoverX == null
+      ? null
+      : kpis.map((k, idx) => {
+          const s = series[idx]
+          const i = Math.max(0, Math.min(s.length - 1, Math.round((hoverX / W) * (s.length - 1))))
+          return { symbol: k.symbol, value: s[i], color: EXPERIMENT_COLORS[idx % EXPERIMENT_COLORS.length] }
+        })
+  const flipTooltip = hoverX != null && hoverX > W * 0.75
+
   return (
-    <div className="px-4 pb-4">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-[240px]">
+    <div className="px-4 pb-4 relative">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="w-full h-[240px] cursor-crosshair"
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHoverX(null)}
+      >
         <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke="#1a2236" strokeWidth="1" vectorEffect="non-scaling-stroke" />
         {series.map((s, idx) => {
           const path = s.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i, s.length).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
@@ -768,7 +799,31 @@ function ExperimentOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
             />
           )
         })}
+        {hoverX != null && (
+          <line x1={hoverX} y1={0} x2={hoverX} y2={H} stroke="#64748b" strokeWidth="1" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+        )}
       </svg>
+      {hoverPoints && (
+        <div
+          className="absolute top-2 bg-panel border border-border rounded px-2.5 py-1.5 text-[0.72em] shadow-md pointer-events-none flex flex-col gap-0.5"
+          style={
+            flipTooltip
+              ? { right: `${((W - hoverX!) / W) * 100}%`, marginRight: '1rem' }
+              : { left: `${(hoverX! / W) * 100}%`, marginLeft: '1rem' }
+          }
+        >
+          {hoverPoints.map((p) => (
+            <span key={p.symbol} className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{ background: p.color }} />
+              <span className="text-muted">{p.symbol}</span>
+              <span className={p.value >= 0 ? 'text-green' : 'text-red'}>
+                {p.value >= 0 ? '+' : ''}
+                {p.value.toFixed(2)}%
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex gap-4 flex-wrap mt-2 text-[0.78em]">
         {kpis.map((k, idx) => (
           <span key={k.file} className="flex items-center gap-1.5 text-muted">
@@ -777,7 +832,7 @@ function ExperimentOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
           </span>
         ))}
       </div>
-      <p className="text-[0.72em] text-muted mt-2">% return from each experiment's own starting balance, plotted by trade sequence (not calendar time) — runs may cover different date ranges.</p>
+      <p className="text-[0.72em] text-muted mt-2">% return from each experiment's own starting balance, plotted by trade sequence (not calendar time) — runs may cover different date ranges. Hover the chart for exact values.</p>
     </div>
   )
 }

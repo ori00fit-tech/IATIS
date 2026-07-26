@@ -1957,6 +1957,70 @@ def test_research_run_reports_detects_chart_data_sidecar(client, tmp_path, monke
     }
 
 
+def test_research_run_report_content_requires_auth(client):
+    assert client.get("/research/run-reports/whatever.json").status_code == 401
+
+
+def test_research_run_report_content_404_for_unknown_file(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    r = client.get("/research/run-reports/does_not_exist.json", headers=HDR)
+    assert r.status_code == 404
+
+
+def test_research_run_report_content_blocks_path_traversal(client, tmp_path, monkeypatch):
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path / "reports")
+    (tmp_path / "reports").mkdir()
+    # A secret file living OUTSIDE the reports dir, in tmp_path itself.
+    (tmp_path / "secret.json").write_text('{"leaked": true}')
+
+    r = client.get("/research/run-reports/..%2Fsecret.json", headers=HDR)
+    assert r.status_code in (400, 404)
+    assert "leaked" not in r.text
+
+
+def test_research_run_report_content_returns_full_json(client, tmp_path, monkeypatch):
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    payload = {"symbol": "EURUSD", "timeframe": "H1", "equity_curve": [{"x": "t1", "y": 10000.0}]}
+    (tmp_path / "EURUSD_H1_20260726_chart_data.json").write_text(_json.dumps(payload))
+
+    r = client.get("/research/run-reports/EURUSD_H1_20260726_chart_data.json", headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json() == payload
+
+
+def test_research_run_report_content_serves_files_over_the_files_read_cap(client, tmp_path, monkeypatch):
+    """Regression: GET /files/read caps inline content at 512,000 bytes —
+    real chart_data.json files exceed that as trades/equity points
+    accumulate (hit live in production on XAUUSD, 708,022 bytes). This
+    endpoint must serve such a file successfully since _REPORTS_DIR is a
+    trusted, backend-generated directory, not arbitrary repo content."""
+    import json as _json
+    import execution.routes.research as m
+    monkeypatch.setattr(m, "_REPORTS_DIR", tmp_path)
+
+    big_payload = {
+        "symbol": "XAUUSD",
+        "timeframe": "H1",
+        # Padding well past the 512,000-byte /files/read cap.
+        "trades": [{"trade_id": f"XAUUSD-{i}", "pnl_usd": 1.23} for i in range(20_000)],
+    }
+    raw = _json.dumps(big_payload)
+    assert len(raw.encode("utf-8")) > 512_000
+    (tmp_path / "XAUUSD_H1_20260726_chart_data.json").write_text(raw)
+
+    r = client.get("/research/run-reports/XAUUSD_H1_20260726_chart_data.json", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["symbol"] == "XAUUSD"
+    assert len(body["trades"]) == 20_000
+
+
 def test_research_dashboard_summary_requires_auth(client):
     assert client.get("/research/dashboard-summary").status_code == 401
 

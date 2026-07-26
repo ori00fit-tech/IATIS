@@ -123,3 +123,40 @@ class MacroAnalysis:
             "error": self.error,
             "generated_at": self.generated_at,
         }
+
+
+@dataclass
+class HypothesisSuggestion:
+    """A DRAFT candidate for the operator's next research hypothesis
+    (AI Copilot, Phase 4d). Never a decision, never PASSED/registered —
+    see execution/routes/ai.py's save_hypothesis_draft, which is the
+    only thing allowed to persist this, and only ever into
+    research/hypotheses/drafts/, never research/results/registry.json.
+    """
+
+    title: str = ""
+    statement: str = ""
+    why_this_might_be_true: str = ""
+    data_required: dict = field(default_factory=dict)
+    falsification_criteria: str = ""
+    distinct_from_prior_kill: str = ""
+    notes: str = ""
+    provider: str = ""
+    status: str = "ok"
+    error: str = ""
+    generated_at: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "statement": self.statement,
+            "why_this_might_be_true": self.why_this_might_be_true,
+            "data_required": self.data_required,
+            "falsification_criteria": self.falsification_criteria,
+            "distinct_from_prior_kill": self.distinct_from_prior_kill,
+            "notes": self.notes,
+            "provider": self.provider,
+            "status": self.status,
+            "error": self.error,
+            "generated_at": self.generated_at,
+        }

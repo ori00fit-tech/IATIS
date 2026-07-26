@@ -258,3 +258,30 @@ export interface ValidationConfigResponse {
 }
 
 export const getValidationConfig = () => apiGet<ValidationConfigResponse>('/research/validation-config')
+
+// ── AI Copilot: next-hypothesis suggestion + draft file (Phase 4d, 2026-07-26) ──
+// Two-step by design: suggestHypothesis() is read-only (no side effects);
+// saveHypothesisDraft() is a separate, explicit, human-triggered write.
+// Neither ever touches research/results/registry.json — the backend only
+// ever writes into research/hypotheses/drafts/ (execution/routes/ai.py).
+export interface HypothesisSuggestion {
+  title: string
+  statement: string
+  why_this_might_be_true: string
+  data_required: Record<string, unknown>
+  falsification_criteria: string
+  distinct_from_prior_kill: string
+  notes: string
+}
+
+export interface SuggestHypothesisResponse extends Partial<HypothesisSuggestion> {
+  status: 'ok' | 'disabled' | 'error'
+  provider: string
+  error?: string
+}
+
+export const suggestHypothesis = (focusHint: string) =>
+  apiPost<SuggestHypothesisResponse>('/ai/suggest-hypothesis', { focus_hint: focusHint })
+
+export const saveHypothesisDraft = (suggestion: HypothesisSuggestion) =>
+  apiPost<{ file: string }>('/ai/save-hypothesis-draft', suggestion)

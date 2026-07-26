@@ -18,6 +18,8 @@ import {
   getResearchIndicators,
   getDashboardSummary,
   compareHypotheses,
+  suggestHypothesis,
+  saveHypothesisDraft,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
@@ -25,6 +27,7 @@ import {
   type AiResearchSummary,
   type HypothesisDetailResponse,
   type HypothesisCompareEntry,
+  type SuggestHypothesisResponse,
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
@@ -273,6 +276,147 @@ function HypothesisComparePanel({ ids, onClose }: { ids: string[]; onClose: () =
       ) : (
         <Empty>No hypotheses to compare</Empty>
       )}
+    </Panel>
+  )
+}
+
+// AI Copilot: next-hypothesis suggestion + draft file (Phase 4d, 2026-07-26).
+// Two-step by design: "Suggest Next Test" only ever fetches a draft (no
+// side effects); "Save as Draft" is a separate, explicit, human-triggered
+// write. Neither this component nor the backend it calls ever touches
+// research/results/registry.json — the saved file lands in
+// research/hypotheses/drafts/ for the operator to review, edit, and
+// manually promote (CLAUDE.md rule 1: pre-register before you build).
+function AiCopilotPanel() {
+  const [focusHint, setFocusHint] = useState('')
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: SuggestHypothesisResponse | null }>({
+    loading: false,
+    error: null,
+    data: null,
+  })
+  const [save, setSave] = useState<{ saving: boolean; error: string | null; file: string | null }>({
+    saving: false,
+    error: null,
+    file: null,
+  })
+
+  const suggest = () => {
+    setState({ loading: true, error: null, data: null })
+    setSave({ saving: false, error: null, file: null })
+    suggestHypothesis(focusHint)
+      .then((data) => setState({ loading: false, error: null, data }))
+      .catch((err) => setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+  }
+
+  const saveDraft = () => {
+    if (!state.data || state.data.status !== 'ok') return
+    const { title, statement, why_this_might_be_true, data_required, falsification_criteria, distinct_from_prior_kill, notes } = state.data
+    setSave({ saving: true, error: null, file: null })
+    saveHypothesisDraft({
+      title: title ?? '',
+      statement: statement ?? '',
+      why_this_might_be_true: why_this_might_be_true ?? '',
+      data_required: data_required ?? {},
+      falsification_criteria: falsification_criteria ?? '',
+      distinct_from_prior_kill: distinct_from_prior_kill ?? '',
+      notes: notes ?? '',
+    })
+      .then((res) => setSave({ saving: false, error: null, file: res.file }))
+      .catch((err) => setSave({ saving: false, error: err instanceof Error ? err.message : String(err), file: null }))
+  }
+
+  const suggestion = state.data && state.data.status === 'ok' ? state.data : null
+
+  return (
+    <Panel
+      title="AI Copilot"
+      right={
+        <div className="flex items-center gap-2">
+          <input
+            value={focusHint}
+            onChange={(e) => setFocusHint(e.target.value)}
+            placeholder="focus hint (optional)…"
+            className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.85em] placeholder:text-muted/60 w-48"
+          />
+          <button
+            onClick={suggest}
+            disabled={state.loading}
+            className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+          >
+            {state.loading ? 'Thinking…' : state.data ? 'Suggest Again' : 'Suggest Next Test'}
+          </button>
+        </div>
+      }
+    >
+      <div className="p-4">
+        {!state.data && !state.loading && !state.error ? (
+          <Empty>
+            Drafts a candidate for your next research hypothesis, grounded in the real registry and the ideas already
+            killed by measurement. Click "Suggest Next Test".
+          </Empty>
+        ) : (
+          <AiStatusFrame loading={state.loading} fetchError={state.error} status={state.data?.status} providerError={state.data?.error}>
+            {suggestion && (
+              <div className="flex flex-col gap-4 text-[0.85em]">
+                <div className="text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+                  ⚠️ AI-generated draft — not reviewed, not registered. Review and edit before using.
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Title</div>
+                  <p className="font-bold">{suggestion.title}</p>
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Statement</div>
+                  <p>{suggestion.statement}</p>
+                </div>
+                {suggestion.why_this_might_be_true && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Why this might be true</div>
+                    <p>{suggestion.why_this_might_be_true}</p>
+                  </div>
+                )}
+                {suggestion.data_required && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Data required</div>
+                    <pre className="bg-surface border border-border rounded p-2 overflow-x-auto text-[0.85em]">
+                      {JSON.stringify(suggestion.data_required, null, 1)}
+                    </pre>
+                  </div>
+                )}
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Falsification criteria</div>
+                  <p>{suggestion.falsification_criteria}</p>
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Distinct from prior kill</div>
+                  <p>{suggestion.distinct_from_prior_kill}</p>
+                </div>
+                {suggestion.notes && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Notes</div>
+                    <p>{suggestion.notes}</p>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={saveDraft}
+                    disabled={save.saving}
+                    className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
+                  >
+                    {save.saving ? 'Saving…' : 'Save as Draft'}
+                  </button>
+                  {save.file && (
+                    <span className="text-green text-[0.8em]">
+                      Saved to <span className="font-mono">{save.file}</span> — open it via the Files tab to review and refine.
+                    </span>
+                  )}
+                  {save.error && <span className="text-red text-[0.8em]">{save.error}</span>}
+                </div>
+              </div>
+            )}
+          </AiStatusFrame>
+        )}
+      </div>
     </Panel>
   )
 }
@@ -707,6 +851,8 @@ export function ResearchBacktests() {
           )}
         </div>
       </Panel>
+
+      <AiCopilotPanel />
 
       <Panel
         title="Evidence Manifests"

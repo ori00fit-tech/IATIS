@@ -179,3 +179,7 @@ class AIProvider(ABC):
     def answer_question(self, context: str, question: str) -> str:
         prompt = load_prompt("research_qa", context=context, question=question)
         return self._chat(prompt).strip()
+
+    def suggest_hypothesis(self, context: str, focus_hint: str) -> dict:
+        prompt = load_prompt("suggest_hypothesis", context=context, focus_hint=focus_hint or "none")
+        return extract_json(self._chat(prompt))

@@ -713,6 +713,15 @@ interface ExperimentKpi {
 }
 
 function computeExperimentKpi(file: string, data: ChartDataFile): ExperimentKpi {
+  // Never silently treat a malformed/incompatible report as "0 trades" —
+  // that would misrepresent a real data problem as a real empty backtest.
+  // backtest/report.py (the only writer of *_chart_data.json) always sets
+  // both fields as arrays; a file missing either is genuinely broken and
+  // must be reported as a per-experiment failure (see ExperimentComparison
+  // Panel.compare()), not crash the whole comparison with a bare TypeError.
+  if (!Array.isArray(data.trades) || !Array.isArray(data.equity_curve)) {
+    throw new Error(`${file}: report is missing trades/equity_curve data (malformed or incompatible report file)`)
+  }
   const trades = data.trades
   const wins = trades.filter((t) => t.is_win)
   const losses = trades.filter((t) => !t.is_win)
@@ -841,7 +850,7 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [kpis, setKpis] = useState<ExperimentKpi[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [failures, setFailures] = useState<{ file: string; error: string }[]>([])
 
   const toggle = (file: string) => {
     setSelected((prev) => {
@@ -854,17 +863,30 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
 
   const compare = async () => {
     setLoading(true)
-    setError(null)
-    try {
-      const files = Array.from(selected)
-      const datas = await Promise.all(files.map((f) => getChartDataFile(f)))
-      setKpis(files.map((f, i) => computeExperimentKpi(f, datas[i])))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setKpis([])
-    } finally {
-      setLoading(false)
-    }
+    setFailures([])
+    const files = Array.from(selected)
+    // Per-file isolation (2026-07-26): one malformed/incompatible report
+    // must never blank the whole comparison for every other symbol that
+    // loaded fine — Promise.all was all-or-nothing and a single bad file
+    // crashed all of them (reported live: XAUUSD/XAGUSD/ETHUSD/BTCUSD all
+    // disappeared because of one bad file among the four).
+    const results = await Promise.allSettled(files.map((f) => getChartDataFile(f)))
+    const okKpis: ExperimentKpi[] = []
+    const failed: { file: string; error: string }[] = []
+    results.forEach((r, i) => {
+      if (r.status !== 'fulfilled') {
+        failed.push({ file: files[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) })
+        return
+      }
+      try {
+        okKpis.push(computeExperimentKpi(files[i], r.value))
+      } catch (e) {
+        failed.push({ file: files[i], error: e instanceof Error ? e.message : String(e) })
+      }
+    })
+    setKpis(okKpis)
+    setFailures(failed)
+    setLoading(false)
   }
 
   const columns: Column<ExperimentKpi>[] = [
@@ -912,7 +934,15 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
           >
             {loading ? 'Comparing…' : `Compare Selected (${selected.size})`}
           </button>
-          {error && <span className="text-red text-[0.8em]">{error}</span>}
+          {failures.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {failures.map((f) => (
+                <span key={f.file} className="text-red text-[0.8em]">
+                  ⚠️ {f.file}: {f.error}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         {kpis.length > 0 && (
           <>

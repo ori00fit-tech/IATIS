@@ -122,7 +122,19 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             f"| {len(active_symbols)} symbol(s) ==="
         )
 
-        execute_signals: list[str] = []  # track for correlation filter
+        # Correlation filter (A1): seeded with symbols already open from a
+        # PREVIOUS run, not just this run's new executes — otherwise the
+        # filter is blind to any position older than one scheduler tick,
+        # since check_correlation() only ever sees whatever list it's
+        # handed (2026-07-25 audit finding: a correlated position open for
+        # hours/days provided zero protection against a new same-group
+        # signal on a later tick).
+        execute_signals: list[str] = []
+        try:
+            from storage.outcome_tracker import get_open_signals
+            execute_signals.extend(str(r.get("symbol") or "") for r in get_open_signals())
+        except Exception as exc:
+            logger.debug(f"Could not seed correlation filter with open positions: {exc}")
         max_per_group = config.get("portfolio", {}).get("max_per_group", MAX_PER_GROUP)
         correlation_filter_enabled = config.get("features", {}).get("correlation_filter", True)
 

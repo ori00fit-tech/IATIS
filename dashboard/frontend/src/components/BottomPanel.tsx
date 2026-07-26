@@ -4,6 +4,7 @@ import { Empty } from './Panel'
 import { useUiStore, BOTTOM_PANEL_COLLAPSED_HEIGHT, BOTTOM_PANEL_MIN_HEIGHT, type BottomPanelTab } from '../lib/uiStore'
 import { useLiveLogs, levelClass } from '../lib/useLiveLogs'
 import { useConsoleStore } from '../lib/consoleCapture'
+import { useNotesStore } from '../lib/notesStore'
 
 const TABS: { id: BottomPanelTab; label: string }[] = [
   { id: 'logs', label: 'Logs' },
@@ -88,11 +89,38 @@ function ConsoleBody() {
   )
 }
 
+/** Persistent free-text scratchpad (2026-07-26) — localStorage-backed via
+ * lib/notesStore.ts, mirroring presetsStore.ts's frontend-only rationale:
+ * this app has no per-user identity anywhere in the backend, so a shared
+ * note is exactly as useful as a backend-persisted one without the new
+ * attack surface. Single scratchpad, not multi-note — no stated need for
+ * more than "a place to jot things down while working in the dashboard." */
+function NotesBody() {
+  const text = useNotesStore((s) => s.text)
+  const setText = useNotesStore((s) => s.setText)
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0">
+        <span className="text-[0.68em] text-muted">Autosaved locally — not shared with other operators</span>
+        <button onClick={() => setText('')} className="ml-auto text-[0.7em] text-muted hover:text-accent">
+          Clear
+        </button>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Jot down anything — hypothesis ideas, things to check, context for tomorrow…"
+        className="flex-1 min-h-0 resize-none bg-transparent p-3 text-[0.78em] leading-relaxed font-mono text-text placeholder:text-muted focus:outline-none"
+      />
+    </div>
+  )
+}
+
 function BottomPanelBody({ activeTab }: { activeTab: BottomPanelTab }) {
   if (activeTab === 'logs') return <LogsBody />
   if (activeTab === 'console') return <ConsoleBody />
   if (activeTab === 'raw-json') return <PlaceholderBody label="Raw JSON inspector" />
-  return <PlaceholderBody label="Research Notes" />
+  return <NotesBody />
 }
 
 /**

@@ -61,4 +61,43 @@ export default defineConfig(({ mode }) => ({
       ]),
     ),
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Phase 5 (2026-07-26): this project's vite@8 bundles via Rolldown,
+        // not classic Rollup — `manualChunks` is deprecated and (unlike
+        // Rollup) function-only, with no equivalent to the `$initial` tag
+        // below, so it can't tell eager code apart from code only reachable
+        // through a dynamic import(). `codeSplitting.groups` is the current
+        // API (verified against node_modules/rolldown's own type defs).
+        codeSplitting: {
+          groups: [
+            // react + react-dom (+ scheduler) — the one vendor chunk that
+            // never changes between deploys. Higher priority so it's
+            // resolved before the generic `vendor` group below.
+            {
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+              tags: ['$initial'],
+              priority: 20,
+            },
+            // Everything else the always-mounted shell needs eagerly
+            // (react-query, framer-motion, cmdk, zustand, the Radix bits
+            // Sidebar/BottomPanel/CommandPalette use). `$initial` is the
+            // load-bearing guard: it restricts this group to code reachable
+            // from the eager entry graph, so `echarts` — already isolated
+            // behind Phase 3's component-level React.lazy, only reachable
+            // via a dynamic import — can never be swept back into an
+            // eagerly-loaded chunk.
+            {
+              name: 'vendor',
+              test: /node_modules[\\/]/,
+              tags: ['$initial'],
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
+  },
 }))

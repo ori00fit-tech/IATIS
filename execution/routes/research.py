@@ -870,10 +870,13 @@ async def research_center(
             "conclusion": (h_data.get("conclusion") or h_data.get("lesson") or "")[:300],
             "trusted": h_data.get("status") != "PASSED" or h_id not in flagged_ids,
         }
-        # Load result file if exists
-        result_file = h_data.get("result_file")
+        # Load result file if exists. Falls back to `linked_result` — the
+        # registry uses four different field names across entries
+        # (linked_result, result_file, result, result_files); only these
+        # two are single-path strings meaningful here (2026-07-26).
+        result_file = h_data.get("result_file") or h_data.get("linked_result")
         if result_file:
-            rp = Path("research") / result_file
+            rp = _resolve_research_result_path(result_file)
             if rp.exists():
                 try:
                     r = _json.loads(rp.read_text())
@@ -1086,6 +1089,19 @@ async def research_integrity(
     return await loop.run_in_executor(_executor, _run)
 
 
+def _resolve_research_result_path(p: str) -> Path:
+    """Registry result paths are inconsistent: `result_file`/`result_files`
+    entries are relative to research/ (e.g. "results/H001_result.json"),
+    while `linked_result` entries already include the research/ prefix
+    (e.g. "research/results/H019_....json"). Normalize both to the same
+    real, repo-root-relative path instead of double-prefixing the latter.
+    """
+    path = Path(p)
+    if path.parts and path.parts[0] == "research":
+        return path
+    return Path("research") / path
+
+
 def _hypothesis_detail(hypothesis_id: str, hypotheses_raw: dict, manifests: list[dict]) -> dict[str, Any] | None:
     """The complete registry.json entry for one hypothesis (untruncated,
     unlike /research's summary list) plus every manifest linked to it and
@@ -1122,8 +1138,9 @@ def _hypothesis_detail(hypothesis_id: str, hypotheses_raw: dict, manifests: list
     # Result file(s) — path + existence check only. Never dumps arbitrary
     # file content through this endpoint; that's File Explorer's job.
     result_paths: list[str] = []
-    if isinstance(hyp.get("result_file"), str):
-        result_paths.append(hyp["result_file"])
+    result_file_field = hyp.get("result_file") or hyp.get("linked_result")
+    if isinstance(result_file_field, str):
+        result_paths.append(result_file_field)
     result_files_field = hyp.get("result_files")
     if isinstance(result_files_field, dict):
         result_paths.extend(v for v in result_files_field.values() if isinstance(v, str))
@@ -1133,7 +1150,7 @@ def _hypothesis_detail(hypothesis_id: str, hypotheses_raw: dict, manifests: list
         "hypothesis": hyp,
         "manifests": {"exact": exact_links, "heuristic": heuristic_links},
         "result_files": [
-            {"path": p, "exists": (Path("research") / p).exists()}
+            {"path": p, "exists": _resolve_research_result_path(p).exists()}
             for p in result_paths
         ],
     }

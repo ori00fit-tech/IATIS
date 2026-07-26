@@ -151,6 +151,23 @@ export interface HypothesisDetailResponse {
 
 export const getHypothesisDetail = (id: string) => apiGet<HypothesisDetailResponse>(`/research/${encodeURIComponent(id)}`)
 
+// Direct hypothesis-vs-hypothesis comparison (Phase 4c, 2026-07-26):
+// /research/compare returns the same full detail as getHypothesisDetail
+// for up to 10 IDs in one round trip. An unknown ID comes back as
+// `{ id, found: false }` rather than failing the whole batch.
+export interface HypothesisCompareEntry extends Partial<HypothesisDetailResponse> {
+  id: string
+  found: boolean
+}
+
+export interface HypothesisCompareResponse {
+  count: number
+  hypotheses: HypothesisCompareEntry[]
+}
+
+export const compareHypotheses = (ids: string[]) =>
+  apiGet<HypothesisCompareResponse>('/research/compare', { ids: ids.join(',') })
+
 // ── Research Workspace, Phases 2-6 (2026-07-24/25) ──────────────────────────
 
 // Symbol Manager: the FULL symbol universe (including disabled/WATCHLIST/

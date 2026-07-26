@@ -17,12 +17,14 @@ import {
   getResearchEngines,
   getResearchIndicators,
   getDashboardSummary,
+  compareHypotheses,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
   type EvidenceManifest,
   type AiResearchSummary,
   type HypothesisDetailResponse,
+  type HypothesisCompareEntry,
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
@@ -197,6 +199,79 @@ function HypothesisDetailPanel({ id, onClose }: { id: string; onClose: () => voi
             </div>
           )}
         </div>
+      )}
+    </Panel>
+  )
+}
+
+// Direct hypothesis-vs-hypothesis comparison (Phase 4c, 2026-07-26). Parallels
+// BacktestingCharts.tsx's ExperimentComparisonPanel KPI-table pattern, but
+// against the hypothesis registry (/research/compare) instead of run files.
+const MAX_HYPOTHESES_COMPARED = 6
+
+function HypothesisComparePanel({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: HypothesisCompareEntry[] | null }>({
+    loading: true,
+    error: null,
+    data: null,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: null, data: null })
+    compareHypotheses(ids)
+      .then((res) => !cancelled && setState({ loading: false, error: null, data: res.hypotheses }))
+      .catch((err) => !cancelled && setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [ids])
+
+  const columns: Column<HypothesisCompareEntry>[] = [
+    { header: 'ID', render: (h) => <span className="font-bold text-accent">{h.id}</span> },
+    {
+      header: 'Title',
+      render: (h) => (h.found ? <span title={String((h.hypothesis as Record<string, unknown> | undefined)?.conclusion ?? '')}>{String((h.hypothesis as Record<string, unknown> | undefined)?.title ?? '')}</span> : <span className="text-muted italic">not in registry</span>),
+    },
+    {
+      header: 'Status',
+      render: (h) => (h.found ? <Badge tone={statusTone(String((h.hypothesis as Record<string, unknown> | undefined)?.status ?? ''))}>{String((h.hypothesis as Record<string, unknown> | undefined)?.status ?? 'UNKNOWN')}</Badge> : '—'),
+    },
+    {
+      header: 'Result Files',
+      render: (h) =>
+        h.found && h.result_files && h.result_files.length > 0 ? (
+          <span>
+            {h.result_files.filter((rf) => rf.exists).length}/{h.result_files.length}{' '}
+            <span className={h.result_files.some((rf) => rf.exists) ? 'text-green' : 'text-red'}>
+              {h.result_files.some((rf) => rf.exists) ? '✓' : '✗'}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        ),
+      align: 'right',
+    },
+    {
+      header: 'Conclusion',
+      render: (h) => {
+        const hyp = h.hypothesis as Record<string, unknown> | undefined
+        const conclusion = typeof hyp?.conclusion === 'string' ? hyp.conclusion : typeof hyp?.lesson === 'string' ? hyp.lesson : ''
+        return conclusion ? <span className="text-[0.85em]">{conclusion.slice(0, 160)}{conclusion.length > 160 ? '…' : ''}</span> : <span className="text-muted">—</span>
+      },
+    },
+  ]
+
+  return (
+    <Panel title="Hypothesis Comparison" right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+      {state.loading ? (
+        <Empty>Loading...</Empty>
+      ) : state.error ? (
+        <Empty>Failed: {state.error}</Empty>
+      ) : state.data && state.data.length > 0 ? (
+        <DataTable columns={columns} rows={state.data} rowKey={(h) => h.id} />
+      ) : (
+        <Empty>No hypotheses to compare</Empty>
       )}
     </Panel>
   )
@@ -468,6 +543,17 @@ export function ResearchBacktests() {
     data: null,
   })
   const [drilldown, setDrilldown] = useState<string | null>(null)
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set())
+  const [comparing, setComparing] = useState<string[] | null>(null)
+
+  const toggleCompareSelection = (id: string) => {
+    setSelectedForCompare((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < MAX_HYPOTHESES_COMPARED) next.add(id)
+      return next
+    })
+  }
 
   const generateAiSummary = () => {
     if (!research.data) return
@@ -482,6 +568,18 @@ export function ResearchBacktests() {
   }
 
   const hypothesisColumns: Column<Hypothesis>[] = [
+    {
+      header: '',
+      render: (h) => (
+        <input
+          type="checkbox"
+          checked={selectedForCompare.has(h.id)}
+          onChange={() => toggleCompareSelection(h.id)}
+          disabled={!selectedForCompare.has(h.id) && selectedForCompare.size >= MAX_HYPOTHESES_COMPARED}
+          title={`Select ${h.id} for comparison`}
+        />
+      ),
+    },
     {
       header: 'ID',
       render: (h) => (
@@ -644,7 +742,21 @@ export function ResearchBacktests() {
         </Panel>
       )}
 
-      <Panel title="Hypothesis Registry" right="click an ID for the full drill-down">
+      <Panel
+        title="Hypothesis Registry"
+        right={
+          <span className="flex items-center gap-3">
+            click an ID for the full drill-down · select rows (max {MAX_HYPOTHESES_COMPARED}) to compare
+            <button
+              onClick={() => setComparing(Array.from(selectedForCompare))}
+              disabled={selectedForCompare.size < 2}
+              className="px-2.5 py-1 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed font-bold normal-case tracking-normal"
+            >
+              Compare Selected ({selectedForCompare.size})
+            </button>
+          </span>
+        }
+      >
         {research.data && research.data.hypotheses.length > 0 ? (
           <DataTable columns={hypothesisColumns} rows={research.data.hypotheses} rowKey={(h) => h.id} />
         ) : (
@@ -653,6 +765,7 @@ export function ResearchBacktests() {
       </Panel>
 
       {drilldown && <HypothesisDetailPanel id={drilldown} onClose={() => setDrilldown(null)} />}
+      {comparing && <HypothesisComparePanel ids={comparing} onClose={() => setComparing(null)} />}
 
       <Panel title="Backtest Results" right={backtests.data ? `${backtests.data.count} runs` : undefined}>
         {backtests.data && backtests.data.results.length > 0 ? (

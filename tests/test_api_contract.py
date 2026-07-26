@@ -1538,6 +1538,43 @@ def test_research_hypothesis_detail_includes_result_files_with_existence_check(c
     assert all({"path", "exists"}.issubset(rf.keys()) for rf in body["result_files"])
 
 
+def test_research_hypothesis_detail_resolves_linked_result_field(client):
+    # H019's registry entry uses `linked_result`, not `result_file` — the
+    # registry uses four different field names across entries; only
+    # result_file/linked_result are single-path strings _hypothesis_detail
+    # resolves. The file genuinely exists on disk in this checkout.
+    r = client.get("/research/H019", headers=HDR)
+    body = r.json()
+    assert body["result_files"] == [
+        {"path": "research/results/H019_crypto_positioning_ab.json", "exists": True}
+    ]
+
+
+def test_research_compare_resolves_linked_result_field(client):
+    r = client.get("/research/compare?ids=H019", headers=HDR)
+    body = r.json()
+    entry = body["hypotheses"][0]
+    assert entry["found"] is True
+    assert entry["result_files"] == [
+        {"path": "research/results/H019_crypto_positioning_ab.json", "exists": True}
+    ]
+
+
+def test_research_list_enrichment_reads_linked_result_file(client):
+    # /research's sample_size/win_rate/p_value enrichment also falls back
+    # to linked_result. H019's actual result JSON (a dPF/win_fraction A/B
+    # verdict, not the older win_rate/p_value shape) doesn't match any of
+    # the extracted field names, so the values stay None — but the key's
+    # presence proves the file was actually read via the linked_result
+    # fallback (before the fix, h_data.get("result_file") was None for
+    # H019 and the enrichment block never ran at all, so the key would be
+    # entirely absent instead of present-and-None).
+    r = client.get("/research", headers=HDR)
+    body = r.json()
+    h019 = next(h for h in body["hypotheses"] if h["id"] == "H019")
+    assert "sample_size" in h019
+
+
 def test_research_compare_requires_auth(client):
     assert client.get("/research/compare?ids=H015").status_code == 401
 

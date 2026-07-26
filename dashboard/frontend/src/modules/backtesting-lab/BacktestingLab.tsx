@@ -7,6 +7,7 @@ import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { AiResearchAssistant } from '../../components/AiResearchAssistant'
 import { DatasetUpload } from './DatasetUpload'
+import { PresetsBar } from './PresetsBar'
 import {
   getResearchDatasets,
   getResearchSymbols,
@@ -46,9 +47,16 @@ const POLL_MS = 60_000
 const STEPS = ['Dataset', 'Symbols', 'Timeframes', 'Strategy', 'Indicators', 'Hypotheses', 'Execution', 'Results'] as const
 type StepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 
-interface WizardState {
+export interface WizardState {
   selectedSymbols: string[]
   jobId: string // 'backtest' | 'walk_forward' | 'robustness' | 'hypothesis_H0xx'
+  // Robustness-only sweep config (Phase 4b, 2026-07-26) — lifted up from
+  // ExecutionStep's own local state so a Preset can capture and restore it.
+  // As a side effect this also fixes a pre-existing quirk: ExecutionStep
+  // only mounts at step===6, so local state there used to reset every time
+  // the wizard left and re-entered the Execution step.
+  sweepParams: string[]
+  sweepMultipliers: number[]
 }
 
 function Stepper({ current, onJump, maxReached }: { current: StepIndex; onJump: (i: StepIndex) => void; maxReached: StepIndex }) {
@@ -466,11 +474,13 @@ function SweepConfig({
 
 function ExecutionStep({
   state,
+  setState,
   job,
   setJob,
   onFinished,
 }: {
   state: WizardState
+  setState: (s: WizardState) => void
   job: JobDetail | null
   setJob: (j: JobDetail | null) => void
   onFinished: () => void
@@ -482,8 +492,10 @@ function ExecutionStep({
 
   const { markUnauthenticated } = useAuth()
   const validation = useApiQuery(['validation-config'], getValidationConfig, POLL_MS, markUnauthenticated)
-  const [sweepParams, setSweepParams] = useState<string[]>([])
-  const [sweepMultipliers, setSweepMultipliers] = useState<number[]>([])
+  const sweepParams = state.sweepParams
+  const sweepMultipliers = state.sweepMultipliers
+  const setSweepParams = (p: string[]) => setState({ ...state, sweepParams: p })
+  const setSweepMultipliers = (m: number[]) => setState({ ...state, sweepMultipliers: m })
   useEffect(() => {
     if (validation.data && sweepParams.length === 0) setSweepParams(validation.data.robustness.params)
     if (validation.data && sweepMultipliers.length === 0) setSweepMultipliers(validation.data.robustness.multipliers)
@@ -594,7 +606,9 @@ function ResultsStep({ state, job }: { state: WizardState; job: JobDetail | null
 export function BacktestingLab() {
   const [step, setStep] = useState<StepIndex>(0)
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
-  const [state, setState] = useState<WizardState>({ selectedSymbols: [], jobId: 'backtest' })
+  const [state, setState] = useState<WizardState>({
+    selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
+  })
   const [job, setJob] = useState<JobDetail | null>(null)
 
   const goTo = (i: StepIndex) => {
@@ -618,6 +632,7 @@ export function BacktestingLab() {
         <div className="p-4">
           <Stepper current={step} onJump={goTo} maxReached={maxReached} />
         </div>
+        <PresetsBar state={state} setState={setState} />
       </Panel>
 
       {step === 0 && <DatasetStep />}
@@ -629,6 +644,7 @@ export function BacktestingLab() {
       {step === 6 && (
         <ExecutionStep
           state={state}
+          setState={setState}
           job={job}
           setJob={setJob}
           onFinished={() => setMaxReached((m) => (m < 7 ? (7 as StepIndex) : m))}

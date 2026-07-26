@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type LazyExoticComponent, type ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queryClient'
 import { AuthProvider, useAuth } from './lib/auth'
@@ -9,50 +9,64 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { CommandPalette } from './components/CommandPalette'
 import { Sidebar } from './components/Sidebar'
 import { BottomPanel } from './components/BottomPanel'
-import { MissionControl } from './modules/mission-control/MissionControl'
-import { LiveSignals } from './modules/live-signals/LiveSignals'
-import { DataCenter } from './modules/data-center/DataCenter'
-import { ProviderEval } from './modules/provider-eval/ProviderEval'
-import { EngineMonitor } from './modules/engine-monitor/EngineMonitor'
-import { AiDecisionCenter } from './modules/ai-decision-center/AiDecisionCenter'
-import { ResearchBacktests } from './modules/research-backtests/ResearchBacktests'
-import { BacktestingLab } from './modules/backtesting-lab/BacktestingLab'
-import { BacktestingCharts } from './modules/backtesting-charts/BacktestingCharts'
-import { SystemAudit } from './modules/system-audit/SystemAudit'
-import { LiveLogs } from './modules/live-logs/LiveLogs'
-import { FileExplorer } from './modules/file-explorer/FileExplorer'
-import { AlertCenter } from './modules/alert-center/AlertCenter'
-import { ForwardDemo } from './modules/forward-demo/ForwardDemo'
-import { Journal } from './modules/journal/Journal'
-import { RiskCenter } from './modules/risk-center/RiskCenter'
-import { ExecutionQuality } from './modules/execution-quality/ExecutionQuality'
-import { Reports } from './modules/reports/Reports'
-import { ExperimentRunner } from './modules/experiment-runner/ExperimentRunner'
-import { VpsOperations } from './modules/vps-operations/VpsOperations'
-import { RoadmapGrid } from './modules/roadmap/RoadmapGrid'
 
-const MODULES: Record<TabId, () => ReactNode> = {
-  'mission-control': () => <MissionControl />,
-  'live-signals': () => <LiveSignals />,
-  'forward-demo': () => <ForwardDemo />,
-  journal: () => <Journal />,
-  'risk-center': () => <RiskCenter />,
-  'execution-quality': () => <ExecutionQuality />,
-  'data-center': () => <DataCenter />,
-  'provider-eval': () => <ProviderEval />,
-  'engine-monitor': () => <EngineMonitor />,
-  'ai-decision-center': () => <AiDecisionCenter />,
-  research: () => <ResearchBacktests />,
-  'backtesting-lab': () => <BacktestingLab />,
-  'backtesting-charts': () => <BacktestingCharts />,
-  'system-audit': () => <SystemAudit />,
-  logs: () => <LiveLogs />,
-  files: () => <FileExplorer />,
-  alerts: () => <AlertCenter />,
-  reports: () => <Reports />,
-  experiments: () => <ExperimentRunner />,
-  ops: () => <VpsOperations />,
-  roadmap: () => <RoadmapGrid />,
+// Route-level code splitting (Phase 5 institutional redesign, 2026-07-26) —
+// each tab is its own dynamic import instead of one ~957KB shared bundle.
+// Named-export lazy idiom matches Phase 3's existing precedent
+// (RiskCenter.tsx/BacktestingCharts.tsx's MonthlyReturnsHeatmap/
+// RMultipleHistogram). Specifiers MUST be string literals, not a
+// templated/looped import() — only literals are statically chunk-splittable.
+const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
+  'mission-control': lazy(() =>
+    import('./modules/mission-control/MissionControl').then((m) => ({ default: m.MissionControl }))),
+  'live-signals': lazy(() =>
+    import('./modules/live-signals/LiveSignals').then((m) => ({ default: m.LiveSignals }))),
+  'forward-demo': lazy(() =>
+    import('./modules/forward-demo/ForwardDemo').then((m) => ({ default: m.ForwardDemo }))),
+  journal: lazy(() =>
+    import('./modules/journal/Journal').then((m) => ({ default: m.Journal }))),
+  'risk-center': lazy(() =>
+    import('./modules/risk-center/RiskCenter').then((m) => ({ default: m.RiskCenter }))),
+  'execution-quality': lazy(() =>
+    import('./modules/execution-quality/ExecutionQuality').then((m) => ({ default: m.ExecutionQuality }))),
+  'data-center': lazy(() =>
+    import('./modules/data-center/DataCenter').then((m) => ({ default: m.DataCenter }))),
+  'provider-eval': lazy(() =>
+    import('./modules/provider-eval/ProviderEval').then((m) => ({ default: m.ProviderEval }))),
+  'engine-monitor': lazy(() =>
+    import('./modules/engine-monitor/EngineMonitor').then((m) => ({ default: m.EngineMonitor }))),
+  'ai-decision-center': lazy(() =>
+    import('./modules/ai-decision-center/AiDecisionCenter').then((m) => ({ default: m.AiDecisionCenter }))),
+  research: lazy(() =>
+    import('./modules/research-backtests/ResearchBacktests').then((m) => ({ default: m.ResearchBacktests }))),
+  'backtesting-lab': lazy(() =>
+    import('./modules/backtesting-lab/BacktestingLab').then((m) => ({ default: m.BacktestingLab }))),
+  'backtesting-charts': lazy(() =>
+    import('./modules/backtesting-charts/BacktestingCharts').then((m) => ({ default: m.BacktestingCharts }))),
+  'system-audit': lazy(() =>
+    import('./modules/system-audit/SystemAudit').then((m) => ({ default: m.SystemAudit }))),
+  logs: lazy(() =>
+    import('./modules/live-logs/LiveLogs').then((m) => ({ default: m.LiveLogs }))),
+  files: lazy(() =>
+    import('./modules/file-explorer/FileExplorer').then((m) => ({ default: m.FileExplorer }))),
+  alerts: lazy(() =>
+    import('./modules/alert-center/AlertCenter').then((m) => ({ default: m.AlertCenter }))),
+  reports: lazy(() =>
+    import('./modules/reports/Reports').then((m) => ({ default: m.Reports }))),
+  experiments: lazy(() =>
+    import('./modules/experiment-runner/ExperimentRunner').then((m) => ({ default: m.ExperimentRunner }))),
+  ops: lazy(() =>
+    import('./modules/vps-operations/VpsOperations').then((m) => ({ default: m.VpsOperations }))),
+  roadmap: lazy(() =>
+    import('./modules/roadmap/RoadmapGrid').then((m) => ({ default: m.RoadmapGrid }))),
+}
+
+function TabLoading({ label }: { label: string }) {
+  return (
+    <div className="min-h-[240px] flex items-center justify-center text-muted text-[0.85em]">
+      Loading {label}…
+    </div>
+  )
 }
 
 function Clock() {
@@ -107,6 +121,9 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const ActiveModule = MODULES[tab]
+  const activeLabel = TABS.find((t) => t.id === tab)?.label ?? tab
+
   return (
     <div className="h-screen flex flex-col">
       <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-gradient-to-r from-bg to-[#0d1829] shrink-0">
@@ -140,8 +157,10 @@ function Shell() {
         <Sidebar tab={tab} setTab={setTab} />
         <BottomPanel>
           <main className="px-6 py-5 max-w-[1400px] mx-auto">
-            <ErrorBoundary key={tab} moduleName={TABS.find((t) => t.id === tab)?.label ?? tab}>
-              {MODULES[tab]()}
+            <ErrorBoundary key={tab} moduleName={activeLabel}>
+              <Suspense fallback={<TabLoading label={activeLabel} />}>
+                <ActiveModule />
+              </Suspense>
             </ErrorBoundary>
           </main>
         </BottomPanel>

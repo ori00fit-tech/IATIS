@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { getJobCatalog, getJobList, getJobDetail, runJob, cancelJob, type JobCatalogResponse, type JobSummary, type JobDetail, type JobStatus } from './api'
+import { getResearchSymbols, type SymbolsResponse } from '../research-backtests/api'
 
 const POLL_MS = 3_000
 
@@ -17,6 +18,71 @@ const STATUS_TONE: Record<JobStatus, 'exec' | 'no-trade' | 'good' | 'marginal' |
   cancelled: 'no-trade',
 }
 
+// Symbol picker for the backtest/walk_forward/robustness job rows below
+// (2026-07-26) — replaces a free-text "type your symbols" input with real,
+// currently-configured symbols from getResearchSymbols(), the same source
+// BacktestingLab.tsx's SymbolsStep uses. Self-contained (no new dependency
+// — this app has no popover/combobox primitive yet, and one purpose-built
+// dropdown for this single screen doesn't warrant adding one).
+function SymbolMultiSelect({
+  value,
+  onChange,
+  symbolsData,
+}: {
+  value: string[]
+  onChange: (symbols: string[]) => void
+  symbolsData: SymbolsResponse | null
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const allEntries = symbolsData ? Object.values(symbolsData.asset_classes).flat() : []
+  const filtered = allEntries.filter((s) => s.internal.toLowerCase().includes(search.toLowerCase()))
+  const toggle = (sym: string) => onChange(value.includes(sym) ? value.filter((s) => s !== sym) : [...value, sym])
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56 text-left truncate"
+      >
+        {value.length === 0 ? <span className="text-muted">Select symbols…</span> : value.join(', ')}
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-72 max-h-72 overflow-y-auto bg-panel border border-border rounded shadow-md p-2 flex flex-col gap-2">
+          <input
+            autoFocus
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search…"
+            className="px-2 py-1 text-[0.78em] rounded border border-border bg-bg text-text"
+          />
+          <div className="flex flex-col gap-0.5">
+            {filtered.map((s) => (
+              <label key={s.internal} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-surface cursor-pointer text-[0.78em]">
+                <input type="checkbox" checked={value.includes(s.internal)} onChange={() => toggle(s.internal)} />
+                <span className="font-mono">{s.internal}</span>
+              </label>
+            ))}
+            {filtered.length === 0 && <span className="text-muted text-[0.78em] px-1.5 py-1">No matches</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ExperimentRunner() {
   const { markUnauthenticated } = useAuth()
   const [catalog, setCatalog] = useState<JobCatalogResponse | null>(null)
@@ -27,6 +93,7 @@ export function ExperimentRunner() {
   const [cancelling, setCancelling] = useState<string | null>(null)
 
   const jobs = usePolling(() => getJobList(), POLL_MS, markUnauthenticated)
+  const symbolsCatalog = usePolling(getResearchSymbols, POLL_MS, markUnauthenticated)
 
   useEffect(() => {
     getJobCatalog()
@@ -52,7 +119,7 @@ export function ExperimentRunner() {
 
   const runningJobNames = new Set((jobs.data?.jobs ?? []).filter((j) => j.status === 'queued' || j.status === 'running').map((j) => j.job))
   // Per-job symbols text for jobs flagged requires_symbols (backtest).
-  const [symbolsInput, setSymbolsInput] = useState<Record<string, string>>({})
+  const [symbolsInput, setSymbolsInput] = useState<Record<string, string[]>>({})
 
   const start = async (jobId: string, symbols?: string[]) => {
     setStarting(jobId)
@@ -120,10 +187,7 @@ export function ExperimentRunner() {
               .filter((j) => j.category === 'research')
               .map((job) => {
               const isRunning = runningJobNames.has(job.id)
-              const symbols = (symbolsInput[job.id] ?? '')
-                .split(',')
-                .map((s) => s.trim().toUpperCase())
-                .filter(Boolean)
+              const symbols = symbolsInput[job.id] ?? []
               const needsSymbols = !!job.requires_symbols
               return (
                 <div key={job.id} className="px-4 py-3 flex items-center justify-between gap-4 flex-wrap">
@@ -132,11 +196,10 @@ export function ExperimentRunner() {
                     <div className="text-[0.78em] text-muted">{job.description}</div>
                   </div>
                   {needsSymbols && (
-                    <input
-                      className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text placeholder:text-muted w-56"
-                      placeholder="symbols, e.g. XAUUSD, BTCUSD"
-                      value={symbolsInput[job.id] ?? ''}
-                      onChange={(e) => setSymbolsInput((m) => ({ ...m, [job.id]: e.target.value }))}
+                    <SymbolMultiSelect
+                      value={symbols}
+                      onChange={(syms) => setSymbolsInput((m) => ({ ...m, [job.id]: syms }))}
+                      symbolsData={symbolsCatalog.data}
                     />
                   )}
                   <button

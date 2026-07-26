@@ -3,6 +3,7 @@ import { Group, Panel, Separator, type PanelImperativeHandle, type PanelSize } f
 import { Empty } from './Panel'
 import { useUiStore, BOTTOM_PANEL_COLLAPSED_HEIGHT, BOTTOM_PANEL_MIN_HEIGHT, type BottomPanelTab } from '../lib/uiStore'
 import { useLiveLogs, levelClass } from '../lib/useLiveLogs'
+import { useConsoleStore } from '../lib/consoleCapture'
 
 const TABS: { id: BottomPanelTab; label: string }[] = [
   { id: 'logs', label: 'Logs' },
@@ -53,9 +54,43 @@ function PlaceholderBody({ label }: { label: string }) {
   return <Empty>{label} — coming in a later phase.</Empty>
 }
 
+/** Real browser-side JS diagnostics (2026-07-26) — console.error/warn,
+ * window.onerror, unhandledrejection, captured globally by
+ * lib/consoleCapture.ts from app startup. A module's ErrorBoundary trip
+ * already calls console.error (ErrorBoundary.tsx), so it surfaces here
+ * automatically. Not persisted across reloads — a stale error from a
+ * previous page load reappearing here would mislead live diagnostics. */
+function ConsoleBody() {
+  const entries = useConsoleStore((s) => s.entries)
+  const clear = useConsoleStore((s) => s.clear)
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0">
+        <span className="text-[0.68em] text-muted">{entries.length} captured this page load</span>
+        <button onClick={clear} className="ml-auto text-[0.7em] text-muted hover:text-accent">
+          Clear
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto p-2">
+        {entries.length > 0 ? (
+          <pre className="text-[0.7em] leading-relaxed whitespace-pre-wrap break-words font-mono">
+            {entries.map((e, i) => (
+              <div key={i} className={e.level === 'warn' ? 'text-amber' : 'text-red'}>
+                [{e.timestamp.slice(11, 19)}] {e.level.toUpperCase()}: {e.message}
+              </div>
+            ))}
+          </pre>
+        ) : (
+          <Empty>No console errors/warnings captured this page load.</Empty>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function BottomPanelBody({ activeTab }: { activeTab: BottomPanelTab }) {
   if (activeTab === 'logs') return <LogsBody />
-  if (activeTab === 'console') return <PlaceholderBody label="Console" />
+  if (activeTab === 'console') return <ConsoleBody />
   if (activeTab === 'raw-json') return <PlaceholderBody label="Raw JSON inspector" />
   return <PlaceholderBody label="Research Notes" />
 }

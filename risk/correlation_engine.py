@@ -52,7 +52,10 @@ def check_correlation(
 
     Args:
         symbol: symbol being evaluated (e.g. "AUDJPY")
-        active_executes: symbols already EXECUTE in this run
+        active_executes: symbols already EXECUTE this run OR already open
+            from a previous run — the caller (scheduler.py) seeds this with
+            outcome_tracker.get_open_signals() before the run starts, so
+            correlation is capped across time, not just within one tick.
         max_per_group: max signals from same correlation group
 
     Returns:

@@ -223,6 +223,30 @@ def test_run_once_does_not_log_outcome_when_broker_path_unconfigured(synthetic_c
 
 
 # ---------------------------------------------------------------------------
+# correlation filter — must span across runs, not just within one tick
+# (2026-07-25 Risk Engine audit finding: execute_signals started empty
+# every run, so a position open for hours/days gave zero correlation
+# protection against a new same-group signal on a later tick).
+# ---------------------------------------------------------------------------
+
+def test_run_once_correlation_filter_considers_already_open_positions(synthetic_config):
+    """Two USD_MAJORS positions already open from a PREVIOUS run must count
+    toward the correlation cap on a NEW candidate this run."""
+    from scheduler import run_once
+    from storage.outcome_tracker import log_signal
+
+    log_signal(_fake_execute_report("EURUSD"))
+    log_signal(_fake_execute_report("GBPUSD"))  # both in USD_MAJORS, MAX_PER_GROUP=2
+
+    with patch("scheduler.run_pipeline") as mock_pipeline, \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        reports = run_once(synthetic_config, symbols=["AUDUSD"])  # 3rd USD_MAJORS symbol
+
+    mock_pipeline.assert_not_called()  # blocked before the pipeline even runs
+    assert reports[0].get("correlation_blocked") is True
+
+
+# ---------------------------------------------------------------------------
 # startup message
 # ---------------------------------------------------------------------------
 

@@ -40,11 +40,12 @@ this codebase (see .env.example) — never stored in config.yaml.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 from ai.cache import TTLCache
-from ai.models import MacroAnalysis, NewsAnalysis, TradeExplanation
+from ai.models import HypothesisSuggestion, MacroAnalysis, NewsAnalysis, TradeExplanation
 from ai.providers.base import AIProvider, AIProviderError
 from utils.logger import get_logger
 
@@ -386,3 +387,51 @@ class AIAnalyzer:
         except AIProviderError as exc:
             logger.warning(f"AIAnalyzer.answer_research_question failed: {exc}")
             return {"status": "error", "provider": self.provider_name, "error": _user_safe_error(exc), "text": ""}
+
+    # ── Next-hypothesis suggestion (AI Copilot, Phase 4d) ────────────────
+
+    _REQUIRED_SUGGESTION_FIELDS = (
+        "title", "statement", "falsification_criteria", "distinct_from_prior_kill",
+    )
+
+    def suggest_next_hypothesis(self, context: dict, focus_hint: str = "") -> dict:
+        """Draft a candidate for the operator's NEXT research hypothesis —
+        never a decision, never written to research/results/registry.json
+        by this method or anything it calls (execution/routes/ai.py's
+        save_hypothesis_draft is the only thing allowed to persist a
+        suggestion, and only into research/hypotheses/drafts/). `context`
+        is the already-assembled registry summary + dead-list + backlog
+        text (see execution/routes/ai.py::_build_copilot_context) — this
+        method never re-derives it.
+        """
+        if not self.available:
+            return HypothesisSuggestion(status="disabled", provider=self.provider_name).to_dict()
+        try:
+            context_text = json.dumps(context, indent=2, default=str)[:12000]
+            raw = self._provider.suggest_hypothesis(context_text, focus_hint)
+        except AIProviderError as exc:
+            logger.warning(f"AIAnalyzer.suggest_next_hypothesis failed: {exc}")
+            return HypothesisSuggestion(
+                status="error", error=_user_safe_error(exc), provider=self.provider_name
+            ).to_dict()
+
+        missing = [f for f in self._REQUIRED_SUGGESTION_FIELDS if not str(raw.get(f, "")).strip()]
+        if missing:
+            logger.warning(f"AIAnalyzer.suggest_next_hypothesis: response missing fields {missing}")
+            return HypothesisSuggestion(
+                status="error",
+                error="AI response was missing required fields — try again.",
+                provider=self.provider_name,
+            ).to_dict()
+
+        return HypothesisSuggestion(
+            title=raw.get("title", ""),
+            statement=raw.get("statement", ""),
+            why_this_might_be_true=raw.get("why_this_might_be_true", ""),
+            data_required=raw.get("data_required", {}) or {},
+            falsification_criteria=raw.get("falsification_criteria", ""),
+            distinct_from_prior_kill=raw.get("distinct_from_prior_kill", ""),
+            notes=raw.get("notes", ""),
+            provider=self._provider.name,
+            status="ok",
+        ).to_dict()

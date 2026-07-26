@@ -17,12 +17,17 @@ import {
   getResearchEngines,
   getResearchIndicators,
   getDashboardSummary,
+  compareHypotheses,
+  suggestHypothesis,
+  saveHypothesisDraft,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
   type EvidenceManifest,
   type AiResearchSummary,
   type HypothesisDetailResponse,
+  type HypothesisCompareEntry,
+  type SuggestHypothesisResponse,
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
@@ -198,6 +203,220 @@ function HypothesisDetailPanel({ id, onClose }: { id: string; onClose: () => voi
           )}
         </div>
       )}
+    </Panel>
+  )
+}
+
+// Direct hypothesis-vs-hypothesis comparison (Phase 4c, 2026-07-26). Parallels
+// BacktestingCharts.tsx's ExperimentComparisonPanel KPI-table pattern, but
+// against the hypothesis registry (/research/compare) instead of run files.
+const MAX_HYPOTHESES_COMPARED = 6
+
+function HypothesisComparePanel({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: HypothesisCompareEntry[] | null }>({
+    loading: true,
+    error: null,
+    data: null,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: null, data: null })
+    compareHypotheses(ids)
+      .then((res) => !cancelled && setState({ loading: false, error: null, data: res.hypotheses }))
+      .catch((err) => !cancelled && setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [ids])
+
+  const columns: Column<HypothesisCompareEntry>[] = [
+    { header: 'ID', render: (h) => <span className="font-bold text-accent">{h.id}</span> },
+    {
+      header: 'Title',
+      render: (h) => (h.found ? <span title={String((h.hypothesis as Record<string, unknown> | undefined)?.conclusion ?? '')}>{String((h.hypothesis as Record<string, unknown> | undefined)?.title ?? '')}</span> : <span className="text-muted italic">not in registry</span>),
+    },
+    {
+      header: 'Status',
+      render: (h) => (h.found ? <Badge tone={statusTone(String((h.hypothesis as Record<string, unknown> | undefined)?.status ?? ''))}>{String((h.hypothesis as Record<string, unknown> | undefined)?.status ?? 'UNKNOWN')}</Badge> : '—'),
+    },
+    {
+      header: 'Result Files',
+      render: (h) =>
+        h.found && h.result_files && h.result_files.length > 0 ? (
+          <span>
+            {h.result_files.filter((rf) => rf.exists).length}/{h.result_files.length}{' '}
+            <span className={h.result_files.some((rf) => rf.exists) ? 'text-green' : 'text-red'}>
+              {h.result_files.some((rf) => rf.exists) ? '✓' : '✗'}
+            </span>
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        ),
+      align: 'right',
+    },
+    {
+      header: 'Conclusion',
+      render: (h) => {
+        const hyp = h.hypothesis as Record<string, unknown> | undefined
+        const conclusion = typeof hyp?.conclusion === 'string' ? hyp.conclusion : typeof hyp?.lesson === 'string' ? hyp.lesson : ''
+        return conclusion ? <span className="text-[0.85em]">{conclusion.slice(0, 160)}{conclusion.length > 160 ? '…' : ''}</span> : <span className="text-muted">—</span>
+      },
+    },
+  ]
+
+  return (
+    <Panel title="Hypothesis Comparison" right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+      {state.loading ? (
+        <Empty>Loading...</Empty>
+      ) : state.error ? (
+        <Empty>Failed: {state.error}</Empty>
+      ) : state.data && state.data.length > 0 ? (
+        <DataTable columns={columns} rows={state.data} rowKey={(h) => h.id} />
+      ) : (
+        <Empty>No hypotheses to compare</Empty>
+      )}
+    </Panel>
+  )
+}
+
+// AI Copilot: next-hypothesis suggestion + draft file (Phase 4d, 2026-07-26).
+// Two-step by design: "Suggest Next Test" only ever fetches a draft (no
+// side effects); "Save as Draft" is a separate, explicit, human-triggered
+// write. Neither this component nor the backend it calls ever touches
+// research/results/registry.json — the saved file lands in
+// research/hypotheses/drafts/ for the operator to review, edit, and
+// manually promote (CLAUDE.md rule 1: pre-register before you build).
+function AiCopilotPanel() {
+  const [focusHint, setFocusHint] = useState('')
+  const [state, setState] = useState<{ loading: boolean; error: string | null; data: SuggestHypothesisResponse | null }>({
+    loading: false,
+    error: null,
+    data: null,
+  })
+  const [save, setSave] = useState<{ saving: boolean; error: string | null; file: string | null }>({
+    saving: false,
+    error: null,
+    file: null,
+  })
+
+  const suggest = () => {
+    setState({ loading: true, error: null, data: null })
+    setSave({ saving: false, error: null, file: null })
+    suggestHypothesis(focusHint)
+      .then((data) => setState({ loading: false, error: null, data }))
+      .catch((err) => setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+  }
+
+  const saveDraft = () => {
+    if (!state.data || state.data.status !== 'ok') return
+    const { title, statement, why_this_might_be_true, data_required, falsification_criteria, distinct_from_prior_kill, notes } = state.data
+    setSave({ saving: true, error: null, file: null })
+    saveHypothesisDraft({
+      title: title ?? '',
+      statement: statement ?? '',
+      why_this_might_be_true: why_this_might_be_true ?? '',
+      data_required: data_required ?? {},
+      falsification_criteria: falsification_criteria ?? '',
+      distinct_from_prior_kill: distinct_from_prior_kill ?? '',
+      notes: notes ?? '',
+    })
+      .then((res) => setSave({ saving: false, error: null, file: res.file }))
+      .catch((err) => setSave({ saving: false, error: err instanceof Error ? err.message : String(err), file: null }))
+  }
+
+  const suggestion = state.data && state.data.status === 'ok' ? state.data : null
+
+  return (
+    <Panel
+      title="AI Copilot"
+      right={
+        <div className="flex items-center gap-2">
+          <input
+            value={focusHint}
+            onChange={(e) => setFocusHint(e.target.value)}
+            placeholder="focus hint (optional)…"
+            className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.85em] placeholder:text-muted/60 w-48"
+          />
+          <button
+            onClick={suggest}
+            disabled={state.loading}
+            className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+          >
+            {state.loading ? 'Thinking…' : state.data ? 'Suggest Again' : 'Suggest Next Test'}
+          </button>
+        </div>
+      }
+    >
+      <div className="p-4">
+        {!state.data && !state.loading && !state.error ? (
+          <Empty>
+            Drafts a candidate for your next research hypothesis, grounded in the real registry and the ideas already
+            killed by measurement. Click "Suggest Next Test".
+          </Empty>
+        ) : (
+          <AiStatusFrame loading={state.loading} fetchError={state.error} status={state.data?.status} providerError={state.data?.error}>
+            {suggestion && (
+              <div className="flex flex-col gap-4 text-[0.85em]">
+                <div className="text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+                  ⚠️ AI-generated draft — not reviewed, not registered. Review and edit before using.
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Title</div>
+                  <p className="font-bold">{suggestion.title}</p>
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Statement</div>
+                  <p>{suggestion.statement}</p>
+                </div>
+                {suggestion.why_this_might_be_true && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Why this might be true</div>
+                    <p>{suggestion.why_this_might_be_true}</p>
+                  </div>
+                )}
+                {suggestion.data_required && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Data required</div>
+                    <pre className="bg-surface border border-border rounded p-2 overflow-x-auto text-[0.85em]">
+                      {JSON.stringify(suggestion.data_required, null, 1)}
+                    </pre>
+                  </div>
+                )}
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Falsification criteria</div>
+                  <p>{suggestion.falsification_criteria}</p>
+                </div>
+                <div>
+                  <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Distinct from prior kill</div>
+                  <p>{suggestion.distinct_from_prior_kill}</p>
+                </div>
+                {suggestion.notes && (
+                  <div>
+                    <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1">Notes</div>
+                    <p>{suggestion.notes}</p>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={saveDraft}
+                    disabled={save.saving}
+                    className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50 font-bold"
+                  >
+                    {save.saving ? 'Saving…' : 'Save as Draft'}
+                  </button>
+                  {save.file && (
+                    <span className="text-green text-[0.8em]">
+                      Saved to <span className="font-mono">{save.file}</span> — open it via the Files tab to review and refine.
+                    </span>
+                  )}
+                  {save.error && <span className="text-red text-[0.8em]">{save.error}</span>}
+                </div>
+              </div>
+            )}
+          </AiStatusFrame>
+        )}
+      </div>
     </Panel>
   )
 }
@@ -468,6 +687,17 @@ export function ResearchBacktests() {
     data: null,
   })
   const [drilldown, setDrilldown] = useState<string | null>(null)
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set())
+  const [comparing, setComparing] = useState<string[] | null>(null)
+
+  const toggleCompareSelection = (id: string) => {
+    setSelectedForCompare((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < MAX_HYPOTHESES_COMPARED) next.add(id)
+      return next
+    })
+  }
 
   const generateAiSummary = () => {
     if (!research.data) return
@@ -482,6 +712,18 @@ export function ResearchBacktests() {
   }
 
   const hypothesisColumns: Column<Hypothesis>[] = [
+    {
+      header: '',
+      render: (h) => (
+        <input
+          type="checkbox"
+          checked={selectedForCompare.has(h.id)}
+          onChange={() => toggleCompareSelection(h.id)}
+          disabled={!selectedForCompare.has(h.id) && selectedForCompare.size >= MAX_HYPOTHESES_COMPARED}
+          title={`Select ${h.id} for comparison`}
+        />
+      ),
+    },
     {
       header: 'ID',
       render: (h) => (
@@ -610,6 +852,8 @@ export function ResearchBacktests() {
         </div>
       </Panel>
 
+      <AiCopilotPanel />
+
       <Panel
         title="Evidence Manifests"
         right={manifests.data ? `${manifests.data.count} runs · git-tracked, SHA256-fingerprinted` : undefined}
@@ -644,7 +888,21 @@ export function ResearchBacktests() {
         </Panel>
       )}
 
-      <Panel title="Hypothesis Registry" right="click an ID for the full drill-down">
+      <Panel
+        title="Hypothesis Registry"
+        right={
+          <span className="flex items-center gap-3">
+            click an ID for the full drill-down · select rows (max {MAX_HYPOTHESES_COMPARED}) to compare
+            <button
+              onClick={() => setComparing(Array.from(selectedForCompare))}
+              disabled={selectedForCompare.size < 2}
+              className="px-2.5 py-1 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed font-bold normal-case tracking-normal"
+            >
+              Compare Selected ({selectedForCompare.size})
+            </button>
+          </span>
+        }
+      >
         {research.data && research.data.hypotheses.length > 0 ? (
           <DataTable columns={hypothesisColumns} rows={research.data.hypotheses} rowKey={(h) => h.id} />
         ) : (
@@ -653,6 +911,7 @@ export function ResearchBacktests() {
       </Panel>
 
       {drilldown && <HypothesisDetailPanel id={drilldown} onClose={() => setDrilldown(null)} />}
+      {comparing && <HypothesisComparePanel ids={comparing} onClose={() => setComparing(null)} />}
 
       <Panel title="Backtest Results" right={backtests.data ? `${backtests.data.count} runs` : undefined}>
         {backtests.data && backtests.data.results.length > 0 ? (

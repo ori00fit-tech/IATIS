@@ -10,6 +10,10 @@ docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-1).
 """
 from __future__ import annotations
 
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request
@@ -17,6 +21,13 @@ from fastapi import APIRouter, Cookie, Header, HTTPException, Request
 from execution.api_core import _check_auth, _get_config, logger
 
 router = APIRouter()
+
+# AI Copilot draft storage (Phase 4d, 2026-07-26) — a fixed, server-
+# controlled directory nothing else in the codebase reads (edge_gate.py /
+# philosophy_audit.py / forward_review.py only ever read registry.json +
+# the outcomes DB). Module-level so tests can monkeypatch it instead of
+# writing into the real repo tree, same pattern as research.py's _DATA_DIR.
+_DRAFTS_DIR = Path("research/hypotheses/drafts")
 
 
 @router.post("/ai/optimize-weights")
@@ -289,5 +300,197 @@ async def ai_daily_report(
         return analyzer.generate_daily_report(stats)
     except Exception as exc:
         logger.error(f"AI daily report error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+# ---------------------------------------------------------------------------
+# AI Copilot (Phase 4d, 2026-07-26) — drafts a candidate for the operator's
+# NEXT research hypothesis, grounded in the real registry + CLAUDE.md's dead
+# list + the hypothesis backlog. Two-step, deliberately: suggest (read-only,
+# no side effects) then save-draft (a separate, explicit, human-triggered
+# write) — never a single call that both generates and persists. Neither
+# endpoint ever touches research/results/registry.json; the only write
+# target is _DRAFTS_DIR, a brand-new directory nothing else in the codebase
+# reads.
+# ---------------------------------------------------------------------------
+
+def _extract_markdown_section(text: str, heading: str) -> str | None:
+    """Return the text between `heading` (e.g. "## The dead list") and the
+    next "## " heading, or None if `heading` isn't found. Callers must
+    degrade gracefully (omit the section) rather than crash — a doc's
+    heading wording can change without this endpoint knowing.
+    """
+    idx = text.find(heading)
+    if idx == -1:
+        return None
+    rest = text[idx + len(heading):]
+    next_idx = rest.find("\n## ")
+    section = rest[:next_idx] if next_idx != -1 else rest
+    return section.strip()
+
+
+def _build_copilot_context() -> dict[str, Any]:
+    """Everything the suggest_next_hypothesis prompt needs: a compact
+    registry summary (so the model knows what's already been tried), the
+    CLAUDE.md dead list (so a suggestion never rebuilds a killed idea
+    unchecked), and the newest hypothesis backlog's reserved-IDs section
+    (so it steers toward already-triaged candidates). Every section
+    degrades gracefully to omitted/None on a missing file or a doc-heading
+    edit — this must never 500 the endpoint over documentation formatting.
+    """
+    from execution.routes.research import _load_registry_hypotheses
+
+    hypotheses_raw = _load_registry_hypotheses()
+    registry_summary = [
+        {
+            "id": h_id,
+            "title": (h.get("title") or "")[:120],
+            "status": h.get("status", "UNKNOWN"),
+            "conclusion": (h.get("conclusion") or h.get("lesson") or "")[:200],
+        }
+        for h_id, h in hypotheses_raw.items()
+    ]
+
+    highest_id = 0
+    for h_id in hypotheses_raw:
+        m = re.match(r"^H(\d+)", h_id)
+        if m:
+            highest_id = max(highest_id, int(m.group(1)))
+
+    dead_list = None
+    claude_md = Path("CLAUDE.md")
+    if claude_md.exists():
+        try:
+            dead_list = _extract_markdown_section(
+                claude_md.read_text(encoding="utf-8"), "## The dead list"
+            )
+        except Exception as exc:
+            logger.debug(f"Copilot context: could not read CLAUDE.md dead list: {exc}")
+
+    backlog_reserved = None
+    try:
+        backlog_files = sorted(
+            Path("research/hypotheses").glob("BACKLOG_*.md"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if backlog_files:
+            backlog_reserved = _extract_markdown_section(
+                backlog_files[0].read_text(encoding="utf-8"), "## Reserved registry IDs"
+            )
+    except Exception as exc:
+        logger.debug(f"Copilot context: could not read hypothesis backlog: {exc}")
+
+    return {
+        "registry_summary": registry_summary,
+        "highest_registered_id": f"H{highest_id:03d}" if highest_id else None,
+        "already_killed_ideas": dead_list or "Not available — see CLAUDE.md's dead list table directly.",
+        "reserved_backlog_ids": backlog_reserved or "Not available.",
+    }
+
+
+@router.post("/ai/suggest-hypothesis")
+async def ai_suggest_hypothesis(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Drafts a candidate for the operator's next research hypothesis.
+    Read-only: no side effects, nothing written to disk. Optional body:
+    {focus_hint: string} — free text steering the suggestion (e.g. "crypto
+    order flow"), same convention as /ai/research-question's free-form
+    question box. Empty/omitted hint lets the prompt default toward
+    docs/PHILOSOPHY_AUDIT_2026-07.md's own named next-candidates.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from ai.ai_analyzer import AIAnalyzer
+
+        body = await request.json() if await request.body() else {}
+        focus_hint = str(body.get("focus_hint") or "")[:300]
+        context = _build_copilot_context()
+
+        analyzer = AIAnalyzer(_get_config())
+        return analyzer.suggest_next_hypothesis(context, focus_hint)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"AI suggest-hypothesis error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+
+
+def _slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+    return slug or "untitled"
+
+
+def _render_draft_markdown(body: dict[str, Any], timestamp: str) -> str:
+    def _s(key: str) -> str:
+        return str(body.get(key) or "").strip()
+
+    data_required = body.get("data_required") or {}
+
+    return f"""<!-- AI-GENERATED DRAFT — NOT REVIEWED — NOT A REGISTRATION.
+     Per CLAUDE.md rule 1, this must be reviewed, refined, and manually
+     registered in research/results/registry.json (with its own ID)
+     before any experiment runs against it. Never copy directly. -->
+
+# {_s("title") or "Untitled"}
+
+**Status:** DRAFT (AI-suggested, unreviewed)
+**Generated:** {timestamp}
+
+## Statement
+{_s("statement")}
+
+## Why this might be true
+{_s("why_this_might_be_true")}
+
+## Data required
+{json.dumps(data_required, indent=2)}
+
+## Falsification criteria
+{_s("falsification_criteria")}
+
+## Distinct from prior kill
+{_s("distinct_from_prior_kill")}
+
+## Notes
+{_s("notes")}
+"""
+
+
+@router.post("/ai/save-hypothesis-draft")
+async def ai_save_hypothesis_draft(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Persists a Copilot suggestion (whatever the operator has on screen)
+    as a DRAFT markdown file, shaped like research/hypotheses/TEMPLATE.md
+    so it can be renamed/finished into a real HXXX_*.md by hand. NEVER
+    writes to research/results/registry.json — the only write target is
+    _DRAFTS_DIR, a brand-new directory nothing else in the codebase reads,
+    so a draft is structurally incapable of being mistaken for a real
+    registration. Filename is timestamp+slug, server-constructed —
+    the client never supplies a path.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        body = await request.json()
+        title = str(body.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required.")
+
+        slug = _slugify(title)[:60]
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        _DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+        target = _DRAFTS_DIR / f"ai_draft_{ts}_{slug}.md"
+        target.write_text(_render_draft_markdown(body, ts), encoding="utf-8")
+        return {"file": str(target)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"AI save-hypothesis-draft error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
 

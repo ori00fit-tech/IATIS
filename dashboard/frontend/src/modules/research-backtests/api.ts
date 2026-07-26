@@ -151,6 +151,23 @@ export interface HypothesisDetailResponse {
 
 export const getHypothesisDetail = (id: string) => apiGet<HypothesisDetailResponse>(`/research/${encodeURIComponent(id)}`)
 
+// Direct hypothesis-vs-hypothesis comparison (Phase 4c, 2026-07-26):
+// /research/compare returns the same full detail as getHypothesisDetail
+// for up to 10 IDs in one round trip. An unknown ID comes back as
+// `{ id, found: false }` rather than failing the whole batch.
+export interface HypothesisCompareEntry extends Partial<HypothesisDetailResponse> {
+  id: string
+  found: boolean
+}
+
+export interface HypothesisCompareResponse {
+  count: number
+  hypotheses: HypothesisCompareEntry[]
+}
+
+export const compareHypotheses = (ids: string[]) =>
+  apiGet<HypothesisCompareResponse>('/research/compare', { ids: ids.join(',') })
+
 // ── Research Workspace, Phases 2-6 (2026-07-24/25) ──────────────────────────
 
 // Symbol Manager: the FULL symbol universe (including disabled/WATCHLIST/
@@ -241,3 +258,30 @@ export interface ValidationConfigResponse {
 }
 
 export const getValidationConfig = () => apiGet<ValidationConfigResponse>('/research/validation-config')
+
+// ── AI Copilot: next-hypothesis suggestion + draft file (Phase 4d, 2026-07-26) ──
+// Two-step by design: suggestHypothesis() is read-only (no side effects);
+// saveHypothesisDraft() is a separate, explicit, human-triggered write.
+// Neither ever touches research/results/registry.json — the backend only
+// ever writes into research/hypotheses/drafts/ (execution/routes/ai.py).
+export interface HypothesisSuggestion {
+  title: string
+  statement: string
+  why_this_might_be_true: string
+  data_required: Record<string, unknown>
+  falsification_criteria: string
+  distinct_from_prior_kill: string
+  notes: string
+}
+
+export interface SuggestHypothesisResponse extends Partial<HypothesisSuggestion> {
+  status: 'ok' | 'disabled' | 'error'
+  provider: string
+  error?: string
+}
+
+export const suggestHypothesis = (focusHint: string) =>
+  apiPost<SuggestHypothesisResponse>('/ai/suggest-hypothesis', { focus_hint: focusHint })
+
+export const saveHypothesisDraft = (suggestion: HypothesisSuggestion) =>
+  apiPost<{ file: string }>('/ai/save-hypothesis-draft', suggestion)

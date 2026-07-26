@@ -249,6 +249,83 @@ def test_ai_research_question_rejects_overlong_question(client):
     assert r.status_code == 400
 
 
+def test_ai_suggest_hypothesis_requires_auth(client):
+    r = client.post("/ai/suggest-hypothesis", json={})
+    assert r.status_code == 401
+
+
+def test_ai_suggest_hypothesis_disabled_by_default(client):
+    r = client.post("/ai/suggest-hypothesis", json={"focus_hint": "crypto"}, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+
+
+def test_ai_suggest_hypothesis_works_with_no_body(client):
+    # focus_hint is optional — an empty POST body must not 400/500.
+    r = client.post("/ai/suggest-hypothesis", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["status"] == "disabled"
+
+
+def test_ai_save_hypothesis_draft_requires_auth(client):
+    r = client.post("/ai/save-hypothesis-draft", json={"title": "x"})
+    assert r.status_code == 401
+
+
+def test_ai_save_hypothesis_draft_rejects_empty_title(client):
+    r = client.post("/ai/save-hypothesis-draft", json={"title": "   "}, headers=HDR)
+    assert r.status_code == 400
+
+
+def test_ai_save_hypothesis_draft_writes_real_file(client, tmp_path, monkeypatch):
+    import execution.routes.ai as m
+
+    monkeypatch.setattr(m, "_DRAFTS_DIR", tmp_path)
+    r = client.post(
+        "/ai/save-hypothesis-draft",
+        json={
+            "title": "Order-flow imbalance on crypto",
+            "statement": "A cumulative delta divergence predicts short-term reversals.",
+            "why_this_might_be_true": "Retail order flow is public and lagged.",
+            "data_required": {"symbols": ["BTCUSD"]},
+            "falsification_criteria": "PASS if OOS PF >= 1.2 at n >= 300.",
+            "distinct_from_prior_kill": "Not the crypto_volume experiment.",
+            "notes": "n/a",
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    file_path = r.json()["file"]
+    written = tmp_path / file_path.split("/")[-1]
+    assert written.exists()
+    content = written.read_text()
+    assert "AI-GENERATED DRAFT" in content
+    assert "Order-flow imbalance on crypto" in content
+    assert "PASS if OOS PF >= 1.2 at n >= 300." in content
+    assert "Not the crypto_volume experiment." in content
+
+
+def test_build_copilot_context_includes_real_registry_and_dead_list():
+    from execution.routes.ai import _build_copilot_context
+
+    ctx = _build_copilot_context()
+    assert len(ctx["registry_summary"]) > 0
+    assert ctx["highest_registered_id"] is not None
+    assert "BOS+FVG" in ctx["already_killed_ideas"]
+
+
+def test_build_copilot_context_degrades_gracefully_on_missing_heading(monkeypatch):
+    from execution.routes.ai import _build_copilot_context
+
+    monkeypatch.setattr(
+        "execution.routes.ai._extract_markdown_section",
+        lambda text, heading: None,
+    )
+    ctx = _build_copilot_context()
+    assert ctx["already_killed_ideas"] == "Not available — see CLAUDE.md's dead list table directly."
+    assert ctx["reserved_backlog_ids"] == "Not available."
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

@@ -354,3 +354,53 @@ def test_ai_analyzer_reads_new_providers_structure(monkeypatch):
     analyzer = AIAnalyzer(config)
     assert analyzer.provider_name == "anthropic"
     assert analyzer.available is True
+
+
+# ---------------------------------------------------------------------------
+# suggest_next_hypothesis (AI Copilot, Phase 4d)
+# ---------------------------------------------------------------------------
+
+def test_ai_analyzer_suggest_next_hypothesis_disabled():
+    analyzer = AIAnalyzer(_config(enabled=False))
+    result = analyzer.suggest_next_hypothesis({"registry_summary": []})
+    assert result["status"] == "disabled"
+
+
+def test_ai_analyzer_suggest_next_hypothesis_ok(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = (
+        '{"title": "Order-flow imbalance on crypto", '
+        '"statement": "A cumulative delta divergence predicts short-term reversals.", '
+        '"why_this_might_be_true": "Retail order flow on perpetuals is public and lagged.", '
+        '"data_required": {"symbols": ["BTCUSD"], "timeframes": ["H4"], "date_range": "2022-2026", "min_sample_size": "300"}, '
+        '"falsification_criteria": "PASS if OOS PF >= 1.2 at n >= 300; FAIL otherwise.", '
+        '"distinct_from_prior_kill": "Not the crypto_volume experiment (traded volume) — this is order-flow imbalance, a different signal.", '
+        '"notes": "n/a"}'
+    )
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.suggest_next_hypothesis({"registry_summary": []}, focus_hint="crypto order flow")
+    assert result["status"] == "ok"
+    assert result["title"] == "Order-flow imbalance on crypto"
+    assert result["data_required"]["symbols"] == ["BTCUSD"]
+    assert "crypto_volume" in result["distinct_from_prior_kill"]
+
+
+def test_ai_analyzer_suggest_next_hypothesis_rejects_missing_required_fields(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    # Missing distinct_from_prior_kill — a malformed suggestion must never
+    # reach status="ok" (that's what gates the frontend's Save button).
+    fake_json = '{"title": "t", "statement": "s", "falsification_criteria": "f"}'
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.suggest_next_hypothesis({})
+    assert result["status"] == "error"
+    assert "required fields" in result["error"].lower()
+
+
+def test_ai_analyzer_suggest_next_hypothesis_handles_provider_error(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(GeminiProvider, "_chat", return_value="not json at all, sorry"):
+        result = analyzer.suggest_next_hypothesis({})
+    assert result["status"] == "error"

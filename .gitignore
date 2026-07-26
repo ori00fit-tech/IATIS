@@ -55,3 +55,7 @@ data/ic_symbols_backtest.json
 graphify-out/cache/
 graphify-out/.graphify_*
 archive/
+
+# AI Copilot draft hypotheses (execution/routes/ai.py's _DRAFTS_DIR) —
+# unreviewed AI output, never meant to be committed as-is.
+research/hypotheses/drafts/

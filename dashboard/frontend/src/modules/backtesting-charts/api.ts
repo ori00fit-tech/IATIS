@@ -109,16 +109,27 @@ export interface ChartCandle {
   close: number
 }
 
+// Per-category performance split (backtest/metrics.py:280-309) — every key
+// present in one of these dicts has trades > 0 by construction (win_rate is
+// only ever added there once a category has at least one trade), so these
+// fields are safe as required, not optional.
+export interface BreakdownBucket {
+  trades: number
+  wins: number
+  win_rate: number
+  pnl: number
+}
+
 export interface ChartDataFile {
   symbol: string
   timeframe: string
   equity_curve: { x: string; y: number }[]
   monthly_returns: Record<string, number>
   yearly_returns: Record<string, number>
-  by_regime: Record<string, unknown>
+  by_regime: Record<string, BreakdownBucket>
   by_symbol: Record<string, unknown>
-  by_direction: Record<string, unknown>
-  by_session: Record<string, unknown>
+  by_direction: Record<string, BreakdownBucket>
+  by_session: Record<string, BreakdownBucket>
   candles: ChartCandle[] | null
   trades: ChartTrade[]
   monte_carlo: {

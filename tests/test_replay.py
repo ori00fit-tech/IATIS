@@ -31,6 +31,18 @@ def _pipeline_config() -> dict:
     # Persist a window for EVERY verdict so the test never depends on the
     # synthetic walk happening to produce an EXECUTE.
     config.setdefault("system", {})["persist_replay_windows"] = "all"
+    # Replay determinism: main._market_quality_gate reads system._replay_now
+    # (its own docstring: "a replayed decision must be scored at the
+    # ORIGINAL decision time, not at whatever hour the replay happens to
+    # run") but defaults to real wall-clock time when unset. Without pinning
+    # this, the MQS gate's session score varies with whenever the suite
+    # happens to run — landing in a low-quality session (e.g. Sydney)
+    # rejects the decision at the MQS gate before confluence ever runs,
+    # short-circuiting past the replay-window persist step entirely and
+    # failing every test in this file non-deterministically. Fixed to a
+    # Tuesday (no Monday/Friday/Sunday day-of-week penalty) at 14:00 UTC
+    # (London+NY overlap, the maximum session score).
+    config["system"]["_replay_now"] = "2025-01-07T14:00:00+00:00"
     return config
 
 
@@ -131,3 +143,18 @@ def test_replay_all_and_cli_exit_codes(windows_dir, monkeypatch, capsys):
     assert replay_mod.main() == 0
     out = capsys.readouterr().out
     assert "IDENTICAL" in out
+
+
+def test_persist_window_honors_an_already_pinned_replay_now(windows_dir):
+    """Regression: persist_window used to stamp decision_wall_time with
+    real datetime.now() unconditionally — even when the ORIGINAL run
+    already had an explicit system._replay_now (itself being replayed, or
+    a determinism-pinned test). That silently reintroduced non-determinism
+    one level down: replaying the artifact would re-score MQS at whatever
+    real hour the replay happened to run, not the original pinned moment.
+    persist_window must prefer system._replay_now when present."""
+    report = _run_and_capture(_pipeline_config())
+    assert report is not None
+    artifact_path = next(windows_dir.glob("*.json"))
+    artifact = json.loads(artifact_path.read_text())
+    assert artifact["decision_wall_time"] == "2025-01-07T14:00:00+00:00"

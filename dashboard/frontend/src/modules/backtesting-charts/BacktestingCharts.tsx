@@ -21,6 +21,7 @@ import {
   type ChartCandle,
   type RobustnessReportFile,
   type RobustnessSweep,
+  type BreakdownBucket,
 } from './api'
 
 // Lazy: keeps echarts' JS out of the main bundle until a user actually
@@ -559,6 +560,35 @@ function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t:
   return <DataTable columns={columns} rows={trades} rowKey={(t) => t.trade_id} />
 }
 
+// Performance Breakdown (Phase 6, 2026-07-26) — by_regime/by_direction/
+// by_session were computed by backtest/metrics.py since Phase 3 but never
+// rendered anywhere; this is the deferred follow-up Phase 3's own plan
+// flagged ("table-shaped, not chart-shaped").
+interface BreakdownRow {
+  name: string
+  bucket: BreakdownBucket
+}
+
+function PerformanceBreakdownTable({ title, buckets }: { title: string; buckets: Record<string, BreakdownBucket> }) {
+  const rows: BreakdownRow[] = Object.entries(buckets).map(([name, bucket]) => ({ name, bucket }))
+  const columns: Column<BreakdownRow>[] = [
+    { header: title, render: (r) => <span className="font-bold text-accent">{r.name}</span> },
+    { header: 'Trades', render: (r) => r.bucket.trades, align: 'right' },
+    { header: 'Win Rate', render: (r) => `${r.bucket.win_rate.toFixed(1)}%`, align: 'right' },
+    {
+      header: 'PnL',
+      render: (r) => (
+        <span className={r.bucket.pnl >= 0 ? 'text-green' : 'text-red'}>
+          {r.bucket.pnl >= 0 ? '+' : ''}
+          {r.bucket.pnl.toFixed(2)}
+        </span>
+      ),
+      align: 'right',
+    },
+  ]
+  return <DataTable columns={columns} rows={rows} rowKey={(r) => r.name} />
+}
+
 function QueueManagerCharts({ entries }: { entries: RunReportEntry[] }) {
   const [selected, setSelected] = useState<string | null>(entries[0]?.file ?? null)
   const [chart, setChart] = useState<{ loading: boolean; error: string | null; data: ChartDataFile | null }>({
@@ -632,6 +662,25 @@ function QueueManagerCharts({ entries }: { entries: RunReportEntry[] }) {
           </div>
         </Panel>
       )}
+
+      {chart.data &&
+        (Object.keys(chart.data.by_direction).length > 0 ||
+          Object.keys(chart.data.by_session).length > 0 ||
+          Object.keys(chart.data.by_regime).length > 0) && (
+          <Panel title="Performance Breakdown" right="from this run's closed trades">
+            <div className="grid gap-4 p-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))]">
+              {Object.keys(chart.data.by_direction).length > 0 && (
+                <PerformanceBreakdownTable title="Direction" buckets={chart.data.by_direction} />
+              )}
+              {Object.keys(chart.data.by_session).length > 0 && (
+                <PerformanceBreakdownTable title="Session" buckets={chart.data.by_session} />
+              )}
+              {Object.keys(chart.data.by_regime).length > 0 && (
+                <PerformanceBreakdownTable title="Regime" buckets={chart.data.by_regime} />
+              )}
+            </div>
+          </Panel>
+        )}
 
       {trades.length > 0 && (
         <Panel title="Trades" right={`${trades.length} closed`}>

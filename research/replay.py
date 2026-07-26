@@ -118,12 +118,19 @@ def persist_window(report: dict, mtf_data: dict, config: dict,
     stamp = re.sub(r"[^0-9A-Za-z]+", "", bar_time) or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     prov = report.get("provenance") or {}
 
+    # The original decision's wall-clock moment: replayed MQS scoring must
+    # run at this time, not at replay time. If the ORIGINAL run already had
+    # an explicit system._replay_now (itself being replayed, or a
+    # determinism-pinned test/backtest), that IS the moment MQS was scored
+    # at — recording real now() here instead would silently reintroduce
+    # non-determinism one level down the next time this artifact is replayed.
+    _replay_now = (config.get("system") or {}).get("_replay_now")
+    decision_wall_time = _replay_now or datetime.now(timezone.utc).isoformat()
+
     artifact = {
         "schema": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        # The original decision's wall-clock moment: replayed MQS scoring
-        # must run at this time, not at replay time.
-        "decision_wall_time": datetime.now(timezone.utc).isoformat(),
+        "decision_wall_time": decision_wall_time,
         "symbol": symbol,
         "bar_time": bar_time,
         "original": {

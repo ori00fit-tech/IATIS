@@ -1,5 +1,4 @@
 import { apiGet } from '../../lib/api'
-import { getFileContent } from '../file-explorer/api'
 
 // Backtesting Charts is a visualization layer over data other endpoints
 // already produce: /backtest-results (per-run metrics + an optional legacy
@@ -143,16 +142,15 @@ export interface ChartDataFile {
   } | null
 }
 
-/** Fetches a *_chart_data.json sidecar's full content via the File
- * Explorer's generic, repo-confined /files/read — /research/run-reports
- * only returns lightweight highlights, never the full series. */
-export async function getChartDataFile(file: string): Promise<ChartDataFile> {
-  const res = await getFileContent(`reports/${file}`)
-  if (res.error || res.content == null) {
-    throw new Error(res.error ?? `${file}: empty content`)
-  }
-  return JSON.parse(res.content) as ChartDataFile
-}
+/** Fetches a *_chart_data.json sidecar's full content via
+ * GET /research/run-reports/{filename} — /research/run-reports (list)
+ * only returns lightweight highlights, never the full series. Uses a
+ * dedicated, uncapped endpoint (2026-07-26) rather than the File
+ * Explorer's generic /files/read, which caps inline reads at 512,000
+ * bytes — a real report with enough trades/equity points exceeds that
+ * and would otherwise fail to load entirely (hit live on XAUUSD). */
+export const getChartDataFile = (file: string) =>
+  apiGet<ChartDataFile>(`/research/run-reports/${encodeURIComponent(file)}`)
 
 // Parameter Sweep full detail (2026-07-25) — backtest/robustness.py's
 // complete per-point output, not the lightweight verdict-only highlights
@@ -205,10 +203,5 @@ export interface RobustnessReportFile {
   symbols: Record<string, RobustnessSymbolResult>
 }
 
-export async function getRobustnessReportFile(file: string): Promise<RobustnessReportFile> {
-  const res = await getFileContent(`reports/${file}`)
-  if (res.error || res.content == null) {
-    throw new Error(res.error ?? `${file}: empty content`)
-  }
-  return JSON.parse(res.content) as RobustnessReportFile
-}
+export const getRobustnessReportFile = (file: string) =>
+  apiGet<RobustnessReportFile>(`/research/run-reports/${encodeURIComponent(file)}`)

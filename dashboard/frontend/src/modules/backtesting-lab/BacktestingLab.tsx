@@ -940,11 +940,11 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`
 }
 
-function ReviewRow({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+function ReviewRow({ label, value, muted, warn }: { label: string; value: string; muted?: boolean; warn?: boolean }) {
   return (
     <div className="flex items-start gap-3">
       <span className="w-40 shrink-0 text-muted uppercase text-[0.7em] tracking-[1px] pt-0.5">{label}</span>
-      <span className={muted ? 'text-muted' : 'text-text'}>{value}</span>
+      <span className={warn ? 'text-red' : muted ? 'text-muted' : 'text-text'}>{value}</span>
     </div>
   )
 }
@@ -1011,9 +1011,10 @@ function ReviewPanel({ state }: { state: WizardState }) {
             state.selectedSymbols.length === 0
               ? '— select symbols first —'
               : missing.length > 0
-                ? `${decisionPoints.toLocaleString()} (no on-disk dataset for: ${missing.join(', ')} — downloaded fresh at run time)`
+                ? `${decisionPoints.toLocaleString()} — no on-disk dataset for: ${missing.join(', ')}. This run will FAIL for ${missing.length > 1 ? 'these symbols' : 'this symbol'} unless you upload a dataset first (Dataset step → Dataset Explorer → Upload).`
                 : `~${decisionPoints.toLocaleString()} bars evaluated across ${state.selectedSymbols.length} symbol(s), from ${totalBars.toLocaleString()} total rows on disk`
           }
+          warn={missing.length > 0}
         />
         <ReviewRow
           label="Recent runtime"

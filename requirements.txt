@@ -106,3 +106,19 @@ python-multipart>=0.0.9,<0.1.0
 # above: bump the floor if pip-audit flags it again. Ceiling kept at the
 # next major past the fix version to bound the resolver search space.
 pyarrow>=23.0.1,<26.0.0
+
+# AI Research Lab / Mission Center Phase 1 (2026-07-27) — Bayesian
+# (TPESampler, Optuna's default) / Grid / Random / Genetic-Evolutionary
+# (NSGAIISampler) sampling for backtest/optimizer.py's joint search space.
+# Covers Bayesian Optimization, Genetic Algorithm, and Hyperopt's core
+# algorithm (TPE) through one well-tested MIT-licensed library instead of
+# hand-rolling multiple fragile custom optimizers or stacking several
+# redundant dependencies. No optimization library existed in this repo
+# before (confirmed: optuna/scikit-learn/scipy all absent, only numpy
+# pinned). Floored at the first 4.x release with a stable multivariate
+# TPESampler + NSGAIISampler API; ceiling at the next major per this
+# file's established pattern. Pulls in alembic/sqlalchemy/colorlog/tqdm as
+# transitive deps (optuna's storage layer) — unused here, missions use
+# Optuna's default in-memory Study only; persistence is this project's own
+# D1 tables (storage/research_missions.py), never optuna's own storage URL.
+optuna>=4.5.0,<5.0.0

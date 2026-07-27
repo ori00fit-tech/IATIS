@@ -20,12 +20,14 @@ import {
   runJob,
   runRobustnessJob,
   getJobDetail,
+  getJobList,
   type DatasetEntry,
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
   type JobDescriptor,
   type JobDetail,
+  type JobSummary,
 } from './api'
 
 const POLL_MS = 60_000
@@ -875,6 +877,144 @@ function SweepConfig({
   )
 }
 
+// ── Review & Run — real, computed-from-real-data estimates only ─────────
+// No fabricated numbers: decision points come from actual on-disk dataset
+// row counts (the exact file run_backtest will read); runtime comes from
+// actual finished-job history on this server. RAM/CPU has no telemetry
+// anywhere in the codebase and is deliberately labeled "not measured"
+// rather than invented — same evidence discipline this whole app applies
+// to backtest results.
+function estimateDecisionPoints(
+  symbols: string[], datasets: DatasetEntry[], dateRange: DateRangeState,
+  warmupBars: number, stepBars: number,
+): { totalBars: number; decisionPoints: number; missing: string[] } {
+  let totalBars = 0
+  let decisionPoints = 0
+  const missing: string[] = []
+  for (const sym of symbols) {
+    const d = datasets.find((x) => x.symbol === sym && x.readable && x.rows)
+    if (!d || !d.rows) {
+      missing.push(sym)
+      continue
+    }
+    let rows = d.rows
+    if (dateRange.start && dateRange.end && d.start && d.end) {
+      const fileSpan = new Date(d.end).getTime() - new Date(d.start).getTime()
+      const wantStart = Math.max(new Date(dateRange.start).getTime(), new Date(d.start).getTime())
+      const wantEnd = Math.min(new Date(dateRange.end).getTime(), new Date(d.end).getTime())
+      if (fileSpan > 0) rows = Math.round(rows * (Math.max(0, wantEnd - wantStart) / fileSpan))
+    }
+    totalBars += rows
+    decisionPoints += Math.max(0, Math.floor((rows - warmupBars) / Math.max(1, stepBars)))
+  }
+  return { totalBars, decisionPoints, missing }
+}
+
+function recentRuntimeStats(jobs: JobSummary[], jobId: string): { medianMs: number; n: number } | null {
+  const durations = jobs
+    .filter((j) => j.job === jobId && j.status === 'finished' && j.started_at && j.finished_at)
+    .map((j) => new Date(j.finished_at!).getTime() - new Date(j.started_at!).getTime())
+    .sort((a, b) => a - b)
+  if (durations.length === 0) return null
+  return { medianMs: durations[Math.floor(durations.length / 2)], n: durations.length }
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
+}
+
+function ReviewRow({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="w-40 shrink-0 text-muted uppercase text-[0.7em] tracking-[1px] pt-0.5">{label}</span>
+      <span className={muted ? 'text-muted' : 'text-text'}>{value}</span>
+    </div>
+  )
+}
+
+function ReviewPanel({ state }: { state: WizardState }) {
+  const { markUnauthenticated } = useAuth()
+  const datasets = useApiQuery(['research-datasets'], getResearchDatasets, POLL_MS, markUnauthenticated)
+  const jobs = useApiQuery(['experiments-list'], getJobList, POLL_MS, markUnauthenticated)
+  const scenario = useApiQuery(['scenario-config'], getScenarioConfig, POLL_MS, markUnauthenticated)
+  const catalog = useApiQuery(['job-catalog'], getJobCatalog, POLL_MS, markUnauthenticated)
+  const research = useApiQuery(['research-registry'], getResearch, POLL_MS, markUnauthenticated)
+
+  const registryById = new Map((research.data?.hypotheses ?? []).map((h) => [h.id, h]))
+  let jobLabel = state.jobId
+  if (state.jobId === 'backtest') jobLabel = 'Standalone Backtest'
+  else if (state.jobId === 'walk_forward') jobLabel = 'Walk-Forward'
+  else if (state.jobId === 'robustness') jobLabel = 'Robustness Sweep'
+  else if (state.jobId.startsWith('hypothesis_')) {
+    const hid = state.jobId.replace('hypothesis_', '')
+    const reg = registryById.get(hid)
+    const catalogJob = catalog.data?.jobs.find((j) => j.id === state.jobId)
+    jobLabel = `${hid}${reg ? ` — ${reg.title}` : ''}${!reg && catalogJob ? ` — ${catalogJob.description}` : ''}`
+  }
+
+  const defaultWarmup = scenario.data?.scenario_fields.find((f) => f.field === 'warmup_bars')?.default ?? 210
+  const defaultStep = scenario.data?.scenario_fields.find((f) => f.field === 'step_bars')?.default ?? 4
+  const warmupBars = state.riskOverrides.warmup_bars ?? Number(defaultWarmup)
+  const stepBars = state.riskOverrides.step_bars ?? Number(defaultStep)
+
+  const { totalBars, decisionPoints, missing } = estimateDecisionPoints(
+    state.selectedSymbols, datasets.data?.datasets ?? [], state.dateRange, warmupBars, stepBars,
+  )
+  const runtime = recentRuntimeStats(jobs.data?.jobs ?? [], state.jobId)
+
+  const riskEntries = Object.entries(state.riskOverrides).filter(([, v]) => v !== null)
+
+  return (
+    <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-panel-border bg-panel shadow-md">
+      <div className="text-[0.72em] text-muted uppercase tracking-[1px]">Review — confirm before running</div>
+        <ReviewRow
+          label="Dataset"
+          value={
+            state.dateRange.preset === 'all'
+              ? 'all available history'
+              : `${state.dateRange.preset}${state.dateRange.start ? ` (${state.dateRange.start} → ${state.dateRange.end})` : ''}`
+          }
+        />
+        <ReviewRow label="Symbols" value={state.selectedSymbols.join(', ') || '— none selected —'} />
+        <ReviewRow label="Timeframes" value={(state.timeframes ?? [...DEFAULT_TIMEFRAMES_ORDER]).join(', ')} />
+        <ReviewRow
+          label="Risk overrides"
+          value={riskEntries.length > 0 ? riskEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'production defaults'}
+        />
+        <ReviewRow label="Engines" value={state.engines ? state.engines.join(', ') : 'production enabled set'} />
+        <ReviewRow
+          label="Indicators"
+          value={state.indicators && state.indicators.length > 0 ? state.indicators.map((i) => `${i.name}:${i.mode}`).join(', ') : 'none'}
+        />
+        <ReviewRow label="Hypothesis / Job" value={jobLabel} />
+        <div className="h-px bg-border my-1" />
+        <ReviewRow
+          label="Decision points"
+          value={
+            state.selectedSymbols.length === 0
+              ? '— select symbols first —'
+              : missing.length > 0
+                ? `${decisionPoints.toLocaleString()} (no on-disk dataset for: ${missing.join(', ')} — downloaded fresh at run time)`
+                : `~${decisionPoints.toLocaleString()} bars evaluated across ${state.selectedSymbols.length} symbol(s), from ${totalBars.toLocaleString()} total rows on disk`
+          }
+        />
+        <ReviewRow
+          label="Recent runtime"
+          value={
+            runtime
+              ? `median ${formatDuration(runtime.medianMs)} over the last ${runtime.n} finished "${state.jobId}" run(s) on this server`
+              : `no completed "${state.jobId}" runs yet on this server — no timing history available`
+          }
+        />
+      <ReviewRow label="RAM / CPU" value="not measured — this server has no per-run resource tracking" muted />
+    </div>
+  )
+}
+
 function ExecutionStep({
   state,
   setState,
@@ -950,9 +1090,7 @@ function ExecutionStep({
   return (
     <Panel title="Execution" right={`job: ${state.jobId}`}>
       <div className="p-4 flex flex-col gap-3">
-        <div className="text-[0.82em] text-muted">
-          Symbols: {state.selectedSymbols.length > 0 ? state.selectedSymbols.join(', ') : requiresSymbols ? 'none selected' : 'n/a — fixed method'}
-        </div>
+        {!job && <ReviewPanel state={state} />}
         {isRobustness && (
           <SweepConfig params={sweepParams} multipliers={sweepMultipliers} onParamsChange={setSweepParams} onMultipliersChange={setSweepMultipliers} />
         )}

@@ -630,6 +630,9 @@ _NATIVE_TF: dict[str, set] = {
     "finnhub":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
     "fcs_api":       {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
     "alpaca":        {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    # MT5's standard TIMEFRAME_* constants cover all of these natively,
+    # same as cTrader (see the MT5 section above _fetch_mt5).
+    "mt5":           {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
 }
 
 # FCS API added 2026-07-14 (fx/metals/indices only — no crypto endpoint used
@@ -652,6 +655,12 @@ _NATIVE_TF: dict[str, set] = {
 # but wrong bar silently poisons decisions. The fetcher stays in the
 # codebase for deliberate offline use (cross_provider_diff, downloads) —
 # it is simply never consulted for live decisions anymore.
+# "mt5" deliberately absent from every entry below (2026-07-27): the
+# Wine-hosted bridge (see the MT5 section above _fetch_mt5) is an
+# unofficial, unsupported setup, not something to default every live
+# FX/metals decision onto sight-unseen. Opt in per asset class via
+# config.yaml's data.provider_chains override once docs/
+# MT5_BRIDGE_SETUP.md's verification steps pass on the real VPS.
 DEFAULT_CHAINS: dict[str, list[str]] = {
     "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub"],
     "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub"],
@@ -960,6 +969,67 @@ def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
 
 
+# ---------------------------------------------------------------------------
+# MT5 (2026-07-27, operator request) — Wine-hosted bridge, opt-in only.
+#
+# MetaTrader5's official Python package is Windows-only (a thin wrapper over
+# a DLL that talks to a real, running MT5 terminal on the SAME machine) —
+# unlike cTrader's real cross-platform network protocol, there is no
+# official way to reach MT5 from this Linux process. The operator's chosen
+# setup: a Wine-hosted Windows Python + MT5 terminal on this same VPS,
+# fronted by a small localhost-only HTTP bridge (scripts/mt5_bridge/
+# mt5_bridge_server.py) that is the only thing that ever imports
+# MetaTrader5. This function talks to that bridge exactly like every other
+# pull-based provider here talks to a remote REST API — MT5's own Python
+# API has no push/streaming surface even on native Windows, so there is no
+# persistent-session machinery to build (unlike execution/ctrader_client.py).
+#
+# Deliberately NOT added to DEFAULT_CHAINS below — see that dict's own
+# comment. Opt in per asset class via config.yaml's data.provider_chains
+# override once docs/MT5_BRIDGE_SETUP.md's verification steps pass on the
+# real VPS.
+# ---------------------------------------------------------------------------
+
+def _mt5_bridge_url() -> str:
+    url = os.getenv("MT5_BRIDGE_URL")
+    if not url:
+        raise DataFetchError("MT5 bridge not configured (MT5_BRIDGE_URL unset)")
+    return url.rstrip("/")
+
+
+def _fetch_mt5(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Bars via the Wine-hosted MT5 bridge (scripts/mt5_bridge/mt5_bridge_server.py).
+
+    Unofficial/unsupported path — see this section's header comment. Any
+    bridge failure (unreachable, timeout, terminal disconnected, HTTP
+    error) raises DataFetchError so the provider chain falls through
+    cleanly, exactly like a missing cTrader credential does today.
+    """
+    import requests
+    internal = _internal_symbol(symbol)
+    try:
+        resp = requests.get(
+            f"{_mt5_bridge_url()}/rates",
+            params={"symbol": internal, "timeframe": interval, "count": outputsize},
+            headers={"X-Bridge-Token": os.getenv("MT5_BRIDGE_TOKEN", "")},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()["rates"]
+    except DataFetchError:
+        raise
+    except Exception as exc:
+        raise DataFetchError(f"MT5 bridge: {exc}") from exc
+    if not rows:
+        raise DataFetchError(f"MT5 bridge: no bars for {internal} @ {interval}")
+    df = pd.DataFrame(rows)
+    # Bridge returns "time" in SECONDS since epoch (mt5_bridge_server.py's
+    # own contract) — deliberately not repeating the ms/s unit mistake
+    # found and fixed in _fetch_ctrader above.
+    df.index = pd.to_datetime(df.pop("time"), unit="s", utc=True)
+    return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
+
+
 def fetch_with_failover(
     symbol: str,
     interval: str,
@@ -1009,6 +1079,8 @@ def fetch_with_failover(
                 df = _fetch_ccxt_provider(symbol, interval, outputsize)
             elif provider == "ctrader":
                 df = _fetch_ctrader(symbol, interval, outputsize)
+            elif provider == "mt5":
+                df = _fetch_mt5(symbol, interval, outputsize)
             else:
                 raise DataFetchError(f"Unknown provider: {provider}")
 

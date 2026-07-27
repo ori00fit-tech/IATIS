@@ -188,3 +188,77 @@ def test_fetch_ctrader_timestamp_unit_is_seconds_not_milliseconds(monkeypatch):
     df = dp._fetch_ctrader("EUR/USD", "H1", 10)
     assert df.index[0] == real_dt
     assert df.index[0].year == 2026  # not 1970
+
+
+# ── MT5 bridge (2026-07-27) ─────────────────────────────────────────────
+
+def test_mt5_falls_through_cleanly_without_bridge_url(monkeypatch):
+    monkeypatch.delenv("MT5_BRIDGE_URL", raising=False)
+    monkeypatch.setattr(dp, "_fetch_twelve_data",
+                        lambda s, i, o, c: _df(n=o, mark=9.0))
+    views = dp.fetch_multi_timeframe_with_failover(
+        "EUR/USD", ["H1"], outputsize=120,
+        providers=["mt5", "twelve_data"],
+    )
+    assert float(views["H1"]["volume"].iloc[0]) == 9.0  # next in chain won
+
+
+def test_fetch_mt5_raises_when_bridge_url_unset(monkeypatch):
+    monkeypatch.delenv("MT5_BRIDGE_URL", raising=False)
+    with pytest.raises(dp.DataFetchError, match="not configured"):
+        dp._fetch_mt5("EUR/USD", "H1", 10)
+
+
+def test_fetch_mt5_parses_bridge_response(monkeypatch):
+    monkeypatch.setenv("MT5_BRIDGE_URL", "http://127.0.0.1:18812")
+
+    real_dt = pd.Timestamp("2026-07-27 12:00:00", tz="UTC")
+    ts_seconds = int(real_dt.timestamp())
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"rates": [{
+                "time": ts_seconds, "open": 1.1, "high": 1.11,
+                "low": 1.09, "close": 1.1, "volume": 250.0,
+            }]}
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        assert url.endswith("/rates")
+        assert params["symbol"] == "EURUSD"
+        return _FakeResp()
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    df = dp._fetch_mt5("EUR/USD", "H1", 10)
+    assert df.index[0] == real_dt
+    assert df.index[0].year == 2026
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert float(df["volume"].iloc[0]) == 250.0
+
+
+def test_fetch_mt5_raises_on_bridge_http_error(monkeypatch):
+    monkeypatch.setenv("MT5_BRIDGE_URL", "http://127.0.0.1:18812")
+
+    import requests as _requests
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        raise _requests.exceptions.ConnectionError("connection refused")
+
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    with pytest.raises(dp.DataFetchError, match="MT5 bridge"):
+        dp._fetch_mt5("EUR/USD", "H1", 10)
+
+
+def test_mt5_not_in_default_chains():
+    for cls, chain in dp.DEFAULT_CHAINS.items():
+        assert "mt5" not in chain, f"{cls}: {chain}"
+
+
+def test_provider_chain_override_can_include_mt5():
+    chain = dp.provider_chain_for("EUR/USD", {"fx": ["ctrader", "mt5", "twelve_data"]})
+    assert chain == ["ctrader", "mt5", "twelve_data"]

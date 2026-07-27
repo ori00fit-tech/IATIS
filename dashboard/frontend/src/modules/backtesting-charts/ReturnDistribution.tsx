@@ -1,16 +1,17 @@
-import type { ChartTrade } from '../backtesting-charts/api'
+import type { ChartTrade } from './api'
 import { Empty } from '../../components/Panel'
 
 const BIN_WIDTH = 0.5
 
 /**
- * R-multiple distribution for the Results page (2026-07-27). A new, small
- * component rather than reusing risk-center/RMultipleHistogram.tsx — that
- * component is typed to live-outcome OutcomeRow[] (a different domain/data
- * source), and adapting it would need a lossy field-mapping shim for no
- * real benefit over this correctly-typed alternative. Same hand-rolled
- * div-bar idiom Risk Center's own pre-ECharts histogram used, rather than
- * pulling in a charting library for one small panel local to this wizard.
+ * R-multiple distribution for the Results page (2026-07-27) and Run
+ * Comparison (2026-07-27). A new, small component rather than reusing
+ * risk-center/RMultipleHistogram.tsx — that component is typed to
+ * live-outcome OutcomeRow[] (a different domain/data source), and adapting
+ * it would need a lossy field-mapping shim for no real benefit over this
+ * correctly-typed alternative. Same hand-rolled div-bar idiom Risk
+ * Center's own pre-ECharts histogram used, rather than pulling in a
+ * charting library for one small panel.
  */
 export function realizedR(t: ChartTrade): number | null {
   if (t.exit_price == null) return null

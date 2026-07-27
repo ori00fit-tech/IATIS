@@ -9,7 +9,7 @@ import { AiResearchAssistant } from '../../components/AiResearchAssistant'
 import { KpiCard } from '../../components/KpiCard'
 import { downloadUrl } from '../file-explorer/api'
 import { EquityCurveSvg, DrawdownCurveSvg, drawdownCurve, TradesTable, TradeDecisionPanel } from '../backtesting-charts/BacktestingCharts'
-import { ReturnDistribution } from './ReturnDistribution'
+import { ReturnDistribution } from '../backtesting-charts/ReturnDistribution'
 import { DatasetUpload } from './DatasetUpload'
 import { PresetsBar } from './PresetsBar'
 import {

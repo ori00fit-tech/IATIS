@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
@@ -6,6 +6,10 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { AiResearchAssistant } from '../../components/AiResearchAssistant'
+import { KpiCard } from '../../components/KpiCard'
+import { downloadUrl } from '../file-explorer/api'
+import { EquityCurveSvg, DrawdownCurveSvg, drawdownCurve, TradesTable, TradeDecisionPanel } from '../backtesting-charts/BacktestingCharts'
+import { ReturnDistribution } from './ReturnDistribution'
 import { DatasetUpload } from './DatasetUpload'
 import { PresetsBar } from './PresetsBar'
 import {
@@ -22,6 +26,7 @@ import {
   getJobDetail,
   getJobList,
   cancelJob,
+  getChartDataFile,
   type DatasetEntry,
   type SymbolEntry,
   type EngineEntry,
@@ -30,7 +35,13 @@ import {
   type JobDetail,
   type JobSummary,
   type JobStatus,
+  type ChartDataFile,
+  type ChartTrade,
 } from './api'
+
+const MonthlyReturnsHeatmap = lazy(() =>
+  import('../backtesting-charts/MonthlyReturnsHeatmap').then((m) => ({ default: m.MonthlyReturnsHeatmap })),
+)
 
 const POLL_MS = 60_000
 
@@ -1040,9 +1051,15 @@ function inferStage(log: string[], status: JobStatus): { stage: RunStage; detail
   if (status === 'finished') return { stage: 'done', detail: `${log.length} log line(s).` }
   if (status === 'queued') return { stage: 'queued', detail: 'Waiting for a worker slot.' }
 
+  // Real log lines carry the formatted prefix (timestamp | level | logger |
+  // message), never just the bare message — match substrings, not anchors
+  // (regression found 2026-07-27 while building the Results page: these
+  // three used to anchor with startsWith and so never actually matched a
+  // real running job's log, only ever reached via the status==='finished'
+  // early return above).
   const starts = log.filter((l) => l.includes(' bars to process')).length
-  const ends = log.filter((l) => l.startsWith('Backtest done:')).length
-  const artifacts = log.filter((l) => l.startsWith('Summary written:') || l.startsWith('Robustness report:')).length
+  const ends = log.filter((l) => l.includes('Backtest done:')).length
+  const artifacts = log.filter((l) => l.includes('Summary written:') || l.includes('Robustness report:')).length
 
   if (starts === 0) return { stage: 'loading', detail: 'Reading OHLCV data, validating schema.' }
   if (artifacts > 0) return { stage: 'finalizing', detail: 'Writing the run summary.' }
@@ -1217,6 +1234,154 @@ function ExecutionStep({
 }
 
 // ── Step 9: Results ──────────────────────────────────────────────────────
+
+// backtest/report.py logs this exact line right after writing each
+// *_chart_data.json sidecar (2026-07-27) — the one observable marker that
+// tells us which report file(s) belong to the run that just finished,
+// without guessing from filename recency. One line per symbol for a
+// multi-symbol `backtest` job; absent entirely for walk_forward/
+// robustness/hypothesis jobs (they never call generate_html_report).
+function chartDataFilenamesFromLog(log: string[]): string[] {
+  // Job log lines carry the full formatted prefix (utils/logger.py's
+  // "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"), not just the
+  // bare message — search for the marker text anywhere in the line rather
+  // than anchoring at the start.
+  const seen = new Set<string>()
+  const marker = 'Chart data written: '
+  for (const line of log) {
+    const idx = line.indexOf(marker)
+    if (idx !== -1) seen.add(line.slice(idx + marker.length).trim())
+  }
+  return Array.from(seen)
+}
+
+function tradesToCsv(trades: ChartTrade[]): string {
+  const header = ['trade_id', 'direction', 'entry_time', 'exit_time', 'entry_price', 'exit_price', 'stop_loss', 'take_profit', 'pnl_usd', 'is_win', 'exit_reason', 'regime', 'cf_score']
+  const rows = trades.map((t) => [
+    t.trade_id,
+    t.direction,
+    t.entry_time != null ? new Date(t.entry_time * 1000).toISOString() : '',
+    t.exit_time != null ? new Date(t.exit_time * 1000).toISOString() : '',
+    t.entry_price,
+    t.exit_price ?? '',
+    t.stop_loss,
+    t.take_profit,
+    t.pnl_usd,
+    t.is_win,
+    t.exit_reason,
+    t.regime ?? '',
+    t.cf_score ?? '',
+  ])
+  return [header, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+}
+
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function ResultsReportPanel({ file }: { file: string }) {
+  const [chart, setChart] = useState<{ loading: boolean; error: string | null; data: ChartDataFile | null }>({
+    loading: true, error: null, data: null,
+  })
+  const [decisionTrade, setDecisionTrade] = useState<ChartTrade | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setChart({ loading: true, error: null, data: null })
+    setDecisionTrade(null)
+    getChartDataFile(file)
+      .then((data) => !cancelled && setChart({ loading: false, error: null, data }))
+      .catch((err) => !cancelled && setChart({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
+    return () => {
+      cancelled = true
+    }
+  }, [file])
+
+  if (chart.loading) return <Empty>Loading results…</Empty>
+  if (chart.error) return <Empty>Failed to load {file}: {chart.error}</Empty>
+  const chartData = chart.data
+  if (!chartData) return null
+
+  const equityValues = chartData.equity_curve.map((p) => p.y)
+  const trades = chartData.trades
+
+  return (
+    <div className="flex flex-col gap-4">
+      {chartData.kpis ? (
+        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(130px,1fr))]">
+          <KpiCard value={chartData.kpis.profit_factor.toFixed(2)} label="Profit Factor" color={chartData.kpis.profit_factor >= 1 ? 'green' : 'red'} />
+          <KpiCard value={chartData.kpis.sharpe_ratio.toFixed(2)} label="Sharpe" color={chartData.kpis.sharpe_ratio >= 0 ? 'blue' : 'red'} />
+          <KpiCard value={chartData.kpis.sortino_ratio.toFixed(2)} label="Sortino" color={chartData.kpis.sortino_ratio >= 0 ? 'blue' : 'red'} />
+          <KpiCard value={`-${chartData.kpis.max_drawdown_pct.toFixed(1)}%`} label="Max Drawdown" color="red" />
+          <KpiCard value={`${chartData.kpis.win_rate.toFixed(1)}%`} label="Win Rate" color={chartData.kpis.win_rate >= 50 ? 'green' : 'amber'} />
+          <KpiCard value={chartData.kpis.total_trades} label="Trades" />
+          <KpiCard value={`${chartData.kpis.net_profit >= 0 ? '+' : ''}$${chartData.kpis.net_profit.toFixed(0)}`} label="Net Profit" color={chartData.kpis.net_profit >= 0 ? 'green' : 'red'} />
+        </div>
+      ) : (
+        <Empty>KPI cards not available for this run — chart data was written before this feature shipped.</Empty>
+      )}
+
+      <Panel title="Equity Curve">
+        {equityValues.length >= 2 ? <EquityCurveSvg curve={equityValues} /> : <Empty>Not enough closed trades for an equity curve.</Empty>}
+      </Panel>
+
+      <Panel title="Drawdown">
+        {equityValues.length >= 2 ? <DrawdownCurveSvg curve={drawdownCurve(equityValues)} /> : <Empty>Not enough closed trades for a drawdown curve.</Empty>}
+      </Panel>
+
+      {Object.keys(chartData.monthly_returns).length > 0 && (
+        <Panel title="Monthly Returns">
+          <div className="p-4">
+            <Suspense fallback={<Empty>Loading chart…</Empty>}>
+              <MonthlyReturnsHeatmap monthlyReturns={chartData.monthly_returns} />
+            </Suspense>
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="Distribution">
+        <ReturnDistribution trades={trades} />
+      </Panel>
+
+      {trades.length > 0 && (
+        <Panel title="Trade List" right={`${trades.length} closed`}>
+          <TradesTable trades={trades} onSelect={setDecisionTrade} />
+        </Panel>
+      )}
+      {decisionTrade && <TradeDecisionPanel trade={decisionTrade} onClose={() => setDecisionTrade(null)} />}
+
+      <Panel title="Export">
+        <div className="p-4 flex items-center gap-3 flex-wrap text-[0.82em]">
+          {chartData.html_report ? (
+            <a
+              href={downloadUrl(`reports/${chartData.html_report}`)}
+              className="px-3 py-1.5 rounded border border-accent text-accent hover:bg-accent/10 font-bold"
+            >
+              Download HTML report
+            </a>
+          ) : (
+            <span className="text-muted">HTML report filename not available for this run.</span>
+          )}
+          <button
+            onClick={() => downloadCsv(`${chartData.symbol}_${chartData.timeframe}_trades.csv`, tradesToCsv(trades))}
+            disabled={trades.length === 0}
+            className="px-3 py-1.5 rounded border border-border text-text hover:border-accent disabled:opacity-40"
+          >
+            Download trades CSV
+          </button>
+          <span className="text-muted">PDF export isn't built — use the browser's Print → Save as PDF on the HTML report above.</span>
+        </div>
+      </Panel>
+    </div>
+  )
+}
+
 function ResultsStep({ state, job }: { state: WizardState; job: JobDetail | null }) {
   const context = job
     ? {
@@ -1229,19 +1394,57 @@ function ResultsStep({ state, job }: { state: WizardState; job: JobDetail | null
       }
     : null
 
+  const chartFiles = job ? chartDataFilenamesFromLog(job.log) : []
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  useEffect(() => {
+    setSelectedFile(chartFiles[0] ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.job_id, chartFiles.join(',')])
+
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="Results">
-        <div className="p-4 flex flex-col gap-3 text-[0.85em]">
-          <p className="text-muted">
-            The full Result Explorer (equity curves, walk-forward/robustness verdicts, Monte Carlo) lives in the
-            Backtesting Charts tab — it reads the same reports/ output this run just wrote.
-          </p>
-          <a href="#/backtesting-charts" className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 font-bold">
-            Open Backtesting Charts →
-          </a>
-        </div>
-      </Panel>
+      {chartFiles.length > 0 ? (
+        <Panel
+          title="Results"
+          right={
+            chartFiles.length > 1 ? (
+              <div className="flex gap-1 flex-wrap">
+                {chartFiles.map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setSelectedFile(f)}
+                    className={`px-2 py-0.5 rounded text-[0.9em] ${selectedFile === f ? 'text-accent border border-accent/50' : 'text-muted border border-transparent hover:text-text'}`}
+                  >
+                    {f.split('_').slice(0, 1)[0]}
+                  </button>
+                ))}
+              </div>
+            ) : undefined
+          }
+        >
+          <div className="p-4 text-[0.78em] text-muted">
+            From this run's own output — {selectedFile}.{' '}
+            <a href="#/backtesting-charts" className="text-accent hover:text-accent2">Open in Backtesting Charts →</a> for
+            side-by-side comparison with other runs.
+          </div>
+        </Panel>
+      ) : (
+        <Panel title="Results">
+          <div className="p-4 flex flex-col gap-3 text-[0.85em]">
+            <p className="text-muted">
+              {job
+                ? "This job kind doesn't produce an inline results panel here — the full Result Explorer (equity curves, walk-forward/robustness verdicts, Monte Carlo) lives in the Backtesting Charts tab, reading the same reports/ output this run just wrote."
+                : 'Run a job in the Execution step first.'}
+            </p>
+            <a href="#/backtesting-charts" className="self-start px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 font-bold">
+              Open Backtesting Charts →
+            </a>
+          </div>
+        </Panel>
+      )}
+
+      {selectedFile && <ResultsReportPanel file={selectedFile} />}
+
       <AiResearchAssistant
         context={context}
         emptyHint="Run a job in the Execution step first — the assistant answers from that run's own status and log, nothing else."

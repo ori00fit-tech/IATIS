@@ -24,6 +24,10 @@ import {
   getJobCatalog, runJob, getJobDetail, runRobustnessJob, getJobList, cancelJob,
   type JobCatalogResponse, type JobDescriptor, type JobSummary, type JobDetail, type JobListResponse, type JobStatus,
 } from '../experiment-runner/api'
+import {
+  getChartDataFile,
+  type ChartDataFile, type ChartTrade, type ChartKpis, type ChartEngineVote, type ChartIndicatorFilter,
+} from '../backtesting-charts/api'
 
 // Backtesting Lab (Research Workbench, 2026-07-25) reuses the SAME
 // endpoints the Research & Backtests monitoring tab already calls — this
@@ -44,6 +48,7 @@ export {
   getJobDetail,
   getJobList,
   cancelJob,
+  getChartDataFile,
 }
 export type {
   SymbolsResponse,
@@ -64,6 +69,11 @@ export type {
   JobDetail,
   JobListResponse,
   JobStatus,
+  ChartDataFile,
+  ChartTrade,
+  ChartKpis,
+  ChartEngineVote,
+  ChartIndicatorFilter,
 }
 
 // Dataset Explorer (Phase 3 backend, 2026-07-24) — local historical CSVs

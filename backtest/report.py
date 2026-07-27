@@ -20,7 +20,9 @@ from pathlib import Path
 import pandas as pd
 from backtest.metrics import BacktestMetrics, TradeRecord
 from backtest.monte_carlo import MonteCarloResult
+from utils.logger import get_logger
 
+logger = get_logger(__name__)
 
 REPORTS_DIR = Path("reports")
 REPORTS_DIR.mkdir(exist_ok=True)
@@ -95,6 +97,10 @@ def generate_html_report(
 ) -> Path:
     """Generate HTML report and save to reports/ directory."""
 
+    date_str = datetime.now().strftime("%Y%m%d")
+    html_filename = f"{symbol}_{timeframe}_{date_str}.html"
+    chart_filename = f"{symbol}_{timeframe}_{date_str}_chart_data.json"
+
     equity_data = []
     bal = 10_000.0
     equity_data.append({"x": "Start", "y": bal})
@@ -116,6 +122,23 @@ def generate_html_report(
     chart_data = {
         "symbol": symbol,
         "timeframe": timeframe,
+        "html_report": html_filename,
+        # Results page (2026-07-27) — already-computed BacktestMetrics
+        # fields, previously discarded by this dict. Real values
+        # serialized once, here — never recomputed client-side, so they
+        # can never silently disagree with the HTML report's own KPI
+        # cards above.
+        "kpis": {
+            "total_trades": metrics.total_trades,
+            "win_rate": round(metrics.win_rate, 2),
+            "profit_factor": round(metrics.profit_factor, 3),
+            "sharpe_ratio": round(metrics.sharpe_ratio, 3),
+            "sortino_ratio": round(metrics.sortino_ratio, 3),
+            "max_drawdown_pct": round(metrics.max_drawdown, 2),
+            "net_profit": round(metrics.net_profit, 2),
+            "total_return_pct": round(metrics.total_return_pct, 2),
+            "expectancy_usd": round(metrics.expectancy, 2),
+        },
         "equity_curve": equity_data,
         "monthly_returns": metrics.monthly_returns,
         "yearly_returns": metrics.yearly_returns,
@@ -319,10 +342,10 @@ new Chart(ctx, {{
 </body>
 </html>"""
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    out_path = REPORTS_DIR / f"{symbol}_{timeframe}_{date_str}.html"
+    out_path = REPORTS_DIR / html_filename
     out_path.write_text(html, encoding="utf-8")
 
-    chart_path = REPORTS_DIR / f"{symbol}_{timeframe}_{date_str}_chart_data.json"
+    chart_path = REPORTS_DIR / chart_filename
     chart_path.write_text(json.dumps(chart_data, indent=2, default=str), encoding="utf-8")
+    logger.info(f"Chart data written: {chart_filename}")
     return out_path

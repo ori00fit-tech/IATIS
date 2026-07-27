@@ -117,6 +117,47 @@ function drawdownSeries(curve: number[]): { maxDD: number; ddAt: number } {
   return { maxDD: maxDD * 100, ddAt }
 }
 
+// Results page (2026-07-27) — the full per-point drawdown-from-peak series,
+// same peak-tracking loop as drawdownSeries above but returning every point
+// instead of just the max, for a real drawdown chart (not just a marker).
+export function drawdownCurve(curve: number[]): number[] {
+  let peak = curve[0] ?? 0
+  return curve.map((v) => {
+    if (v > peak) peak = v
+    return peak > 0 ? ((peak - v) / peak) * 100 : 0
+  })
+}
+
+export function DrawdownCurveSvg({ curve }: { curve: number[] }) {
+  const W = 800
+  const H = 160
+  const max = Math.max(...curve, 0.0001)
+  const x = (i: number) => (curve.length > 1 ? (i / (curve.length - 1)) * W : 0)
+  const y = (v: number) => (v / max) * H
+  const linePath = curve.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const areaPath = `${linePath} L${W},0 L0,0 Z`
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <div className="flex items-baseline gap-4 flex-wrap text-[0.82em]">
+        <span>
+          Max Drawdown <b className="text-red">−{Math.max(...curve, 0).toFixed(1)}%</b>
+        </span>
+        <span className="text-muted">{curve.length} points</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-[160px]">
+        <defs>
+          <linearGradient id="ddfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--red)" stopOpacity="0" />
+            <stop offset="100%" stopColor="var(--red)" stopOpacity="0.35" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill="url(#ddfill)" />
+        <path d={linePath} fill="none" stroke="var(--red)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  )
+}
+
 function EquityCurve({ run }: { run: BacktestRun }) {
   const curve = run.equity_curve ?? []
   if (curve.length < 2) {
@@ -130,7 +171,7 @@ function EquityCurve({ run }: { run: BacktestRun }) {
   return <EquityCurveSvg curve={curve} />
 }
 
-function EquityCurveSvg({ curve }: { curve: number[] }) {
+export function EquityCurveSvg({ curve }: { curve: number[] }) {
   const { maxDD, ddAt } = drawdownSeries(curve) // ≤500 points, cheap enough to run inline
   const W = 800
   const H = 240
@@ -486,7 +527,7 @@ function CandlestickTradeChart({ candles, trades, onSelectTrade }: { candles: Ch
   return <div ref={containerRef} className="px-4 pb-2" />
 }
 
-function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: () => void }) {
+export function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: () => void }) {
   const votes = trade.engine_votes ? Object.values(trade.engine_votes) : []
   return (
     <Panel
@@ -544,7 +585,7 @@ function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: ()
   )
 }
 
-function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t: ChartTrade) => void }) {
+export function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t: ChartTrade) => void }) {
   const columns: Column<ChartTrade>[] = [
     { header: 'ID', render: (t) => <span className="font-mono text-muted text-[0.85em]">{t.trade_id}</span> },
     { header: 'Dir', render: (t) => <Badge tone={t.direction === 'BUY' ? 'exec' : 'no-trade'}>{t.direction}</Badge> },

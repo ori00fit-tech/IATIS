@@ -220,6 +220,27 @@ def _data_health_snapshot() -> dict[str, Any]:
     Statuses: OK · STALE (latest decision too old) · STARVED (bars below
     the engine minimums — the silent-degradation class) · MISSING (no
     provenance-carrying decision yet for this symbol).
+
+    2026-07-27 fix: a symbol can have a perfectly live pipeline that
+    simply hasn't produced a provenance-carrying decision recently — the
+    Market Quality gate (main.py:_market_quality_gate) returns its
+    NO_TRADE report BEFORE build_provenance() ever runs, so
+    storage/decision_db.py writes that row with data_versions=NULL. The
+    OLD query here only ever looked at provenance-carrying rows, so a
+    symbol stuck in repeated MQS-gated NO_TRADEs (real, live, working
+    pipeline) showed STALE forever — observed live on BTCUSD (MQS
+    34-39/100 "dead market" for hours, decisions logged every run, panel
+    still said STALE). Now also tracks the most recent decision of ANY
+    kind per symbol; if it's fresh, the symbol is reported OK with a
+    `note` explaining the per-timeframe bar detail is from an older
+    provenance snapshot, instead of a false STALE alarm.
+
+    This does NOT change symbols the scheduler skips before ever calling
+    run_pipeline() at all (e.g. the correlation filter's `continue` in
+    scheduler.py — no decision of any kind gets written that tick), since
+    there is genuinely no row to find. Those keep showing STALE, which is
+    an accurate (if easy to misread) description: literally nothing was
+    evaluated for that symbol on skipped ticks.
     """
     import json as _json
 
@@ -230,6 +251,7 @@ def _data_health_snapshot() -> dict[str, Any]:
     dtf = (config_timeframes or ["H1"])[0]  # decision TF = timeframes[0]
 
     latest: dict[str, Any] = {}
+    last_any: dict[str, str] = {}
     try:
         from storage import d1_client
         with d1_client.d1_connection() as con:
@@ -242,6 +264,12 @@ def _data_health_snapshot() -> dict[str, Any]:
                 ).fetchone()
                 if row is not None:
                     latest[symbol] = {"ts": row["ts"], "dv": row["data_versions"]}
+                any_row = con.execute(
+                    "SELECT ts FROM decisions WHERE symbol=? ORDER BY id DESC LIMIT 1",
+                    (symbol,),
+                ).fetchone()
+                if any_row is not None:
+                    last_any[symbol] = any_row["ts"]
     except Exception as exc:
         # Pre-migration table / D1 outage: report MISSING rather than 500 —
         # the panel must stay readable when storage is the problem.
@@ -259,7 +287,27 @@ def _data_health_snapshot() -> dict[str, Any]:
     for symbol in active_symbols:
         tf_status: dict[str, Any] = {}
         worst = "OK"
+        note: str | None = None
         rec = latest.get(symbol)
+
+        # Is the pipeline genuinely alive for this symbol right now, even if
+        # its most recent provenance-carrying decision is old? A recent
+        # decision of ANY kind (e.g. a Market Quality gate NO_TRADE, which
+        # never reaches build_provenance()) proves the feed/pipeline is
+        # actually running — a stale provenance snapshot alone must not
+        # override that.
+        pipeline_alive_recently = False
+        any_ts = last_any.get(symbol)
+        if any_ts:
+            try:
+                any_decided_at = datetime.fromisoformat(str(any_ts))
+                if any_decided_at.tzinfo is None:
+                    any_decided_at = any_decided_at.replace(tzinfo=timezone.utc)
+                if (now - any_decided_at).total_seconds() / 60 <= _DH_STALE_MINUTES:
+                    pipeline_alive_recently = True
+            except ValueError:
+                pass
+
         if rec is None:
             tf_status = {tf: _tf_missing() for tf in config_timeframes}
             worst = "MISSING"
@@ -286,7 +334,15 @@ def _data_health_snapshot() -> dict[str, Any]:
                 elif tf == "D1" and tf != dtf and bars < _DH_MIN_D1_BARS:
                     status = "STARVED"
                 elif age_minutes is not None and age_minutes > _DH_STALE_MINUTES:
-                    status = "STALE"
+                    if pipeline_alive_recently:
+                        status = "OK"
+                        note = (
+                            "Pipeline is actively deciding this symbol (recent NO_TRADE, "
+                            "e.g. a Market Quality gate exit) but hasn't produced a fresh "
+                            "provenance snapshot — bar detail below is from an older decision."
+                        )
+                    else:
+                        status = "STALE"
                 else:
                     status = "OK"
                 score = {"OK": 100, "STALE": 60, "STARVED": 30, "MISSING": 0}[status]
@@ -303,7 +359,10 @@ def _data_health_snapshot() -> dict[str, Any]:
                 }
                 if _DH_V2_RANK[status] > _DH_V2_RANK[worst]:
                     worst = status
-        results.append({"symbol": symbol, "timeframes": tf_status, "overall_status": worst})
+        entry: dict[str, Any] = {"symbol": symbol, "timeframes": tf_status, "overall_status": worst}
+        if note:
+            entry["note"] = note
+        results.append(entry)
         summary[worst.lower()] += 1
 
     return {

@@ -79,6 +79,7 @@ def _trades_for_chart(trades: list[TradeRecord]) -> list[dict]:
             "regime": t.regime or None,
             "cf_score": t.cf_score or None,
             "engine_votes": t.engine_votes or None,
+            "indicator_filters": t.indicator_filters or None,
         })
     return out
 

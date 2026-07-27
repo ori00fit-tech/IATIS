@@ -96,6 +96,31 @@ export const ENGINE_KEYS = [
   'divergence', 'market_structure', 'sentiment',
 ] as const
 
+// Backtesting Lab Pro Phase D (2026-07-27) — mirrors
+// confluence.indicator_filters.INDICATOR_KEYS/FILTER_MODES exactly.
+// Non-negotiable design constraint: an indicator can only veto
+// (entry_filter), nudge the score (confirmation/score_weight) — never
+// set a trade's direction. The EXECUTE/NO_TRADE decision always
+// originates from the engine vote (see StrategyStep above), unchanged
+// by anything configured here.
+export const INDICATOR_KEYS = ['rsi', 'macd', 'ema', 'adx', 'atr'] as const
+export const FILTER_MODES = ['disabled', 'entry_filter', 'confirmation', 'score_weight'] as const
+
+export interface IndicatorFilterState {
+  name: (typeof INDICATOR_KEYS)[number]
+  mode: (typeof FILTER_MODES)[number]
+  params: Record<string, number>
+  weight: number
+}
+
+export const DEFAULT_INDICATOR_PARAMS: Record<(typeof INDICATOR_KEYS)[number], Record<string, number>> = {
+  rsi: { period: 14, buy_above: 55, sell_below: 45 },
+  macd: { fast: 12, slow: 26, signal: 9 },
+  ema: { period: 50 },
+  adx: { period: 14, min_trend: 20 },
+  atr: { period: 14, min_atr: 0, max_atr: 999999 },
+}
+
 export interface WizardState {
   selectedSymbols: string[]
   jobId: string // 'backtest' | 'walk_forward' | 'robustness' | 'hypothesis_H0xx'
@@ -116,6 +141,11 @@ export interface WizardState {
   // config/engines.yaml enabled set, unchanged. Non-null = the explicit,
   // complete list of engines ON for this run (not a partial patch).
   engines: string[] | null
+  // Backtesting Lab Pro Phase D (2026-07-27) — null = no indicator
+  // filter/confirmation/score-weight layer, unchanged from every prior
+  // phase's behavior. Non-null = the explicit, complete list of
+  // non-disabled indicator specs for this run.
+  indicators: IndicatorFilterState[] | null
 }
 
 function toApiRiskOverrides(r: RiskOverridesState) {
@@ -584,26 +614,136 @@ function StrategyStep({ state, setState }: { state: WizardState; setState: (s: W
   )
 }
 
-// ── Step 6: Indicators (catalog, read-only) ─────────────────────────────
-function IndicatorsStep() {
+// ── Step 6: Indicators (catalog + Filters, Backtesting Lab Pro Phase D) ──
+function IndicatorsStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const indicators = useApiQuery(['research-indicators'], getResearchIndicators, POLL_MS, markUnauthenticated)
 
+  const specs = state.indicators ?? []
+  const specFor = (name: (typeof INDICATOR_KEYS)[number]) => specs.find((s) => s.name === name)
+
+  const setMode = (name: (typeof INDICATOR_KEYS)[number], mode: (typeof FILTER_MODES)[number]) => {
+    const others = specs.filter((s) => s.name !== name)
+    if (mode === 'disabled') {
+      setState({ ...state, indicators: others.length > 0 ? others : null })
+      return
+    }
+    const existing = specFor(name)
+    const next: IndicatorFilterState = {
+      name, mode, params: existing?.params ?? { ...DEFAULT_INDICATOR_PARAMS[name] }, weight: existing?.weight ?? 0,
+    }
+    setState({ ...state, indicators: [...others, next] })
+  }
+
+  const setParam = (name: (typeof INDICATOR_KEYS)[number], key: string, value: number) => {
+    const current = specFor(name)
+    if (!current) return
+    setState({
+      ...state,
+      indicators: specs.map((s) => (s.name === name ? { ...s, params: { ...s.params, [key]: value } } : s)),
+    })
+  }
+
+  const setWeight = (name: (typeof INDICATOR_KEYS)[number], weight: number) => {
+    setState({ ...state, indicators: specs.map((s) => (s.name === name ? { ...s, weight } : s)) })
+  }
+
+  const resetAll = () => setState({ ...state, indicators: null })
+
   return (
-    <Panel title="Indicators" right="catalog of what each engine already computes — not an editor">
-      <div className="p-4 grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
-        {indicators.data?.indicators.map((i: IndicatorEntry) => (
-          <div key={i.id} className="rounded-lg border border-border bg-surface/40 px-3.5 py-3 flex flex-col gap-1">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-accent text-[0.88em]">{i.name}</span>
-              <Badge tone="neutral">{i.category}</Badge>
+    <div className="flex flex-col gap-4">
+      <Panel title="Indicators" right="catalog of what each engine already computes — not an editor">
+        <div className="p-4 grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
+          {indicators.data?.indicators.map((i: IndicatorEntry) => (
+            <div key={i.id} className="rounded-lg border border-border bg-surface/40 px-3.5 py-3 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-accent text-[0.88em]">{i.name}</span>
+                <Badge tone="neutral">{i.category}</Badge>
+              </div>
+              <span className="text-muted text-[0.78em]">{i.description}</span>
             </div>
-            <span className="text-muted text-[0.78em]">{i.description}</span>
+          ))}
+          {!indicators.data && <Empty>{indicators.loading ? 'Loading…' : 'No indicator catalog'}</Empty>}
+        </div>
+      </Panel>
+
+      <Panel title="Filters" right="ad-hoc, this run only — never written to config.yaml">
+        <div className="p-4 flex flex-col gap-3">
+          <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+            Indicators never open or close a trade on their own — they can only confirm, veto, or nudge the score of
+            a decision the engines (SMC/NNFX/Price Action/Wyckoff/…) already produced. Direction always comes from
+            the engine vote in the Strategy step.
           </div>
-        ))}
-        {!indicators.data && <Empty>{indicators.loading ? 'Loading…' : 'No indicator catalog'}</Empty>}
-      </div>
-    </Panel>
+          <div className="flex flex-col gap-2.5">
+            {INDICATOR_KEYS.map((name) => {
+              const spec = specFor(name)
+              const mode = spec?.mode ?? 'disabled'
+              const params = spec?.params ?? DEFAULT_INDICATOR_PARAMS[name]
+              return (
+                <div
+                  key={name}
+                  className={`rounded-lg border px-3.5 py-3 flex flex-col gap-2 ${
+                    mode !== 'disabled' ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-bold text-text uppercase w-14 shrink-0">{name}</span>
+                    <select
+                      value={mode}
+                      onChange={(e) => setMode(name, e.target.value as (typeof FILTER_MODES)[number])}
+                      className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.82em]"
+                    >
+                      {FILTER_MODES.map((m) => (
+                        <option key={m} value={m}>
+                          {m.replace('_', ' ')}
+                        </option>
+                      ))}
+                    </select>
+                    {mode !== 'disabled' &&
+                      Object.entries(DEFAULT_INDICATOR_PARAMS[name]).map(([key, def]) => (
+                        <label key={key} className="flex items-center gap-1.5 text-[0.78em] text-muted">
+                          {key}
+                          <input
+                            type="number"
+                            value={params[key] ?? def}
+                            onChange={(e) => setParam(name, key, Number(e.target.value))}
+                            placeholder={String(def)}
+                            className="w-20 px-1.5 py-1 bg-bg border border-border rounded text-text"
+                          />
+                        </label>
+                      ))}
+                    {mode === 'score_weight' && (
+                      <label className="flex items-center gap-1.5 text-[0.78em] text-muted">
+                        weight
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={spec?.weight ?? 0}
+                          onChange={(e) => setWeight(name, Number(e.target.value))}
+                          className="w-16 px-1.5 py-1 bg-bg border border-border rounded text-text"
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {state.indicators !== null && (
+            <div className="flex items-center gap-3">
+              <span className="text-amber text-[0.78em]">
+                Non-default indicator filters make this run exploratory, not evidence — same status as any other
+                ad-hoc backtest.
+              </span>
+              <button onClick={resetAll} className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent/50">
+                Reset — disable all filters
+              </button>
+            </div>
+          )}
+        </div>
+      </Panel>
+    </div>
   )
 }
 
@@ -782,14 +922,15 @@ function ExecutionStep({
       const risk = requiresSymbols ? toApiRiskOverrides(state.riskOverrides) : undefined
       const timeframes = requiresSymbols && state.timeframes ? state.timeframes : undefined
       const engines = requiresSymbols && state.engines ? state.engines : undefined
+      const indicators = requiresSymbols && state.indicators ? state.indicators : undefined
       const summary = isRobustness
         ? await runRobustnessJob(
             state.selectedSymbols,
             sweepParams.length > 0 ? sweepParams : undefined,
             sweepMultipliers.length > 0 ? sweepMultipliers : undefined,
-            range, risk, timeframes, engines,
+            range, risk, timeframes, engines, indicators,
           )
-        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes, engines)
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes, engines, indicators)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -881,6 +1022,7 @@ export function BacktestingLab() {
   const [state, setState] = useState<WizardState>({
     selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
     dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null, engines: null,
+    indicators: null,
   })
   const [job, setJob] = useState<JobDetail | null>(null)
 
@@ -915,7 +1057,7 @@ export function BacktestingLab() {
       {step === 2 && <RiskRangeStep state={state} setState={setState} />}
       {step === 3 && <TimeframesStep state={state} setState={setState} />}
       {step === 4 && <StrategyStep state={state} setState={setState} />}
-      {step === 5 && <IndicatorsStep />}
+      {step === 5 && <IndicatorsStep state={state} setState={setState} />}
       {step === 6 && <HypothesesStep state={state} setState={setState} />}
       {step === 7 && (
         <ExecutionStep

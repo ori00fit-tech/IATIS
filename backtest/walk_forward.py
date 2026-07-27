@@ -92,6 +92,10 @@ class WalkForwardConfig:
         engines: Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc
             per-run engine selection (explicit complete list). None =
             production config/engines.yaml enabled set, unchanged.
+        indicators: Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc
+            per-run indicator filter/confirmation/score-weight specs.
+            None = no indicator layer, unchanged from every prior
+            phase's behavior.
     """
 
     n_windows: int = 3
@@ -101,6 +105,7 @@ class WalkForwardConfig:
     engine_overrides: dict = field(default_factory=dict)
     timeframes: tuple[str, ...] | None = None
     engines: tuple[str, ...] | None = None
+    indicators: tuple[dict, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -201,6 +206,7 @@ def run_walk_forward(
     engine_config = build_engine_config_override(
         timeframes=list(wf_config.timeframes) if wf_config.timeframes else None,
         engines_enabled={e: (e in wf_config.engines) for e in ENGINE_KEYS} if wf_config.engines else None,
+        indicators=list(wf_config.indicators) if wf_config.indicators else None,
     )
 
     for k, (frame, test_start, test_end) in enumerate(windows):
@@ -346,11 +352,22 @@ def main() -> None:
     # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
     # selection (explicit complete list of which engines run).
     parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
+    # filter/confirmation/score-weight specs (JSON-encoded).
+    parser.add_argument("--indicators-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
         f: getattr(args, f) for f in _WF_ENGINE_OVERRIDE_FIELDS if getattr(args, f) is not None
     }
+
+    indicators = None
+    if args.indicators_json:
+        from confluence.indicator_filters import parse_indicators_json
+        try:
+            indicators = parse_indicators_json(args.indicators_json)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     results = run_walk_forward_suite(
         symbols=args.symbols,
@@ -363,6 +380,7 @@ def main() -> None:
             engine_overrides=engine_overrides,
             timeframes=tuple(args.timeframes) if args.timeframes else None,
             engines=tuple(args.engines) if args.engines else None,
+            indicators=indicators,
         ),
         start=args.start, end=args.end,
     )

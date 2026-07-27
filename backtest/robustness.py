@@ -76,6 +76,10 @@ class RobustnessConfig:
     # selection (explicit complete list). None = production config/
     # engines.yaml enabled set, unchanged.
     engines: tuple[str, ...] | None = None
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run
+    # indicator filter/confirmation/score-weight specs. None = no
+    # indicator layer, unchanged from every prior phase's behavior.
+    indicators: tuple[dict, ...] | None = None
 
     def __post_init__(self) -> None:
         if 1.0 not in self.multipliers:
@@ -153,6 +157,7 @@ def run_param_sweep(
     engine_config = build_engine_config_override(
         timeframes=list(rc.timeframes) if rc.timeframes else None,
         engines_enabled={e: (e in rc.engines) for e in ENGINE_KEYS} if rc.engines else None,
+        indicators=list(rc.indicators) if rc.indicators else None,
     )
 
     points: list[SweepPoint] = []
@@ -272,11 +277,22 @@ def main() -> None:
     # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
     # selection (explicit complete list of which engines run).
     parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
+    # filter/confirmation/score-weight specs (JSON-encoded).
+    parser.add_argument("--indicators-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
         f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
     }
+
+    indicators = None
+    if args.indicators_json:
+        from confluence.indicator_filters import parse_indicators_json
+        try:
+            indicators = parse_indicators_json(args.indicators_json)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     results = run_robustness_suite(
         symbols=args.symbols,
@@ -288,6 +304,7 @@ def main() -> None:
             engine_overrides=engine_overrides,
             timeframes=tuple(args.timeframes) if args.timeframes else None,
             engines=tuple(args.engines) if args.engines else None,
+            indicators=indicators,
         ),
         start=args.start, end=args.end,
     )

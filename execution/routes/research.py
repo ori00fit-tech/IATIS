@@ -267,7 +267,15 @@ async def research_indicators(
     _INDICATOR_CATALOG's module comment: a read-only inventory of the
     indicator math already implemented in this codebase, grouped by
     category, for the Dataset Builder to let a researcher see/select
-    which indicators back a chosen engine. Adds no new computation."""
+    which indicators back a chosen engine. Adds no new computation.
+
+    A separate, ephemeral mechanism (Backtesting Lab Pro Phase D,
+    2026-07-27) lets POST /experiments/run's `indicators` field
+    configure ad-hoc RSI/MACD/EMA/ADX/ATR filter/confirmation/
+    score-weight overrides for one research run — that override never
+    affects this endpoint's own reported catalog and can never set a
+    trade's direction itself (see confluence/indicator_filters.py).
+    """
     _check_auth(x_api_key, iatis_session)
     by_category: dict[str, list[dict[str, Any]]] = {}
     for ind in _INDICATOR_CATALOG:

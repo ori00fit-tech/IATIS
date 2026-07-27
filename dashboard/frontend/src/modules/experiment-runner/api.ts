@@ -59,12 +59,25 @@ export interface DateRange {
   end?: string
 }
 
+// Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
+// filter/confirmation/score-weight specs, forwarded verbatim to
+// POST /experiments/run's indicators field. See confluence.
+// indicator_filters's module docstring: an indicator can only veto/nudge
+// a decision the engine vote already produced, never set direction.
+export interface IndicatorFilterSpec {
+  name: string
+  mode: string
+  params?: Record<string, number>
+  weight?: number
+}
+
 export const runJob = (
   job: string, symbols?: string[], range?: DateRange, riskOverrides?: RiskOverrides,
-  timeframes?: string[], engines?: string[],
+  timeframes?: string[], engines?: string[], indicators?: IndicatorFilterSpec[],
 ) =>
   apiPost<JobSummary>('/experiments/run', {
-    job, symbols, start: range?.start, end: range?.end, risk_overrides: riskOverrides, timeframes, engines,
+    job, symbols, start: range?.start, end: range?.end, risk_overrides: riskOverrides,
+    timeframes, engines, indicators,
   })
 
 // robustness only (Parameter Sweep, 2026-07-25) — server validates params
@@ -74,8 +87,10 @@ export const runJob = (
 export const runRobustnessJob = (
   symbols: string[], params?: string[], multipliers?: number[],
   range?: DateRange, riskOverrides?: RiskOverrides, timeframes?: string[], engines?: string[],
+  indicators?: IndicatorFilterSpec[],
 ) =>
   apiPost<JobSummary>('/experiments/run', {
     job: 'robustness', symbols, params, multipliers,
-    start: range?.start, end: range?.end, risk_overrides: riskOverrides, timeframes, engines,
+    start: range?.start, end: range?.end, risk_overrides: riskOverrides,
+    timeframes, engines, indicators,
   })

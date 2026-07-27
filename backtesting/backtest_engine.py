@@ -251,8 +251,15 @@ class BacktestResult:
         default_factory=lambda: {
             "mqs": 0, "score": 0, "votes": 0,
             "contradiction": 0, "reversal_veto": 0, "info_share": 0,
+            "indicator_filter": 0,
         }
     )
+    # Backtesting Lab Pro Phase D (2026-07-27) — which indicator (by
+    # name) vetoed how many bars, when indicator_filter is the gate
+    # that rejected. Separate from gate_rejections["indicator_filter"]
+    # (the total count) since more than one indicator can be configured
+    # per run.
+    indicator_rejections: dict = field(default_factory=dict)
 
     trades: list = field(default_factory=list)
     equity_curve: list = field(default_factory=list)
@@ -345,22 +352,31 @@ ENGINE_KEYS: tuple[str, ...] = (
 def build_engine_config_override(
     timeframes: list[str] | None = None,
     engines_enabled: dict[str, bool] | None = None,
+    indicators: list[dict] | None = None,
 ) -> dict | None:
-    """Backtesting Lab Pro Phase B/C (2026-07-27) — ad-hoc per-run
+    """Backtesting Lab Pro Phase B/C/D (2026-07-27) — ad-hoc per-run
     overrides, merged over a real load_config() snapshot so every other
     confluence/engine setting (weights, min_score_to_trade, ...) stays
-    exactly as configured. Returns None when neither override is
-    requested, preserving run_backtest's own load_config() default path
+    exactly as configured. Returns None when no override is requested,
+    preserving run_backtest's own load_config() default path
     byte-for-byte — zero behavior change for every existing caller that
-    never passes either. Ephemeral — never writes to config.yaml.
+    never passes any of these. Ephemeral — never writes to config.yaml.
 
     engines_enabled (Phase C): an explicit {engine_key: is_enabled} map
     merged over config/engines.yaml's real enabled dict. Only the 9
     ENGINE_KEYS are meaningful here — any other key is silently inert,
     matching run_backtest's own enabled.get(key, ...) lookup, which only
     ever consults ENGINE_KEYS.
+
+    indicators (Phase D): a list of confluence.indicator_filters.
+    IndicatorSpec-shaped dicts ({"name","mode","params","weight"}).
+    Stored verbatim under engine_config["indicators"]["filters"] —
+    run_backtest reconstructs IndicatorSpec objects from it. Indicators
+    only ever filter/confirm/weight a decision the engine vote already
+    produced (see confluence/indicator_filters.py's module docstring);
+    they can never set direction/bias themselves.
     """
-    if timeframes is None and engines_enabled is None:
+    if timeframes is None and engines_enabled is None and indicators is None:
         return None
     from utils.helpers import load_config
     base = load_config()
@@ -372,6 +388,8 @@ def build_engine_config_override(
             **base.get("engines", {}),
             "enabled": {**base.get("engines", {}).get("enabled", {}), **engines_enabled},
         }
+    if indicators is not None:
+        merged["indicators"] = {"filters": list(indicators)}
     return merged
 
 
@@ -590,6 +608,27 @@ def run_backtest(
                     max(0.0, min(100.0, adjusted_score + mtf_res.score_adjustment)), 2
                 )
 
+            # Indicator filters (Backtesting Lab Pro Phase D, 2026-07-27)
+            # — ad-hoc, per-run RSI/MACD/EMA/ADX/ATR filters that can
+            # only veto an otherwise-valid EXECUTE (entry_filter) or
+            # nudge adjusted_score (confirmation/score_weight). Never
+            # sets direction/bias — see confluence/indicator_filters.py.
+            # Absent for every existing caller (engine_config has no
+            # "indicators" key), so this is a no-op unless explicitly
+            # configured.
+            indicator_veto_blocked = False
+            indicator_result = None
+            indicator_specs = engine_config.get("indicators", {}).get("filters")
+            if indicator_specs:
+                from confluence.indicator_filters import IndicatorSpec, evaluate_indicator_filters
+                specs = [IndicatorSpec(**s) for s in indicator_specs]
+                indicator_result = evaluate_indicator_filters(window, vote.winning_bias.value, specs)
+                adjusted_score = round(
+                    max(0.0, min(100.0, adjusted_score + indicator_result.score_adjustment)), 2
+                )
+                if indicator_result.vetoed:
+                    indicator_veto_blocked = True
+
             # H013 reversal veto — hard veto blocks, soft veto scales the
             # score by confidence_multiplier (identical to production).
             veto_blocked = False
@@ -615,6 +654,7 @@ def run_backtest(
                 and vote.agree_count >= min_engines
                 and not contradiction.blocked
                 and not veto_blocked
+                and not indicator_veto_blocked
                 and vote.winning_bias.value != "NEUTRAL"
                 and info_share_ok
             )
@@ -622,6 +662,10 @@ def run_backtest(
                 result.no_trade_count += 1
                 if veto_blocked:
                     result.gate_rejections["reversal_veto"] += 1
+                elif indicator_veto_blocked:
+                    result.gate_rejections["indicator_filter"] += 1
+                    name = indicator_result.veto_indicator
+                    result.indicator_rejections[name] = result.indicator_rejections.get(name, 0) + 1
                 elif adjusted_score < min_score:
                     result.gate_rejections["score"] += 1
                 elif contradiction.blocked:
@@ -658,6 +702,7 @@ def run_backtest(
                 "score": round(score.final_score, 2),
                 "adjusted_score": adjusted_score,
                 "regime": regime.regime.value if config.use_regime_weights else None,
+                "indicator_filters": indicator_result.per_indicator if indicator_result else None,
             }
 
             open_trade = Trade(

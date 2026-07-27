@@ -81,6 +81,13 @@ class RunnerConfig:
             per-run override of which engines run (explicit complete
             list, e.g. ("nnfx","price_action")). None = use the real
             config/engines.yaml enabled set, unchanged.
+        indicators: Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc
+            per-run indicator filter/confirmation/score-weight specs
+            (confluence.indicator_filters.IndicatorSpec-shaped dicts).
+            None = no indicator layer, unchanged from every prior
+            phase's behavior. Indicators can only filter/confirm/weight
+            a decision the engine vote already produced — see
+            confluence/indicator_filters.py's module docstring.
     """
 
     symbols: tuple[str, ...]
@@ -93,6 +100,7 @@ class RunnerConfig:
     engine_overrides: dict = field(default_factory=dict)
     timeframes: tuple[str, ...] | None = None
     engines: tuple[str, ...] | None = None
+    indicators: tuple[dict, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +243,7 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
         regime=decision.get("regime") or "",
         cf_score=decision.get("adjusted_score", 0.0),
         engine_votes=engine_votes,
+        indicator_filters=decision.get("indicator_filters") or {},
     )
 
 
@@ -261,6 +270,7 @@ def run_symbol(
         engines_enabled=(
             {e: (e in runner_config.engines) for e in ENGINE_KEYS} if runner_config.engines else None
         ),
+        indicators=list(runner_config.indicators) if runner_config.indicators else None,
     )
     result = run_backtest(df, engine_cfg, engine_config=engine_config)
 
@@ -333,6 +343,13 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
                 "bars": r.bars,
                 "pipeline_runs": r.engine_result.total_runs,
                 "pipeline_errors": r.engine_result.error_count,
+                # Backtesting Lab Pro Phase D (2026-07-27) — already
+                # computed by run_backtest, previously discarded here.
+                # gate_rejections turns "N trades" into a diagnosable
+                # funnel; indicator_rejections is the per-indicator
+                # veto-count breakdown the operator explicitly asked for.
+                "gate_rejections": dict(r.engine_result.gate_rejections),
+                "indicator_rejections": dict(r.engine_result.indicator_rejections),
                 "trades": r.metrics.total_trades,
                 "win_rate": round(r.metrics.win_rate, 4),
                 "profit_factor": round(r.metrics.profit_factor, 3),
@@ -400,11 +417,24 @@ def main() -> None:
     # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
     # selection (explicit complete list of which engines run).
     parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
+    # filter/confirmation/score-weight specs (JSON-encoded list of
+    # confluence.indicator_filters.IndicatorSpec-shaped dicts) — structured
+    # data doesn't fit the nargs="+" pattern the flags above use.
+    parser.add_argument("--indicators-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
         f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
     }
+
+    indicators = None
+    if args.indicators_json:
+        from confluence.indicator_filters import parse_indicators_json
+        try:
+            indicators = parse_indicators_json(args.indicators_json)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     config = RunnerConfig(
         symbols=tuple(args.symbols),
@@ -417,6 +447,7 @@ def main() -> None:
         engine_overrides=engine_overrides,
         timeframes=tuple(args.timeframes) if args.timeframes else None,
         engines=tuple(args.engines) if args.engines else None,
+        indicators=indicators,
     )
     results = run_all(config)
     if not results:

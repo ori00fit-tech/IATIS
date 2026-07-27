@@ -28,6 +28,7 @@ export function PresetsBar({ state, setState }: { state: WizardState; setState: 
       riskOverrides: p.riskOverrides ?? DEFAULT_RISK_OVERRIDES,
       timeframes: p.timeframes ?? null,
       engines: p.engines ?? null,
+      indicators: p.indicators ?? null,
     })
   }
 
@@ -180,8 +181,17 @@ function validatePreset(value: unknown, fallbackName: string): WizardPreset | nu
   // without this key must not fail import.
   const engines =
     Array.isArray(v.engines) && v.engines.every((e) => typeof e === 'string') ? (v.engines as string[]) : null
+  // indicators (Backtesting Lab Pro Phase D) — same tolerant treatment:
+  // null/absent both mean "no indicator filter layer." Only a loose
+  // shape check (name/mode are strings) — an old preset without this
+  // key, or a hand-edited file missing it, must not fail import.
+  const indicators =
+    Array.isArray(v.indicators) &&
+    v.indicators.every((i) => typeof i === 'object' && i !== null && typeof (i as Record<string, unknown>).name === 'string' && typeof (i as Record<string, unknown>).mode === 'string')
+      ? (v.indicators as WizardPreset['indicators'])
+      : null
   return {
     name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers,
-    dateRange, riskOverrides, timeframes, engines, savedAt,
+    dateRange, riskOverrides, timeframes, engines, indicators, savedAt,
   }
 }

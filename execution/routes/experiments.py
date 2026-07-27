@@ -292,6 +292,12 @@ class _RunJobRequest(BaseModel):
     start: str | None = None
     end: str | None = None
     risk_overrides: _RiskOverrides | None = None
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first, e.g. ["H1"] or
+    # ["H4","D1","H1"]). Different override channel than risk_overrides
+    # (run_backtest's engine_config keyword, not BacktestConfig) — see
+    # backtesting.backtest_engine.build_engine_config_override.
+    timeframes: list[str] | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -421,8 +427,23 @@ async def experiments_run(
             raise HTTPException(status_code=400, detail="start must be <= end.")
         if body.risk_overrides is not None:
             argv += _risk_override_argv(body.risk_overrides)
-    elif body.start is not None or body.end is not None or body.risk_overrides is not None:
-        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no start/end/risk_overrides.")
+        if body.timeframes is not None:
+            from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+
+            if not (1 <= len(body.timeframes) <= 4):
+                raise HTTPException(status_code=400, detail="timeframes: 1-4 values per run.")
+            unknown_tf = sorted(set(body.timeframes) - set(SUPPORTED_TIMEFRAMES))
+            if unknown_tf:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown timeframe(s) {unknown_tf} — choose from {sorted(SUPPORTED_TIMEFRAMES)}.",
+                )
+            argv += ["--timeframes", *body.timeframes]
+    elif (
+        body.start is not None or body.end is not None
+        or body.risk_overrides is not None or body.timeframes is not None
+    ):
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no start/end/risk_overrides/timeframes.")
 
     if body.job == "robustness":
         from backtest.robustness import SWEEP_PARAMS
@@ -469,6 +490,8 @@ async def experiments_run(
             detail += f" end={body.end}"
         if body.risk_overrides is not None:
             detail += f" risk_overrides={body.risk_overrides.model_dump(exclude_none=True)}"
+        if body.timeframes is not None:
+            detail += f" timeframes={body.timeframes}"
     if body.job == "robustness":
         if body.params is not None:
             detail += f" params={body.params}"

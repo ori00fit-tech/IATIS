@@ -77,6 +77,15 @@ export const DEFAULT_RISK_OVERRIDES: RiskOverridesState = {
   slippage_pips: null, swap_pips_per_night: null, initial_balance: null, warmup_bars: null, step_bars: null,
 }
 
+// Backtesting Lab Pro Phase B (2026-07-27) — the only timeframe labels
+// core/timeframe_sync.py's resample()/_TF_MINUTES can correctly handle
+// (mirrors core.timeframe_sync.SUPPORTED_TIMEFRAMES — any other label
+// would silently mislabel its resampling cadence server-side).
+export const SUPPORTED_TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'] as const
+// Production order (config.yaml's data.timeframes) — shown as the default
+// selection; reordering/deselecting only affects this one ad-hoc run.
+export const DEFAULT_TIMEFRAMES_ORDER = ['H4', 'D1', 'H1'] as const
+
 export interface WizardState {
   selectedSymbols: string[]
   jobId: string // 'backtest' | 'walk_forward' | 'robustness' | 'hypothesis_H0xx'
@@ -89,6 +98,10 @@ export interface WizardState {
   sweepMultipliers: number[]
   dateRange: DateRangeState
   riskOverrides: RiskOverridesState
+  // Backtesting Lab Pro Phase B (2026-07-27) — null = production
+  // config.yaml order [H4, D1, H1], unchanged. Non-null = this run's
+  // decision timeframe first, then confirmation timeframe(s).
+  timeframes: string[] | null
 }
 
 function toApiRiskOverrides(r: RiskOverridesState) {
@@ -397,7 +410,7 @@ function RiskRangeStep({ state, setState }: { state: WizardState; setState: (s: 
 }
 
 // ── Step 4: Timeframe Matrix (informational — see module docstring) ─────
-function TimeframesStep() {
+function TimeframesStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const symbols = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
 
@@ -409,15 +422,58 @@ function TimeframesStep() {
   // relitigate that removal for anyone using this picker.
   const activeProviders = symbols.data ? new Set(Object.values(symbols.data.chains).flat()) : new Set<string>()
 
+  const effective = state.timeframes ?? [...DEFAULT_TIMEFRAMES_ORDER]
+
+  const toggle = (tf: string) => {
+    const current = state.timeframes ?? [...DEFAULT_TIMEFRAMES_ORDER]
+    const next = current.includes(tf) ? current.filter((t) => t !== tf) : [...current, tf]
+    setState({ ...state, timeframes: next })
+  }
+  const resetToProduction = () => setState({ ...state, timeframes: null })
+
   return (
-    <Panel title="Timeframe Matrix">
+    <Panel title="Timeframes" right="ad-hoc, this run only — never written to config.yaml">
       <div className="p-4 flex flex-col gap-3">
-        <div className="text-[0.82em] bg-amber/10 border border-amber/30 text-amber rounded px-3 py-2">
-          Fixed by config.yaml, not selectable per-run: every live decision uses the same H1 base / H4-D1 confirmation
-          triplet across all symbols. Changing this mid-sample resets the forward-evidence counter (CLAUDE.md rule 6).
-          Shown below: which timeframes each provider actually serves natively — providers in at least one live chain
-          only (see /provider-chains for the full chain order).
+        <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+          Production order shown below (H4 decision / D1-H1 confirmation) — click to reorder/deselect for this run
+          only. Only M15/H1/H4/D1 are supported (the only labels this system can correctly resample); changing this
+          mid-sample would reset the forward-evidence counter on the LIVE pipeline, but this ad-hoc run never touches
+          that (CLAUDE.md rule 6 governs production, not a read-only research backtest).
         </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {SUPPORTED_TIMEFRAMES.map((tf) => {
+            const idx = effective.indexOf(tf)
+            const selected = idx !== -1
+            return (
+              <button
+                key={tf}
+                onClick={() => toggle(tf)}
+                className={`px-2.5 py-1.5 rounded text-[0.82em] font-mono border ${
+                  selected ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
+                }`}
+              >
+                {selected && <span className="text-[0.75em] mr-1">{idx + 1}.</span>}
+                {tf}
+              </button>
+            )
+          })}
+          {state.timeframes !== null && (
+            <button onClick={resetToProduction} className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent/50">
+              Reset to production order
+            </button>
+          )}
+        </div>
+        <div className="text-[0.78em] text-muted">
+          Decision timeframe: <span className="font-mono text-text">{effective[0] ?? '—'}</span>
+          {effective.length > 1 && (
+            <>
+              {' '}· confirms against: <span className="font-mono text-text">{effective.slice(1).join(', ')}</span>
+            </>
+          )}
+        </div>
+        {effective.length === 0 && <span className="text-red text-[0.78em]">Select at least one timeframe.</span>}
+
+        <div className="text-muted uppercase text-[0.7em] tracking-[1px] mt-2">Native provider coverage</div>
         {symbols.data ? (
           <div className="flex flex-col gap-2">
             {Object.entries(symbols.data.native_timeframes)
@@ -670,14 +726,15 @@ function ExecutionStep({
     try {
       const range = requiresSymbols ? toApiDateRange(state.dateRange) : undefined
       const risk = requiresSymbols ? toApiRiskOverrides(state.riskOverrides) : undefined
+      const timeframes = requiresSymbols && state.timeframes ? state.timeframes : undefined
       const summary = isRobustness
         ? await runRobustnessJob(
             state.selectedSymbols,
             sweepParams.length > 0 ? sweepParams : undefined,
             sweepMultipliers.length > 0 ? sweepMultipliers : undefined,
-            range, risk,
+            range, risk, timeframes,
           )
-        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk)
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -768,7 +825,7 @@ export function BacktestingLab() {
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
   const [state, setState] = useState<WizardState>({
     selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
-    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES,
+    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null,
   })
   const [job, setJob] = useState<JobDetail | null>(null)
 
@@ -781,6 +838,8 @@ export function BacktestingLab() {
 
   const requiresSymbols = ['backtest', 'walk_forward', 'robustness'].includes(state.jobId)
   const canAdvanceFromSymbols = step !== 1 || state.selectedSymbols.length > 0 || !requiresSymbols
+  const canAdvanceFromTimeframes = step !== 3 || (state.timeframes ?? DEFAULT_TIMEFRAMES_ORDER).length > 0
+  const canAdvance = canAdvanceFromSymbols && canAdvanceFromTimeframes
 
   return (
     <div className="flex flex-col gap-4">
@@ -799,7 +858,7 @@ export function BacktestingLab() {
       {step === 0 && <DatasetStep />}
       {step === 1 && <SymbolsStep state={state} setState={setState} />}
       {step === 2 && <RiskRangeStep state={state} setState={setState} />}
-      {step === 3 && <TimeframesStep />}
+      {step === 3 && <TimeframesStep state={state} setState={setState} />}
       {step === 4 && <StrategyStep />}
       {step === 5 && <IndicatorsStep />}
       {step === 6 && <HypothesesStep state={state} setState={setState} />}
@@ -824,8 +883,14 @@ export function BacktestingLab() {
         </button>
         <button
           onClick={next}
-          disabled={step === 8 || !canAdvanceFromSymbols}
-          title={!canAdvanceFromSymbols ? 'Select at least one symbol first' : undefined}
+          disabled={step === 8 || !canAdvance}
+          title={
+            !canAdvanceFromSymbols
+              ? 'Select at least one symbol first'
+              : !canAdvanceFromTimeframes
+                ? 'Select at least one timeframe first'
+                : undefined
+          }
           className="px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 disabled:opacity-40 font-bold"
         >
           Next →

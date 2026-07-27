@@ -46,7 +46,7 @@ import pandas as pd
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -86,6 +86,9 @@ class WalkForwardConfig:
             warmup so window 1 behaves identically to the others.
         engine_overrides: applied to the BacktestConfig of every window
             (ignored for windows where a parameter_selector is used).
+        timeframes: Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc
+            per-run data.timeframes override (decision TF first). None
+            = production config.yaml timeframes, unchanged.
     """
 
     n_windows: int = 3
@@ -93,6 +96,7 @@ class WalkForwardConfig:
     min_trades_per_window: int = 10
     warmup_bars: int = 210
     engine_overrides: dict = field(default_factory=dict)
+    timeframes: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -189,6 +193,8 @@ def run_walk_forward(
     """
     windows = split_windows(df, wf_config.n_windows, wf_config.warmup_bars)
     results: list[WindowResult] = []
+    # Computed once — identical for every window.
+    engine_config = build_engine_config_override(list(wf_config.timeframes) if wf_config.timeframes else None)
 
     for k, (frame, test_start, test_end) in enumerate(windows):
         if parameter_selector is not None:
@@ -200,7 +206,7 @@ def run_walk_forward(
                 **{"warmup_bars": wf_config.warmup_bars, **wf_config.engine_overrides},
             )
 
-        bt = run_backtest(frame, engine_cfg)
+        bt = run_backtest(frame, engine_cfg, engine_config=engine_config)
         records = [trade_to_record(t, symbol) for t in bt.trades]
         m = calculate_metrics(records, initial_capital=engine_cfg.initial_balance)
 
@@ -326,6 +332,10 @@ def main() -> None:
     parser.add_argument("--swap-pips-per-night", type=float, default=None)
     parser.add_argument("--initial-balance", type=float, default=None)
     parser.add_argument("--step-bars", type=int, default=None)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first).
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+    parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -341,6 +351,7 @@ def main() -> None:
             min_trades_per_window=args.min_trades,
             warmup_bars=args.warmup_bars,
             engine_overrides=engine_overrides,
+            timeframes=tuple(args.timeframes) if args.timeframes else None,
         ),
         start=args.start, end=args.end,
     )

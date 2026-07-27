@@ -26,6 +26,7 @@ export function PresetsBar({ state, setState }: { state: WizardState; setState: 
       sweepMultipliers: p.sweepMultipliers,
       dateRange: p.dateRange ?? DEFAULT_DATE_RANGE,
       riskOverrides: p.riskOverrides ?? DEFAULT_RISK_OVERRIDES,
+      timeframes: p.timeframes ?? null,
     })
   }
 
@@ -166,5 +167,12 @@ function validatePreset(value: unknown, fallbackName: string): WizardPreset | nu
   // applyPreset's own `?? DEFAULT_*` fallback fills them in.
   const dateRange = typeof v.dateRange === 'object' && v.dateRange !== null ? (v.dateRange as WizardPreset['dateRange']) : undefined
   const riskOverrides = typeof v.riskOverrides === 'object' && v.riskOverrides !== null ? (v.riskOverrides as WizardPreset['riskOverrides']) : undefined
-  return { name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers, dateRange, riskOverrides, savedAt }
+  // timeframes (Backtesting Lab Pro Phase B) — same tolerant treatment:
+  // null/absent both mean "production order," an old preset without this
+  // key must not fail import.
+  const timeframes =
+    Array.isArray(v.timeframes) && v.timeframes.every((t) => typeof t === 'string')
+      ? (v.timeframes as string[])
+      : null
+  return { name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers, dateRange, riskOverrides, timeframes, savedAt }
 }

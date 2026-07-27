@@ -195,3 +195,43 @@ def test_robustness_cli_wires_risk_overrides(monkeypatch):
         robustness_mod.main()
     assert captured["rc"].engine_overrides == {"commission_pips": 2.0}
     assert captured["start"] == "2024-01-01"
+
+
+def test_robustness_cli_wires_timeframes_override(monkeypatch):
+    import sys
+    import backtest.robustness as robustness_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, rc, start=None, end=None):
+        captured["rc"] = rc
+        return {}
+
+    monkeypatch.setattr(robustness_mod, "run_robustness_suite", fake_suite)
+    monkeypatch.setattr(sys, "argv", ["robustness.py", "--symbols", "EURUSD", "--timeframes", "H4", "H1"])
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        robustness_mod.main()
+    assert captured["rc"].timeframes == ("H4", "H1")
+
+
+def test_run_param_sweep_threads_timeframes_override_into_run_backtest(monkeypatch):
+    """A robustness sweep with a timeframes override must build the
+    engine_config once and pass it into every sweep point's run_backtest
+    call — not silently ignore it."""
+    import backtest.robustness as robustness_mod
+
+    captured_engine_configs = []
+    real_run_backtest = robustness_mod.run_backtest
+
+    def spy_run_backtest(df, cfg, engine_config=None):
+        captured_engine_configs.append(engine_config)
+        return real_run_backtest(df, cfg, engine_config=engine_config)
+
+    monkeypatch.setattr(robustness_mod, "run_backtest", spy_run_backtest)
+
+    df = _ohlcv(2400, trend=0.10)
+    rc = RobustnessConfig(params=("min_rr",), multipliers=(1.0,), min_trades=1, timeframes=("H1",))
+    robustness_mod.run_param_sweep("EURUSD", df, "min_rr", rc)
+
+    assert len(captured_engine_configs) == 1
+    assert captured_engine_configs[0]["data"]["timeframes"] == ["H1"]

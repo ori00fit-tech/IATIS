@@ -330,6 +330,22 @@ class BacktestResult:
         logger.info(f"Backtest saved to {path}")
 
 
+def build_engine_config_override(timeframes: list[str] | None) -> dict | None:
+    """Backtesting Lab Pro Phase B (2026-07-27) — an ad-hoc per-run
+    data.timeframes override, merged over a real load_config() snapshot
+    so every other confluence/engine setting (weights, min_score_to_trade,
+    engines.enabled, ...) stays exactly as configured. Returns None when
+    no override is requested, preserving run_backtest's own load_config()
+    default path byte-for-byte — zero behavior change for every existing
+    caller that never passes this. Ephemeral — never writes to config.yaml.
+    """
+    if timeframes is None:
+        return None
+    from utils.helpers import load_config
+    base = load_config()
+    return {**base, "data": {**base["data"], "timeframes": list(timeframes)}}
+
+
 def run_backtest(
     df: pd.DataFrame,
     config: BacktestConfig | None = None,

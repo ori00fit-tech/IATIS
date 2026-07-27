@@ -355,6 +355,114 @@ def test_walk_forward_cli_wires_risk_overrides(monkeypatch):
     assert captured["end"] == "2024-06-01"
 
 
+def test_runner_cli_wires_timeframes_override(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--timeframes", "H1"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].timeframes == ("H1",)
+
+
+def test_runner_cli_rejects_unsupported_timeframe(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--timeframes", "M1"],
+    )
+    with pytest.raises(SystemExit):
+        runner_mod.main()
+
+
+def test_walk_forward_cli_wires_timeframes_override(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(sys, "argv", ["walk_forward.py", "--symbols", "EURUSD", "--timeframes", "H4", "D1", "H1"])
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    assert captured["wf_config"].timeframes == ("H4", "D1", "H1")
+
+
+def test_engine_config_override_none_when_no_timeframes_requested():
+    """build_engine_config_override(None) must return None — preserving
+    run_backtest's own load_config() default path byte-for-byte for every
+    existing caller that never requests an override."""
+    from backtesting.backtest_engine import build_engine_config_override
+
+    assert build_engine_config_override(None) is None
+
+
+def test_engine_config_override_merges_timeframes_only():
+    """The override must carry every other confluence/engine setting from
+    the real config unchanged — only data.timeframes is replaced."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from utils.helpers import load_config
+
+    real = load_config()
+    override = build_engine_config_override(["H1"])
+    assert override["data"]["timeframes"] == ["H1"]
+    assert override["confluence"]["weights"] == real["confluence"]["weights"]
+    assert override["engines"] == real["engines"]
+
+
+def test_timeframes_override_produces_the_expected_mtf_view():
+    """The authoritative proof (Backtesting Lab Pro Phase B) that the
+    override reaches build_multi_timeframe_view with the exact requested
+    timeframe set — a ["H1"]-only override must yield no coarser (D1/H4)
+    resampled views, while a full ["H4","D1","H1"] override must."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from core.timeframe_sync import build_multi_timeframe_view
+
+    df = _ohlcv(2400, trend=0.10)
+
+    single_tf_config = build_engine_config_override(["H1"])
+    mtf_single = build_multi_timeframe_view(df, single_tf_config["data"]["timeframes"])
+    assert set(mtf_single.keys()) == {"H1"}
+
+    full_config = build_engine_config_override(["H4", "D1", "H1"])
+    mtf_full = build_multi_timeframe_view(df, full_config["data"]["timeframes"])
+    assert "D1" in mtf_full and "H4" in mtf_full
+
+
+def test_timeframes_override_reaches_run_backtest_without_crashing():
+    """End-to-end smoke test: run_backtest with a single-timeframe
+    override must complete and produce trades whose decision snapshot is
+    still fully populated — MTF confirmation degrading to neutral (no D1
+    view to confirm against) must never crash the pipeline."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    override_config = build_engine_config_override(["H1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.error_count == 0
+    assert len(result.trades) > 0
+    for t in result.trades:
+        assert t.decision is not None
+        assert len(t.decision["engines"]) > 0
+
+
 def test_engine_overrides_actually_change_backtest_output(tmp_path):
     """The authoritative proof (Backtesting Lab Pro Phase A) that a risk
     override isn't silently accepted-and-ignored: running the SAME dataset

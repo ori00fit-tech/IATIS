@@ -59,9 +59,12 @@ export interface DateRange {
   end?: string
 }
 
-export const runJob = (job: string, symbols?: string[], range?: DateRange, riskOverrides?: RiskOverrides) =>
+export const runJob = (
+  job: string, symbols?: string[], range?: DateRange, riskOverrides?: RiskOverrides,
+  timeframes?: string[],
+) =>
   apiPost<JobSummary>('/experiments/run', {
-    job, symbols, start: range?.start, end: range?.end, risk_overrides: riskOverrides,
+    job, symbols, start: range?.start, end: range?.end, risk_overrides: riskOverrides, timeframes,
   })
 
 // robustness only (Parameter Sweep, 2026-07-25) — server validates params
@@ -70,9 +73,9 @@ export const runJob = (job: string, symbols?: string[], range?: DateRange, riskO
 // measure.
 export const runRobustnessJob = (
   symbols: string[], params?: string[], multipliers?: number[],
-  range?: DateRange, riskOverrides?: RiskOverrides,
+  range?: DateRange, riskOverrides?: RiskOverrides, timeframes?: string[],
 ) =>
   apiPost<JobSummary>('/experiments/run', {
     job: 'robustness', symbols, params, multipliers,
-    start: range?.start, end: range?.end, risk_overrides: riskOverrides,
+    start: range?.start, end: range?.end, risk_overrides: riskOverrides, timeframes,
   })

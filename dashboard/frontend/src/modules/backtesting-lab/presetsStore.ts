@@ -30,6 +30,10 @@ export interface WizardPreset {
   // validatePreset fall back to defaults when absent).
   dateRange?: DateRangeState
   riskOverrides?: RiskOverridesState
+  // Backtesting Lab Pro Phase B (2026-07-27) — optional, same
+  // pre-existing-preset backward-compat reasoning. null/absent =
+  // production config.yaml order.
+  timeframes?: string[] | null
   savedAt: string
 }
 

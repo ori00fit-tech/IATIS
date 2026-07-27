@@ -43,7 +43,7 @@ from pathlib import Path
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,6 +68,10 @@ class RobustnessConfig:
     params: tuple[str, ...] = SWEEP_PARAMS
     min_trades: int = 10
     engine_overrides: dict = field(default_factory=dict)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first). None = production
+    # config.yaml timeframes, unchanged.
+    timeframes: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if 1.0 not in self.multipliers:
@@ -123,10 +127,13 @@ class RobustnessResult:
         }
 
 
-def _run_point(df, symbol: str, param: str, value: float, engine_overrides: dict) -> tuple[int, float, float, float]:
+def _run_point(
+    df, symbol: str, param: str, value: float, engine_overrides: dict,
+    engine_config: dict | None = None,
+) -> tuple[int, float, float, float]:
     """Run one sweep point, returning (trades, profit_factor, win_rate, max_drawdown_pct)."""
     cfg = BacktestConfig.from_profile(symbol, **{**engine_overrides, param: value})
-    bt = run_backtest(df, cfg)
+    bt = run_backtest(df, cfg, engine_config=engine_config)
     records = [trade_to_record(t, symbol) for t in bt.trades]
     m = calculate_metrics(records, initial_capital=cfg.initial_balance)
     return m.total_trades, m.profit_factor, m.win_rate, m.max_drawdown
@@ -138,12 +145,14 @@ def run_param_sweep(
     """Sweep one parameter across ``rc.multipliers`` for one symbol."""
     baseline_cfg = BacktestConfig.from_profile(symbol, **rc.engine_overrides)
     baseline_value = getattr(baseline_cfg, param)
+    # Computed once per sweep — identical for every point in it.
+    engine_config = build_engine_config_override(list(rc.timeframes) if rc.timeframes else None)
 
     points: list[SweepPoint] = []
     baseline_pf = 0.0
     for mult in rc.multipliers:
         value = baseline_value * mult
-        trades, pf, wr, mdd = _run_point(df, symbol, param, value, rc.engine_overrides)
+        trades, pf, wr, mdd = _run_point(df, symbol, param, value, rc.engine_overrides, engine_config)
         sufficient = trades >= rc.min_trades
         points.append(SweepPoint(
             multiplier=mult, value=round(value, 6), trades=trades,
@@ -249,6 +258,10 @@ def main() -> None:
     parser.add_argument("--initial-balance", type=float, default=None)
     parser.add_argument("--warmup-bars", type=int, default=None)
     parser.add_argument("--step-bars", type=int, default=None)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first).
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+    parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -263,6 +276,7 @@ def main() -> None:
             params=tuple(args.params),
             min_trades=args.min_trades,
             engine_overrides=engine_overrides,
+            timeframes=tuple(args.timeframes) if args.timeframes else None,
         ),
         start=args.start, end=args.end,
     )

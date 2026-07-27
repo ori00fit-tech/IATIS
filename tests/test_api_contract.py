@@ -1166,6 +1166,80 @@ def test_scenario_config_fields_match_risk_override_fields_contract():
     assert documented == set(RISK_OVERRIDE_FIELDS)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase B — timeframes override plumbing
+# ─────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_forwards_timeframes(client, monkeypatch, job):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, job: ["echo", job]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": job, "symbols": ["eurusd"], "timeframes": ["H4", "D1", "H1"]},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", job, "--symbols", "EURUSD", "--timeframes", "H4", "D1", "H1"]
+
+
+def test_experiments_run_rejects_timeframes_for_non_parameterized_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "verify_data_integrity", "timeframes": ["H1"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no start/end/risk_overrides/timeframes" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_empty_timeframes(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "timeframes": []},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "1-4 values" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_too_many_timeframes(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "timeframes": ["H1", "H4", "D1", "H1", "H4"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "1-4 values" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unsupported_timeframe(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "timeframes": ["M1"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown timeframe" in r.json()["detail"]
+
+
 def test_experiments_status_unknown_job_404s(client):
     assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
 

@@ -47,6 +47,14 @@ def resample(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
 # coarser base (you cannot invent H1 candles out of D1 data).
 _TF_MINUTES = {"M15": 15, "H1": 60, "H4": 240, "D1": 1440}
 
+# Backtesting Lab Pro Phase B (2026-07-27) — the only timeframe labels this
+# module can correctly resample/label (matches _RESAMPLE_RULE/_TF_MINUTES
+# exactly). Any other label (M1, M5, M30, W1) would silently fall through
+# _TF_MINUTES.get(tf, 60)'s 60-minute default — a real correctness bug, not
+# just an unsupported choice — so a per-run timeframe override must be
+# restricted to exactly this set.
+SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(_TF_MINUTES.keys())
+
 
 def build_multi_timeframe_view(df_base: pd.DataFrame, timeframes: list[str]) -> dict[str, pd.DataFrame]:
     """Build a dict of {timeframe_label: DataFrame} from a single base series.

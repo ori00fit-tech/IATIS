@@ -941,7 +941,22 @@ def _fetch_ctrader(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     if not bars:
         raise DataFetchError(f"cTrader feed: no trendbars for {internal} @ {interval}")
     df = pd.DataFrame(bars)
-    df.index = pd.to_datetime(df.pop("timestamp"), unit="ms", utc=True)
+    # BUG FIX (2026-07-27): execution/ctrader_client.py's _on_trendbars_res
+    # stores "timestamp" as utcTimestampInMinutes*60 — i.e. SECONDS since
+    # epoch (confirmed by every other consumer of get_trendbars(): scripts/
+    # download_ctrader_fx_history.py:152 and scripts/backtest_ic_symbols.py
+    # both treat it as seconds; tests/test_ctrader_message_handlers.py's own
+    # assertions match that scale). Parsing it here with unit="ms" divided
+    # every cTrader-sourced bar's real elapsed time by 1000, collapsing a
+    # 2026 date to ~20 days after the Unix epoch (Jan 1970) and compressing
+    # real 1-hour bar spacing to ~3.6 seconds — silently corrupting every
+    # cTrader-fetched DataFrame's index (H4/D1 resampling, gap detection,
+    # last_bar_time provenance) while leaving the OHLC values untouched.
+    # Root-caused live via the Cross-Provider Data Confidence panel
+    # (core/data_confidence.py): every ctrader-vs-twelve_data check on FX
+    # symbols returned NO_OVERLAP (0 common bars) — impossible unless one
+    # side's timestamps were off by orders of magnitude, which this was.
+    df.index = pd.to_datetime(df.pop("timestamp"), unit="s", utc=True)
     return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
 
 

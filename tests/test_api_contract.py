@@ -1240,6 +1240,83 @@ def test_experiments_run_rejects_unsupported_timeframe(client):
     assert "Unknown timeframe" in r.json()["detail"]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase C — engine selection override plumbing
+# ─────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_forwards_engines(client, monkeypatch, job):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, job: ["echo", job]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": job, "symbols": ["eurusd"], "engines": ["nnfx", "wyckoff"]},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", job, "--symbols", "EURUSD", "--engines", "nnfx", "wyckoff"]
+
+
+def test_experiments_run_rejects_engines_for_non_parameterized_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "verify_data_integrity", "engines": ["nnfx"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no start/end/risk_overrides/timeframes/engines" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_empty_engines(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": []},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "values per run" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unknown_engine(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": ["not_a_real_engine"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown engine" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_macro_as_engine(client):
+    """"macro" has a confluence weight but no runnable engine class in
+    the backtest path at all — must be rejected as unknown, not silently
+    accepted as a no-op."""
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": ["macro"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown engine" in r.json()["detail"]
+
+
 def test_experiments_status_unknown_job_404s(client):
     assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
 

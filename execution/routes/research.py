@@ -111,9 +111,13 @@ async def research_engines(
     """Engine Selector (Research Workspace, 2026-07-24): every engine's
     activation state, confluence weight, and version, sourced from
     config/engines.yaml + confluence.weights — not reimplemented here.
-    Read-only: this endpoint reports the frozen prod4 configuration, it
-    does not let a caller toggle an engine (CLAUDE.md: enabling another
-    engine needs a new pre-registered hypothesis, not a dashboard click).
+    Read-only: this endpoint always reports the real, persisted
+    config/engines.yaml state — it has no write path and nothing can make
+    its response drift from that file. A separate, ephemeral mechanism
+    (Backtesting Lab Pro Phase C, 2026-07-27) lets POST /experiments/run's
+    `engines` field select a different engine set for one ad-hoc research
+    run — that override is never written back to config/engines.yaml or
+    registry.json, so it can never affect what this endpoint reports.
     """
     _check_auth(x_api_key, iatis_session)
     config = _get_config()

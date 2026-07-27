@@ -46,7 +46,7 @@ import pandas as pd
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -89,6 +89,9 @@ class WalkForwardConfig:
         timeframes: Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc
             per-run data.timeframes override (decision TF first). None
             = production config.yaml timeframes, unchanged.
+        engines: Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc
+            per-run engine selection (explicit complete list). None =
+            production config/engines.yaml enabled set, unchanged.
     """
 
     n_windows: int = 3
@@ -97,6 +100,7 @@ class WalkForwardConfig:
     warmup_bars: int = 210
     engine_overrides: dict = field(default_factory=dict)
     timeframes: tuple[str, ...] | None = None
+    engines: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -194,7 +198,10 @@ def run_walk_forward(
     windows = split_windows(df, wf_config.n_windows, wf_config.warmup_bars)
     results: list[WindowResult] = []
     # Computed once — identical for every window.
-    engine_config = build_engine_config_override(list(wf_config.timeframes) if wf_config.timeframes else None)
+    engine_config = build_engine_config_override(
+        timeframes=list(wf_config.timeframes) if wf_config.timeframes else None,
+        engines_enabled={e: (e in wf_config.engines) for e in ENGINE_KEYS} if wf_config.engines else None,
+    )
 
     for k, (frame, test_start, test_end) in enumerate(windows):
         if parameter_selector is not None:
@@ -336,6 +343,9 @@ def main() -> None:
     # data.timeframes override (decision TF first).
     from core.timeframe_sync import SUPPORTED_TIMEFRAMES
     parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection (explicit complete list of which engines run).
+    parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -352,6 +362,7 @@ def main() -> None:
             warmup_bars=args.warmup_bars,
             engine_overrides=engine_overrides,
             timeframes=tuple(args.timeframes) if args.timeframes else None,
+            engines=tuple(args.engines) if args.engines else None,
         ),
         start=args.start, end=args.end,
     )

@@ -298,6 +298,15 @@ class _RunJobRequest(BaseModel):
     # (run_backtest's engine_config keyword, not BacktestConfig) — see
     # backtesting.backtest_engine.build_engine_config_override.
     timeframes: list[str] | None = None
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection: an explicit, complete list of which engines are ON for
+    # this run (not a partial patch — absent = production config/
+    # engines.yaml enabled set, unchanged). No registration gate, per an
+    # explicit operator decision — but every such result must be labeled
+    # exploratory (frontend concern) and this can never write back to
+    # config/engines.yaml or registry.json (backend guarantee: it only
+    # ever builds an in-memory dict, see build_engine_config_override).
+    engines: list[str] | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -439,11 +448,29 @@ async def experiments_run(
                     detail=f"Unknown timeframe(s) {unknown_tf} — choose from {sorted(SUPPORTED_TIMEFRAMES)}.",
                 )
             argv += ["--timeframes", *body.timeframes]
+        if body.engines is not None:
+            from backtesting.backtest_engine import ENGINE_KEYS
+
+            if not (1 <= len(body.engines) <= len(ENGINE_KEYS)):
+                raise HTTPException(
+                    status_code=400, detail=f"engines: 1-{len(ENGINE_KEYS)} values per run.",
+                )
+            unknown_engines = sorted(set(body.engines) - set(ENGINE_KEYS))
+            if unknown_engines:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown engine(s) {unknown_engines} — choose from {sorted(ENGINE_KEYS)}.",
+                )
+            argv += ["--engines", *body.engines]
     elif (
         body.start is not None or body.end is not None
         or body.risk_overrides is not None or body.timeframes is not None
+        or body.engines is not None
     ):
-        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no start/end/risk_overrides/timeframes.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{body.job}' takes no start/end/risk_overrides/timeframes/engines.",
+        )
 
     if body.job == "robustness":
         from backtest.robustness import SWEEP_PARAMS
@@ -492,6 +519,8 @@ async def experiments_run(
             detail += f" risk_overrides={body.risk_overrides.model_dump(exclude_none=True)}"
         if body.timeframes is not None:
             detail += f" timeframes={body.timeframes}"
+        if body.engines is not None:
+            detail += f" engines={body.engines}"
     if body.job == "robustness":
         if body.params is not None:
             detail += f" params={body.params}"

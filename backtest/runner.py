@@ -39,6 +39,7 @@ from backtest.metrics import BacktestMetrics, TradeRecord, calculate_metrics, js
 from backtest.monte_carlo import MonteCarloResult, run_monte_carlo
 from backtest.report import generate_html_report
 from backtesting.backtest_engine import (
+    ENGINE_KEYS,
     BacktestConfig,
     BacktestResult,
     Trade,
@@ -76,6 +77,10 @@ class RunnerConfig:
             per-run override of data.timeframes (decision TF first,
             e.g. ("H1",) or ("H4","D1","H1")). None = use the real
             config.yaml timeframes, unchanged.
+        engines: Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc
+            per-run override of which engines run (explicit complete
+            list, e.g. ("nnfx","price_action")). None = use the real
+            config/engines.yaml enabled set, unchanged.
     """
 
     symbols: tuple[str, ...]
@@ -87,6 +92,7 @@ class RunnerConfig:
     write_html: bool = True
     engine_overrides: dict = field(default_factory=dict)
     timeframes: tuple[str, ...] | None = None
+    engines: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -251,7 +257,10 @@ def run_symbol(
         symbol, **runner_config.engine_overrides
     )
     engine_config = build_engine_config_override(
-        list(runner_config.timeframes) if runner_config.timeframes else None
+        timeframes=list(runner_config.timeframes) if runner_config.timeframes else None,
+        engines_enabled=(
+            {e: (e in runner_config.engines) for e in ENGINE_KEYS} if runner_config.engines else None
+        ),
     )
     result = run_backtest(df, engine_cfg, engine_config=engine_config)
 
@@ -388,6 +397,9 @@ def main() -> None:
     # run_backtest's engine_config keyword via build_engine_config_override.
     from core.timeframe_sync import SUPPORTED_TIMEFRAMES
     parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection (explicit complete list of which engines run).
+    parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -404,6 +416,7 @@ def main() -> None:
         write_html=not args.no_html,
         engine_overrides=engine_overrides,
         timeframes=tuple(args.timeframes) if args.timeframes else None,
+        engines=tuple(args.engines) if args.engines else None,
     )
     results = run_all(config)
     if not results:

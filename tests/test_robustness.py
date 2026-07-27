@@ -235,3 +235,44 @@ def test_run_param_sweep_threads_timeframes_override_into_run_backtest(monkeypat
 
     assert len(captured_engine_configs) == 1
     assert captured_engine_configs[0]["data"]["timeframes"] == ["H1"]
+
+
+def test_robustness_cli_wires_engines_override(monkeypatch):
+    import sys
+    import backtest.robustness as robustness_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, rc, start=None, end=None):
+        captured["rc"] = rc
+        return {}
+
+    monkeypatch.setattr(robustness_mod, "run_robustness_suite", fake_suite)
+    monkeypatch.setattr(sys, "argv", ["robustness.py", "--symbols", "EURUSD", "--engines", "nnfx", "smc"])
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        robustness_mod.main()
+    assert captured["rc"].engines == ("nnfx", "smc")
+
+
+def test_run_param_sweep_threads_engines_override_into_run_backtest(monkeypatch):
+    """Same proof as the timeframes-override test above, for engines."""
+    import backtest.robustness as robustness_mod
+    from backtesting.backtest_engine import ENGINE_KEYS
+
+    captured_engine_configs = []
+    real_run_backtest = robustness_mod.run_backtest
+
+    def spy_run_backtest(df, cfg, engine_config=None):
+        captured_engine_configs.append(engine_config)
+        return real_run_backtest(df, cfg, engine_config=engine_config)
+
+    monkeypatch.setattr(robustness_mod, "run_backtest", spy_run_backtest)
+
+    df = _ohlcv(2400, trend=0.10)
+    rc = RobustnessConfig(params=("min_rr",), multipliers=(1.0,), min_trades=1, engines=("nnfx",))
+    robustness_mod.run_param_sweep("EURUSD", df, "min_rr", rc)
+
+    assert len(captured_engine_configs) == 1
+    enabled = captured_engine_configs[0]["engines"]["enabled"]
+    assert enabled["nnfx"] is True
+    assert all(v is False for k, v in enabled.items() if k in ENGINE_KEYS and k != "nnfx")

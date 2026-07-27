@@ -27,6 +27,7 @@ export function PresetsBar({ state, setState }: { state: WizardState; setState: 
       dateRange: p.dateRange ?? DEFAULT_DATE_RANGE,
       riskOverrides: p.riskOverrides ?? DEFAULT_RISK_OVERRIDES,
       timeframes: p.timeframes ?? null,
+      engines: p.engines ?? null,
     })
   }
 
@@ -174,5 +175,13 @@ function validatePreset(value: unknown, fallbackName: string): WizardPreset | nu
     Array.isArray(v.timeframes) && v.timeframes.every((t) => typeof t === 'string')
       ? (v.timeframes as string[])
       : null
-  return { name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers, dateRange, riskOverrides, timeframes, savedAt }
+  // engines (Backtesting Lab Pro Phase C) — same tolerant treatment:
+  // null/absent both mean "production enabled set," an old preset
+  // without this key must not fail import.
+  const engines =
+    Array.isArray(v.engines) && v.engines.every((e) => typeof e === 'string') ? (v.engines as string[]) : null
+  return {
+    name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers,
+    dateRange, riskOverrides, timeframes, engines, savedAt,
+  }
 }

@@ -34,6 +34,10 @@ export interface WizardPreset {
   // pre-existing-preset backward-compat reasoning. null/absent =
   // production config.yaml order.
   timeframes?: string[] | null
+  // Backtesting Lab Pro Phase C (2026-07-27) — optional, same
+  // pre-existing-preset backward-compat reasoning. null/absent =
+  // production config/engines.yaml enabled set.
+  engines?: string[] | null
   savedAt: string
 }
 

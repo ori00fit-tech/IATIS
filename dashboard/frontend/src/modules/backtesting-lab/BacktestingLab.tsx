@@ -86,6 +86,16 @@ export const SUPPORTED_TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'] as const
 // selection; reordering/deselecting only affects this one ad-hoc run.
 export const DEFAULT_TIMEFRAMES_ORDER = ['H4', 'D1', 'H1'] as const
 
+// Backtesting Lab Pro Phase C (2026-07-27) — the 9 engines run_backtest
+// can actually execute (mirrors backtesting.backtest_engine.ENGINE_KEYS).
+// Deliberately excludes "macro": it has a confluence weight but no
+// runnable engine class in the backtest path — toggling it would be a
+// silent no-op, so it's never offered as a choice here.
+export const ENGINE_KEYS = [
+  'smc', 'price_action', 'ict', 'nnfx', 'quant', 'wyckoff',
+  'divergence', 'market_structure', 'sentiment',
+] as const
+
 export interface WizardState {
   selectedSymbols: string[]
   jobId: string // 'backtest' | 'walk_forward' | 'robustness' | 'hypothesis_H0xx'
@@ -102,6 +112,10 @@ export interface WizardState {
   // config.yaml order [H4, D1, H1], unchanged. Non-null = this run's
   // decision timeframe first, then confirmation timeframe(s).
   timeframes: string[] | null
+  // Backtesting Lab Pro Phase C (2026-07-27) — null = production
+  // config/engines.yaml enabled set, unchanged. Non-null = the explicit,
+  // complete list of engines ON for this run (not a partial patch).
+  engines: string[] | null
 }
 
 function toApiRiskOverrides(r: RiskOverridesState) {
@@ -498,33 +512,73 @@ function TimeframesStep({ state, setState }: { state: WizardState; setState: (s:
 }
 
 // ── Step 5: Strategy (Engine Selector, read-only) ───────────────────────
-function StrategyStep() {
+function StrategyStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const engines = useApiQuery(['research-engines'], getResearchEngines, POLL_MS, markUnauthenticated)
 
+  // Only render toggles for engines run_backtest can actually execute —
+  // "macro" (in the fetched data, has a confluence weight) is silently
+  // excluded since toggling it would be a no-op (see ENGINE_KEYS comment).
+  const toggleable = (engines.data?.engines ?? []).filter(
+    (e): e is EngineEntry & { name: (typeof ENGINE_KEYS)[number] } =>
+      (ENGINE_KEYS as readonly string[]).includes(e.name),
+  )
+
+  const isChecked = (name: string) =>
+    state.engines !== null ? state.engines.includes(name) : (toggleable.find((e) => e.name === name)?.enabled ?? false)
+
+  const toggle = (name: string) => {
+    const current = state.engines ?? toggleable.filter((e) => e.enabled).map((e) => e.name)
+    const next = current.includes(name) ? current.filter((e) => e !== name) : [...current, name]
+    setState({ ...state, engines: next })
+  }
+  const resetToProduction = () => setState({ ...state, engines: null })
+
   return (
-    <Panel title="Strategy" right="read-only — a new hypothesis is required to change engine activation or weights">
+    <Panel title="Strategy" right="ad-hoc, this run only — never written to config/engines.yaml">
       <div className="p-4 flex flex-col gap-3">
+        <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+          Production enabled set checked by default — click to toggle for this run only. "frozen" marks the 4
+          live-production engines, but every engine here is toggleable for ad-hoc research; a real hypothesis
+          registration is still required before any change here could ever inform production.
+        </div>
         <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
-          {engines.data?.engines.map((e: EngineEntry) => (
-            <div
-              key={e.name}
-              className={`rounded-lg border px-3.5 py-3 flex flex-col gap-1.5 ${
-                e.enabled ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40 opacity-60'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-text">{e.name}</span>
-                {e.enabled ? <Badge tone="exec">ON</Badge> : <Badge tone="neutral">OFF</Badge>}
-              </div>
-              <div className="flex items-center gap-2 text-[0.78em] text-muted">
-                <span>weight {e.weight != null ? e.weight.toFixed(4) : '—'}</span>
-                {e.prod4 && <Badge tone="good">frozen</Badge>}
-              </div>
-            </div>
-          ))}
+          {toggleable.map((e) => {
+            const checked = isChecked(e.name)
+            return (
+              <label
+                key={e.name}
+                className={`cursor-pointer rounded-lg border px-3.5 py-3 flex flex-col gap-1.5 ${
+                  checked ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40 opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 font-bold text-text">
+                    <input type="checkbox" checked={checked} onChange={() => toggle(e.name)} />
+                    {e.name}
+                  </span>
+                  {checked ? <Badge tone="exec">ON</Badge> : <Badge tone="neutral">OFF</Badge>}
+                </div>
+                <div className="flex items-center gap-2 text-[0.78em] text-muted">
+                  <span>weight {e.weight != null ? e.weight.toFixed(4) : '—'}</span>
+                  {e.prod4 && <Badge tone="good">frozen</Badge>}
+                </div>
+              </label>
+            )
+          })}
         </div>
         {!engines.data && <Empty>{engines.loading ? 'Loading…' : 'No engine data'}</Empty>}
+        {state.engines !== null && (
+          <div className="flex items-center gap-3">
+            <span className="text-amber text-[0.78em]">
+              Non-default engine selection makes this run exploratory, not evidence — same status as any other
+              ad-hoc backtest.
+            </span>
+            <button onClick={resetToProduction} className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent/50">
+              Reset to production engines
+            </button>
+          </div>
+        )}
       </div>
     </Panel>
   )
@@ -727,14 +781,15 @@ function ExecutionStep({
       const range = requiresSymbols ? toApiDateRange(state.dateRange) : undefined
       const risk = requiresSymbols ? toApiRiskOverrides(state.riskOverrides) : undefined
       const timeframes = requiresSymbols && state.timeframes ? state.timeframes : undefined
+      const engines = requiresSymbols && state.engines ? state.engines : undefined
       const summary = isRobustness
         ? await runRobustnessJob(
             state.selectedSymbols,
             sweepParams.length > 0 ? sweepParams : undefined,
             sweepMultipliers.length > 0 ? sweepMultipliers : undefined,
-            range, risk, timeframes,
+            range, risk, timeframes, engines,
           )
-        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes)
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes, engines)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -825,7 +880,7 @@ export function BacktestingLab() {
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
   const [state, setState] = useState<WizardState>({
     selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
-    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null,
+    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null, engines: null,
   })
   const [job, setJob] = useState<JobDetail | null>(null)
 
@@ -859,7 +914,7 @@ export function BacktestingLab() {
       {step === 1 && <SymbolsStep state={state} setState={setState} />}
       {step === 2 && <RiskRangeStep state={state} setState={setState} />}
       {step === 3 && <TimeframesStep state={state} setState={setState} />}
-      {step === 4 && <StrategyStep />}
+      {step === 4 && <StrategyStep state={state} setState={setState} />}
       {step === 5 && <IndicatorsStep />}
       {step === 6 && <HypothesesStep state={state} setState={setState} />}
       {step === 7 && (

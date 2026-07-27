@@ -330,20 +330,49 @@ class BacktestResult:
         logger.info(f"Backtest saved to {path}")
 
 
-def build_engine_config_override(timeframes: list[str] | None) -> dict | None:
-    """Backtesting Lab Pro Phase B (2026-07-27) — an ad-hoc per-run
-    data.timeframes override, merged over a real load_config() snapshot
-    so every other confluence/engine setting (weights, min_score_to_trade,
-    engines.enabled, ...) stays exactly as configured. Returns None when
-    no override is requested, preserving run_backtest's own load_config()
-    default path byte-for-byte — zero behavior change for every existing
-    caller that never passes this. Ephemeral — never writes to config.yaml.
+# Backtesting Lab Pro Phase C (2026-07-27) — the exact engines
+# run_backtest can execute. Deliberately excludes "macro" (a real
+# confluence.weights entry, forced to 0.0 per CLAUDE.md's frozen-state
+# notes, but with no runnable engine class wired into this backtest path
+# at all — toggling it would be a silent no-op, not a legitimate
+# ablation). Single source of truth for _ENGINE_MAP below.
+ENGINE_KEYS: tuple[str, ...] = (
+    "smc", "price_action", "ict", "nnfx", "quant", "wyckoff",
+    "divergence", "market_structure", "sentiment",
+)
+
+
+def build_engine_config_override(
+    timeframes: list[str] | None = None,
+    engines_enabled: dict[str, bool] | None = None,
+) -> dict | None:
+    """Backtesting Lab Pro Phase B/C (2026-07-27) — ad-hoc per-run
+    overrides, merged over a real load_config() snapshot so every other
+    confluence/engine setting (weights, min_score_to_trade, ...) stays
+    exactly as configured. Returns None when neither override is
+    requested, preserving run_backtest's own load_config() default path
+    byte-for-byte — zero behavior change for every existing caller that
+    never passes either. Ephemeral — never writes to config.yaml.
+
+    engines_enabled (Phase C): an explicit {engine_key: is_enabled} map
+    merged over config/engines.yaml's real enabled dict. Only the 9
+    ENGINE_KEYS are meaningful here — any other key is silently inert,
+    matching run_backtest's own enabled.get(key, ...) lookup, which only
+    ever consults ENGINE_KEYS.
     """
-    if timeframes is None:
+    if timeframes is None and engines_enabled is None:
         return None
     from utils.helpers import load_config
     base = load_config()
-    return {**base, "data": {**base["data"], "timeframes": list(timeframes)}}
+    merged = dict(base)
+    if timeframes is not None:
+        merged["data"] = {**base["data"], "timeframes": list(timeframes)}
+    if engines_enabled is not None:
+        merged["engines"] = {
+            **base.get("engines", {}),
+            "enabled": {**base.get("engines", {}).get("enabled", {}), **engines_enabled},
+        }
+    return merged
 
 
 def run_backtest(
@@ -389,14 +418,10 @@ def run_backtest(
     from engines.market_structure_engine import MarketStructureEngine
     from engines.sentiment_engine import SentimentEngine
 
-    _ENGINE_MAP = {
-        "smc": SMCEngine, "price_action": PriceActionEngine,
-        "ict": ICTEngine, "nnfx": NNFXEngine,
-        "quant": QuantEngine, "wyckoff": WyckoffEngine,
-        "divergence": DivergenceEngine,
-        "market_structure": MarketStructureEngine,
-        "sentiment": SentimentEngine,
-    }
+    _ENGINE_MAP = dict(zip(ENGINE_KEYS, (
+        SMCEngine, PriceActionEngine, ICTEngine, NNFXEngine, QuantEngine, WyckoffEngine,
+        DivergenceEngine, MarketStructureEngine, SentimentEngine,
+    )))
     enabled = engine_config.get("engines", {}).get("enabled", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):

@@ -21,6 +21,7 @@ import {
   runRobustnessJob,
   getJobDetail,
   getJobList,
+  cancelJob,
   type DatasetEntry,
   type SymbolEntry,
   type EngineEntry,
@@ -28,6 +29,7 @@ import {
   type JobDescriptor,
   type JobDetail,
   type JobSummary,
+  type JobStatus,
 } from './api'
 
 const POLL_MS = 60_000
@@ -1015,6 +1017,75 @@ function ReviewPanel({ state }: { state: WizardState }) {
   )
 }
 
+// ── Progress screen — stages inferred from the run's own real log lines,
+// never a fabricated percentage. Verified real log-line shapes this reads:
+// "Backtest: {symbol} | {N} bars to process" (backtesting/backtest_engine.
+// py) marks one run_backtest invocation starting, "Backtest done: ..."
+// marks it ending, "Summary written:"/"Robustness report:" mark the final
+// artifact. Nothing logs inside Monte Carlo/HTML-report generation (grepped
+// — zero hits in backtest/monte_carlo.py and backtest/report.py), so that
+// window is labeled as one honest step, not a fake sub-progress bar.
+type RunStage = 'queued' | 'loading' | 'running' | 'reporting' | 'finalizing' | 'done' | 'failed' | 'cancelled'
+
+const STAGE_LABELS: Record<RunStage, string> = {
+  queued: 'Queued', loading: 'Loading data', running: 'Running backtest',
+  reporting: 'Generating report', finalizing: 'Finalizing', done: 'Done',
+  failed: 'Failed', cancelled: 'Cancelled',
+}
+const STAGE_ORDER: RunStage[] = ['queued', 'loading', 'running', 'reporting', 'finalizing', 'done']
+
+function inferStage(log: string[], status: JobStatus): { stage: RunStage; detail: string } {
+  if (status === 'failed' || status === 'timeout') return { stage: 'failed', detail: 'See log below for the error.' }
+  if (status === 'cancelled') return { stage: 'cancelled', detail: 'Stopped by request.' }
+  if (status === 'finished') return { stage: 'done', detail: `${log.length} log line(s).` }
+  if (status === 'queued') return { stage: 'queued', detail: 'Waiting for a worker slot.' }
+
+  const starts = log.filter((l) => l.includes(' bars to process')).length
+  const ends = log.filter((l) => l.startsWith('Backtest done:')).length
+  const artifacts = log.filter((l) => l.startsWith('Summary written:') || l.startsWith('Robustness report:')).length
+
+  if (starts === 0) return { stage: 'loading', detail: 'Reading OHLCV data, validating schema.' }
+  if (artifacts > 0) return { stage: 'finalizing', detail: 'Writing the run summary.' }
+  if (ends >= starts) {
+    return { stage: 'reporting', detail: 'Computing metrics, Monte Carlo, HTML report — no finer progress is logged for this step.' }
+  }
+  return { stage: 'running', detail: `${ends} of ${starts} backtest run(s) completed so far.` }
+}
+
+function StageTracker({ log, status }: { log: string[]; status: JobStatus }) {
+  const { stage, detail } = inferStage(log, status)
+  const terminal = stage === 'failed' || stage === 'cancelled'
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-1 flex-wrap">
+        {terminal ? (
+          <span className={`px-3 py-1.5 rounded-full text-[0.78em] font-bold border ${stage === 'failed' ? 'border-red text-red' : 'border-amber text-amber'}`}>
+            {STAGE_LABELS[stage]}
+          </span>
+        ) : (
+          STAGE_ORDER.map((s, i) => {
+            const active = s === stage
+            const passed = STAGE_ORDER.indexOf(stage) > i
+            return (
+              <div key={s} className="flex items-center gap-1">
+                <span
+                  className={`px-2.5 py-1 rounded-full text-[0.75em] font-bold border ${
+                    active ? 'border-accent text-accent bg-accent/10' : passed ? 'border-border text-text' : 'border-border text-muted/50'
+                  }`}
+                >
+                  {STAGE_LABELS[s]}
+                </span>
+                {i < STAGE_ORDER.length - 1 && <span className="text-muted text-[0.75em]">→</span>}
+              </div>
+            )
+          })
+        )}
+      </div>
+      <span className="text-muted text-[0.78em]">{detail}</span>
+    </div>
+  )
+}
+
 function ExecutionStep({
   state,
   setState,
@@ -1029,6 +1100,7 @@ function ExecutionStep({
   onFinished: () => void
 }) {
   const [starting, setStarting] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requiresSymbols = ['backtest', 'walk_forward', 'robustness'].includes(state.jobId)
   const isRobustness = state.jobId === 'robustness'
@@ -1085,6 +1157,19 @@ function ExecutionStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminal])
 
+  const cancel = async () => {
+    if (!job) return
+    setCancelling(true)
+    try {
+      const summary = await cancelJob(job.job_id)
+      setJob({ ...summary, log: job.log })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const sweepInvalid = isRobustness && (sweepParams.length === 0 || !sweepMultipliers.includes(1.0))
 
   return (
@@ -1104,10 +1189,22 @@ function ExecutionStep({
         </button>
         {error && <span className="text-red text-[0.8em]">{error}</span>}
         {job && (
-          <div className="flex items-center gap-2">
-            <Badge tone={job.status === 'finished' ? 'exec' : job.status === 'running' || job.status === 'queued' ? 'marginal' : 'no-trade'}>{job.status}</Badge>
-            {job.returncode != null && <span className="text-muted text-[0.8em]">exit {job.returncode}</span>}
-          </div>
+          <>
+            <StageTracker log={job.log} status={job.status} />
+            <div className="flex items-center gap-2">
+              <Badge tone={job.status === 'finished' ? 'exec' : job.status === 'running' || job.status === 'queued' ? 'marginal' : 'no-trade'}>{job.status}</Badge>
+              {job.returncode != null && <span className="text-muted text-[0.8em]">exit {job.returncode}</span>}
+              {!terminal && (
+                <button
+                  onClick={cancel}
+                  disabled={cancelling}
+                  className="px-2.5 py-1 text-[0.75em] rounded border border-red/40 text-red hover:bg-red/10 disabled:opacity-50"
+                >
+                  {cancelling ? 'Cancelling…' : 'Cancel'}
+                </button>
+              )}
+            </div>
+          </>
         )}
         {job && job.log.length > 0 && (
           <pre className="p-3 bg-panel shadow-sm border border-panel-border rounded-lg text-[0.72em] overflow-auto max-h-[280px] whitespace-pre-wrap break-words font-mono">

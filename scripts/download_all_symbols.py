@@ -2,9 +2,22 @@
 """
 scripts/download_all_symbols.py
 ---------------------------------
-Download H1 historical data for ALL 20 IATIS symbols via Yahoo Finance.
+Download H1 historical data for ALL 24 IATIS symbols via Yahoo Finance.
 
 Includes: FOREX (12) + Metals (2) + Energy (1) + Indices (3) + Crypto (2)
+  + Equities (4: AAPL, NVDA, SPY, QQQ)
+
+Equities added 2026-07-27 (operator request — Backtesting Lab research runs
+on AAPL/NVDA were failing with "No dataset for AAPL", since this script
+never covered the equity starter-universe added 2026-07-24). Plain Yahoo
+tickers (no =X/=F/^ prefix — an ordinary NASDAQ/NYSE-listed common stock or
+ETF has no futures-vs-spot or cash-index-vs-CFD basis mismatch, unlike the
+metals/indices entries below), so no new fetch path is needed. This is
+offline research-download data only — these symbols stay enabled:false in
+config/symbols.yaml (WATCHLIST, no pre-registered hypothesis yet per
+CLAUDE.md rule 1) and this script does not change that; it only makes them
+backtestable ad-hoc, same "exploratory, not evidence" status as any other
+Backtesting Lab run.
 
 Usage:
     python3 scripts/download_all_symbols.py              # 2yr H1
@@ -43,6 +56,12 @@ ALL_SYMBOLS = {
     # Crypto
     "BTCUSD":  "BTC-USD",
     "ETHUSD":  "ETH-USD",
+    # Equities/ETFs (2026-07-27) — plain tickers, no basis mismatch like
+    # the metals/indices futures/cash-index entries above.
+    "AAPL":    "AAPL",
+    "NVDA":    "NVDA",
+    "SPY":     "SPY",
+    "QQQ":     "QQQ",
 }
 
 # pip_size for each symbol (for backtest position sizing)

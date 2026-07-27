@@ -156,3 +156,35 @@ def test_ctrader_guard_raises_datafetcherror(monkeypatch):
     monkeypatch.delenv("CTRADER_CLIENT_ID", raising=False)
     with pytest.raises(dp.DataFetchError, match="not configured"):
         dp._fetch_ctrader("EUR/USD", "H4", 100)
+
+
+def test_fetch_ctrader_timestamp_unit_is_seconds_not_milliseconds(monkeypatch):
+    """Regression (2026-07-27): execution/ctrader_client.py's
+    _on_trendbars_res stores "timestamp" as utcTimestampInMinutes*60 —
+    SECONDS since epoch (confirmed by scripts/download_ctrader_fx_history.py
+    and scripts/backtest_ic_symbols.py, both of which parse get_trendbars()'
+    output with unit="s"/time.gmtime()). _fetch_ctrader used to parse it
+    with unit="ms", dividing every cTrader bar's real elapsed time by 1000 —
+    collapsing a 2026 timestamp to ~20 days after the Unix epoch (Jan 1970)
+    and compressing real 1-hour bar spacing to ~3.6 seconds, silently
+    corrupting every cTrader-sourced DataFrame's index while leaving the
+    OHLC values untouched. Root-caused live via the Cross-Provider Data
+    Confidence panel: every ctrader-vs-twelve_data check on FX symbols
+    returned NO_OVERLAP (0 common bars) — impossible unless one side's
+    timestamps were off by orders of magnitude, which they were."""
+    monkeypatch.setenv("CTRADER_CLIENT_ID", "x")
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "y")
+
+    real_dt = pd.Timestamp("2026-07-27 12:00:00", tz="UTC")
+    ts_seconds = int(real_dt.timestamp())  # what get_trendbars() actually returns
+
+    class _FakeClient:
+        def get_trendbars(self, symbol, period="H1", count=10):
+            return [{"timestamp": ts_seconds, "open": 1.1, "high": 1.11,
+                      "low": 1.09, "close": 1.1, "volume": 100}]
+
+    monkeypatch.setattr(dp, "get_shared_ctrader_client", lambda: _FakeClient())
+
+    df = dp._fetch_ctrader("EUR/USD", "H1", 10)
+    assert df.index[0] == real_dt
+    assert df.index[0].year == 2026  # not 1970

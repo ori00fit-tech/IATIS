@@ -6,6 +6,7 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { AiResearchAssistant } from '../../components/AiResearchAssistant'
+import { ReturnDistribution } from './ReturnDistribution'
 import {
   getBacktestResults,
   getOutcomesCalibration,
@@ -117,6 +118,47 @@ function drawdownSeries(curve: number[]): { maxDD: number; ddAt: number } {
   return { maxDD: maxDD * 100, ddAt }
 }
 
+// Results page (2026-07-27) — the full per-point drawdown-from-peak series,
+// same peak-tracking loop as drawdownSeries above but returning every point
+// instead of just the max, for a real drawdown chart (not just a marker).
+export function drawdownCurve(curve: number[]): number[] {
+  let peak = curve[0] ?? 0
+  return curve.map((v) => {
+    if (v > peak) peak = v
+    return peak > 0 ? ((peak - v) / peak) * 100 : 0
+  })
+}
+
+export function DrawdownCurveSvg({ curve }: { curve: number[] }) {
+  const W = 800
+  const H = 160
+  const max = Math.max(...curve, 0.0001)
+  const x = (i: number) => (curve.length > 1 ? (i / (curve.length - 1)) * W : 0)
+  const y = (v: number) => (v / max) * H
+  const linePath = curve.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const areaPath = `${linePath} L${W},0 L0,0 Z`
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <div className="flex items-baseline gap-4 flex-wrap text-[0.82em]">
+        <span>
+          Max Drawdown <b className="text-red">−{Math.max(...curve, 0).toFixed(1)}%</b>
+        </span>
+        <span className="text-muted">{curve.length} points</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-[160px]">
+        <defs>
+          <linearGradient id="ddfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--red)" stopOpacity="0" />
+            <stop offset="100%" stopColor="var(--red)" stopOpacity="0.35" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill="url(#ddfill)" />
+        <path d={linePath} fill="none" stroke="var(--red)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  )
+}
+
 function EquityCurve({ run }: { run: BacktestRun }) {
   const curve = run.equity_curve ?? []
   if (curve.length < 2) {
@@ -130,7 +172,7 @@ function EquityCurve({ run }: { run: BacktestRun }) {
   return <EquityCurveSvg curve={curve} />
 }
 
-function EquityCurveSvg({ curve }: { curve: number[] }) {
+export function EquityCurveSvg({ curve }: { curve: number[] }) {
   const { maxDD, ddAt } = drawdownSeries(curve) // ≤500 points, cheap enough to run inline
   const W = 800
   const H = 240
@@ -486,7 +528,7 @@ function CandlestickTradeChart({ candles, trades, onSelectTrade }: { candles: Ch
   return <div ref={containerRef} className="px-4 pb-2" />
 }
 
-function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: () => void }) {
+export function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: () => void }) {
   const votes = trade.engine_votes ? Object.values(trade.engine_votes) : []
   return (
     <Panel
@@ -544,7 +586,7 @@ function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: ()
   )
 }
 
-function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t: ChartTrade) => void }) {
+export function TradesTable({ trades, onSelect }: { trades: ChartTrade[]; onSelect: (t: ChartTrade) => void }) {
   const columns: Column<ChartTrade>[] = [
     { header: 'ID', render: (t) => <span className="font-mono text-muted text-[0.85em]">{t.trade_id}</span> },
     { header: 'Dir', render: (t) => <Badge tone={t.direction === 'BUY' ? 'exec' : 'no-trade'}>{t.direction}</Badge> },
@@ -728,6 +770,13 @@ interface ExperimentKpi {
   maxDrawdownPct: number
   totalReturnPct: number
   curve: number[]
+  // Run Comparison (2026-07-27) — sharpeRatio is null for a chart_data.json
+  // written before the Results-page phase added `kpis` to that file; never
+  // fabricated as 0. monthlyReturns/tradesList feed the per-run heatmap and
+  // distribution comparison grids below.
+  sharpeRatio: number | null
+  monthlyReturns: Record<string, number>
+  tradesList: ChartTrade[]
 }
 
 function computeExperimentKpi(file: string, data: ChartDataFile): ExperimentKpi {
@@ -752,7 +801,12 @@ function computeExperimentKpi(file: string, data: ChartDataFile): ExperimentKpi 
   const start = curve[0] ?? 10_000
   const end = curve[curve.length - 1] ?? start
   const totalReturnPct = start !== 0 ? ((end - start) / start) * 100 : 0
-  return { file, symbol: data.symbol, trades: trades.length, winRate, profitFactor, maxDrawdownPct: maxDD, totalReturnPct, curve }
+  return {
+    file, symbol: data.symbol, trades: trades.length, winRate, profitFactor, maxDrawdownPct: maxDD, totalReturnPct, curve,
+    sharpeRatio: data.kpis?.sharpe_ratio ?? null,
+    monthlyReturns: data.monthly_returns,
+    tradesList: trades,
+  }
 }
 
 function pfTone(pf: number): 'exec' | 'marginal' | 'no-trade' {
@@ -864,6 +918,91 @@ function ExperimentOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
   )
 }
 
+// Drawdown overlay, sibling to ExperimentOverlayChart above (Run Comparison,
+// 2026-07-27) — same index-normalized-x / hover-crosshair structure, fed by
+// drawdownCurve() (peak-tracking from each run's own start) instead of %
+// return. Drawdown is always >= 0, so the y-axis grows downward from 0 at
+// the top (matching DrawdownCurveSvg's convention) rather than centering on
+// a zero line — red-toned lines keep it visually distinct from the equity
+// overlay at a glance.
+function ExperimentDrawdownOverlayChart({ kpis }: { kpis: ExperimentKpi[] }) {
+  const W = 800
+  const H = 160
+  const series = kpis.map((k) => drawdownCurve(k.curve.length > 0 ? k.curve : [0]))
+  const max = Math.max(0.0001, ...series.flat())
+  const x = (i: number, len: number) => (i / Math.max(1, len - 1)) * W
+  const y = (v: number) => (v / max) * H
+
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [hoverX, setHoverX] = useState<number | null>(null)
+
+  const handleMove = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect || rect.width === 0) return
+    setHoverX(Math.max(0, Math.min(W, ((e.clientX - rect.left) / rect.width) * W)))
+  }
+
+  const hoverPoints =
+    hoverX == null
+      ? null
+      : kpis.map((k, idx) => {
+          const s = series[idx]
+          const i = Math.max(0, Math.min(s.length - 1, Math.round((hoverX / W) * (s.length - 1))))
+          return { symbol: k.symbol, value: s[i], color: EXPERIMENT_COLORS[idx % EXPERIMENT_COLORS.length] }
+        })
+  const flipTooltip = hoverX != null && hoverX > W * 0.75
+
+  return (
+    <div className="px-4 pb-4 relative">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="w-full h-[160px] cursor-crosshair"
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHoverX(null)}
+      >
+        {series.map((s, idx) => {
+          const path = s.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i, s.length).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+          return (
+            <path
+              key={kpis[idx].file}
+              d={path}
+              fill="none"
+              stroke={EXPERIMENT_COLORS[idx % EXPERIMENT_COLORS.length]}
+              strokeWidth="1.5"
+              strokeDasharray="5 2"
+              vectorEffect="non-scaling-stroke"
+            />
+          )
+        })}
+        {hoverX != null && (
+          <line x1={hoverX} y1={0} x2={hoverX} y2={H} stroke="#64748b" strokeWidth="1" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+      {hoverPoints && (
+        <div
+          className="absolute top-2 bg-panel border border-border rounded px-2.5 py-1.5 text-[0.72em] shadow-md pointer-events-none flex flex-col gap-0.5"
+          style={
+            flipTooltip
+              ? { right: `${((W - hoverX!) / W) * 100}%`, marginRight: '1rem' }
+              : { left: `${(hoverX! / W) * 100}%`, marginLeft: '1rem' }
+          }
+        >
+          {hoverPoints.map((p) => (
+            <span key={p.symbol} className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{ background: p.color }} />
+              <span className="text-muted">{p.symbol}</span>
+              <span className="text-red">−{p.value.toFixed(2)}%</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="text-[0.72em] text-muted mt-2">Drawdown-from-peak per experiment, plotted by trade sequence. Hover for exact values.</p>
+    </div>
+  )
+}
+
 function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [kpis, setKpis] = useState<ExperimentKpi[]>([])
@@ -916,6 +1055,7 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
       render: (k) => <Badge tone={pfTone(k.profitFactor)}>{Number.isFinite(k.profitFactor) ? k.profitFactor.toFixed(2) : '∞'}</Badge>,
       align: 'right',
     },
+    { header: 'Sharpe', render: (k) => (k.sharpeRatio != null ? k.sharpeRatio.toFixed(2) : '—'), align: 'right' },
     { header: 'Max DD%', render: (k) => <span className="text-red">{k.maxDrawdownPct.toFixed(1)}%</span>, align: 'right' },
     {
       header: 'Return%',
@@ -966,12 +1106,44 @@ function ExperimentComparisonPanel({ entries }: { entries: RunReportEntry[] }) {
           <>
             <DataTable columns={columns} rows={kpis} rowKey={(k) => k.file} />
             <ExperimentOverlayChart kpis={kpis} />
+            <ExperimentDrawdownOverlayChart kpis={kpis} />
+            <div className="border-t border-border">
+              <span className="block px-4 pt-3 text-[0.72em] text-muted uppercase tracking-[1px]">Monthly Returns</span>
+              <div className="grid gap-4 p-4 grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
+                {kpis.map((k) => (
+                  <div key={k.file} className="flex flex-col gap-2">
+                    <span className="text-[0.78em] font-bold text-accent">{k.symbol}</span>
+                    {Object.keys(k.monthlyReturns).length > 0 ? (
+                      <Suspense fallback={<Empty>Loading…</Empty>}>
+                        <MonthlyReturnsHeatmap monthlyReturns={k.monthlyReturns} />
+                      </Suspense>
+                    ) : (
+                      <Empty>No monthly data</Empty>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-border">
+              <span className="block px-4 pt-3 text-[0.72em] text-muted uppercase tracking-[1px]">Distribution</span>
+              <div className="grid gap-4 p-4 grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
+                {kpis.map((k) => (
+                  <div key={k.file} className="flex flex-col gap-2">
+                    <span className="text-[0.78em] font-bold text-accent">{k.symbol}</span>
+                    <ReturnDistribution trades={k.tradesList} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </>
         )}
       </Panel>
       {kpis.length > 0 && (
         <AiResearchAssistant
-          context={kpis}
+          context={kpis.map((k) => ({
+            symbol: k.symbol, trades: k.trades, winRate: k.winRate, profitFactor: k.profitFactor,
+            sharpeRatio: k.sharpeRatio, maxDrawdownPct: k.maxDrawdownPct, totalReturnPct: k.totalReturnPct,
+          }))}
           examples={['Which experiment had the best profit factor?', 'Why might the drawdowns differ between these runs?', 'Summarize the comparison.']}
         />
       )}

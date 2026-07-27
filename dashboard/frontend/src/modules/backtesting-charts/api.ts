@@ -131,9 +131,27 @@ export interface BreakdownBucket {
   pnl: number
 }
 
+// Results page (2026-07-27) — already-computed BacktestMetrics fields,
+// serialized directly into chart_data.json so they can never silently
+// disagree with the HTML report's own KPI cards. Optional: chart_data.json
+// files written before this phase have neither field.
+export interface ChartKpis {
+  total_trades: number
+  win_rate: number
+  profit_factor: number
+  sharpe_ratio: number
+  sortino_ratio: number
+  max_drawdown_pct: number
+  net_profit: number
+  total_return_pct: number
+  expectancy_usd: number
+}
+
 export interface ChartDataFile {
   symbol: string
   timeframe: string
+  html_report?: string
+  kpis?: ChartKpis
   equity_curve: { x: string; y: number }[]
   monthly_returns: Record<string, number>
   yearly_returns: Record<string, number>

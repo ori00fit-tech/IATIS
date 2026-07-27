@@ -46,7 +46,7 @@ import pandas as pd
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -86,6 +86,9 @@ class WalkForwardConfig:
             warmup so window 1 behaves identically to the others.
         engine_overrides: applied to the BacktestConfig of every window
             (ignored for windows where a parameter_selector is used).
+        timeframes: Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc
+            per-run data.timeframes override (decision TF first). None
+            = production config.yaml timeframes, unchanged.
     """
 
     n_windows: int = 3
@@ -93,6 +96,7 @@ class WalkForwardConfig:
     min_trades_per_window: int = 10
     warmup_bars: int = 210
     engine_overrides: dict = field(default_factory=dict)
+    timeframes: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -189,6 +193,8 @@ def run_walk_forward(
     """
     windows = split_windows(df, wf_config.n_windows, wf_config.warmup_bars)
     results: list[WindowResult] = []
+    # Computed once — identical for every window.
+    engine_config = build_engine_config_override(list(wf_config.timeframes) if wf_config.timeframes else None)
 
     for k, (frame, test_start, test_end) in enumerate(windows):
         if parameter_selector is not None:
@@ -197,11 +203,10 @@ def run_walk_forward(
         else:
             engine_cfg = BacktestConfig.from_profile(
                 symbol,
-                warmup_bars=wf_config.warmup_bars,
-                **wf_config.engine_overrides,
+                **{"warmup_bars": wf_config.warmup_bars, **wf_config.engine_overrides},
             )
 
-        bt = run_backtest(frame, engine_cfg)
+        bt = run_backtest(frame, engine_cfg, engine_config=engine_config)
         records = [trade_to_record(t, symbol) for t in bt.trades]
         m = calculate_metrics(records, initial_capital=engine_cfg.initial_balance)
 
@@ -248,16 +253,19 @@ def run_walk_forward_suite(
     data_dir: Path,
     wf_config: WalkForwardConfig,
     output_dir: Path = Path("reports"),
+    start: str | None = None, end: str | None = None,
 ) -> dict[str, WalkForwardResult]:
     """Run walk-forward across symbols and persist a JSON report.
 
     One symbol's failure (missing data, invalid schema) is logged and
-    excluded; it never aborts the suite.
+    excluded; it never aborts the suite. start/end (Backtesting Lab Pro
+    Phase A, 2026-07-27): optional ISO-date dataset slice, same semantics
+    as backtest.runner.load_symbol_data.
     """
     out: dict[str, WalkForwardResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir)
+            df = load_symbol_data(symbol, data_dir, start, end)
             out[symbol] = run_walk_forward(symbol, df, wf_config)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: walk-forward failed — {exc}")
@@ -281,6 +289,8 @@ def run_walk_forward_suite(
                 "MTF confirmation + H013 reversal veto all active unless "
                 "engine_overrides disabled them (which marks an ablation)."
             ),
+            "start": start,
+            "end": end,
             "engine_overrides": wf_config.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
@@ -292,13 +302,45 @@ def run_walk_forward_suite(
 
 
 def main() -> None:
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
+    # warmup_bars is deliberately its own dedicated flag, not folded into
+    # the generic engine_overrides loop below: it dual-purposes here as
+    # both the window-embargo size (WalkForwardConfig.warmup_bars) AND the
+    # per-window BacktestConfig value (run_walk_forward already merges
+    # them correctly, see the from_profile() call above) — one flag,
+    # interpreted once, not two competing override paths.
+    _WF_ENGINE_OVERRIDE_FIELDS = tuple(f for f in RISK_OVERRIDE_FIELDS if f != "warmup_bars")
+
     parser = argparse.ArgumentParser(description="IATIS walk-forward validation")
     parser.add_argument("--symbols", nargs="+", required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--windows", type=int, default=3)
     parser.add_argument("--min-pf", type=float, default=1.5)
     parser.add_argument("--min-trades", type=int, default=10)
+    parser.add_argument("--warmup-bars", type=int, default=210)
+    parser.add_argument("--start", default=None, help="ISO date, inclusive")
+    parser.add_argument("--end", default=None, help="ISO date, inclusive")
+    # Backtesting Lab Pro Phase A (2026-07-27) — ad-hoc per-run
+    # BacktestConfig overrides, same surface as backtest.runner (minus
+    # warmup_bars, its own dedicated flag above).
+    parser.add_argument("--min-rr", type=float, default=None)
+    parser.add_argument("--sl-atr-multiplier", type=float, default=None)
+    parser.add_argument("--risk-per-trade", type=float, default=None)
+    parser.add_argument("--commission-pips", type=float, default=None)
+    parser.add_argument("--slippage-pips", type=float, default=None)
+    parser.add_argument("--swap-pips-per-night", type=float, default=None)
+    parser.add_argument("--initial-balance", type=float, default=None)
+    parser.add_argument("--step-bars", type=int, default=None)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first).
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+    parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
     args = parser.parse_args()
+
+    engine_overrides = {
+        f: getattr(args, f) for f in _WF_ENGINE_OVERRIDE_FIELDS if getattr(args, f) is not None
+    }
 
     results = run_walk_forward_suite(
         symbols=args.symbols,
@@ -307,7 +349,11 @@ def main() -> None:
             n_windows=args.windows,
             min_pf=args.min_pf,
             min_trades_per_window=args.min_trades,
+            warmup_bars=args.warmup_bars,
+            engine_overrides=engine_overrides,
+            timeframes=tuple(args.timeframes) if args.timeframes else None,
         ),
+        start=args.start, end=args.end,
     )
     if not results:
         raise SystemExit("No symbol completed — see errors above.")

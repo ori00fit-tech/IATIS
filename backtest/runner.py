@@ -42,6 +42,7 @@ from backtesting.backtest_engine import (
     BacktestConfig,
     BacktestResult,
     Trade,
+    build_engine_config_override,
     run_backtest,
 )
 from core.data_validator import validate_ohlcv
@@ -71,6 +72,10 @@ class RunnerConfig:
         engine_overrides: per-run overrides applied to every symbol's
             ``BacktestConfig`` (e.g. {"min_rr": 2.0}). Symbol and
             pip_size are always set per symbol and cannot be overridden.
+        timeframes: Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc
+            per-run override of data.timeframes (decision TF first,
+            e.g. ("H1",) or ("H4","D1","H1")). None = use the real
+            config.yaml timeframes, unchanged.
     """
 
     symbols: tuple[str, ...]
@@ -81,6 +86,7 @@ class RunnerConfig:
     run_mc: bool = True
     write_html: bool = True
     engine_overrides: dict = field(default_factory=dict)
+    timeframes: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -244,7 +250,10 @@ def run_symbol(
     engine_cfg = BacktestConfig.from_profile(
         symbol, **runner_config.engine_overrides
     )
-    result = run_backtest(df, engine_cfg)
+    engine_config = build_engine_config_override(
+        list(runner_config.timeframes) if runner_config.timeframes else None
+    )
+    result = run_backtest(df, engine_cfg, engine_config=engine_config)
 
     records = [trade_to_record(t, symbol) for t in result.trades]
     metrics = calculate_metrics(records, initial_capital=engine_cfg.initial_balance)
@@ -351,6 +360,8 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
 # ─────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
     parser = argparse.ArgumentParser(description="IATIS full backtest runner")
     parser.add_argument("--symbols", nargs="+", required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -359,7 +370,29 @@ def main() -> None:
     parser.add_argument("--end", default=None, help="ISO date, inclusive")
     parser.add_argument("--no-mc", action="store_true")
     parser.add_argument("--no-html", action="store_true")
+    # Backtesting Lab Pro Phase A (2026-07-27) — ad-hoc per-run
+    # BacktestConfig overrides, threaded into RunnerConfig.engine_overrides
+    # (already consumed by run_symbol's BacktestConfig.from_profile call,
+    # backtest/runner.py:244-246 — this only adds the CLI/API surface).
+    parser.add_argument("--min-rr", type=float, default=None)
+    parser.add_argument("--sl-atr-multiplier", type=float, default=None)
+    parser.add_argument("--risk-per-trade", type=float, default=None)
+    parser.add_argument("--commission-pips", type=float, default=None)
+    parser.add_argument("--slippage-pips", type=float, default=None)
+    parser.add_argument("--swap-pips-per-night", type=float, default=None)
+    parser.add_argument("--initial-balance", type=float, default=None)
+    parser.add_argument("--warmup-bars", type=int, default=None)
+    parser.add_argument("--step-bars", type=int, default=None)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first), threaded into
+    # run_backtest's engine_config keyword via build_engine_config_override.
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+    parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
     args = parser.parse_args()
+
+    engine_overrides = {
+        f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
+    }
 
     config = RunnerConfig(
         symbols=tuple(args.symbols),
@@ -369,6 +402,8 @@ def main() -> None:
         end=args.end,
         run_mc=not args.no_mc,
         write_html=not args.no_html,
+        engine_overrides=engine_overrides,
+        timeframes=tuple(args.timeframes) if args.timeframes else None,
     )
     results = run_all(config)
     if not results:

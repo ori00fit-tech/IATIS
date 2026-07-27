@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { DateRangeState, RiskOverridesState } from './BacktestingLab'
 
 /**
  * Named, reusable Backtesting Lab wizard configurations (Phase 4b,
@@ -24,6 +25,15 @@ export interface WizardPreset {
   jobId: string
   sweepParams: string[]
   sweepMultipliers: number[]
+  // Backtesting Lab Pro Phase A (2026-07-27) — optional so a preset saved
+  // before this phase still loads (PresetsBar.tsx's applyPreset/
+  // validatePreset fall back to defaults when absent).
+  dateRange?: DateRangeState
+  riskOverrides?: RiskOverridesState
+  // Backtesting Lab Pro Phase B (2026-07-27) — optional, same
+  // pre-existing-preset backward-compat reasoning. null/absent =
+  // production config.yaml order.
+  timeframes?: string[] | null
   savedAt: string
 }
 

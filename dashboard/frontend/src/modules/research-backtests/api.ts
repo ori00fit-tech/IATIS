@@ -259,6 +259,36 @@ export interface ValidationConfigResponse {
 
 export const getValidationConfig = () => apiGet<ValidationConfigResponse>('/research/validation-config')
 
+// Scenario Testing (Phase 3 backend, 2026-07-24) — the real cost/risk/
+// structural BacktestConfig fields a scenario can vary, plus gate
+// ablation flags and session templates. First real UI consumer is
+// Backtesting Lab Pro Phase A's Risk & Range wizard step (2026-07-27) —
+// this endpoint already existed as documentation; it now backs a real
+// per-run override surface (POST /experiments/run's risk_overrides).
+export interface ScenarioField {
+  field: string
+  group: 'cost' | 'risk' | 'structural' | 'dataset'
+  default: number | string | null
+  description: string
+}
+
+export interface GateFlag {
+  field: string
+  default: boolean
+  description: string
+}
+
+export interface ScenarioConfigResponse {
+  scenario_fields: ScenarioField[]
+  gate_flags: GateFlag[]
+  session_templates: Record<string, { start_utc: number; end_utc: number }>
+  data_mode: string
+  timezone: string
+  not_supported: string[]
+}
+
+export const getScenarioConfig = () => apiGet<ScenarioConfigResponse>('/research/scenario-config')
+
 // ── AI Copilot: next-hypothesis suggestion + draft file (Phase 4d, 2026-07-26) ──
 // Two-step by design: suggestHypothesis() is read-only (no side effects);
 // saveHypothesisDraft() is a separate, explicit, human-triggered write.

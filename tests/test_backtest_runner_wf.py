@@ -278,6 +278,221 @@ def test_run_backtest_attaches_real_decision_snapshot_to_every_trade():
             assert {"engine", "bias", "score", "reasons"}.issubset(e.keys())
 
 
+def test_walk_forward_engine_overrides_warmup_bars_no_collision():
+    """Regression (Backtesting Lab Pro Phase A, 2026-07-27): run_walk_forward
+    used to build BacktestConfig.from_profile(symbol, warmup_bars=wf_config.
+    warmup_bars, **wf_config.engine_overrides) — if engine_overrides ALSO
+    contains a "warmup_bars" key (which the new Risk & Range step produces),
+    this raised TypeError: got multiple values for keyword argument
+    'warmup_bars'. An explicit engine_overrides warmup_bars must win over
+    WalkForwardConfig's own warmup_bars field, not collide with it."""
+    from backtest.walk_forward import run_walk_forward
+
+    df = _ohlcv(3000, trend=0.10)
+    result = run_walk_forward(
+        "EURUSD", df,
+        WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1,
+                           warmup_bars=250, engine_overrides={"warmup_bars": 400}),
+    )
+    assert len(result.windows) == 3
+    # bars = window length - wf_config.warmup_bars (250, the window-embargo
+    # sizing field) — this is unaffected by the BacktestConfig-level override,
+    # which only controls how many bars the ENGINE itself treats as warmup.
+    assert all(w.bars > 0 for w in result.windows)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase A — CLI wiring for per-run risk/cost overrides
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_runner_cli_wires_risk_overrides(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path),
+         "--min-rr", "5.0", "--warmup-bars", "300"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].engine_overrides == {"min_rr": 5.0, "warmup_bars": 300}
+
+
+def test_walk_forward_cli_wires_risk_overrides(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        captured["start"] = start
+        captured["end"] = end
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["walk_forward.py", "--symbols", "EURUSD", "--min-rr", "5.0",
+         "--warmup-bars", "300", "--start", "2024-01-01", "--end", "2024-06-01"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    # warmup_bars is its own dedicated WalkForwardConfig field, NOT folded
+    # into engine_overrides (see main()'s own comment) — this is the
+    # regression proof that the two paths don't collide at the CLI layer.
+    assert captured["wf_config"].warmup_bars == 300
+    assert captured["wf_config"].engine_overrides == {"min_rr": 5.0}
+    assert captured["start"] == "2024-01-01"
+    assert captured["end"] == "2024-06-01"
+
+
+def test_runner_cli_wires_timeframes_override(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--timeframes", "H1"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].timeframes == ("H1",)
+
+
+def test_runner_cli_rejects_unsupported_timeframe(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--timeframes", "M1"],
+    )
+    with pytest.raises(SystemExit):
+        runner_mod.main()
+
+
+def test_walk_forward_cli_wires_timeframes_override(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(sys, "argv", ["walk_forward.py", "--symbols", "EURUSD", "--timeframes", "H4", "D1", "H1"])
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    assert captured["wf_config"].timeframes == ("H4", "D1", "H1")
+
+
+def test_engine_config_override_none_when_no_timeframes_requested():
+    """build_engine_config_override(None) must return None — preserving
+    run_backtest's own load_config() default path byte-for-byte for every
+    existing caller that never requests an override."""
+    from backtesting.backtest_engine import build_engine_config_override
+
+    assert build_engine_config_override(None) is None
+
+
+def test_engine_config_override_merges_timeframes_only():
+    """The override must carry every other confluence/engine setting from
+    the real config unchanged — only data.timeframes is replaced."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from utils.helpers import load_config
+
+    real = load_config()
+    override = build_engine_config_override(["H1"])
+    assert override["data"]["timeframes"] == ["H1"]
+    assert override["confluence"]["weights"] == real["confluence"]["weights"]
+    assert override["engines"] == real["engines"]
+
+
+def test_timeframes_override_produces_the_expected_mtf_view():
+    """The authoritative proof (Backtesting Lab Pro Phase B) that the
+    override reaches build_multi_timeframe_view with the exact requested
+    timeframe set — a ["H1"]-only override must yield no coarser (D1/H4)
+    resampled views, while a full ["H4","D1","H1"] override must."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from core.timeframe_sync import build_multi_timeframe_view
+
+    df = _ohlcv(2400, trend=0.10)
+
+    single_tf_config = build_engine_config_override(["H1"])
+    mtf_single = build_multi_timeframe_view(df, single_tf_config["data"]["timeframes"])
+    assert set(mtf_single.keys()) == {"H1"}
+
+    full_config = build_engine_config_override(["H4", "D1", "H1"])
+    mtf_full = build_multi_timeframe_view(df, full_config["data"]["timeframes"])
+    assert "D1" in mtf_full and "H4" in mtf_full
+
+
+def test_timeframes_override_reaches_run_backtest_without_crashing():
+    """End-to-end smoke test: run_backtest with a single-timeframe
+    override must complete and produce trades whose decision snapshot is
+    still fully populated — MTF confirmation degrading to neutral (no D1
+    view to confirm against) must never crash the pipeline."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    override_config = build_engine_config_override(["H1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.error_count == 0
+    assert len(result.trades) > 0
+    for t in result.trades:
+        assert t.decision is not None
+        assert len(t.decision["engines"]) > 0
+
+
+def test_engine_overrides_actually_change_backtest_output(tmp_path):
+    """The authoritative proof (Backtesting Lab Pro Phase A) that a risk
+    override isn't silently accepted-and-ignored: running the SAME dataset
+    with a starkly different min_rr/risk_per_trade must produce a
+    genuinely different trade count and position sizing."""
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    default_results = run_all(RunnerConfig(
+        symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False,
+    ))
+    overridden_results = run_all(RunnerConfig(
+        symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False,
+        engine_overrides={"risk_per_trade": 0.20, "min_rr": 10.0},
+    ))
+
+    assert "EURUSD" in default_results and "EURUSD" in overridden_results
+    default_trades = default_results["EURUSD"].trade_records
+    overridden_trades = overridden_results["EURUSD"].trade_records
+
+    # A min_rr=10.0 bar is far stricter than the production 2.0 default —
+    # must sharply cut (or zero out) the number of qualifying trades.
+    assert len(overridden_trades) < len(default_trades)
+    if default_trades and overridden_trades:
+        # risk_per_trade=0.20 vs the 0.01 default should scale position
+        # sizing roughly 20x (same starting balance/stop distance regime).
+        avg_default_size = sum(t.position_size for t in default_trades) / len(default_trades)
+        avg_overridden_size = sum(t.position_size for t in overridden_trades) / len(overridden_trades)
+        assert avg_overridden_size > avg_default_size * 5
+
+
 def test_from_profile_uses_real_spread_as_commission():
     """Backtests must cost trades at the measured broker spread by
     default, not the old flat 0.5 pip — otherwise PF for wide-spread

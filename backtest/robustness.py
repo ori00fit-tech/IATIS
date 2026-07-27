@@ -43,7 +43,7 @@ from pathlib import Path
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,6 +68,10 @@ class RobustnessConfig:
     params: tuple[str, ...] = SWEEP_PARAMS
     min_trades: int = 10
     engine_overrides: dict = field(default_factory=dict)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first). None = production
+    # config.yaml timeframes, unchanged.
+    timeframes: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if 1.0 not in self.multipliers:
@@ -123,10 +127,13 @@ class RobustnessResult:
         }
 
 
-def _run_point(df, symbol: str, param: str, value: float, engine_overrides: dict) -> tuple[int, float, float, float]:
+def _run_point(
+    df, symbol: str, param: str, value: float, engine_overrides: dict,
+    engine_config: dict | None = None,
+) -> tuple[int, float, float, float]:
     """Run one sweep point, returning (trades, profit_factor, win_rate, max_drawdown_pct)."""
     cfg = BacktestConfig.from_profile(symbol, **{**engine_overrides, param: value})
-    bt = run_backtest(df, cfg)
+    bt = run_backtest(df, cfg, engine_config=engine_config)
     records = [trade_to_record(t, symbol) for t in bt.trades]
     m = calculate_metrics(records, initial_capital=cfg.initial_balance)
     return m.total_trades, m.profit_factor, m.win_rate, m.max_drawdown
@@ -138,12 +145,14 @@ def run_param_sweep(
     """Sweep one parameter across ``rc.multipliers`` for one symbol."""
     baseline_cfg = BacktestConfig.from_profile(symbol, **rc.engine_overrides)
     baseline_value = getattr(baseline_cfg, param)
+    # Computed once per sweep — identical for every point in it.
+    engine_config = build_engine_config_override(list(rc.timeframes) if rc.timeframes else None)
 
     points: list[SweepPoint] = []
     baseline_pf = 0.0
     for mult in rc.multipliers:
         value = baseline_value * mult
-        trades, pf, wr, mdd = _run_point(df, symbol, param, value, rc.engine_overrides)
+        trades, pf, wr, mdd = _run_point(df, symbol, param, value, rc.engine_overrides, engine_config)
         sufficient = trades >= rc.min_trades
         points.append(SweepPoint(
             multiplier=mult, value=round(value, 6), trades=trades,
@@ -180,16 +189,19 @@ def run_robustness(symbol: str, df, rc: RobustnessConfig) -> RobustnessResult:
 def run_robustness_suite(
     symbols: list[str], data_dir: Path, rc: RobustnessConfig,
     output_dir: Path = Path("reports"),
+    start: str | None = None, end: str | None = None,
 ) -> dict[str, RobustnessResult]:
     """Run robustness sweeps across symbols and persist a JSON report.
 
     One symbol's failure (missing data, invalid schema) is logged and
-    excluded; it never aborts the suite.
+    excluded; it never aborts the suite. start/end (Backtesting Lab Pro
+    Phase A, 2026-07-27): optional ISO-date dataset slice, same semantics
+    as backtest.runner.load_symbol_data.
     """
     out: dict[str, RobustnessResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir)
+            df = load_symbol_data(symbol, data_dir, start, end)
             out[symbol] = run_robustness(symbol, df, rc)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: robustness sweep failed — {exc}")
@@ -214,6 +226,8 @@ def run_robustness_suite(
                 "Does not change any live parameter and does not itself "
                 "justify changing one — CLAUDE.md rule 6."
             ),
+            "start": start,
+            "end": end,
             "engine_overrides": rc.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
@@ -223,13 +237,36 @@ def run_robustness_suite(
 
 
 def main() -> None:
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
     parser = argparse.ArgumentParser(description="IATIS parameter-sensitivity (robustness) sweep")
     parser.add_argument("--symbols", nargs="+", required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--params", nargs="+", default=list(SWEEP_PARAMS), choices=SWEEP_PARAMS)
     parser.add_argument("--multipliers", nargs="+", type=float, default=list(DEFAULT_MULTIPLIERS))
     parser.add_argument("--min-trades", type=int, default=10)
+    parser.add_argument("--start", default=None, help="ISO date, inclusive")
+    parser.add_argument("--end", default=None, help="ISO date, inclusive")
+    # Backtesting Lab Pro Phase A (2026-07-27) — ad-hoc per-run
+    # BacktestConfig overrides, same 9-field surface as backtest.runner.
+    parser.add_argument("--min-rr", type=float, default=None)
+    parser.add_argument("--sl-atr-multiplier", type=float, default=None)
+    parser.add_argument("--risk-per-trade", type=float, default=None)
+    parser.add_argument("--commission-pips", type=float, default=None)
+    parser.add_argument("--slippage-pips", type=float, default=None)
+    parser.add_argument("--swap-pips-per-night", type=float, default=None)
+    parser.add_argument("--initial-balance", type=float, default=None)
+    parser.add_argument("--warmup-bars", type=int, default=None)
+    parser.add_argument("--step-bars", type=int, default=None)
+    # Backtesting Lab Pro Phase B (2026-07-27) — ad-hoc per-run
+    # data.timeframes override (decision TF first).
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES
+    parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
     args = parser.parse_args()
+
+    engine_overrides = {
+        f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
+    }
 
     results = run_robustness_suite(
         symbols=args.symbols,
@@ -238,7 +275,10 @@ def main() -> None:
             multipliers=tuple(args.multipliers),
             params=tuple(args.params),
             min_trades=args.min_trades,
+            engine_overrides=engine_overrides,
+            timeframes=tuple(args.timeframes) if args.timeframes else None,
         ),
+        start=args.start, end=args.end,
     )
     if not results:
         raise SystemExit("No symbol completed — see errors above.")

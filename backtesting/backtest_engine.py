@@ -42,6 +42,18 @@ REAL_SPREAD_PIPS: dict[str, float] = {
     "ETHUSD": 290.0,   # $2.90 ÷ 0.01
 }
 
+# Backtesting Lab Pro, Phase A (2026-07-27) — the exact BacktestConfig
+# fields exposed as free per-run overrides from the API/CLI. Deliberately
+# excludes asset_class/dollar_per_point/pip_size/symbol: those are engine-
+# correctness fields auto-derived per symbol by from_profile(), not risk/
+# cost knobs — overriding asset_class wrongly would silently corrupt P&L
+# math, a bug surface, not a legitimate research variable.
+RISK_OVERRIDE_FIELDS: tuple[str, ...] = (
+    "min_rr", "sl_atr_multiplier", "risk_per_trade", "commission_pips",
+    "slippage_pips", "swap_pips_per_night", "initial_balance",
+    "warmup_bars", "step_bars",
+)
+
 
 @dataclass
 class BacktestConfig:
@@ -316,6 +328,22 @@ class BacktestResult:
         }
         Path(path).write_text(json.dumps(data, indent=2, default=str))
         logger.info(f"Backtest saved to {path}")
+
+
+def build_engine_config_override(timeframes: list[str] | None) -> dict | None:
+    """Backtesting Lab Pro Phase B (2026-07-27) — an ad-hoc per-run
+    data.timeframes override, merged over a real load_config() snapshot
+    so every other confluence/engine setting (weights, min_score_to_trade,
+    engines.enabled, ...) stays exactly as configured. Returns None when
+    no override is requested, preserving run_backtest's own load_config()
+    default path byte-for-byte — zero behavior change for every existing
+    caller that never passes this. Ephemeral — never writes to config.yaml.
+    """
+    if timeframes is None:
+        return None
+    from utils.helpers import load_config
+    base = load_config()
+    return {**base, "data": {**base["data"], "timeframes": list(timeframes)}}
 
 
 def run_backtest(

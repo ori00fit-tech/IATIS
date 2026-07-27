@@ -351,6 +351,8 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
 # ─────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
     parser = argparse.ArgumentParser(description="IATIS full backtest runner")
     parser.add_argument("--symbols", nargs="+", required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -359,7 +361,24 @@ def main() -> None:
     parser.add_argument("--end", default=None, help="ISO date, inclusive")
     parser.add_argument("--no-mc", action="store_true")
     parser.add_argument("--no-html", action="store_true")
+    # Backtesting Lab Pro Phase A (2026-07-27) — ad-hoc per-run
+    # BacktestConfig overrides, threaded into RunnerConfig.engine_overrides
+    # (already consumed by run_symbol's BacktestConfig.from_profile call,
+    # backtest/runner.py:244-246 — this only adds the CLI/API surface).
+    parser.add_argument("--min-rr", type=float, default=None)
+    parser.add_argument("--sl-atr-multiplier", type=float, default=None)
+    parser.add_argument("--risk-per-trade", type=float, default=None)
+    parser.add_argument("--commission-pips", type=float, default=None)
+    parser.add_argument("--slippage-pips", type=float, default=None)
+    parser.add_argument("--swap-pips-per-night", type=float, default=None)
+    parser.add_argument("--initial-balance", type=float, default=None)
+    parser.add_argument("--warmup-bars", type=int, default=None)
+    parser.add_argument("--step-bars", type=int, default=None)
     args = parser.parse_args()
+
+    engine_overrides = {
+        f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
+    }
 
     config = RunnerConfig(
         symbols=tuple(args.symbols),
@@ -369,6 +388,7 @@ def main() -> None:
         end=args.end,
         run_mc=not args.no_mc,
         write_html=not args.no_html,
+        engine_overrides=engine_overrides,
     )
     results = run_all(config)
     if not results:

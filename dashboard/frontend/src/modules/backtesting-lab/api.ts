@@ -5,6 +5,7 @@ import {
   getResearchIndicators,
   getResearch,
   getValidationConfig,
+  getScenarioConfig,
   askResearchQuestion,
   type SymbolsResponse,
   type SymbolEntry,
@@ -15,6 +16,8 @@ import {
   type ResearchResponse,
   type Hypothesis,
   type ValidationConfigResponse,
+  type ScenarioConfigResponse,
+  type ScenarioField,
   type AiResearchAnswer,
 } from '../research-backtests/api'
 import {
@@ -33,6 +36,7 @@ export {
   getResearchIndicators,
   getResearch,
   getValidationConfig,
+  getScenarioConfig,
   askResearchQuestion,
   getJobCatalog,
   runJob,
@@ -49,6 +53,8 @@ export type {
   ResearchResponse,
   Hypothesis,
   ValidationConfigResponse,
+  ScenarioConfigResponse,
+  ScenarioField,
   AiResearchAnswer,
   JobCatalogResponse,
   JobDescriptor,

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { usePresetsStore, type WizardPreset } from './presetsStore'
-import type { WizardState } from './BacktestingLab'
+import { DEFAULT_DATE_RANGE, DEFAULT_RISK_OVERRIDES, type WizardState } from './BacktestingLab'
 
 /**
  * Presets ("FX H4"/"Crypto H1" quick-load) + shareable Profile export/
@@ -24,6 +24,8 @@ export function PresetsBar({ state, setState }: { state: WizardState; setState: 
       jobId: p.jobId,
       sweepParams: p.sweepParams,
       sweepMultipliers: p.sweepMultipliers,
+      dateRange: p.dateRange ?? DEFAULT_DATE_RANGE,
+      riskOverrides: p.riskOverrides ?? DEFAULT_RISK_OVERRIDES,
     })
   }
 
@@ -158,5 +160,11 @@ function validatePreset(value: unknown, fallbackName: string): WizardPreset | nu
     : []
   const name = typeof v.name === 'string' && v.name.trim() ? v.name.trim() : fallbackName.replace(/\.json$/i, '')
   const savedAt = typeof v.savedAt === 'string' ? v.savedAt : new Date().toISOString()
-  return { name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers, savedAt }
+  // dateRange/riskOverrides (Backtesting Lab Pro Phase A) — a preset saved
+  // before this phase, or a hand-edited file missing them, must not fail
+  // import: pass through only if present and shaped like an object, else
+  // applyPreset's own `?? DEFAULT_*` fallback fills them in.
+  const dateRange = typeof v.dateRange === 'object' && v.dateRange !== null ? (v.dateRange as WizardPreset['dateRange']) : undefined
+  const riskOverrides = typeof v.riskOverrides === 'object' && v.riskOverrides !== null ? (v.riskOverrides as WizardPreset['riskOverrides']) : undefined
+  return { name, selectedSymbols: v.selectedSymbols, jobId: v.jobId, sweepParams, sweepMultipliers, dateRange, riskOverrides, savedAt }
 }

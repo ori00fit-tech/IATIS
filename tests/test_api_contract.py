@@ -1069,6 +1069,103 @@ def test_experiments_run_non_robustness_job_rejects_params_and_multipliers(clien
     assert "takes no params/multipliers" in r.json()["detail"]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase A — start/end + risk_overrides plumbing
+# ─────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_forwards_start_end_and_risk_overrides(client, monkeypatch, job):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, job: ["echo", job]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": job, "symbols": ["eurusd"],
+            "start": "2024-01-01", "end": "2024-06-01",
+            "risk_overrides": {"min_rr": 3.0, "warmup_bars": 300},
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    # Deterministic order: RISK_OVERRIDE_FIELDS' own order, not request-body order.
+    assert _FakeProc.captured_argv == [
+        "echo", job, "--symbols", "EURUSD",
+        "--start", "2024-01-01", "--end", "2024-06-01",
+        "--min-rr", "3.0", "--warmup-bars", "300",
+    ]
+
+
+def test_experiments_run_rejects_start_end_risk_overrides_for_non_parameterized_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "verify_data_integrity", "start": "2024-01-01"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no start/end/risk_overrides" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_start_after_end(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "start": "2024-06-01", "end": "2024-01-01"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "start must be <= end" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("bad_date", ["not-a-date", "2024/01/01", "2024-13-40"])
+def test_experiments_run_rejects_malformed_date(client, bad_date):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "start": bad_date},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "ISO date" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("override", [
+    {"risk_per_trade": 5.0}, {"min_rr": -1.0}, {"warmup_bars": 0}, {"initial_balance": 0.0},
+])
+def test_experiments_run_rejects_out_of_bounds_risk_override(client, override):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "risk_overrides": override},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "must be between" in r.json()["detail"]
+
+
+def test_scenario_config_fields_match_risk_override_fields_contract():
+    """Drift guard: the documented /research/scenario-config catalog and
+    the actually-wired per-run override set must never silently diverge."""
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+    from execution.routes.research import _SCENARIO_CONFIG_FIELDS
+
+    documented = {f["field"] for f in _SCENARIO_CONFIG_FIELDS if f["field"] in RISK_OVERRIDE_FIELDS}
+    assert documented == set(RISK_OVERRIDE_FIELDS)
+
+
 def test_experiments_status_unknown_job_404s(client):
     assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
 

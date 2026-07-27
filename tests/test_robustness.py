@@ -154,3 +154,44 @@ def test_suite_writes_nothing_when_every_symbol_fails(tmp_path):
     results = run_robustness_suite(["NOPE"], tmp_path, rc, output_dir=out_dir)
     assert results == {}
     assert not out_dir.exists()
+
+
+def test_suite_threads_start_end_into_payload(tmp_path):
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+    rc = RobustnessConfig(params=("min_rr",), min_trades=1)
+    out_dir = tmp_path / "reports"
+    run_robustness_suite(
+        ["EURUSD"], tmp_path, rc, output_dir=out_dir,
+        start="2024-01-05", end="2024-01-15",
+    )
+    payload = json.loads(next(out_dir.glob("robustness_*.json")).read_text())
+    assert payload["start"] == "2024-01-05"
+    assert payload["end"] == "2024-01-15"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase A — CLI wiring for per-run risk/cost overrides
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_robustness_cli_wires_risk_overrides(monkeypatch):
+    import sys
+    import backtest.robustness as robustness_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, rc, start=None, end=None):
+        captured["rc"] = rc
+        captured["start"] = start
+        captured["end"] = end
+        return {}
+
+    monkeypatch.setattr(robustness_mod, "run_robustness_suite", fake_suite)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["robustness.py", "--symbols", "EURUSD", "--commission-pips", "2.0",
+         "--start", "2024-01-01"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        robustness_mod.main()
+    assert captured["rc"].engine_overrides == {"commission_pips": 2.0}
+    assert captured["start"] == "2024-01-01"

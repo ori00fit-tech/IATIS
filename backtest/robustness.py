@@ -180,16 +180,19 @@ def run_robustness(symbol: str, df, rc: RobustnessConfig) -> RobustnessResult:
 def run_robustness_suite(
     symbols: list[str], data_dir: Path, rc: RobustnessConfig,
     output_dir: Path = Path("reports"),
+    start: str | None = None, end: str | None = None,
 ) -> dict[str, RobustnessResult]:
     """Run robustness sweeps across symbols and persist a JSON report.
 
     One symbol's failure (missing data, invalid schema) is logged and
-    excluded; it never aborts the suite.
+    excluded; it never aborts the suite. start/end (Backtesting Lab Pro
+    Phase A, 2026-07-27): optional ISO-date dataset slice, same semantics
+    as backtest.runner.load_symbol_data.
     """
     out: dict[str, RobustnessResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir)
+            df = load_symbol_data(symbol, data_dir, start, end)
             out[symbol] = run_robustness(symbol, df, rc)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: robustness sweep failed — {exc}")
@@ -214,6 +217,8 @@ def run_robustness_suite(
                 "Does not change any live parameter and does not itself "
                 "justify changing one — CLAUDE.md rule 6."
             ),
+            "start": start,
+            "end": end,
             "engine_overrides": rc.engine_overrides,
             "symbols": {s: r.to_dict() for s, r in out.items()},
         }
@@ -223,13 +228,32 @@ def run_robustness_suite(
 
 
 def main() -> None:
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
     parser = argparse.ArgumentParser(description="IATIS parameter-sensitivity (robustness) sweep")
     parser.add_argument("--symbols", nargs="+", required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--params", nargs="+", default=list(SWEEP_PARAMS), choices=SWEEP_PARAMS)
     parser.add_argument("--multipliers", nargs="+", type=float, default=list(DEFAULT_MULTIPLIERS))
     parser.add_argument("--min-trades", type=int, default=10)
+    parser.add_argument("--start", default=None, help="ISO date, inclusive")
+    parser.add_argument("--end", default=None, help="ISO date, inclusive")
+    # Backtesting Lab Pro Phase A (2026-07-27) — ad-hoc per-run
+    # BacktestConfig overrides, same 9-field surface as backtest.runner.
+    parser.add_argument("--min-rr", type=float, default=None)
+    parser.add_argument("--sl-atr-multiplier", type=float, default=None)
+    parser.add_argument("--risk-per-trade", type=float, default=None)
+    parser.add_argument("--commission-pips", type=float, default=None)
+    parser.add_argument("--slippage-pips", type=float, default=None)
+    parser.add_argument("--swap-pips-per-night", type=float, default=None)
+    parser.add_argument("--initial-balance", type=float, default=None)
+    parser.add_argument("--warmup-bars", type=int, default=None)
+    parser.add_argument("--step-bars", type=int, default=None)
     args = parser.parse_args()
+
+    engine_overrides = {
+        f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
+    }
 
     results = run_robustness_suite(
         symbols=args.symbols,
@@ -238,7 +262,9 @@ def main() -> None:
             multipliers=tuple(args.multipliers),
             params=tuple(args.params),
             min_trades=args.min_trades,
+            engine_overrides=engine_overrides,
         ),
+        start=args.start, end=args.end,
     )
     if not results:
         raise SystemExit("No symbol completed — see errors above.")

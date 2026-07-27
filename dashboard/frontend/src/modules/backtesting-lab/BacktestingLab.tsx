@@ -15,6 +15,7 @@ import {
   getResearchIndicators,
   getResearch,
   getValidationConfig,
+  getScenarioConfig,
   getJobCatalog,
   runJob,
   runRobustnessJob,
@@ -44,8 +45,37 @@ const POLL_MS = 60_000
 // either way, not just a shortcut.
 // ─────────────────────────────────────────────────────────────────────────
 
-const STEPS = ['Dataset', 'Symbols', 'Timeframes', 'Strategy', 'Indicators', 'Hypotheses', 'Execution', 'Results'] as const
-type StepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
+const STEPS = ['Dataset', 'Symbols', 'Risk & Range', 'Timeframes', 'Strategy', 'Indicators', 'Hypotheses', 'Execution', 'Results'] as const
+type StepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+
+// Backtesting Lab Pro Phase A (2026-07-27) — dataset date-range slice +
+// per-run BacktestConfig overrides, forwarded verbatim to POST
+// /experiments/run's start/end/risk_overrides fields. null = "not
+// overridden, use the real production default" — mirrors the API's own
+// `| None` optional-field semantics exactly.
+export interface DateRangeState {
+  preset: '1y' | '2y' | '5y' | '10y' | 'all' | 'custom'
+  start: string | null
+  end: string | null
+}
+
+export interface RiskOverridesState {
+  min_rr: number | null
+  sl_atr_multiplier: number | null
+  risk_per_trade: number | null
+  commission_pips: number | null
+  slippage_pips: number | null
+  swap_pips_per_night: number | null
+  initial_balance: number | null
+  warmup_bars: number | null
+  step_bars: number | null
+}
+
+export const DEFAULT_DATE_RANGE: DateRangeState = { preset: 'all', start: null, end: null }
+export const DEFAULT_RISK_OVERRIDES: RiskOverridesState = {
+  min_rr: null, sl_atr_multiplier: null, risk_per_trade: null, commission_pips: null,
+  slippage_pips: null, swap_pips_per_night: null, initial_balance: null, warmup_bars: null, step_bars: null,
+}
 
 export interface WizardState {
   selectedSymbols: string[]
@@ -57,6 +87,17 @@ export interface WizardState {
   // the wizard left and re-entered the Execution step.
   sweepParams: string[]
   sweepMultipliers: number[]
+  dateRange: DateRangeState
+  riskOverrides: RiskOverridesState
+}
+
+function toApiRiskOverrides(r: RiskOverridesState) {
+  const entries = Object.entries(r).filter(([, v]) => v !== null) as [string, number][]
+  return entries.length > 0 ? (Object.fromEntries(entries) as Record<string, number>) : undefined
+}
+
+function toApiDateRange(d: DateRangeState) {
+  return d.start || d.end ? { start: d.start ?? undefined, end: d.end ?? undefined } : undefined
 }
 
 function Stepper({ current, onJump, maxReached }: { current: StepIndex; onJump: (i: StepIndex) => void; maxReached: StepIndex }) {
@@ -247,7 +288,115 @@ function SymbolsStep({ state, setState }: { state: WizardState; setState: (s: Wi
   )
 }
 
-// ── Step 3: Timeframe Matrix (informational — see module docstring) ─────
+// ── Step 3: Risk & Range (Backtesting Lab Pro Phase A, 2026-07-27) ──────
+// Ad-hoc, this-run-only overrides threaded through POST /experiments/run's
+// start/end/risk_overrides fields into BacktestConfig.from_profile() —
+// never written to config.yaml/config/risk.yaml, so it can never affect
+// the live decision pipeline or any other run. Every field optional:
+// leaving one blank means "use the real production default," shown as
+// the input's placeholder text (from GET /research/scenario-config,
+// already-existing documentation now backing a real override surface).
+function RiskRangeStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
+  const { markUnauthenticated } = useAuth()
+  const scenario = useApiQuery(['scenario-config'], getScenarioConfig, POLL_MS, markUnauthenticated)
+  const fields = (scenario.data?.scenario_fields ?? []).filter(
+    (f): f is typeof f & { field: keyof RiskOverridesState } =>
+      f.group !== 'dataset' && f.field !== 'asset_class',
+  )
+
+  const setDateRange = (dr: DateRangeState) => setState({ ...state, dateRange: dr })
+  const setRisk = (patch: Partial<RiskOverridesState>) =>
+    setState({ ...state, riskOverrides: { ...state.riskOverrides, ...patch } })
+
+  const applyPreset = (preset: DateRangeState['preset']) => {
+    if (preset === 'custom' || preset === 'all') {
+      setDateRange({ preset, start: preset === 'all' ? null : state.dateRange.start, end: preset === 'all' ? null : state.dateRange.end })
+      return
+    }
+    const years = { '1y': 1, '2y': 2, '5y': 5, '10y': 10 }[preset]
+    const end = new Date()
+    const start = new Date(end)
+    start.setFullYear(start.getFullYear() - years)
+    setDateRange({ preset, start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) })
+  }
+
+  const anyOverridden = Object.values(state.riskOverrides).some((v) => v !== null)
+  const rangeInvalid = !!(state.dateRange.start && state.dateRange.end && state.dateRange.start > state.dateRange.end)
+
+  return (
+    <Panel title="Risk & Range" right="ad-hoc, this run only — never written to config.yaml or risk.yaml">
+      <div className="p-4 flex flex-col gap-4">
+        <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+          Every field below is optional. Leave one blank to use the real production default (shown as its placeholder).
+        </div>
+
+        <div>
+          <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1.5">Date Range</div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {(['1y', '2y', '5y', '10y', 'all', 'custom'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => applyPreset(p)}
+                className={`px-2.5 py-1 rounded text-[0.78em] border ${
+                  state.dateRange.preset === p ? 'border-accent bg-accent/15 text-accent' : 'border-border text-muted hover:border-accent/50'
+                }`}
+              >
+                {p === 'all' ? 'All history' : p}
+              </button>
+            ))}
+          </div>
+          {state.dateRange.preset === 'custom' && (
+            <div className="flex items-center gap-2 mt-2">
+              <input
+                type="date"
+                value={state.dateRange.start ?? ''}
+                onChange={(e) => setDateRange({ ...state.dateRange, start: e.target.value || null })}
+                className="px-2.5 py-1 text-[0.78em] rounded border border-border bg-bg text-text"
+              />
+              <span className="text-muted text-[0.78em]">→</span>
+              <input
+                type="date"
+                value={state.dateRange.end ?? ''}
+                onChange={(e) => setDateRange({ ...state.dateRange, end: e.target.value || null })}
+                className="px-2.5 py-1 text-[0.78em] rounded border border-border bg-bg text-text"
+              />
+            </div>
+          )}
+          {rangeInvalid && <div className="text-red text-[0.75em] mt-1">start must be before end</div>}
+        </div>
+
+        <div>
+          <div className="text-muted uppercase text-[0.7em] tracking-[1px] mb-1.5">Risk &amp; Cost Overrides</div>
+          <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
+            {fields.map((f) => (
+              <label key={f.field} className="flex flex-col gap-1 text-[0.78em]">
+                <span className="text-muted" title={f.description}>
+                  {f.field}
+                </span>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder={f.default != null ? String(f.default) : undefined}
+                  value={state.riskOverrides[f.field] ?? ''}
+                  onChange={(e) => setRisk({ [f.field]: e.target.value === '' ? null : Number(e.target.value) })}
+                  className="px-2.5 py-1 rounded border border-border bg-bg text-text font-mono"
+                />
+              </label>
+            ))}
+            {fields.length === 0 && <Empty>{scenario.loading ? 'Loading…' : 'No scenario config'}</Empty>}
+          </div>
+          {anyOverridden && (
+            <div className="mt-2 text-[0.75em] text-amber">
+              Overriding production values makes this run exploratory, not evidence — same status as any other ad-hoc backtest.
+            </div>
+          )}
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
+// ── Step 4: Timeframe Matrix (informational — see module docstring) ─────
 function TimeframesStep() {
   const { markUnauthenticated } = useAuth()
   const symbols = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
@@ -292,7 +441,7 @@ function TimeframesStep() {
   )
 }
 
-// ── Step 4: Strategy (Engine Selector, read-only) ───────────────────────
+// ── Step 5: Strategy (Engine Selector, read-only) ───────────────────────
 function StrategyStep() {
   const { markUnauthenticated } = useAuth()
   const engines = useApiQuery(['research-engines'], getResearchEngines, POLL_MS, markUnauthenticated)
@@ -325,7 +474,7 @@ function StrategyStep() {
   )
 }
 
-// ── Step 5: Indicators (catalog, read-only) ─────────────────────────────
+// ── Step 6: Indicators (catalog, read-only) ─────────────────────────────
 function IndicatorsStep() {
   const { markUnauthenticated } = useAuth()
   const indicators = useApiQuery(['research-indicators'], getResearchIndicators, POLL_MS, markUnauthenticated)
@@ -348,7 +497,7 @@ function IndicatorsStep() {
   )
 }
 
-// ── Step 6: Hypotheses ───────────────────────────────────────────────────
+// ── Step 7: Hypotheses ───────────────────────────────────────────────────
 function HypothesesStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const research = useApiQuery(['research-registry'], getResearch, POLL_MS, markUnauthenticated)
@@ -405,7 +554,7 @@ function statusToneFor(status: string): 'exec' | 'no-trade' | 'neutral' {
   return 'neutral'
 }
 
-// ── Step 7: Execution ────────────────────────────────────────────────────
+// ── Step 8: Execution ────────────────────────────────────────────────────
 // Parameter Sweep config (2026-07-25, Backtesting Lab priority #4) — only
 // shown for the robustness job. Deliberately NO "pick the best value"
 // control anywhere: the operator chooses which parameters and which
@@ -442,6 +591,10 @@ function SweepConfig({
   return (
     <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-panel-border bg-panel shadow-md">
       <div className="text-[0.72em] text-muted uppercase tracking-[1px]">Parameter Sweep — which points to measure, never which one wins</div>
+      <div className="text-[0.72em] text-muted">
+        Sweeping a parameter you've also overridden in the Risk &amp; Range step perturbs around your override, not the
+        production default.
+      </div>
       <div className="flex flex-wrap gap-1.5">
         {allParams.map((p) => (
           <button
@@ -515,9 +668,16 @@ function ExecutionStep({
     setStarting(true)
     setError(null)
     try {
+      const range = requiresSymbols ? toApiDateRange(state.dateRange) : undefined
+      const risk = requiresSymbols ? toApiRiskOverrides(state.riskOverrides) : undefined
       const summary = isRobustness
-        ? await runRobustnessJob(state.selectedSymbols, sweepParams.length > 0 ? sweepParams : undefined, sweepMultipliers.length > 0 ? sweepMultipliers : undefined)
-        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined)
+        ? await runRobustnessJob(
+            state.selectedSymbols,
+            sweepParams.length > 0 ? sweepParams : undefined,
+            sweepMultipliers.length > 0 ? sweepMultipliers : undefined,
+            range, risk,
+          )
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -568,7 +728,7 @@ function ExecutionStep({
   )
 }
 
-// ── Step 8: Results ──────────────────────────────────────────────────────
+// ── Step 9: Results ──────────────────────────────────────────────────────
 function ResultsStep({ state, job }: { state: WizardState; job: JobDetail | null }) {
   const context = job
     ? {
@@ -608,6 +768,7 @@ export function BacktestingLab() {
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
   const [state, setState] = useState<WizardState>({
     selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
+    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES,
   })
   const [job, setJob] = useState<JobDetail | null>(null)
 
@@ -615,7 +776,7 @@ export function BacktestingLab() {
     setStep(i)
     if (i > maxReached) setMaxReached(i)
   }
-  const next = () => goTo(Math.min(7, step + 1) as StepIndex)
+  const next = () => goTo(Math.min(8, step + 1) as StepIndex)
   const back = () => goTo(Math.max(0, step - 1) as StepIndex)
 
   const requiresSymbols = ['backtest', 'walk_forward', 'robustness'].includes(state.jobId)
@@ -637,20 +798,21 @@ export function BacktestingLab() {
 
       {step === 0 && <DatasetStep />}
       {step === 1 && <SymbolsStep state={state} setState={setState} />}
-      {step === 2 && <TimeframesStep />}
-      {step === 3 && <StrategyStep />}
-      {step === 4 && <IndicatorsStep />}
-      {step === 5 && <HypothesesStep state={state} setState={setState} />}
-      {step === 6 && (
+      {step === 2 && <RiskRangeStep state={state} setState={setState} />}
+      {step === 3 && <TimeframesStep />}
+      {step === 4 && <StrategyStep />}
+      {step === 5 && <IndicatorsStep />}
+      {step === 6 && <HypothesesStep state={state} setState={setState} />}
+      {step === 7 && (
         <ExecutionStep
           state={state}
           setState={setState}
           job={job}
           setJob={setJob}
-          onFinished={() => setMaxReached((m) => (m < 7 ? (7 as StepIndex) : m))}
+          onFinished={() => setMaxReached((m) => (m < 8 ? (8 as StepIndex) : m))}
         />
       )}
-      {step === 7 && <ResultsStep state={state} job={job} />}
+      {step === 8 && <ResultsStep state={state} job={job} />}
 
       <div className="flex items-center justify-between">
         <button
@@ -662,7 +824,7 @@ export function BacktestingLab() {
         </button>
         <button
           onClick={next}
-          disabled={step === 7 || !canAdvanceFromSymbols}
+          disabled={step === 8 || !canAdvanceFromSymbols}
           title={!canAdvanceFromSymbols ? 'Select at least one symbol first' : undefined}
           className="px-4 py-1.5 text-[0.82em] rounded border border-accent text-accent hover:bg-accent/10 disabled:opacity-40 font-bold"
         >

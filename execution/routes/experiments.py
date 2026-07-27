@@ -10,12 +10,13 @@ docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-1).
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Query
@@ -251,6 +252,26 @@ def _run_job(job: "_Job") -> None:
         job.finished_at = datetime.now(timezone.utc).isoformat()
 
 
+class _RiskOverrides(BaseModel):
+    """Ad-hoc per-run BacktestConfig overrides (Backtesting Lab Pro Phase
+    A, 2026-07-27). Every field optional; only fields actually set are
+    forwarded as CLI flags, so an omitted field keeps from_profile()'s
+    real default (which may itself be a measured per-symbol value, e.g.
+    commission_pips) instead of being silently clobbered. This is a
+    process-local, ephemeral engine_overrides dict — it is NEVER written
+    to config/engines.yaml or config/risk.yaml, so it can never affect
+    the live decision pipeline or any other run."""
+    min_rr: float | None = None
+    sl_atr_multiplier: float | None = None
+    risk_per_trade: float | None = None
+    commission_pips: float | None = None
+    slippage_pips: float | None = None
+    swap_pips_per_night: float | None = None
+    initial_balance: float | None = None
+    warmup_bars: int | None = None
+    step_bars: int | None = None
+
+
 class _RunJobRequest(BaseModel):
     job: str
     # backtest only: symbols validated against the configured universe.
@@ -265,6 +286,12 @@ class _RunJobRequest(BaseModel):
     # point, same as running it from the CLI.
     params: list[str] | None = None
     multipliers: list[float] | None = None
+    # Backtesting Lab Pro Phase A (2026-07-27) — dataset date-range slice
+    # + BacktestConfig overrides, valid for the same _PARAMETERIZED_JOBS
+    # set that already accepts symbols (backtest/walk_forward/robustness).
+    start: str | None = None
+    end: str | None = None
+    risk_overrides: _RiskOverrides | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -276,6 +303,60 @@ def _configured_symbol_universe() -> set[str]:
         for s in config.get("data", {}).get("twelve_data_symbols", [])
         if s.get("internal")
     }
+
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_iso_date(value: str, field: str) -> None:
+    """Real calendar validation, not just YYYY-MM-DD shape — the regex
+    alone would accept a value like 2024-13-40, which date.fromisoformat
+    correctly rejects."""
+    if not _ISO_DATE_RE.match(value):
+        raise HTTPException(status_code=400, detail=f"{field} must be an ISO date (YYYY-MM-DD).")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"{field} must be an ISO date (YYYY-MM-DD).")
+
+# Bounds mirror what BacktestConfig's own math assumes — not arbitrary:
+# risk_per_trade is a FRACTION of balance, sizing degenerates/blows up
+# outside (0, 1]; the rest are sanity floors/ceilings, not measured limits.
+_RISK_OVERRIDE_BOUNDS: dict[str, tuple[float, float]] = {
+    "min_rr": (0.01, 100.0),
+    "sl_atr_multiplier": (0.01, 50.0),
+    "risk_per_trade": (0.0001, 1.0),
+    "commission_pips": (0.0, 10_000.0),
+    "slippage_pips": (0.0, 10_000.0),
+    "swap_pips_per_night": (0.0, 10_000.0),
+    "initial_balance": (1.0, 1_000_000_000.0),
+    "warmup_bars": (1, 100_000),
+    "step_bars": (1, 100_000),
+}
+
+
+def _risk_override_argv(ro: "_RiskOverrides") -> list[str]:
+    """Backtesting Lab Pro Phase A — build the CLI flags for a
+    _RiskOverrides body, validating each set field against
+    _RISK_OVERRIDE_BOUNDS. Iterates RISK_OVERRIDE_FIELDS (not the model's
+    own field order) so the resulting argv is deterministic regardless of
+    how the client serialized the request body — load-bearing for the
+    exact-argv-list tests."""
+    from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
+
+    argv: list[str] = []
+    for field_name in RISK_OVERRIDE_FIELDS:
+        value = getattr(ro, field_name)
+        if value is None:
+            continue
+        lo, hi = _RISK_OVERRIDE_BOUNDS[field_name]
+        if not (lo <= value <= hi):
+            raise HTTPException(
+                status_code=400,
+                detail=f"risk_overrides.{field_name} must be between {lo} and {hi}.",
+            )
+        argv += [f"--{field_name.replace('_', '-')}", str(value)]
+    return argv
 
 
 @router.get("/experiments/jobs")
@@ -329,6 +410,20 @@ async def experiments_run(
     elif body.symbols:
         raise HTTPException(status_code=400, detail=f"'{body.job}' takes no symbols.")
 
+    if body.job in _PARAMETERIZED_JOBS:
+        if body.start is not None:
+            _validate_iso_date(body.start, "start")
+            argv += ["--start", body.start]
+        if body.end is not None:
+            _validate_iso_date(body.end, "end")
+            argv += ["--end", body.end]
+        if body.start and body.end and body.start > body.end:
+            raise HTTPException(status_code=400, detail="start must be <= end.")
+        if body.risk_overrides is not None:
+            argv += _risk_override_argv(body.risk_overrides)
+    elif body.start is not None or body.end is not None or body.risk_overrides is not None:
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no start/end/risk_overrides.")
+
     if body.job == "robustness":
         from backtest.robustness import SWEEP_PARAMS
 
@@ -368,6 +463,12 @@ async def experiments_run(
     detail = f"{body.job} ({job_id})"
     if body.job in _PARAMETERIZED_JOBS:
         detail += f" symbols={body.symbols}"
+        if body.start:
+            detail += f" start={body.start}"
+        if body.end:
+            detail += f" end={body.end}"
+        if body.risk_overrides is not None:
+            detail += f" risk_overrides={body.risk_overrides.model_dump(exclude_none=True)}"
     if body.job == "robustness":
         if body.params is not None:
             detail += f" params={body.params}"

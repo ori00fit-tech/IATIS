@@ -278,6 +278,113 @@ def test_run_backtest_attaches_real_decision_snapshot_to_every_trade():
             assert {"engine", "bias", "score", "reasons"}.issubset(e.keys())
 
 
+def test_walk_forward_engine_overrides_warmup_bars_no_collision():
+    """Regression (Backtesting Lab Pro Phase A, 2026-07-27): run_walk_forward
+    used to build BacktestConfig.from_profile(symbol, warmup_bars=wf_config.
+    warmup_bars, **wf_config.engine_overrides) — if engine_overrides ALSO
+    contains a "warmup_bars" key (which the new Risk & Range step produces),
+    this raised TypeError: got multiple values for keyword argument
+    'warmup_bars'. An explicit engine_overrides warmup_bars must win over
+    WalkForwardConfig's own warmup_bars field, not collide with it."""
+    from backtest.walk_forward import run_walk_forward
+
+    df = _ohlcv(3000, trend=0.10)
+    result = run_walk_forward(
+        "EURUSD", df,
+        WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1,
+                           warmup_bars=250, engine_overrides={"warmup_bars": 400}),
+    )
+    assert len(result.windows) == 3
+    # bars = window length - wf_config.warmup_bars (250, the window-embargo
+    # sizing field) — this is unaffected by the BacktestConfig-level override,
+    # which only controls how many bars the ENGINE itself treats as warmup.
+    assert all(w.bars > 0 for w in result.windows)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase A — CLI wiring for per-run risk/cost overrides
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_runner_cli_wires_risk_overrides(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path),
+         "--min-rr", "5.0", "--warmup-bars", "300"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].engine_overrides == {"min_rr": 5.0, "warmup_bars": 300}
+
+
+def test_walk_forward_cli_wires_risk_overrides(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        captured["start"] = start
+        captured["end"] = end
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["walk_forward.py", "--symbols", "EURUSD", "--min-rr", "5.0",
+         "--warmup-bars", "300", "--start", "2024-01-01", "--end", "2024-06-01"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    # warmup_bars is its own dedicated WalkForwardConfig field, NOT folded
+    # into engine_overrides (see main()'s own comment) — this is the
+    # regression proof that the two paths don't collide at the CLI layer.
+    assert captured["wf_config"].warmup_bars == 300
+    assert captured["wf_config"].engine_overrides == {"min_rr": 5.0}
+    assert captured["start"] == "2024-01-01"
+    assert captured["end"] == "2024-06-01"
+
+
+def test_engine_overrides_actually_change_backtest_output(tmp_path):
+    """The authoritative proof (Backtesting Lab Pro Phase A) that a risk
+    override isn't silently accepted-and-ignored: running the SAME dataset
+    with a starkly different min_rr/risk_per_trade must produce a
+    genuinely different trade count and position sizing."""
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    default_results = run_all(RunnerConfig(
+        symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False,
+    ))
+    overridden_results = run_all(RunnerConfig(
+        symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False,
+        engine_overrides={"risk_per_trade": 0.20, "min_rr": 10.0},
+    ))
+
+    assert "EURUSD" in default_results and "EURUSD" in overridden_results
+    default_trades = default_results["EURUSD"].trade_records
+    overridden_trades = overridden_results["EURUSD"].trade_records
+
+    # A min_rr=10.0 bar is far stricter than the production 2.0 default —
+    # must sharply cut (or zero out) the number of qualifying trades.
+    assert len(overridden_trades) < len(default_trades)
+    if default_trades and overridden_trades:
+        # risk_per_trade=0.20 vs the 0.01 default should scale position
+        # sizing roughly 20x (same starting balance/stop distance regime).
+        avg_default_size = sum(t.position_size for t in default_trades) / len(default_trades)
+        avg_overridden_size = sum(t.position_size for t in overridden_trades) / len(overridden_trades)
+        assert avg_overridden_size > avg_default_size * 5
+
+
 def test_from_profile_uses_real_spread_as_commission():
     """Backtests must cost trades at the measured broker spread by
     default, not the old flat 0.5 pip — otherwise PF for wide-spread

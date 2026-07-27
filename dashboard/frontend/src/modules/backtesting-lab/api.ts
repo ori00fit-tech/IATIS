@@ -21,8 +21,8 @@ import {
   type AiResearchAnswer,
 } from '../research-backtests/api'
 import {
-  getJobCatalog, runJob, getJobDetail, runRobustnessJob,
-  type JobCatalogResponse, type JobDescriptor, type JobSummary, type JobDetail,
+  getJobCatalog, runJob, getJobDetail, runRobustnessJob, getJobList,
+  type JobCatalogResponse, type JobDescriptor, type JobSummary, type JobDetail, type JobListResponse,
 } from '../experiment-runner/api'
 
 // Backtesting Lab (Research Workbench, 2026-07-25) reuses the SAME
@@ -42,6 +42,7 @@ export {
   runJob,
   runRobustnessJob,
   getJobDetail,
+  getJobList,
 }
 export type {
   SymbolsResponse,
@@ -60,6 +61,7 @@ export type {
   JobDescriptor,
   JobSummary,
   JobDetail,
+  JobListResponse,
 }
 
 // Dataset Explorer (Phase 3 backend, 2026-07-24) — local historical CSVs

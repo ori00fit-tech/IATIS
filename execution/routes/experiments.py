@@ -272,6 +272,19 @@ class _RiskOverrides(BaseModel):
     step_bars: int | None = None
 
 
+class _IndicatorFilterSpec(BaseModel):
+    """One ad-hoc indicator filter/confirmation/score-weight spec
+    (Backtesting Lab Pro Phase D, 2026-07-27). Validated server-side
+    against confluence.indicator_filters.INDICATOR_KEYS/FILTER_MODES —
+    never written to config.yaml/config/engines.yaml, forwarded as a
+    single JSON-encoded --indicators-json CLI argument (structured data
+    doesn't fit the nargs="+" flag pattern used for timeframes/engines)."""
+    name: str
+    mode: str
+    params: dict[str, float] = {}
+    weight: float = 0.0
+
+
 class _RunJobRequest(BaseModel):
     job: str
     # backtest only: symbols validated against the configured universe.
@@ -298,6 +311,21 @@ class _RunJobRequest(BaseModel):
     # (run_backtest's engine_config keyword, not BacktestConfig) — see
     # backtesting.backtest_engine.build_engine_config_override.
     timeframes: list[str] | None = None
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection: an explicit, complete list of which engines are ON for
+    # this run (not a partial patch — absent = production config/
+    # engines.yaml enabled set, unchanged). No registration gate, per an
+    # explicit operator decision — but every such result must be labeled
+    # exploratory (frontend concern) and this can never write back to
+    # config/engines.yaml or registry.json (backend guarantee: it only
+    # ever builds an in-memory dict, see build_engine_config_override).
+    engines: list[str] | None = None
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run
+    # indicator filter/confirmation/score-weight specs. See
+    # confluence.indicator_filters's module docstring: an indicator can
+    # only veto/nudge a decision the engine vote already produced, never
+    # set direction itself. Ephemeral — see _indicators_argv below.
+    indicators: list[_IndicatorFilterSpec] | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -363,6 +391,62 @@ def _risk_override_argv(ro: "_RiskOverrides") -> list[str]:
             )
         argv += [f"--{field_name.replace('_', '-')}", str(value)]
     return argv
+
+
+# Bounds for indicator params (Backtesting Lab Pro Phase D, 2026-07-27) —
+# sanity floors/ceilings mirroring _RISK_OVERRIDE_BOUNDS's own convention,
+# not measured limits. Applies to any param key across all 5 indicators;
+# an indicator that doesn't use a given key simply never reads it (see
+# confluence/indicator_filters.py's per-indicator param defaults).
+_INDICATOR_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "period": (2, 500), "fast": (2, 500), "slow": (2, 500), "signal": (2, 500),
+    "buy_above": (0, 100), "sell_below": (0, 100), "min_trend": (0, 100),
+    "min_atr": (0, 1_000_000_000.0), "max_atr": (0, 1_000_000_000.0),
+}
+
+
+def _indicators_argv(specs: list[_IndicatorFilterSpec]) -> list[str]:
+    """Backtesting Lab Pro Phase D — validate every indicator spec
+    against confluence.indicator_filters.INDICATOR_KEYS/FILTER_MODES,
+    reject duplicates and out-of-bounds params/weight, then JSON-encode
+    the whole list as a single --indicators-json CLI argument (structured
+    per-indicator data doesn't fit the nargs="+" flag pattern used for
+    timeframes/engines)."""
+    import json as _json
+    from confluence.indicator_filters import FILTER_MODES, INDICATOR_KEYS
+
+    if len(specs) > len(INDICATOR_KEYS):
+        raise HTTPException(status_code=400, detail=f"indicators: at most {len(INDICATOR_KEYS)} entries.")
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name not in INDICATOR_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown indicator '{spec.name}' — choose from {sorted(INDICATOR_KEYS)}.",
+            )
+        if spec.name in seen:
+            raise HTTPException(status_code=400, detail=f"Duplicate indicator '{spec.name}'.")
+        seen.add(spec.name)
+        if spec.mode not in FILTER_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown mode '{spec.mode}' for '{spec.name}' — choose from {sorted(FILTER_MODES)}.",
+            )
+        if not (0.0 <= spec.weight <= 100.0):
+            raise HTTPException(status_code=400, detail=f"indicators.{spec.name}.weight must be 0-100.")
+        for key, value in spec.params.items():
+            bounds = _INDICATOR_PARAM_BOUNDS.get(key)
+            if bounds is None:
+                raise HTTPException(status_code=400, detail=f"Unknown indicator param '{key}' for '{spec.name}'.")
+            lo, hi = bounds
+            if not (lo <= value <= hi):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"indicators.{spec.name}.{key} must be between {lo} and {hi}.",
+                )
+        if "min_atr" in spec.params and "max_atr" in spec.params and spec.params["min_atr"] > spec.params["max_atr"]:
+            raise HTTPException(status_code=400, detail=f"indicators.{spec.name}: min_atr must be <= max_atr.")
+    return ["--indicators-json", _json.dumps([s.model_dump() for s in specs])]
 
 
 @router.get("/experiments/jobs")
@@ -439,11 +523,31 @@ async def experiments_run(
                     detail=f"Unknown timeframe(s) {unknown_tf} — choose from {sorted(SUPPORTED_TIMEFRAMES)}.",
                 )
             argv += ["--timeframes", *body.timeframes]
+        if body.engines is not None:
+            from backtesting.backtest_engine import ENGINE_KEYS
+
+            if not (1 <= len(body.engines) <= len(ENGINE_KEYS)):
+                raise HTTPException(
+                    status_code=400, detail=f"engines: 1-{len(ENGINE_KEYS)} values per run.",
+                )
+            unknown_engines = sorted(set(body.engines) - set(ENGINE_KEYS))
+            if unknown_engines:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown engine(s) {unknown_engines} — choose from {sorted(ENGINE_KEYS)}.",
+                )
+            argv += ["--engines", *body.engines]
+        if body.indicators is not None:
+            argv += _indicators_argv(body.indicators)
     elif (
         body.start is not None or body.end is not None
         or body.risk_overrides is not None or body.timeframes is not None
+        or body.engines is not None or body.indicators is not None
     ):
-        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no start/end/risk_overrides/timeframes.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{body.job}' takes no start/end/risk_overrides/timeframes/engines/indicators.",
+        )
 
     if body.job == "robustness":
         from backtest.robustness import SWEEP_PARAMS
@@ -492,6 +596,10 @@ async def experiments_run(
             detail += f" risk_overrides={body.risk_overrides.model_dump(exclude_none=True)}"
         if body.timeframes is not None:
             detail += f" timeframes={body.timeframes}"
+        if body.engines is not None:
+            detail += f" engines={body.engines}"
+        if body.indicators is not None:
+            detail += f" indicators={[s.model_dump() for s in body.indicators]}"
     if body.job == "robustness":
         if body.params is not None:
             detail += f" params={body.params}"

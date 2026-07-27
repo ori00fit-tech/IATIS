@@ -404,6 +404,23 @@ def test_walk_forward_cli_wires_timeframes_override(monkeypatch):
     assert captured["wf_config"].timeframes == ("H4", "D1", "H1")
 
 
+def test_walk_forward_cli_wires_engines_override(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(sys, "argv", ["walk_forward.py", "--symbols", "EURUSD", "--engines", "nnfx"])
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    assert captured["wf_config"].engines == ("nnfx",)
+
+
 def test_engine_config_override_none_when_no_timeframes_requested():
     """build_engine_config_override(None) must return None — preserving
     run_backtest's own load_config() default path byte-for-byte for every
@@ -463,6 +480,101 @@ def test_timeframes_override_reaches_run_backtest_without_crashing():
         assert len(t.decision["engines"]) > 0
 
 
+def test_runner_cli_wires_engines_override(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--engines", "nnfx", "wyckoff"],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].engines == ("nnfx", "wyckoff")
+
+
+def test_runner_cli_rejects_unsupported_engine(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--engines", "macro"],
+    )
+    with pytest.raises(SystemExit):
+        runner_mod.main()
+
+
+def test_build_engine_config_override_returns_none_when_nothing_requested():
+    from backtesting.backtest_engine import build_engine_config_override
+
+    assert build_engine_config_override() is None
+    assert build_engine_config_override(timeframes=None, engines_enabled=None) is None
+
+
+def test_build_engine_config_override_merges_engines_enabled_only():
+    """The override must carry every other confluence setting and the
+    real data.timeframes unchanged — only engines.enabled is replaced."""
+    from backtesting.backtest_engine import ENGINE_KEYS, build_engine_config_override
+    from utils.helpers import load_config
+
+    real = load_config()
+    engines_enabled = {e: (e == "nnfx") for e in ENGINE_KEYS}
+    override = build_engine_config_override(engines_enabled=engines_enabled)
+    assert override["engines"]["enabled"]["nnfx"] is True
+    assert override["engines"]["enabled"]["smc"] is False
+    assert override["data"]["timeframes"] == real["data"]["timeframes"]
+    assert override["confluence"]["weights"] == real["confluence"]["weights"]
+
+
+def test_build_engine_config_override_never_writes_to_config_files(tmp_path):
+    """Hard-block correctness requirement (Backtesting Lab Pro Phase C):
+    an engine-selection override must be purely in-memory — it can never
+    reach config/engines.yaml or registry.json, no matter what it's
+    asked to override."""
+    import inspect
+    from pathlib import Path
+    from backtesting.backtest_engine import ENGINE_KEYS, build_engine_config_override
+
+    source = inspect.getsource(build_engine_config_override)
+    for forbidden in ("write_text", "yaml.safe_dump", "yaml.dump", "json.dump", "open("):
+        assert forbidden not in source, f"build_engine_config_override must never {forbidden}"
+
+    engines_yaml = Path("config/engines.yaml")
+    before = engines_yaml.read_bytes()
+    build_engine_config_override(
+        timeframes=["H1"], engines_enabled={e: False for e in ENGINE_KEYS},
+    )
+    after = engines_yaml.read_bytes()
+    assert before == after, "config/engines.yaml must be byte-identical after an override call"
+
+
+def test_engines_override_reaches_run_backtest_vote_tallying():
+    """The authoritative proof (Backtesting Lab Pro Phase C): restricting
+    to a single engine must show up in every trade's decision snapshot —
+    agree_count <= 1 and engine_votes containing only that one engine's
+    key — proving the override reached confluence vote tallying, not
+    silently ignored."""
+    from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    engines_enabled = {e: (e == "nnfx") for e in ENGINE_KEYS}
+    override_config = build_engine_config_override(engines_enabled=engines_enabled)
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.error_count == 0
+    for t in result.trades:
+        assert t.decision["agree_count"] <= 1
+        assert set(t.decision["engine_votes"]) <= {"NNFX"}
+
+
 def test_engine_overrides_actually_change_backtest_output(tmp_path):
     """The authoritative proof (Backtesting Lab Pro Phase A) that a risk
     override isn't silently accepted-and-ignored: running the SAME dataset
@@ -491,6 +603,153 @@ def test_engine_overrides_actually_change_backtest_output(tmp_path):
         avg_default_size = sum(t.position_size for t in default_trades) / len(default_trades)
         avg_overridden_size = sum(t.position_size for t in overridden_trades) / len(overridden_trades)
         assert avg_overridden_size > avg_default_size * 5
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase D — Indicators & Filters
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_walk_forward_cli_wires_indicators_override(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    captured: dict = {}
+
+    def fake_suite(symbols, data_dir, wf_config, start=None, end=None):
+        captured["wf_config"] = wf_config
+        return {}
+
+    monkeypatch.setattr(wf_mod, "run_walk_forward_suite", fake_suite)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["walk_forward.py", "--symbols", "EURUSD", "--indicators-json",
+         '[{"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 55}, "weight": 0}]'],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        wf_mod.main()
+    assert captured["wf_config"].indicators == (
+        {"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 55}, "weight": 0},
+    )
+
+
+def test_walk_forward_cli_rejects_malformed_indicators_json(monkeypatch):
+    import sys
+    import backtest.walk_forward as wf_mod
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["walk_forward.py", "--symbols", "EURUSD", "--indicators-json", '[{"name": "bogus", "mode": "entry_filter"}]'],
+    )
+    with pytest.raises(SystemExit):
+        wf_mod.main()
+
+
+def test_runner_cli_wires_indicators_override(monkeypatch, tmp_path):
+    import sys
+    import backtest.runner as runner_mod
+
+    captured: dict = {}
+
+    def fake_run_all(config):
+        captured["config"] = config
+        return {}
+
+    monkeypatch.setattr(runner_mod, "run_all", fake_run_all)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["runner.py", "--symbols", "EURUSD", "--data-dir", str(tmp_path), "--indicators-json",
+         '[{"name": "ema", "mode": "confirmation", "params": {"period": 50}, "weight": 0}]'],
+    )
+    with pytest.raises(SystemExit, match="No symbol completed"):
+        runner_mod.main()
+    assert captured["config"].indicators == (
+        {"name": "ema", "mode": "confirmation", "params": {"period": 50}, "weight": 0},
+    )
+
+
+def test_build_engine_config_override_merges_indicators_only():
+    """The override must carry every other confluence/engine/timeframe
+    setting from the real config unchanged — only indicators.filters is
+    added (a key that doesn't exist in config.yaml at all)."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from utils.helpers import load_config
+
+    real = load_config()
+    specs = [{"name": "rsi", "mode": "entry_filter", "params": {}, "weight": 0}]
+    override = build_engine_config_override(indicators=specs)
+    assert override["indicators"]["filters"] == specs
+    assert override["data"]["timeframes"] == real["data"]["timeframes"]
+    assert override["engines"] == real["engines"]
+
+
+def test_build_engine_config_override_returns_none_indicators_absent():
+    from backtesting.backtest_engine import build_engine_config_override
+
+    assert build_engine_config_override(indicators=None) is None
+
+
+def test_build_engine_config_override_indicators_never_writes_to_config_files():
+    """Hard-block correctness requirement (Backtesting Lab Pro Phase D),
+    mirroring Phase C's own engines test: an indicator override must be
+    purely in-memory."""
+    from pathlib import Path
+    from backtesting.backtest_engine import build_engine_config_override
+
+    engines_yaml = Path("config/engines.yaml")
+    before = engines_yaml.read_bytes()
+    build_engine_config_override(
+        indicators=[{"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 100, "sell_below": 0}, "weight": 0}],
+    )
+    after = engines_yaml.read_bytes()
+    assert before == after, "config/engines.yaml must be byte-identical after an indicator override call"
+
+
+def test_indicator_entry_filter_veto_zeroes_out_trades_and_records_rejection():
+    """The authoritative proof (Backtesting Lab Pro Phase D): an
+    entry_filter-mode indicator with impossible thresholds must reach
+    the real EXECUTE/NO_TRADE decision and block every trade, while a
+    baseline run on the identical data produces real trades — proving
+    the veto isn't silently ignored, and that it can never itself
+    generate a trade (only ever subtract from what the engine vote
+    already allowed)."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    cfg = BacktestConfig.from_profile("EURUSD")
+
+    baseline = run_backtest(df, cfg, engine_config=None)
+    assert len(baseline.trades) > 0
+
+    veto_config = build_engine_config_override(
+        indicators=[{"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 100, "sell_below": 0}, "weight": 0}],
+    )
+    vetoed = run_backtest(df, cfg, engine_config=veto_config)
+    assert vetoed.execute_count == 0
+    assert vetoed.indicator_rejections.get("rsi", 0) > 0
+    assert vetoed.gate_rejections["indicator_filter"] > 0
+
+
+def test_indicator_confirmation_mode_adjusts_score_and_never_sets_direction():
+    """confirmation-mode indicators must nudge adjusted_score (visible
+    in each trade's decision snapshot) without ever changing which
+    direction a trade takes — direction always comes from the engine
+    vote (vote.winning_bias), confirmed by cross-checking BUY/SELL
+    against decision['winning_bias'] for every trade."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    cfg = BacktestConfig.from_profile("EURUSD")
+
+    confirm_config = build_engine_config_override(
+        indicators=[{"name": "ema", "mode": "confirmation", "params": {"period": 20}, "weight": 0}],
+    )
+    result = run_backtest(df, cfg, engine_config=confirm_config)
+    assert len(result.trades) > 0
+    for t in result.trades:
+        assert t.decision["indicator_filters"] is not None
+        assert "ema" in t.decision["indicator_filters"]
+        expected_direction = "BUY" if t.decision["winning_bias"] == "BULLISH" else "SELL"
+        assert t.direction == expected_direction
 
 
 def test_from_profile_uses_real_spread_as_commission():

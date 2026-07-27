@@ -521,6 +521,24 @@ function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onClose: ()
         ) : (
           <Empty>No engine-vote snapshot for this trade (predates decision capture, or built outside run_backtest).</Empty>
         )}
+        {trade.indicator_filters && Object.keys(trade.indicator_filters).length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-muted uppercase text-[0.7em] tracking-[1px]">Indicator Filters</div>
+            {Object.entries(trade.indicator_filters).map(([name, f]) => (
+              <div key={name} className="flex items-center gap-2 flex-wrap">
+                <span className="w-20 shrink-0 font-bold text-accent">{name.toUpperCase()}</span>
+                <Badge tone="neutral">{f.mode.replace('_', ' ')}</Badge>
+                <span className="tabular-nums">{f.value != null ? f.value.toFixed(2) : '—'}</span>
+                <Badge tone={f.aligned ? 'exec' : 'no-trade'}>{f.aligned ? 'aligned' : 'not aligned'}</Badge>
+                {f.contribution !== 0 && (
+                  <span className="text-muted text-[0.82em]">
+                    {f.contribution > 0 ? '+' : ''}{f.contribution.toFixed(1)} score
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Panel>
   )

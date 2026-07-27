@@ -43,7 +43,7 @@ from pathlib import Path
 
 from backtest.metrics import calculate_metrics, json_safe
 from backtest.runner import load_symbol_data, trade_to_record
-from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,6 +72,14 @@ class RobustnessConfig:
     # data.timeframes override (decision TF first). None = production
     # config.yaml timeframes, unchanged.
     timeframes: tuple[str, ...] | None = None
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection (explicit complete list). None = production config/
+    # engines.yaml enabled set, unchanged.
+    engines: tuple[str, ...] | None = None
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run
+    # indicator filter/confirmation/score-weight specs. None = no
+    # indicator layer, unchanged from every prior phase's behavior.
+    indicators: tuple[dict, ...] | None = None
 
     def __post_init__(self) -> None:
         if 1.0 not in self.multipliers:
@@ -146,7 +154,11 @@ def run_param_sweep(
     baseline_cfg = BacktestConfig.from_profile(symbol, **rc.engine_overrides)
     baseline_value = getattr(baseline_cfg, param)
     # Computed once per sweep — identical for every point in it.
-    engine_config = build_engine_config_override(list(rc.timeframes) if rc.timeframes else None)
+    engine_config = build_engine_config_override(
+        timeframes=list(rc.timeframes) if rc.timeframes else None,
+        engines_enabled={e: (e in rc.engines) for e in ENGINE_KEYS} if rc.engines else None,
+        indicators=list(rc.indicators) if rc.indicators else None,
+    )
 
     points: list[SweepPoint] = []
     baseline_pf = 0.0
@@ -262,11 +274,25 @@ def main() -> None:
     # data.timeframes override (decision TF first).
     from core.timeframe_sync import SUPPORTED_TIMEFRAMES
     parser.add_argument("--timeframes", nargs="+", choices=SUPPORTED_TIMEFRAMES, default=None)
+    # Backtesting Lab Pro Phase C (2026-07-27) — ad-hoc per-run engine
+    # selection (explicit complete list of which engines run).
+    parser.add_argument("--engines", nargs="+", choices=ENGINE_KEYS, default=None)
+    # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
+    # filter/confirmation/score-weight specs (JSON-encoded).
+    parser.add_argument("--indicators-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
         f: getattr(args, f) for f in RISK_OVERRIDE_FIELDS if getattr(args, f) is not None
     }
+
+    indicators = None
+    if args.indicators_json:
+        from confluence.indicator_filters import parse_indicators_json
+        try:
+            indicators = parse_indicators_json(args.indicators_json)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     results = run_robustness_suite(
         symbols=args.symbols,
@@ -277,6 +303,8 @@ def main() -> None:
             min_trades=args.min_trades,
             engine_overrides=engine_overrides,
             timeframes=tuple(args.timeframes) if args.timeframes else None,
+            engines=tuple(args.engines) if args.engines else None,
+            indicators=indicators,
         ),
         start=args.start, end=args.end,
     )

@@ -1240,6 +1240,228 @@ def test_experiments_run_rejects_unsupported_timeframe(client):
     assert "Unknown timeframe" in r.json()["detail"]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase C — engine selection override plumbing
+# ─────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_forwards_engines(client, monkeypatch, job):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, job: ["echo", job]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": job, "symbols": ["eurusd"], "engines": ["nnfx", "wyckoff"]},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", job, "--symbols", "EURUSD", "--engines", "nnfx", "wyckoff"]
+
+
+def test_experiments_run_rejects_engines_for_non_parameterized_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "verify_data_integrity", "engines": ["nnfx"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no start/end/risk_overrides/timeframes/engines" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_empty_engines(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": []},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "values per run" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unknown_engine(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": ["not_a_real_engine"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown engine" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_macro_as_engine(client):
+    """"macro" has a confluence weight but no runnable engine class in
+    the backtest path at all — must be rejected as unknown, not silently
+    accepted as a no-op."""
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "engines": ["macro"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown engine" in r.json()["detail"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Backtesting Lab Pro Phase D — indicator filter/confirmation/score-weight
+# override plumbing
+# ─────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("job", ["backtest", "walk_forward", "robustness"])
+def test_experiments_run_forwards_indicators(client, monkeypatch, job):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, job: ["echo", job]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": job, "symbols": ["eurusd"],
+            "indicators": [{"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 55}, "weight": 0}],
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv[:4] == ["echo", job, "--symbols", "EURUSD"]
+    assert "--indicators-json" in _FakeProc.captured_argv
+    import json as _json
+    idx = _FakeProc.captured_argv.index("--indicators-json")
+    assert _json.loads(_FakeProc.captured_argv[idx + 1]) == [
+        {"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 55.0}, "weight": 0.0}
+    ]
+
+
+def test_experiments_run_rejects_indicators_for_non_parameterized_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "verify_data_integrity", "indicators": [{"name": "rsi", "mode": "entry_filter"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no start/end/risk_overrides/timeframes/engines/indicators" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_too_many_indicators(client):
+    from confluence.indicator_filters import INDICATOR_KEYS
+
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": "backtest", "symbols": ["EURUSD"],
+            "indicators": [{"name": k, "mode": "entry_filter"} for k in INDICATOR_KEYS] + [{"name": "rsi", "mode": "confirmation"}],
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "at most" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unknown_indicator_name(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "indicators": [{"name": "stochastic", "mode": "entry_filter"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown indicator" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unknown_indicator_mode(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "indicators": [{"name": "rsi", "mode": "always_trade"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown mode" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_duplicate_indicator(client):
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": "backtest", "symbols": ["EURUSD"],
+            "indicators": [{"name": "rsi", "mode": "entry_filter"}, {"name": "rsi", "mode": "confirmation"}],
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Duplicate indicator" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_indicator_weight_out_of_bounds(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "indicators": [{"name": "rsi", "mode": "score_weight", "weight": 150}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "weight must be 0-100" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_indicator_param_out_of_bounds(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "indicators": [{"name": "rsi", "mode": "entry_filter", "params": {"buy_above": 500}}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "must be between" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_unknown_indicator_param_key(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "indicators": [{"name": "rsi", "mode": "entry_filter", "params": {"bogus_key": 1}}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown indicator param" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_min_atr_greater_than_max_atr(client):
+    r = client.post(
+        "/experiments/run",
+        json={
+            "job": "backtest", "symbols": ["EURUSD"],
+            "indicators": [{"name": "atr", "mode": "entry_filter", "params": {"min_atr": 10, "max_atr": 1}}],
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "min_atr must be <= max_atr" in r.json()["detail"]
+
+
 def test_experiments_status_unknown_job_404s(client):
     assert client.get("/experiments/nonexistent-job-id", headers=HDR).status_code == 404
 

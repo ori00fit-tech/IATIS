@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { DateRangeState, RiskOverridesState } from './BacktestingLab'
+import type { DateRangeState, IndicatorFilterState, RiskOverridesState } from './BacktestingLab'
 
 /**
  * Named, reusable Backtesting Lab wizard configurations (Phase 4b,
@@ -34,6 +34,14 @@ export interface WizardPreset {
   // pre-existing-preset backward-compat reasoning. null/absent =
   // production config.yaml order.
   timeframes?: string[] | null
+  // Backtesting Lab Pro Phase C (2026-07-27) — optional, same
+  // pre-existing-preset backward-compat reasoning. null/absent =
+  // production config/engines.yaml enabled set.
+  engines?: string[] | null
+  // Backtesting Lab Pro Phase D (2026-07-27) — optional, same
+  // pre-existing-preset backward-compat reasoning. null/absent = no
+  // indicator filter layer.
+  indicators?: IndicatorFilterState[] | null
   savedAt: string
 }
 

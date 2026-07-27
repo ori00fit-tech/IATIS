@@ -83,6 +83,17 @@ export interface ChartEngineVote {
   reasons: string[]
 }
 
+// Backtesting Lab Pro Phase D (2026-07-27) — per-indicator filter/
+// confirmation/score-weight involvement at entry, when an ad-hoc
+// indicator override was configured for this run. null for trades from
+// a run with no indicator override (every trade before this phase).
+export interface ChartIndicatorFilter {
+  mode: string
+  value: number | null
+  aligned: boolean
+  contribution: number
+}
+
 export interface ChartTrade {
   trade_id: string
   direction: string
@@ -98,6 +109,7 @@ export interface ChartTrade {
   regime: string | null
   cf_score: number | null
   engine_votes: Record<string, ChartEngineVote> | null
+  indicator_filters: Record<string, ChartIndicatorFilter> | null
 }
 
 export interface ChartCandle {

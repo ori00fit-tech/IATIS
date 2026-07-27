@@ -20,12 +20,14 @@ import {
   runJob,
   runRobustnessJob,
   getJobDetail,
+  getJobList,
   type DatasetEntry,
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
   type JobDescriptor,
   type JobDetail,
+  type JobSummary,
 } from './api'
 
 const POLL_MS = 60_000
@@ -86,6 +88,41 @@ export const SUPPORTED_TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'] as const
 // selection; reordering/deselecting only affects this one ad-hoc run.
 export const DEFAULT_TIMEFRAMES_ORDER = ['H4', 'D1', 'H1'] as const
 
+// Backtesting Lab Pro Phase C (2026-07-27) — the 9 engines run_backtest
+// can actually execute (mirrors backtesting.backtest_engine.ENGINE_KEYS).
+// Deliberately excludes "macro": it has a confluence weight but no
+// runnable engine class in the backtest path — toggling it would be a
+// silent no-op, so it's never offered as a choice here.
+export const ENGINE_KEYS = [
+  'smc', 'price_action', 'ict', 'nnfx', 'quant', 'wyckoff',
+  'divergence', 'market_structure', 'sentiment',
+] as const
+
+// Backtesting Lab Pro Phase D (2026-07-27) — mirrors
+// confluence.indicator_filters.INDICATOR_KEYS/FILTER_MODES exactly.
+// Non-negotiable design constraint: an indicator can only veto
+// (entry_filter), nudge the score (confirmation/score_weight) — never
+// set a trade's direction. The EXECUTE/NO_TRADE decision always
+// originates from the engine vote (see StrategyStep above), unchanged
+// by anything configured here.
+export const INDICATOR_KEYS = ['rsi', 'macd', 'ema', 'adx', 'atr'] as const
+export const FILTER_MODES = ['disabled', 'entry_filter', 'confirmation', 'score_weight'] as const
+
+export interface IndicatorFilterState {
+  name: (typeof INDICATOR_KEYS)[number]
+  mode: (typeof FILTER_MODES)[number]
+  params: Record<string, number>
+  weight: number
+}
+
+export const DEFAULT_INDICATOR_PARAMS: Record<(typeof INDICATOR_KEYS)[number], Record<string, number>> = {
+  rsi: { period: 14, buy_above: 55, sell_below: 45 },
+  macd: { fast: 12, slow: 26, signal: 9 },
+  ema: { period: 50 },
+  adx: { period: 14, min_trend: 20 },
+  atr: { period: 14, min_atr: 0, max_atr: 999999 },
+}
+
 export interface WizardState {
   selectedSymbols: string[]
   jobId: string // 'backtest' | 'walk_forward' | 'robustness' | 'hypothesis_H0xx'
@@ -102,6 +139,15 @@ export interface WizardState {
   // config.yaml order [H4, D1, H1], unchanged. Non-null = this run's
   // decision timeframe first, then confirmation timeframe(s).
   timeframes: string[] | null
+  // Backtesting Lab Pro Phase C (2026-07-27) — null = production
+  // config/engines.yaml enabled set, unchanged. Non-null = the explicit,
+  // complete list of engines ON for this run (not a partial patch).
+  engines: string[] | null
+  // Backtesting Lab Pro Phase D (2026-07-27) — null = no indicator
+  // filter/confirmation/score-weight layer, unchanged from every prior
+  // phase's behavior. Non-null = the explicit, complete list of
+  // non-disabled indicator specs for this run.
+  indicators: IndicatorFilterState[] | null
 }
 
 function toApiRiskOverrides(r: RiskOverridesState) {
@@ -498,58 +544,208 @@ function TimeframesStep({ state, setState }: { state: WizardState; setState: (s:
 }
 
 // ── Step 5: Strategy (Engine Selector, read-only) ───────────────────────
-function StrategyStep() {
+function StrategyStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const engines = useApiQuery(['research-engines'], getResearchEngines, POLL_MS, markUnauthenticated)
 
+  // Only render toggles for engines run_backtest can actually execute —
+  // "macro" (in the fetched data, has a confluence weight) is silently
+  // excluded since toggling it would be a no-op (see ENGINE_KEYS comment).
+  const toggleable = (engines.data?.engines ?? []).filter(
+    (e): e is EngineEntry & { name: (typeof ENGINE_KEYS)[number] } =>
+      (ENGINE_KEYS as readonly string[]).includes(e.name),
+  )
+
+  const isChecked = (name: string) =>
+    state.engines !== null ? state.engines.includes(name) : (toggleable.find((e) => e.name === name)?.enabled ?? false)
+
+  const toggle = (name: string) => {
+    const current = state.engines ?? toggleable.filter((e) => e.enabled).map((e) => e.name)
+    const next = current.includes(name) ? current.filter((e) => e !== name) : [...current, name]
+    setState({ ...state, engines: next })
+  }
+  const resetToProduction = () => setState({ ...state, engines: null })
+
   return (
-    <Panel title="Strategy" right="read-only — a new hypothesis is required to change engine activation or weights">
+    <Panel title="Strategy" right="ad-hoc, this run only — never written to config/engines.yaml">
       <div className="p-4 flex flex-col gap-3">
+        <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+          Production enabled set checked by default — click to toggle for this run only. "frozen" marks the 4
+          live-production engines, but every engine here is toggleable for ad-hoc research; a real hypothesis
+          registration is still required before any change here could ever inform production.
+        </div>
         <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
-          {engines.data?.engines.map((e: EngineEntry) => (
-            <div
-              key={e.name}
-              className={`rounded-lg border px-3.5 py-3 flex flex-col gap-1.5 ${
-                e.enabled ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40 opacity-60'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-text">{e.name}</span>
-                {e.enabled ? <Badge tone="exec">ON</Badge> : <Badge tone="neutral">OFF</Badge>}
-              </div>
-              <div className="flex items-center gap-2 text-[0.78em] text-muted">
-                <span>weight {e.weight != null ? e.weight.toFixed(4) : '—'}</span>
-                {e.prod4 && <Badge tone="good">frozen</Badge>}
-              </div>
-            </div>
-          ))}
+          {toggleable.map((e) => {
+            const checked = isChecked(e.name)
+            return (
+              <label
+                key={e.name}
+                className={`cursor-pointer rounded-lg border px-3.5 py-3 flex flex-col gap-1.5 ${
+                  checked ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40 opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2 font-bold text-text">
+                    <input type="checkbox" checked={checked} onChange={() => toggle(e.name)} />
+                    {e.name}
+                  </span>
+                  {checked ? <Badge tone="exec">ON</Badge> : <Badge tone="neutral">OFF</Badge>}
+                </div>
+                <div className="flex items-center gap-2 text-[0.78em] text-muted">
+                  <span>weight {e.weight != null ? e.weight.toFixed(4) : '—'}</span>
+                  {e.prod4 && <Badge tone="good">frozen</Badge>}
+                </div>
+              </label>
+            )
+          })}
         </div>
         {!engines.data && <Empty>{engines.loading ? 'Loading…' : 'No engine data'}</Empty>}
+        {state.engines !== null && (
+          <div className="flex items-center gap-3">
+            <span className="text-amber text-[0.78em]">
+              Non-default engine selection makes this run exploratory, not evidence — same status as any other
+              ad-hoc backtest.
+            </span>
+            <button onClick={resetToProduction} className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent/50">
+              Reset to production engines
+            </button>
+          </div>
+        )}
       </div>
     </Panel>
   )
 }
 
-// ── Step 6: Indicators (catalog, read-only) ─────────────────────────────
-function IndicatorsStep() {
+// ── Step 6: Indicators (catalog + Filters, Backtesting Lab Pro Phase D) ──
+function IndicatorsStep({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const { markUnauthenticated } = useAuth()
   const indicators = useApiQuery(['research-indicators'], getResearchIndicators, POLL_MS, markUnauthenticated)
 
+  const specs = state.indicators ?? []
+  const specFor = (name: (typeof INDICATOR_KEYS)[number]) => specs.find((s) => s.name === name)
+
+  const setMode = (name: (typeof INDICATOR_KEYS)[number], mode: (typeof FILTER_MODES)[number]) => {
+    const others = specs.filter((s) => s.name !== name)
+    if (mode === 'disabled') {
+      setState({ ...state, indicators: others.length > 0 ? others : null })
+      return
+    }
+    const existing = specFor(name)
+    const next: IndicatorFilterState = {
+      name, mode, params: existing?.params ?? { ...DEFAULT_INDICATOR_PARAMS[name] }, weight: existing?.weight ?? 0,
+    }
+    setState({ ...state, indicators: [...others, next] })
+  }
+
+  const setParam = (name: (typeof INDICATOR_KEYS)[number], key: string, value: number) => {
+    const current = specFor(name)
+    if (!current) return
+    setState({
+      ...state,
+      indicators: specs.map((s) => (s.name === name ? { ...s, params: { ...s.params, [key]: value } } : s)),
+    })
+  }
+
+  const setWeight = (name: (typeof INDICATOR_KEYS)[number], weight: number) => {
+    setState({ ...state, indicators: specs.map((s) => (s.name === name ? { ...s, weight } : s)) })
+  }
+
+  const resetAll = () => setState({ ...state, indicators: null })
+
   return (
-    <Panel title="Indicators" right="catalog of what each engine already computes — not an editor">
-      <div className="p-4 grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
-        {indicators.data?.indicators.map((i: IndicatorEntry) => (
-          <div key={i.id} className="rounded-lg border border-border bg-surface/40 px-3.5 py-3 flex flex-col gap-1">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-accent text-[0.88em]">{i.name}</span>
-              <Badge tone="neutral">{i.category}</Badge>
+    <div className="flex flex-col gap-4">
+      <Panel title="Indicators" right="catalog of what each engine already computes — not an editor">
+        <div className="p-4 grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
+          {indicators.data?.indicators.map((i: IndicatorEntry) => (
+            <div key={i.id} className="rounded-lg border border-border bg-surface/40 px-3.5 py-3 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-accent text-[0.88em]">{i.name}</span>
+                <Badge tone="neutral">{i.category}</Badge>
+              </div>
+              <span className="text-muted text-[0.78em]">{i.description}</span>
             </div>
-            <span className="text-muted text-[0.78em]">{i.description}</span>
+          ))}
+          {!indicators.data && <Empty>{indicators.loading ? 'Loading…' : 'No indicator catalog'}</Empty>}
+        </div>
+      </Panel>
+
+      <Panel title="Filters" right="ad-hoc, this run only — never written to config.yaml">
+        <div className="p-4 flex flex-col gap-3">
+          <div className="text-[0.82em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+            Indicators never open or close a trade on their own — they can only confirm, veto, or nudge the score of
+            a decision the engines (SMC/NNFX/Price Action/Wyckoff/…) already produced. Direction always comes from
+            the engine vote in the Strategy step.
           </div>
-        ))}
-        {!indicators.data && <Empty>{indicators.loading ? 'Loading…' : 'No indicator catalog'}</Empty>}
-      </div>
-    </Panel>
+          <div className="flex flex-col gap-2.5">
+            {INDICATOR_KEYS.map((name) => {
+              const spec = specFor(name)
+              const mode = spec?.mode ?? 'disabled'
+              const params = spec?.params ?? DEFAULT_INDICATOR_PARAMS[name]
+              return (
+                <div
+                  key={name}
+                  className={`rounded-lg border px-3.5 py-3 flex flex-col gap-2 ${
+                    mode !== 'disabled' ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-bold text-text uppercase w-14 shrink-0">{name}</span>
+                    <select
+                      value={mode}
+                      onChange={(e) => setMode(name, e.target.value as (typeof FILTER_MODES)[number])}
+                      className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.82em]"
+                    >
+                      {FILTER_MODES.map((m) => (
+                        <option key={m} value={m}>
+                          {m.replace('_', ' ')}
+                        </option>
+                      ))}
+                    </select>
+                    {mode !== 'disabled' &&
+                      Object.entries(DEFAULT_INDICATOR_PARAMS[name]).map(([key, def]) => (
+                        <label key={key} className="flex items-center gap-1.5 text-[0.78em] text-muted">
+                          {key}
+                          <input
+                            type="number"
+                            value={params[key] ?? def}
+                            onChange={(e) => setParam(name, key, Number(e.target.value))}
+                            placeholder={String(def)}
+                            className="w-20 px-1.5 py-1 bg-bg border border-border rounded text-text"
+                          />
+                        </label>
+                      ))}
+                    {mode === 'score_weight' && (
+                      <label className="flex items-center gap-1.5 text-[0.78em] text-muted">
+                        weight
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={spec?.weight ?? 0}
+                          onChange={(e) => setWeight(name, Number(e.target.value))}
+                          className="w-16 px-1.5 py-1 bg-bg border border-border rounded text-text"
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {state.indicators !== null && (
+            <div className="flex items-center gap-3">
+              <span className="text-amber text-[0.78em]">
+                Non-default indicator filters make this run exploratory, not evidence — same status as any other
+                ad-hoc backtest.
+              </span>
+              <button onClick={resetAll} className="px-2.5 py-1.5 text-[0.75em] rounded border border-border text-muted hover:text-accent hover:border-accent/50">
+                Reset — disable all filters
+              </button>
+            </div>
+          )}
+        </div>
+      </Panel>
+    </div>
   )
 }
 
@@ -681,6 +877,144 @@ function SweepConfig({
   )
 }
 
+// ── Review & Run — real, computed-from-real-data estimates only ─────────
+// No fabricated numbers: decision points come from actual on-disk dataset
+// row counts (the exact file run_backtest will read); runtime comes from
+// actual finished-job history on this server. RAM/CPU has no telemetry
+// anywhere in the codebase and is deliberately labeled "not measured"
+// rather than invented — same evidence discipline this whole app applies
+// to backtest results.
+function estimateDecisionPoints(
+  symbols: string[], datasets: DatasetEntry[], dateRange: DateRangeState,
+  warmupBars: number, stepBars: number,
+): { totalBars: number; decisionPoints: number; missing: string[] } {
+  let totalBars = 0
+  let decisionPoints = 0
+  const missing: string[] = []
+  for (const sym of symbols) {
+    const d = datasets.find((x) => x.symbol === sym && x.readable && x.rows)
+    if (!d || !d.rows) {
+      missing.push(sym)
+      continue
+    }
+    let rows = d.rows
+    if (dateRange.start && dateRange.end && d.start && d.end) {
+      const fileSpan = new Date(d.end).getTime() - new Date(d.start).getTime()
+      const wantStart = Math.max(new Date(dateRange.start).getTime(), new Date(d.start).getTime())
+      const wantEnd = Math.min(new Date(dateRange.end).getTime(), new Date(d.end).getTime())
+      if (fileSpan > 0) rows = Math.round(rows * (Math.max(0, wantEnd - wantStart) / fileSpan))
+    }
+    totalBars += rows
+    decisionPoints += Math.max(0, Math.floor((rows - warmupBars) / Math.max(1, stepBars)))
+  }
+  return { totalBars, decisionPoints, missing }
+}
+
+function recentRuntimeStats(jobs: JobSummary[], jobId: string): { medianMs: number; n: number } | null {
+  const durations = jobs
+    .filter((j) => j.job === jobId && j.status === 'finished' && j.started_at && j.finished_at)
+    .map((j) => new Date(j.finished_at!).getTime() - new Date(j.started_at!).getTime())
+    .sort((a, b) => a - b)
+  if (durations.length === 0) return null
+  return { medianMs: durations[Math.floor(durations.length / 2)], n: durations.length }
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
+}
+
+function ReviewRow({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="w-40 shrink-0 text-muted uppercase text-[0.7em] tracking-[1px] pt-0.5">{label}</span>
+      <span className={muted ? 'text-muted' : 'text-text'}>{value}</span>
+    </div>
+  )
+}
+
+function ReviewPanel({ state }: { state: WizardState }) {
+  const { markUnauthenticated } = useAuth()
+  const datasets = useApiQuery(['research-datasets'], getResearchDatasets, POLL_MS, markUnauthenticated)
+  const jobs = useApiQuery(['experiments-list'], getJobList, POLL_MS, markUnauthenticated)
+  const scenario = useApiQuery(['scenario-config'], getScenarioConfig, POLL_MS, markUnauthenticated)
+  const catalog = useApiQuery(['job-catalog'], getJobCatalog, POLL_MS, markUnauthenticated)
+  const research = useApiQuery(['research-registry'], getResearch, POLL_MS, markUnauthenticated)
+
+  const registryById = new Map((research.data?.hypotheses ?? []).map((h) => [h.id, h]))
+  let jobLabel = state.jobId
+  if (state.jobId === 'backtest') jobLabel = 'Standalone Backtest'
+  else if (state.jobId === 'walk_forward') jobLabel = 'Walk-Forward'
+  else if (state.jobId === 'robustness') jobLabel = 'Robustness Sweep'
+  else if (state.jobId.startsWith('hypothesis_')) {
+    const hid = state.jobId.replace('hypothesis_', '')
+    const reg = registryById.get(hid)
+    const catalogJob = catalog.data?.jobs.find((j) => j.id === state.jobId)
+    jobLabel = `${hid}${reg ? ` — ${reg.title}` : ''}${!reg && catalogJob ? ` — ${catalogJob.description}` : ''}`
+  }
+
+  const defaultWarmup = scenario.data?.scenario_fields.find((f) => f.field === 'warmup_bars')?.default ?? 210
+  const defaultStep = scenario.data?.scenario_fields.find((f) => f.field === 'step_bars')?.default ?? 4
+  const warmupBars = state.riskOverrides.warmup_bars ?? Number(defaultWarmup)
+  const stepBars = state.riskOverrides.step_bars ?? Number(defaultStep)
+
+  const { totalBars, decisionPoints, missing } = estimateDecisionPoints(
+    state.selectedSymbols, datasets.data?.datasets ?? [], state.dateRange, warmupBars, stepBars,
+  )
+  const runtime = recentRuntimeStats(jobs.data?.jobs ?? [], state.jobId)
+
+  const riskEntries = Object.entries(state.riskOverrides).filter(([, v]) => v !== null)
+
+  return (
+    <div className="flex flex-col gap-2.5 p-3 rounded-lg border border-panel-border bg-panel shadow-md">
+      <div className="text-[0.72em] text-muted uppercase tracking-[1px]">Review — confirm before running</div>
+        <ReviewRow
+          label="Dataset"
+          value={
+            state.dateRange.preset === 'all'
+              ? 'all available history'
+              : `${state.dateRange.preset}${state.dateRange.start ? ` (${state.dateRange.start} → ${state.dateRange.end})` : ''}`
+          }
+        />
+        <ReviewRow label="Symbols" value={state.selectedSymbols.join(', ') || '— none selected —'} />
+        <ReviewRow label="Timeframes" value={(state.timeframes ?? [...DEFAULT_TIMEFRAMES_ORDER]).join(', ')} />
+        <ReviewRow
+          label="Risk overrides"
+          value={riskEntries.length > 0 ? riskEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'production defaults'}
+        />
+        <ReviewRow label="Engines" value={state.engines ? state.engines.join(', ') : 'production enabled set'} />
+        <ReviewRow
+          label="Indicators"
+          value={state.indicators && state.indicators.length > 0 ? state.indicators.map((i) => `${i.name}:${i.mode}`).join(', ') : 'none'}
+        />
+        <ReviewRow label="Hypothesis / Job" value={jobLabel} />
+        <div className="h-px bg-border my-1" />
+        <ReviewRow
+          label="Decision points"
+          value={
+            state.selectedSymbols.length === 0
+              ? '— select symbols first —'
+              : missing.length > 0
+                ? `${decisionPoints.toLocaleString()} (no on-disk dataset for: ${missing.join(', ')} — downloaded fresh at run time)`
+                : `~${decisionPoints.toLocaleString()} bars evaluated across ${state.selectedSymbols.length} symbol(s), from ${totalBars.toLocaleString()} total rows on disk`
+          }
+        />
+        <ReviewRow
+          label="Recent runtime"
+          value={
+            runtime
+              ? `median ${formatDuration(runtime.medianMs)} over the last ${runtime.n} finished "${state.jobId}" run(s) on this server`
+              : `no completed "${state.jobId}" runs yet on this server — no timing history available`
+          }
+        />
+      <ReviewRow label="RAM / CPU" value="not measured — this server has no per-run resource tracking" muted />
+    </div>
+  )
+}
+
 function ExecutionStep({
   state,
   setState,
@@ -727,14 +1061,16 @@ function ExecutionStep({
       const range = requiresSymbols ? toApiDateRange(state.dateRange) : undefined
       const risk = requiresSymbols ? toApiRiskOverrides(state.riskOverrides) : undefined
       const timeframes = requiresSymbols && state.timeframes ? state.timeframes : undefined
+      const engines = requiresSymbols && state.engines ? state.engines : undefined
+      const indicators = requiresSymbols && state.indicators ? state.indicators : undefined
       const summary = isRobustness
         ? await runRobustnessJob(
             state.selectedSymbols,
             sweepParams.length > 0 ? sweepParams : undefined,
             sweepMultipliers.length > 0 ? sweepMultipliers : undefined,
-            range, risk, timeframes,
+            range, risk, timeframes, engines, indicators,
           )
-        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes)
+        : await runJob(state.jobId, requiresSymbols ? state.selectedSymbols : undefined, range, risk, timeframes, engines, indicators)
       setJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -754,9 +1090,7 @@ function ExecutionStep({
   return (
     <Panel title="Execution" right={`job: ${state.jobId}`}>
       <div className="p-4 flex flex-col gap-3">
-        <div className="text-[0.82em] text-muted">
-          Symbols: {state.selectedSymbols.length > 0 ? state.selectedSymbols.join(', ') : requiresSymbols ? 'none selected' : 'n/a — fixed method'}
-        </div>
+        {!job && <ReviewPanel state={state} />}
         {isRobustness && (
           <SweepConfig params={sweepParams} multipliers={sweepMultipliers} onParamsChange={setSweepParams} onMultipliersChange={setSweepMultipliers} />
         )}
@@ -825,7 +1159,8 @@ export function BacktestingLab() {
   const [maxReached, setMaxReached] = useState<StepIndex>(0)
   const [state, setState] = useState<WizardState>({
     selectedSymbols: [], jobId: 'backtest', sweepParams: [], sweepMultipliers: [],
-    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null,
+    dateRange: DEFAULT_DATE_RANGE, riskOverrides: DEFAULT_RISK_OVERRIDES, timeframes: null, engines: null,
+    indicators: null,
   })
   const [job, setJob] = useState<JobDetail | null>(null)
 
@@ -859,8 +1194,8 @@ export function BacktestingLab() {
       {step === 1 && <SymbolsStep state={state} setState={setState} />}
       {step === 2 && <RiskRangeStep state={state} setState={setState} />}
       {step === 3 && <TimeframesStep state={state} setState={setState} />}
-      {step === 4 && <StrategyStep />}
-      {step === 5 && <IndicatorsStep />}
+      {step === 4 && <StrategyStep state={state} setState={setState} />}
+      {step === 5 && <IndicatorsStep state={state} setState={setState} />}
       {step === 6 && <HypothesesStep state={state} setState={setState} />}
       {step === 7 && (
         <ExecutionStep

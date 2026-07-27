@@ -73,6 +73,10 @@ class TradeRecord:
     cf_score:     float = 0.0    # confluence score at entry
     engine_votes: dict = field(default_factory=dict)
     is_win:       bool = False
+    # Backtesting Lab Pro Phase D (2026-07-27) — per-indicator filter/
+    # confirmation/score-weight involvement at entry, when an ad-hoc
+    # indicator override was configured for this run (empty otherwise).
+    indicator_filters: dict = field(default_factory=dict)
 
 
 @dataclass

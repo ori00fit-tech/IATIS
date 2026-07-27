@@ -134,10 +134,16 @@ async def data_health(
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    """Data Center — per-symbol/timeframe OHLCV cache completeness.
+    """Data Center — per-symbol/timeframe LIVE-FEED health.
 
-    Read-only inspection of core/data_manager.py's local CSV cache. Never
-    triggers a provider fetch — reports what's actually cached on disk.
+    Read-only; never triggers a provider fetch. Derived from decision
+    provenance (utils/provenance.py, via execution.api_shared_helpers.
+    _data_health_snapshot) — the bars the live pipeline actually consumed
+    at its latest run for each symbol, read from D1's `decisions` table.
+    NOT core/data_manager.py's local `*_2y.csv` cache — that path is
+    legacy/offline-only and the live pipeline stopped feeding it
+    2026-07-16 (see _data_health_snapshot's own docstring for why this
+    endpoint used to report everything MISSING when it read that cache).
     """
     _check_auth(x_api_key, iatis_session)
     try:

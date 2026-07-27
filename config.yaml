@@ -177,10 +177,14 @@ features:
   correlation_filter: true       # scheduler.py — portfolio correlation cap
   ai_weight_suggestions: true    # execution/api_server.py — POST /ai/optimize-weights
   # core/data_confidence.py — cross-provider close check, ONE symbol per
-  # scheduler run (round-robin). Monitoring only, NEVER a gate. Off by
-  # default: costs ~1-2 extra provider calls per run. History at
-  # GET /data-confidence; MATERIAL disagreement alerts via Telegram.
-  data_confidence_check: false
+  # scheduler run (round-robin). Monitoring only, NEVER a gate. Costs
+  # ~1-2 extra provider calls per run. History at GET /data-confidence;
+  # MATERIAL disagreement alerts via Telegram. Enabled 2026-07-27 after
+  # the FX/BTCUSD staleness investigation (Data Center dashboard showing
+  # STALE for FX pairs + BTCUSD) — this won't diagnose why a decision
+  # stopped being recorded, but it starts building real cross-provider
+  # divergence history for whichever symbols DO still get scanned.
+  data_confidence_check: true
   data_confidence_interval: H1   # timeframe compared
   data_confidence_bars: 48       # bars compared per check
   data_confidence_tolerance_pct: 0.05  # per-bar close divergence tolerance

@@ -128,3 +128,49 @@ def test_data_health_v2_from_provenance(client, fake_d1):
         s["overall_status"] in ("OK", "STALE", "GAPS", "STARVED", "MISSING")
         for s in body["symbols"]
     )
+
+
+def test_data_health_alive_pipeline_not_stale_without_provenance(client, fake_d1):
+    """Regression (2026-07-27): a symbol whose most recent decision is a
+    Market Quality gate NO_TRADE (main.py:_market_quality_gate returns
+    BEFORE build_provenance() runs, so storage/decision_db.py writes
+    data_versions=NULL) must not be reported STALE — the pipeline is
+    genuinely alive and deciding this symbol every run, it just hasn't
+    needed a fresh provenance snapshot. Observed live on BTCUSD: MQS
+    34-39/100 for hours, a real NO_TRADE logged every scheduler tick,
+    Data Center still said STALE because the OLD provenance-carrying
+    decision (from before the dead-market streak) was hours old."""
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    from storage import migrations
+    migrations.apply_migrations()
+
+    now = datetime.now(timezone.utc)
+    old_ts = (now - timedelta(minutes=400)).isoformat()  # > _DH_STALE_MINUTES (360)
+    fresh_ts = now.isoformat()
+
+    old_dv = _json.dumps({
+        tf: {"provider": "ccxt", "row_count": 750, "last_ts": "2026-07-20 00:00:00", "sha256": "bb"}
+        for tf in ("M15", "H1", "H4", "D1")
+    })
+    fake_d1.execute(
+        "INSERT INTO decisions (ts, symbol, verdict, data_versions) VALUES (?,?,?,?)",
+        (old_ts, "BTCUSD", "NO_TRADE", old_dv),
+    )
+    # The Market Quality gate's early-exit report — no provenance built yet.
+    fake_d1.execute(
+        "INSERT INTO decisions (ts, symbol, verdict, data_versions) VALUES (?,?,?,?)",
+        (fresh_ts, "BTCUSD", "NO_TRADE", None),
+    )
+    fake_d1.commit()
+
+    r = client.get("/data-health", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    by_symbol = {s["symbol"]: s for s in body["symbols"]}
+
+    if "BTCUSD" in by_symbol:
+        btc = by_symbol["BTCUSD"]
+        assert btc["overall_status"] == "OK"
+        assert "note" in btc
+        assert "provenance" in btc["note"].lower()

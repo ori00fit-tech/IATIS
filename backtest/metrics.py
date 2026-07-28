@@ -100,16 +100,22 @@ class BacktestMetrics:
     sharpe_ratio:     float = 0.0
     sortino_ratio:    float = 0.0
     calmar_ratio:     float = 0.0
-    mar_ratio:        float = 0.0
+    mar_ratio:        float = 0.0     # == calmar_ratio here — see calculate_metrics()
 
     # Drawdown
     max_drawdown:     float = 0.0     # %
     max_drawdown_usd: float = 0.0
     avg_drawdown:     float = 0.0
-    max_dd_duration:  int   = 0       # bars
+    max_dd_duration:  int   = 0       # consecutive CLOSED TRADES underwater, not bars
+                                       # (no per-bar series reaches this function)
 
     # Trade stats
     avg_rr:           float = 0.0
+    std_rr:           float = 0.0     # sample std of R-multiples — the
+                                       # mean_r/std_r/n input backtest/
+                                       # multiple_testing.py's per-trial
+                                       # significance test needs (AI
+                                       # Research Lab Phase 1, 2026-07-27)
     avg_holding_bars: float = 0.0
     avg_win:          float = 0.0
     avg_loss:         float = 0.0
@@ -130,6 +136,18 @@ class BacktestMetrics:
 
     # Exposure
     exposure_pct:     float = 0.0    # % time in market
+
+    # AI Research Lab Phase 1 (2026-07-27) — standard risk/distribution
+    # metrics beyond the original set, computed from data already
+    # collected above (trade PnL, R-multiples, the equity/drawdown loop).
+    sqn:              float = 0.0    # System Quality Number: mean(R)/std(R) * sqrt(n)
+    recovery_factor:  float = 0.0    # net_profit / max_drawdown_usd
+    ulcer_index:      float = 0.0    # sqrt(mean(drawdown_pct**2)) over per-trade drawdown
+    kelly_criterion:  float = 0.0    # win_rate - (1-win_rate)/(avg_win/avg_loss), clamped [-1,1]
+    var_95:           float = 0.0    # 5th percentile of trade pnl_usd (historical VaR)
+    cvar_95:          float = 0.0    # mean pnl_usd of trades at/below var_95 (Expected Shortfall)
+    skew:             float = 0.0    # sample skewness of trade pnl_usd
+    kurtosis:         float = 0.0    # sample excess kurtosis of trade pnl_usd
 
     # By category
     by_direction:     dict  = field(default_factory=dict)
@@ -199,6 +217,8 @@ def calculate_metrics(
     # Expectancy in R
     rrs = [t.rr_actual for t in closed if t.rr_actual != 0]
     m.avg_rr = sum(rrs) / len(rrs) if rrs else 0
+    if len(rrs) >= 2:
+        m.std_rr = float(np.std(np.array(rrs), ddof=1))
     win_rrs  = [t.rr_actual for t in closed if t.is_win and t.rr_actual > 0]
     loss_rrs = [abs(t.rr_actual) for t in closed if not t.is_win and t.rr_actual != 0]
     wr = m.win_rate / 100
@@ -231,6 +251,45 @@ def calculate_metrics(
     m.avg_drawdown     = sum(dds) / len(dds) if dds else 0
     m.total_return_pct = (equity[-1] - initial_capital) / initial_capital * 100
 
+    # Ulcer Index: RMS of the per-trade drawdown series (equity[1:] vs.
+    # running peak) — already computed above as `dds`.
+    if dds:
+        m.ulcer_index = math.sqrt(sum(d * d for d in dds) / len(dds))
+
+    # max_dd_duration: longest run of consecutive closed trades where
+    # equity sits below the running peak (honest "consecutive trades
+    # underwater" definition — see the dataclass field's own comment).
+    cur_underwater = max_underwater = 0
+    peak_run = equity[0]
+    for e in equity[1:]:
+        if e > peak_run:
+            peak_run = e
+        if e < peak_run:
+            cur_underwater += 1
+            max_underwater = max(max_underwater, cur_underwater)
+        else:
+            cur_underwater = 0
+    m.max_dd_duration = max_underwater
+
+    # Recovery Factor: net profit relative to the worst drawdown suffered.
+    if m.max_drawdown_usd > 0:
+        m.recovery_factor = m.net_profit / m.max_drawdown_usd
+
+    # exposure_pct: real elapsed time in market vs. the trading window's
+    # real elapsed time, from entry_time/exit_time timestamps already on
+    # each TradeRecord — decoupled from max_dd_duration's trade-count
+    # definition on purpose (this one needs to be wall-clock true).
+    timed = [t for t in closed if t.entry_time and t.exit_time]
+    if timed:
+        in_market = sum(
+            (t.exit_time - t.entry_time).total_seconds() for t in timed
+        )
+        span_start = min(t.entry_time for t in timed)
+        span_end = max(t.exit_time for t in timed)
+        span_seconds = (span_end - span_start).total_seconds()
+        if span_seconds > 0:
+            m.exposure_pct = min(100.0, in_market / span_seconds * 100)
+
     # Consecutive wins/losses
     max_cw = max_cl = cur_cw = cur_cl = 0
     for t in closed:
@@ -261,6 +320,42 @@ def calculate_metrics(
     # Calmar
     if m.max_drawdown > 0:
         m.calmar_ratio = m.total_return_pct / m.max_drawdown
+    # MAR ratio is conventionally calmar computed over annualized return —
+    # this function has no separate multi-year windowing to make it
+    # distinct from calmar_ratio here, so it's set equal rather than
+    # fabricated. See the dataclass field's own comment.
+    m.mar_ratio = m.calmar_ratio
+
+    # System Quality Number (Van Tharp): mean(R)/std(R) * sqrt(n), using
+    # the R-multiples already gathered above for avg_rr.
+    if len(rrs) >= 2:
+        rr_arr = np.array(rrs)
+        rr_std = np.std(rr_arr, ddof=1)
+        if rr_std > 0:
+            m.sqn = float(np.mean(rr_arr) / rr_std * math.sqrt(len(rrs)))
+
+    # Kelly criterion, clamped to [-1, 1] — undefined/pathological inputs
+    # (all-wins avg_loss==0, all-losses avg_win==0) must never divide by
+    # zero or blow past a sane range.
+    if m.avg_win > 0 and m.avg_loss > 0:
+        b = m.avg_win / m.avg_loss
+        raw_kelly = wr - (1 - wr) / b
+        m.kelly_criterion = max(-1.0, min(1.0, raw_kelly))
+
+    # VaR / CVaR (historical, 95%) over the trade PnL distribution.
+    if len(pnls) >= 2:
+        pnl_arr_sorted = np.sort(np.array(pnls))
+        m.var_95 = float(np.percentile(pnl_arr_sorted, 5))
+        tail = pnl_arr_sorted[pnl_arr_sorted <= m.var_95]
+        m.cvar_95 = float(np.mean(tail)) if len(tail) > 0 else m.var_95
+
+        # Skew / excess kurtosis of the trade PnL distribution.
+        mean_pnl = np.mean(pnl_arr_sorted)
+        std_pnl_pop = np.std(pnl_arr_sorted)  # population std for moment ratios
+        if std_pnl_pop > 0:
+            z = (pnl_arr_sorted - mean_pnl) / std_pnl_pop
+            m.skew = float(np.mean(z ** 3))
+            m.kurtosis = float(np.mean(z ** 4) - 3.0)
 
     # Monthly / Yearly returns
     sorted_trades = sorted(closed, key=lambda t: t.entry_time)
@@ -312,8 +407,21 @@ def calculate_metrics(
         if t.is_win:
             m.by_regime[r]["wins"] += 1
 
+    # By engine — unlike direction/session/regime (exactly one category per
+    # trade), multiple engines can vote on the same trade (TradeRecord.
+    # engine_votes is a dict keyed by every engine that voted), so a trade
+    # can contribute to more than one engine's bucket here.
+    for t in closed:
+        for engine_name in t.engine_votes:
+            if engine_name not in m.by_engine:
+                m.by_engine[engine_name] = {"trades": 0, "wins": 0, "pnl": 0.0}
+            m.by_engine[engine_name]["trades"] += 1
+            m.by_engine[engine_name]["pnl"]    += t.pnl_usd
+            if t.is_win:
+                m.by_engine[engine_name]["wins"] += 1
+
     # Win rates per category
-    for cat_dict in (m.by_session, m.by_regime, m.by_direction):
+    for cat_dict in (m.by_session, m.by_regime, m.by_direction, m.by_engine):
         for v in cat_dict.values():
             if isinstance(v, dict) and v.get("trades", 0) > 0:
                 v["win_rate"] = v.get("wins", 0) / v["trades"] * 100

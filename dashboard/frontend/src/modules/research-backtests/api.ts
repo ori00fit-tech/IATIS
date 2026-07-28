@@ -310,8 +310,15 @@ export interface SuggestHypothesisResponse extends Partial<HypothesisSuggestion>
   error?: string
 }
 
-export const suggestHypothesis = (focusHint: string) =>
-  apiPost<SuggestHypothesisResponse>('/ai/suggest-hypothesis', { focus_hint: focusHint })
+// provider/model (2026-07-28): an optional one-off override for THIS call
+// only — never touches the persisted config/ai.yaml (see ai-settings
+// module for the global setting). Omit both to use the configured default.
+export const suggestHypothesis = (focusHint: string, provider?: string, model?: string) =>
+  apiPost<SuggestHypothesisResponse>('/ai/suggest-hypothesis', {
+    focus_hint: focusHint,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+  })
 
 export const saveHypothesisDraft = (suggestion: HypothesisSuggestion) =>
   apiPost<{ file: string }>('/ai/save-hypothesis-draft', suggestion)

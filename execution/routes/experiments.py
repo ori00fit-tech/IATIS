@@ -82,6 +82,14 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # each module's docstring for what it does and does NOT claim.
     "walk_forward": [sys.executable, "-m", "backtest.walk_forward"],
     "robustness": [sys.executable, "-m", "backtest.robustness"],
+    # AI Research Lab / Mission Center Phase 2 (2026-07-28) — a whole
+    # mission is ONE subprocess (fits this same job-whitelist model
+    # unchanged), looping over many trials in-process internally
+    # (backtest/mission_runner.py). Full argv is built per-request in
+    # execution/routes/missions.py (mission_id, search space, sampler,
+    # etc. — all server-validated before reaching argv, same pattern as
+    # `backtest`'s own --symbols validation below).
+    "research_mission": [sys.executable, "-m", "backtest.mission_runner"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -96,6 +104,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "hypothesis_H103": "H103 (meta_decision gate removal) A/B — PLANNED, not yet run. Only still-open hypothesis job in this whitelist.",
     "walk_forward": "Disjoint chronological OOS window consistency test (backtest/walk_forward.py). Requires --symbols. Fixed production parameters, no per-window optimization.",
     "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
+    "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -114,6 +123,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "hypothesis_H103": "research",
     "walk_forward": "research",
     "robustness": "research",
+    "research_mission": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -132,6 +142,12 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # `backtest` run.
     "walk_forward": 2400,
     "robustness": 2400,
+    # Last-resort net only — backtest/mission_runner.py's own
+    # --max-wall-clock-seconds budget (set per-request, checked every
+    # trial) is the PRIMARY, graceful stop mechanism for a mission; this
+    # ceiling exists purely so a misbehaving/unbounded mission can't
+    # occupy a job slot forever if that internal check is ever bypassed.
+    "research_mission": 21_600,  # 6h hard ceiling
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against
@@ -139,7 +155,12 @@ _JOB_TIMEOUTS: dict[str, int] = {
 # whitelist member, per `backtest`'s original 2026-07-16 precedent).
 _PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
 
-_job_executor = ThreadPoolExecutor(max_workers=2)
+# AI Research Lab / Mission Center Phase 2 (2026-07-28): bumped 2->3.
+# A mission can legitimately occupy one slot for hours (see
+# _JOB_TIMEOUTS["research_mission"]) — 3 keeps at least 2 slots free for
+# ordinary short ad-hoc jobs (backtest/robustness/hypothesis runs) while
+# one mission runs, without unbounding the pool.
+_job_executor = ThreadPoolExecutor(max_workers=3)
 _jobs: dict[str, "_Job"] = {}
 _jobs_lock = threading.Lock()
 

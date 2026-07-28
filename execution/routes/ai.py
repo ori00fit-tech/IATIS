@@ -11,14 +11,16 @@ docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-1).
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request
+from pydantic import BaseModel
 
-from execution.api_core import _check_auth, _get_config, logger
+from execution.api_core import _check_auth, _get_config, _reset_config_cache, logger
 
 router = APIRouter()
 
@@ -401,6 +403,12 @@ async def ai_suggest_hypothesis(
     order flow"), same convention as /ai/research-question's free-form
     question box. Empty/omitted hint lets the prompt default toward
     docs/PHILOSOPHY_AUDIT_2026-07.md's own named next-candidates.
+
+    Optional {provider: string, model: string} (2026-07-28): a one-off
+    override for THIS call only — never touches the persisted
+    config/ai.yaml (POST /ai/settings is the only thing that does). Built
+    as a fresh dict, never mutating _get_config()'s cached "ai" sub-dict
+    in place, so no other request is affected.
     """
     _check_auth(x_api_key, iatis_session)
     try:
@@ -408,9 +416,24 @@ async def ai_suggest_hypothesis(
 
         body = await request.json() if await request.body() else {}
         focus_hint = str(body.get("focus_hint") or "")[:300]
-        context = _build_copilot_context()
+        override_provider = body.get("provider")
+        override_model = body.get("model")
 
-        analyzer = AIAnalyzer(_get_config())
+        config = _get_config()
+        if override_provider is not None:
+            if override_provider not in _KNOWN_AI_PROVIDERS:
+                raise HTTPException(status_code=400, detail=f"Unknown provider '{override_provider}' — choose from {_KNOWN_AI_PROVIDERS}.")
+            override_ai_cfg = {
+                **(config.get("ai", {}) or {}),
+                "providers": {override_provider: {"enabled": True}},
+                "fallback_order": [override_provider],
+            }
+            if override_model:
+                override_ai_cfg["model"] = str(override_model)[:200]
+            config = {**config, "ai": override_ai_cfg}
+
+        context = _build_copilot_context()
+        analyzer = AIAnalyzer(config)
         return analyzer.suggest_next_hypothesis(context, focus_hint)
     except HTTPException:
         raise
@@ -493,4 +516,159 @@ async def ai_save_hypothesis_draft(
     except Exception as exc:
         logger.error(f"AI save-hypothesis-draft error: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error.")
+
+
+# ---------------------------------------------------------------------------
+# AI Settings (2026-07-28) — global provider/model selection, previously
+# config/ai.yaml-only (hand-edited on the VPS, no dashboard surface). This
+# ONLY controls the explanation/reporting layer's config (ai/ai_analyzer.py
+# docstring: "AIAnalyzer NEVER produces a BUY/SELL/EXECUTE decision") — it
+# carries none of the "changing thresholds mid-sample" risk config/risk.yaml
+# or config/symbols.yaml would. Same yaml.safe_load -> mutate -> yaml.dump
+# round-trip ai/dynamic_weights.py's apply_weights_to_config already uses
+# for config.yaml — plain PyYAML strips comments on a round-trip, so the
+# file's own header docstring is re-prepended verbatim from a constant
+# rather than lost.
+# ---------------------------------------------------------------------------
+
+_AI_CONFIG_PATH = Path("config/ai.yaml")
+_KNOWN_AI_PROVIDERS = ("gemini", "openai", "anthropic")
+
+_AI_CONFIG_HEADER = """# config/ai.yaml — AI Explanation Layer
+# -----------------------------------------------------------------------
+# Split out of config.yaml (2026-07-12). Loaded and merged into the
+# top-level `ai` key by utils/helpers.py::load_config().
+#
+# AIAnalyzer NEVER produces a BUY/SELL/EXECUTE decision (see
+# ai/ai_analyzer.py docstring) — this section only controls the
+# explanation/reporting layer, so it carries none of the "changing
+# thresholds mid-sample" risk that risk.yaml / symbols.yaml do.
+#
+# Editable via the AI Settings dashboard tab (POST /ai/settings) or by
+# hand — both write this same file. API keys are never stored here, only
+# in the environment (see .env.example).
+"""
+
+
+def _has_ai_api_key(provider: str) -> bool:
+    from ai.ai_analyzer import _PROVIDER_ENV_KEYS
+
+    env_key = _PROVIDER_ENV_KEYS.get(provider)
+    return bool(env_key and os.environ.get(env_key))
+
+
+@router.get("/ai/settings")
+async def ai_get_settings(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Current config/ai.yaml content plus which providers actually have
+    an API key available server-side (has_api_key) — so the dashboard
+    never lets an operator pick a provider that will silently do nothing."""
+    _check_auth(x_api_key, iatis_session)
+    from ai.ai_analyzer import _DEFAULT_MODELS, _resolve_provider_name
+
+    ai_cfg = _get_config().get("ai", {}) or {}
+    return {
+        "enabled": bool(ai_cfg.get("enabled", False)),
+        "providers": ai_cfg.get("providers", {}),
+        "fallback_order": ai_cfg.get("fallback_order", list(_KNOWN_AI_PROVIDERS)),
+        "model": ai_cfg.get("model", ""),
+        "temperature": ai_cfg.get("temperature", 0.1),
+        "max_tokens": ai_cfg.get("max_tokens", 1200),
+        "timeout": ai_cfg.get("timeout", 20),
+        "default_models": _DEFAULT_MODELS,
+        "has_api_key": {p: _has_ai_api_key(p) for p in _KNOWN_AI_PROVIDERS},
+        "active_provider": _resolve_provider_name(ai_cfg),
+    }
+
+
+class _AiProviderSetting(BaseModel):
+    enabled: bool = False
+
+
+class _AiSettingsRequest(BaseModel):
+    enabled: bool
+    providers: dict[str, _AiProviderSetting]
+    fallback_order: list[str]
+    model: str
+    temperature: float = 0.1
+    max_tokens: int = 1200
+    timeout: float = 20.0
+
+
+@router.post("/ai/settings")
+async def ai_save_settings(
+    body: _AiSettingsRequest,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Writes config/ai.yaml. Rejects (400) rather than silently saving a
+    config that would leave `enabled: true` pointed at a provider with no
+    API key configured — the same "don't let a selection silently do
+    nothing" guarantee GET /ai/settings' has_api_key field gives the UI,
+    enforced server-side too since this endpoint can be called directly."""
+    _check_auth(x_api_key, iatis_session)
+
+    unknown_providers = sorted(set(body.providers) - set(_KNOWN_AI_PROVIDERS))
+    if unknown_providers:
+        raise HTTPException(status_code=400, detail=f"Unknown provider(s) {unknown_providers} — choose from {_KNOWN_AI_PROVIDERS}.")
+    unknown_fallback = sorted(set(body.fallback_order) - set(_KNOWN_AI_PROVIDERS))
+    if unknown_fallback:
+        raise HTTPException(status_code=400, detail=f"Unknown provider(s) in fallback_order: {unknown_fallback}.")
+    if len(body.fallback_order) != len(set(body.fallback_order)):
+        raise HTTPException(status_code=400, detail="fallback_order must not contain duplicates.")
+    if not body.model.strip():
+        raise HTTPException(status_code=400, detail="model must not be empty.")
+    if not (0.0 <= body.temperature <= 2.0):
+        raise HTTPException(status_code=400, detail="temperature must be between 0 and 2.")
+    if not (1 <= body.max_tokens <= 8000):
+        raise HTTPException(status_code=400, detail="max_tokens must be between 1 and 8000.")
+    if not (1.0 <= body.timeout <= 120.0):
+        raise HTTPException(status_code=400, detail="timeout must be between 1 and 120 seconds.")
+
+    providers_dict = {k: v.model_dump() for k, v in body.providers.items()}
+    from ai.ai_analyzer import _resolve_provider_name
+
+    candidate_ai_cfg = {"providers": providers_dict, "fallback_order": body.fallback_order, "model": body.model}
+    if body.enabled:
+        active = _resolve_provider_name(candidate_ai_cfg)
+        if not _has_ai_api_key(active):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot enable: the active provider '{active}' has no API key configured "
+                       f"in the environment (see .env.example). Set the key first, or pick a "
+                       f"different fallback_order/providers combination.",
+            )
+
+    try:
+        import yaml
+
+        existing_cache = (_get_config().get("ai", {}) or {}).get("cache", {"news_ttl_min": 20, "macro_ttl_min": 60})
+        new_cfg = {
+            "enabled": body.enabled,
+            "providers": providers_dict,
+            "fallback_order": body.fallback_order,
+            "model": body.model,
+            "temperature": body.temperature,
+            "max_tokens": body.max_tokens,
+            "timeout": body.timeout,
+            "cache": existing_cache,
+        }
+        _AI_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _AI_CONFIG_PATH.write_text(
+            _AI_CONFIG_HEADER + yaml.dump(new_cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        )
+    except Exception as exc:
+        logger.error(f"AI settings save error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not write config/ai.yaml. See server logs.")
+
+    _reset_config_cache()
+
+    from storage.audit_log import log_action
+    log_action(
+        "ai_settings_update", x_api_key=x_api_key, session_id=iatis_session,
+        detail=f"enabled={body.enabled} model={body.model} fallback_order={body.fallback_order}",
+    )
+    return {"status": "saved", "active_provider": _resolve_provider_name(candidate_ai_cfg)}
 

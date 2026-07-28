@@ -103,6 +103,7 @@ from execution.routes import (
     health,
     journal,
     logs,
+    missions,
     outcomes,
     research,
 )
@@ -110,11 +111,22 @@ from execution.routes import (
 # Included in the same relative order their endpoints first appeared in
 # the pre-split file — see this module's docstring on why order is
 # preserved even though no cross-module path-template collision exists.
+#
+# EXCEPTION (2026-07-28): missions.router is deliberately included BEFORE
+# research.router, breaking strict chronological order — GET
+# /research/missions (one path segment after /research/) would otherwise
+# be swallowed by research.py's own GET /research/{hypothesis_id} catch-
+# all (registered first = wins under Starlette's registration-order
+# matching; hypothesis_id="missions" resolves to nothing and 404s).
+# /research/missions/{mission_id} (two segments) never collided — only
+# the exact one-segment /research/missions path did. Confirmed by a real
+# failing test before this reorder (tests/test_missions.py).
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(auth.router)
 app.include_router(dashboard_legacy.router)
 app.include_router(experience.router)
+app.include_router(missions.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

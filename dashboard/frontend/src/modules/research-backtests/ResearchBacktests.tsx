@@ -287,8 +287,15 @@ function HypothesisComparePanel({ ids, onClose }: { ids: string[]; onClose: () =
 // research/results/registry.json — the saved file lands in
 // research/hypotheses/drafts/ for the operator to review, edit, and
 // manually promote (CLAUDE.md rule 1: pre-register before you build).
+const AI_OVERRIDE_PROVIDERS = ['', 'gemini', 'openai', 'anthropic'] as const
+
 function AiCopilotPanel() {
   const [focusHint, setFocusHint] = useState('')
+  // Per-request provider/model override (2026-07-28) — never touches the
+  // persisted config/ai.yaml (see the AI Settings tab for that); empty
+  // provider means "use the configured default", same as omitting it.
+  const [overrideProvider, setOverrideProvider] = useState('')
+  const [overrideModel, setOverrideModel] = useState('')
   const [state, setState] = useState<{ loading: boolean; error: string | null; data: SuggestHypothesisResponse | null }>({
     loading: false,
     error: null,
@@ -303,7 +310,7 @@ function AiCopilotPanel() {
   const suggest = () => {
     setState({ loading: true, error: null, data: null })
     setSave({ saving: false, error: null, file: null })
-    suggestHypothesis(focusHint)
+    suggestHypothesis(focusHint, overrideProvider || undefined, overrideModel || undefined)
       .then((data) => setState({ loading: false, error: null, data }))
       .catch((err) => setState({ loading: false, error: err instanceof Error ? err.message : String(err), data: null }))
   }
@@ -338,6 +345,24 @@ function AiCopilotPanel() {
             placeholder="focus hint (optional)…"
             className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.85em] placeholder:text-muted/60 w-48"
           />
+          <select
+            value={overrideProvider}
+            onChange={(e) => setOverrideProvider(e.target.value)}
+            title="Override provider for this suggestion only — never saved to config/ai.yaml"
+            className="px-1.5 py-1 bg-bg border border-border rounded text-text text-[0.78em]"
+          >
+            {AI_OVERRIDE_PROVIDERS.map((p) => (
+              <option key={p} value={p}>{p || 'default provider'}</option>
+            ))}
+          </select>
+          {overrideProvider && (
+            <input
+              value={overrideModel}
+              onChange={(e) => setOverrideModel(e.target.value)}
+              placeholder="model (optional)…"
+              className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.78em] placeholder:text-muted/60 w-32"
+            />
+          )}
           <button
             onClick={suggest}
             disabled={state.loading}

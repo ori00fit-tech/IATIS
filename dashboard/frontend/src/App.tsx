@@ -37,6 +37,8 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/engine-monitor/EngineMonitor').then((m) => ({ default: m.EngineMonitor }))),
   'ai-decision-center': lazy(() =>
     import('./modules/ai-decision-center/AiDecisionCenter').then((m) => ({ default: m.AiDecisionCenter }))),
+  'ai-settings': lazy(() =>
+    import('./modules/ai-settings/AiSettings').then((m) => ({ default: m.AiSettings }))),
   research: lazy(() =>
     import('./modules/research-backtests/ResearchBacktests').then((m) => ({ default: m.ResearchBacktests }))),
   'backtesting-lab': lazy(() =>
@@ -55,6 +57,8 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/reports/Reports').then((m) => ({ default: m.Reports }))),
   experiments: lazy(() =>
     import('./modules/experiment-runner/ExperimentRunner').then((m) => ({ default: m.ExperimentRunner }))),
+  'mission-center': lazy(() =>
+    import('./modules/mission-center/MissionCenter').then((m) => ({ default: m.MissionCenter }))),
   ops: lazy(() =>
     import('./modules/vps-operations/VpsOperations').then((m) => ({ default: m.VpsOperations }))),
   roadmap: lazy(() =>

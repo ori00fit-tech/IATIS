@@ -56,6 +56,7 @@ from backtest.optimizer import (
     OPTIMIZABLE_METRICS,
     SAMPLER_KEYS,
     MissionSearchSpace,
+    _CONTEXT_IDX_KEY,
     distributions_for,
     evaluate_point,
     make_sampler,
@@ -108,6 +109,7 @@ def _search_space_dict(space: MissionSearchSpace) -> dict:
         "timeframes_choices": [list(tf) for tf in space.timeframes_choices],
         "engine_set_choices": [list(e) for e in space.engine_set_choices],
         "indicator_set_choices": [list(i) for i in space.indicator_set_choices],
+        "context_filter_set_choices": [list(c) for c in space.context_filter_set_choices],
         "risk_param_ranges": space.risk_param_ranges,
         "risk_param_grid": space.risk_param_grid,
     }
@@ -204,11 +206,21 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
     dists = distributions_for(mc.search_space, grid_mode)
     existing = research_missions.existing_trials(mc.mission_id, symbol)
     for row in existing:
+        row_params = json.loads(row["params_json"])
+        # Context Filters (2026-07-30) — a trial recorded before this
+        # dimension existed has no __context_idx key in its stored
+        # params_json. optuna.trial.create_trial() requires params and
+        # distributions to have identical key sets, so backfill it with
+        # index 0 — always the empty-choice entry
+        # MissionSearchSpace.context_filter_set_choices defaults to,
+        # meaning "no context filter" for that replayed trial, matching
+        # what it actually ran with.
+        row_params.setdefault(_CONTEXT_IDX_KEY, 0)
         study.add_trial(
             optuna.trial.create_trial(
                 state=optuna.trial.TrialState[row["state"]],
                 value=row["objective_value"],
-                params=json.loads(row["params_json"]),
+                params=row_params,
                 distributions=dists,
             )
         )
@@ -328,6 +340,8 @@ def main() -> None:
                         help='JSON, e.g. \'[["nnfx","price_action"],["smc","wyckoff"]]\'')
     parser.add_argument("--indicator-set-choices", type=str, default="[[]]",
                         help='JSON, e.g. \'[[],[{"name":"rsi","mode":"entry_filter","params":{},"weight":0}]]\'')
+    parser.add_argument("--context-filter-set-choices", type=str, default="[[]]",
+                        help='JSON, e.g. \'[[],[{"name":"session","mode":"entry_filter","params":{},"weight":0}]]\'')
     parser.add_argument("--risk-param-ranges", type=str, default="{}",
                         help='JSON, e.g. \'{"sl_atr_multiplier":[1.0,4.0]}\' (random/tpe/nsga2)')
     parser.add_argument("--risk-param-grid", type=str, default="{}",
@@ -348,6 +362,7 @@ def main() -> None:
             timeframes_choices=_tuplify_choices(json.loads(args.timeframes_choices)),
             engine_set_choices=_tuplify_choices(json.loads(args.engine_set_choices)),
             indicator_set_choices=_tuplify_choices(json.loads(args.indicator_set_choices)),
+            context_filter_set_choices=_tuplify_choices(json.loads(args.context_filter_set_choices)),
             risk_param_ranges={k: tuple(v) for k, v in json.loads(args.risk_param_ranges).items()},
             risk_param_grid={k: tuple(v) for k, v in json.loads(args.risk_param_grid).items()},
         )

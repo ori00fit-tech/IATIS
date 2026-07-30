@@ -752,6 +752,87 @@ def test_indicator_confirmation_mode_adjusts_score_and_never_sets_direction():
         assert t.direction == expected_direction
 
 
+def test_build_engine_config_override_merges_context_filters_only():
+    """Mirrors test_build_engine_config_override_merges_indicators_only:
+    the override must carry every other confluence/engine/timeframe
+    setting from the real config unchanged — only context_filters.filters
+    is added."""
+    from backtesting.backtest_engine import build_engine_config_override
+    from utils.helpers import load_config
+
+    real = load_config()
+    specs = [{"name": "direction", "mode": "entry_filter", "params": {"allowed": ["BULLISH"]}, "weight": 0}]
+    override = build_engine_config_override(context_filters=specs)
+    assert override["context_filters"]["filters"] == specs
+    assert override["data"]["timeframes"] == real["data"]["timeframes"]
+    assert override["engines"] == real["engines"]
+
+
+def test_build_engine_config_override_returns_none_context_filters_absent():
+    from backtesting.backtest_engine import build_engine_config_override
+
+    assert build_engine_config_override(context_filters=None) is None
+
+
+def test_build_engine_config_override_context_filters_never_writes_to_config_files():
+    """Hard-block correctness requirement, mirroring Phase D's own
+    indicators test: a context-filter override must be purely in-memory."""
+    from pathlib import Path
+    from backtesting.backtest_engine import build_engine_config_override
+
+    engines_yaml = Path("config/engines.yaml")
+    before = engines_yaml.read_bytes()
+    build_engine_config_override(
+        context_filters=[{"name": "day_of_week", "mode": "entry_filter", "params": {"allowed_days": []}, "weight": 0}],
+    )
+    after = engines_yaml.read_bytes()
+    assert before == after, "config/engines.yaml must be byte-identical after a context-filter override call"
+
+
+def test_context_entry_filter_veto_zeroes_out_trades_and_records_rejection():
+    """The authoritative proof (Context Filters, 2026-07-30): an
+    entry_filter-mode context filter with an impossible condition
+    (allowed_days=[], no day of week ever passes) must reach the real
+    EXECUTE/NO_TRADE decision and block every trade, while a baseline
+    run on the identical data produces real trades."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    cfg = BacktestConfig.from_profile("EURUSD")
+
+    baseline = run_backtest(df, cfg, engine_config=None)
+    assert len(baseline.trades) > 0
+
+    veto_config = build_engine_config_override(
+        context_filters=[{"name": "day_of_week", "mode": "entry_filter", "params": {"allowed_days": []}, "weight": 0}],
+    )
+    vetoed = run_backtest(df, cfg, engine_config=veto_config)
+    assert vetoed.execute_count == 0
+    assert vetoed.context_rejections.get("day_of_week", 0) > 0
+    assert vetoed.gate_rejections["context_filter"] > 0
+
+
+def test_context_confirmation_mode_adjusts_score_and_never_sets_direction():
+    """confirmation-mode context filters must nudge adjusted_score
+    (visible in each trade's decision snapshot) without ever changing
+    which direction a trade takes."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    cfg = BacktestConfig.from_profile("EURUSD")
+
+    confirm_config = build_engine_config_override(
+        context_filters=[{"name": "direction", "mode": "confirmation", "params": {"allowed": ["BULLISH"]}, "weight": 0}],
+    )
+    result = run_backtest(df, cfg, engine_config=confirm_config)
+    assert len(result.trades) > 0
+    for t in result.trades:
+        assert t.decision["context_filters"] is not None
+        assert "direction" in t.decision["context_filters"]
+        expected_direction = "BUY" if t.decision["winning_bias"] == "BULLISH" else "SELL"
+        assert t.direction == expected_direction
+
+
 def test_from_profile_uses_real_spread_as_commission():
     """Backtests must cost trades at the measured broker spread by
     default, not the old flat 0.5 pip — otherwise PF for wide-spread

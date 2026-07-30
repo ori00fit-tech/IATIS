@@ -45,6 +45,7 @@ from backtesting.backtest_engine import (
     build_engine_config_override,
     run_backtest,
 )
+from confluence.context_filters import CONTEXT_KEYS
 from confluence.indicator_filters import FILTER_MODES, INDICATOR_KEYS
 from core.timeframe_sync import SUPPORTED_TIMEFRAMES
 
@@ -57,7 +58,8 @@ SAMPLER_KEYS: tuple[str, ...] = ("grid", "random", "tpe", "nsga2")
 _TF_IDX_KEY = "__timeframes_idx"
 _ENGINES_IDX_KEY = "__engines_idx"
 _INDICATORS_IDX_KEY = "__indicators_idx"
-_INTERNAL_KEYS = (_TF_IDX_KEY, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY)
+_CONTEXT_IDX_KEY = "__context_idx"
+_INTERNAL_KEYS = (_TF_IDX_KEY, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _CONTEXT_IDX_KEY)
 
 
 def _validate_indicator_spec(spec: dict) -> None:
@@ -65,6 +67,13 @@ def _validate_indicator_spec(spec: dict) -> None:
         raise ValueError(f"unknown indicator {spec.get('name')!r} — choose from {INDICATOR_KEYS}")
     if spec.get("mode") not in FILTER_MODES:
         raise ValueError(f"unknown indicator mode {spec.get('mode')!r} — choose from {FILTER_MODES}")
+
+
+def _validate_context_spec(spec: dict) -> None:
+    if spec.get("name") not in CONTEXT_KEYS:
+        raise ValueError(f"unknown context filter {spec.get('name')!r} — choose from {CONTEXT_KEYS}")
+    if spec.get("mode") not in FILTER_MODES:
+        raise ValueError(f"unknown context filter mode {spec.get('mode')!r} — choose from {FILTER_MODES}")
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,13 @@ class MissionSearchSpace:
     timeframes_choices: tuple[tuple[str, ...], ...]
     engine_set_choices: tuple[tuple[str, ...], ...]
     indicator_set_choices: tuple[tuple[dict, ...], ...]
+    # Context Filters (2026-07-30) — mirrors indicator_set_choices
+    # exactly: each choice is a tuple of confluence.context_filters.
+    # ContextSpec-shaped dicts (session/day-of-week/volatility-regime/
+    # market-regime/direction). Defaults to a single empty choice
+    # (no context filter layer) so existing callers that never pass this
+    # keep working unchanged.
+    context_filter_set_choices: tuple[tuple[dict, ...], ...] = ((),)
     risk_param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     risk_param_grid: dict[str, tuple[float, ...]] = field(default_factory=dict)
 
@@ -91,6 +107,8 @@ class MissionSearchSpace:
             raise ValueError("engine_set_choices must have at least one entry")
         if not self.indicator_set_choices:
             raise ValueError("indicator_set_choices must have at least one entry")
+        if not self.context_filter_set_choices:
+            raise ValueError("context_filter_set_choices must have at least one entry")
         if self.risk_param_ranges and self.risk_param_grid:
             raise ValueError("supply risk_param_ranges XOR risk_param_grid, not both")
 
@@ -105,6 +123,9 @@ class MissionSearchSpace:
         for indicator_set in self.indicator_set_choices:
             for spec in indicator_set:
                 _validate_indicator_spec(spec)
+        for context_set in self.context_filter_set_choices:
+            for spec in context_set:
+                _validate_context_spec(spec)
 
         allowed_risk_fields = set(RISK_OVERRIDE_FIELDS)
         for name in {**self.risk_param_ranges, **self.risk_param_grid}:
@@ -116,7 +137,10 @@ class MissionSearchSpace:
         mission's n_trials_per_symbol to this, since re-asking past
         exhaustion just cycles/duplicates points (verified against the
         installed optuna's real GridSampler behavior, not assumed)."""
-        n = len(self.timeframes_choices) * len(self.engine_set_choices) * len(self.indicator_set_choices)
+        n = (
+            len(self.timeframes_choices) * len(self.engine_set_choices)
+            * len(self.indicator_set_choices) * len(self.context_filter_set_choices)
+        )
         for choices in self.risk_param_grid.values():
             n *= len(choices)
         return n
@@ -129,6 +153,7 @@ class MissionSearchSpace:
             _TF_IDX_KEY: list(range(len(self.timeframes_choices))),
             _ENGINES_IDX_KEY: list(range(len(self.engine_set_choices))),
             _INDICATORS_IDX_KEY: list(range(len(self.indicator_set_choices))),
+            _CONTEXT_IDX_KEY: list(range(len(self.context_filter_set_choices))),
         }
         d.update({k: list(v) for k, v in self.risk_param_grid.items()})
         return d
@@ -146,6 +171,10 @@ def search_space_from_dict(raw: dict[str, Any]) -> MissionSearchSpace:
         timeframes_choices=tuple(tuple(c) for c in raw["timeframes_choices"]),
         engine_set_choices=tuple(tuple(c) for c in raw["engine_set_choices"]),
         indicator_set_choices=tuple(tuple(c) for c in raw["indicator_set_choices"]),
+        # .get() with a backward-compatible default: a mission created
+        # before Context Filters shipped has no such key in its stored
+        # search_space_json.
+        context_filter_set_choices=tuple(tuple(c) for c in raw.get("context_filter_set_choices", [[]])),
         risk_param_ranges={k: tuple(v) for k, v in raw.get("risk_param_ranges", {}).items()},
         risk_param_grid={k: tuple(v) for k, v in raw.get("risk_param_grid", {}).items()},
     )
@@ -162,6 +191,7 @@ def suggest_point(trial: Any, space: MissionSearchSpace, grid_mode: bool) -> dic
     trial.suggest_categorical(_TF_IDX_KEY, list(range(len(space.timeframes_choices))))
     trial.suggest_categorical(_ENGINES_IDX_KEY, list(range(len(space.engine_set_choices))))
     trial.suggest_categorical(_INDICATORS_IDX_KEY, list(range(len(space.indicator_set_choices))))
+    trial.suggest_categorical(_CONTEXT_IDX_KEY, list(range(len(space.context_filter_set_choices))))
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
             trial.suggest_categorical(name, list(choices))
@@ -173,16 +203,25 @@ def suggest_point(trial: Any, space: MissionSearchSpace, grid_mode: bool) -> dic
 
 def resolve_point(space: MissionSearchSpace, raw_params: dict[str, Any]) -> dict[str, Any]:
     """Pure function: raw_params -> {"timeframes", "engines", "indicators",
-    "risk_overrides"}. Same input always produces the same output —
-    called both live (mission_runner evaluating a trial) and when
-    rendering a stored row's params_json back into something readable."""
+    "context_filters", "risk_overrides"}. Same input always produces the
+    same output — called both live (mission_runner evaluating a trial)
+    and when rendering a stored row's params_json back into something
+    readable.
+
+    raw_params.get(_CONTEXT_IDX_KEY, 0) tolerates a resumed/replayed
+    trial recorded before Context Filters shipped (its params_json has
+    no __context_idx key) — defaults to index 0, which is always the
+    empty-choice entry MissionSearchSpace.context_filter_set_choices
+    defaults to."""
     timeframes = list(space.timeframes_choices[raw_params[_TF_IDX_KEY]])
     engines = list(space.engine_set_choices[raw_params[_ENGINES_IDX_KEY]])
     indicators = list(space.indicator_set_choices[raw_params[_INDICATORS_IDX_KEY]])
+    context_filters = list(space.context_filter_set_choices[raw_params.get(_CONTEXT_IDX_KEY, 0)])
     risk_overrides = {k: v for k, v in raw_params.items() if k not in _INTERNAL_KEYS}
     return {
         "timeframes": timeframes, "engines": engines,
-        "indicators": indicators, "risk_overrides": risk_overrides,
+        "indicators": indicators, "context_filters": context_filters,
+        "risk_overrides": risk_overrides,
     }
 
 
@@ -197,6 +236,7 @@ def distributions_for(space: MissionSearchSpace, grid_mode: bool) -> dict[str, A
         _TF_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.timeframes_choices)))),
         _ENGINES_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.engine_set_choices)))),
         _INDICATORS_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.indicator_set_choices)))),
+        _CONTEXT_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.context_filter_set_choices)))),
     }
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
@@ -288,6 +328,7 @@ def evaluate_point(
         timeframes=point["timeframes"] or None,
         engines_enabled={e: (e in point["engines"]) for e in ENGINE_KEYS},
         indicators=point["indicators"] or None,
+        context_filters=point.get("context_filters") or None,
     )
     cfg = BacktestConfig.from_profile(symbol, **point["risk_overrides"])
     bt = run_backtest(df, cfg, engine_config=engine_config)

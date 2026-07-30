@@ -80,6 +80,11 @@ class RobustnessConfig:
     # indicator filter/confirmation/score-weight specs. None = no
     # indicator layer, unchanged from every prior phase's behavior.
     indicators: tuple[dict, ...] | None = None
+    # Context Filters (2026-07-30) — ad-hoc per-run session/day-of-week/
+    # volatility-regime/market-regime/direction filter/confirmation/
+    # score-weight specs. None = no context filter layer, unchanged from
+    # every prior phase's behavior.
+    context_filters: tuple[dict, ...] | None = None
 
     def __post_init__(self) -> None:
         if 1.0 not in self.multipliers:
@@ -158,6 +163,7 @@ def run_param_sweep(
         timeframes=list(rc.timeframes) if rc.timeframes else None,
         engines_enabled={e: (e in rc.engines) for e in ENGINE_KEYS} if rc.engines else None,
         indicators=list(rc.indicators) if rc.indicators else None,
+        context_filters=list(rc.context_filters) if rc.context_filters else None,
     )
 
     points: list[SweepPoint] = []

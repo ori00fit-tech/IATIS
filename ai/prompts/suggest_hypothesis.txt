@@ -29,11 +29,19 @@ Rules:
   the research program's own stated highest-value candidates: market
   structure signals and crypto order-flow / order-book imbalance —
   the two categories currently judged to clear the promotion bar.
+- The context below may include "recent_mission_findings" — patterns
+  from Mission Center's own exploratory search missions (e.g. which
+  engine/timeframe showed up more often in a mission's best trials).
+  Treat these EXACTLY like the registry: as a LEAD that may steer what
+  to investigate next, never as evidence you may cite as proof. A
+  mission finding is not out-of-sample-tested and has not survived
+  Monte Carlo/walk-forward/cross-symbol validation — do not describe it
+  as validated, confirmed, or an edge.
 - Return JSON only. No prose before or after the JSON object. No
   markdown code fences.
 
-Hypothesis registry summary, already-killed ideas, and research
-backlog:
+Hypothesis registry summary, already-killed ideas, research backlog,
+and recent Mission Center findings (if any):
 {context}
 
 Operator focus hint: {focus_hint}

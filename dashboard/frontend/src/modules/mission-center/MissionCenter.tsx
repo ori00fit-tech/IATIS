@@ -5,7 +5,7 @@ import { KpiCard } from '../../components/KpiCard'
 import { DataTable, type Column } from '../../components/DataTable'
 import { useApiQuery } from '../../lib/useApiQuery'
 import { useAuth } from '../../lib/auth'
-import { ENGINE_KEYS, SUPPORTED_TIMEFRAMES } from '../backtesting-lab/BacktestingLab'
+import { ENGINE_KEYS, SUPPORTED_TIMEFRAMES, FILTER_MODES } from '../backtesting-lab/BacktestingLab'
 import { getResearchSymbols, saveHypothesisDraft, type SymbolsResponse } from '../research-backtests/api'
 import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
@@ -94,6 +94,119 @@ function MultiCheckbox({ options, value, onToggle }: { options: readonly string[
 
 const DEFAULT_RISK_RANGE_FIELDS = ['sl_atr_multiplier', 'min_rr', 'risk_per_trade'] as const
 
+// Context Filters (2026-07-30) — mirrors confluence/context_filters.py's
+// CONTEXT_KEYS + each dimension's own _ALL_* option set exactly.
+const CONTEXT_KEYS = ['session', 'day_of_week', 'volatility_regime', 'market_regime', 'direction'] as const
+type ContextKey = (typeof CONTEXT_KEYS)[number]
+
+const CONTEXT_OPTIONS: Record<ContextKey, { label: string; value: string | number }[]> = {
+  session: ['Asia', 'London', 'NewYork', 'Overlap'].map((v) => ({ label: v, value: v })),
+  day_of_week: ([['Mon', 0], ['Tue', 1], ['Wed', 2], ['Thu', 3], ['Fri', 4], ['Sat', 5], ['Sun', 6]] as const)
+    .map(([label, value]) => ({ label, value })),
+  volatility_regime: ['low', 'normal', 'high', 'extreme'].map((v) => ({ label: v, value: v })),
+  market_regime: ['TRENDING', 'RANGING'].map((v) => ({ label: v, value: v })),
+  direction: ['BULLISH', 'BEARISH'].map((v) => ({ label: v, value: v })),
+}
+
+interface ContextFilterRowState {
+  name: ContextKey
+  mode: (typeof FILTER_MODES)[number]
+  allowed: (string | number)[]
+  weight: number
+}
+
+// One purpose-built row-builder for this one screen, matching every other
+// Filters UI in this arc (IndicatorsStep in BacktestingLab.tsx) — mode +
+// (for context filters) an "allowed" multi-select instead of numeric params,
+// since every dimension here restricts to a fixed enum, not a threshold.
+function ContextFiltersBuilder({ rows, setRows }: { rows: ContextFilterRowState[]; setRows: (r: ContextFilterRowState[]) => void }) {
+  const rowFor = (name: ContextKey) => rows.find((r) => r.name === name)
+
+  const setMode = (name: ContextKey, mode: (typeof FILTER_MODES)[number]) => {
+    const others = rows.filter((r) => r.name !== name)
+    if (mode === 'disabled') {
+      setRows(others)
+      return
+    }
+    const existing = rowFor(name)
+    setRows([...others, { name, mode, allowed: existing?.allowed ?? [], weight: existing?.weight ?? 0 }])
+  }
+
+  const toggleAllowed = (name: ContextKey, value: string | number) => {
+    const existing = rowFor(name)
+    if (!existing) return
+    const has = existing.allowed.includes(value)
+    const nextAllowed = has ? existing.allowed.filter((v) => v !== value) : [...existing.allowed, value]
+    setRows(rows.map((r) => (r.name === name ? { ...r, allowed: nextAllowed } : r)))
+  }
+
+  const setWeight = (name: ContextKey, weight: number) =>
+    setRows(rows.map((r) => (r.name === name ? { ...r, weight } : r)))
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="text-[0.78em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+        Context filters never set direction/bias — they can only confirm, veto, or nudge the score of a decision the
+        engines already produced, based on session/day-of-week/volatility regime/market regime/direction.
+      </div>
+      {CONTEXT_KEYS.map((name) => {
+        const row = rowFor(name)
+        const mode = row?.mode ?? 'disabled'
+        return (
+          <div
+            key={name}
+            className={`rounded-lg border px-3.5 py-3 flex flex-col gap-2 ${
+              mode !== 'disabled' ? 'border-accent/40 bg-accent/[0.04]' : 'border-border bg-surface/40'
+            }`}
+          >
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-bold text-text w-32 shrink-0">{name.replace(/_/g, ' ')}</span>
+              <select
+                value={mode}
+                onChange={(e) => setMode(name, e.target.value as (typeof FILTER_MODES)[number])}
+                className="px-2 py-1 bg-bg border border-border rounded text-text text-[0.82em]"
+              >
+                {FILTER_MODES.map((m) => (
+                  <option key={m} value={m}>{m.replace('_', ' ')}</option>
+                ))}
+              </select>
+              {mode === 'score_weight' && (
+                <label className="flex items-center gap-1.5 text-[0.78em] text-muted">
+                  weight
+                  <input
+                    type="number" min={0} max={100} value={row?.weight ?? 0}
+                    onChange={(e) => setWeight(name, Number(e.target.value))}
+                    className="w-16 px-1.5 py-1 bg-bg border border-border rounded text-text"
+                  />
+                </label>
+              )}
+            </div>
+            {mode !== 'disabled' && (
+              <div className="flex flex-wrap gap-1.5">
+                <span className="text-muted text-[0.72em] self-center">allowed (empty = unrestricted):</span>
+                {CONTEXT_OPTIONS[name].map((opt) => {
+                  const checked = row?.allowed.includes(opt.value) ?? false
+                  return (
+                    <label
+                      key={String(opt.value)}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[0.72em] cursor-pointer ${
+                        checked ? 'border-accent text-accent bg-accent/10' : 'border-border text-muted'
+                      }`}
+                    >
+                      <input type="checkbox" checked={checked} onChange={() => toggleAllowed(name, opt.value)} className="hidden" />
+                      {opt.label}
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void }) {
   const { markUnauthenticated } = useAuth()
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
@@ -109,6 +222,7 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
     sl_atr_multiplier: [1.0, 3.0],
   })
   const [maxWallClock, setMaxWallClock] = useState<number | ''>('')
+  const [contextFilters, setContextFilters] = useState<ContextFilterRowState[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -132,6 +246,12 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
 
     setSubmitting(true)
     try {
+      const contextSpecs = contextFilters.map((r) => ({
+        name: r.name,
+        mode: r.mode,
+        params: r.allowed.length > 0 ? { [r.name === 'day_of_week' ? 'allowed_days' : 'allowed']: r.allowed } : {},
+        weight: r.weight,
+      }))
       const body: MissionRequest = {
         name: name || undefined,
         symbols,
@@ -143,6 +263,7 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
         timeframes_choices: [timeframes],
         engine_set_choices: [engines],
         indicator_set_choices: [[]],
+        context_filter_set_choices: [contextSpecs],
         risk_param_ranges: riskRanges,
         risk_param_grid: {},
         max_wall_clock_seconds: maxWallClock === '' ? undefined : maxWallClock,
@@ -227,6 +348,10 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
               </label>
             ))}
           </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[0.7em] text-muted uppercase">Context filters (this run only)</span>
+          <ContextFiltersBuilder rows={contextFilters} setRows={setContextFilters} />
         </div>
 
         {error && <div className="text-red text-[0.8em]">{error}</div>}

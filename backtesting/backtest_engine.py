@@ -251,7 +251,7 @@ class BacktestResult:
         default_factory=lambda: {
             "mqs": 0, "score": 0, "votes": 0,
             "contradiction": 0, "reversal_veto": 0, "info_share": 0,
-            "indicator_filter": 0,
+            "indicator_filter": 0, "context_filter": 0,
         }
     )
     # Backtesting Lab Pro Phase D (2026-07-27) — which indicator (by
@@ -260,6 +260,12 @@ class BacktestResult:
     # (the total count) since more than one indicator can be configured
     # per run.
     indicator_rejections: dict = field(default_factory=dict)
+    # Context Filters (2026-07-30) — same shape as indicator_rejections,
+    # for confluence/context_filters.py (session/day/volatility/regime/
+    # direction) — a separate filter family with its own gate, so a
+    # STRONG_LEAD investigation can distinguish which family blocked a
+    # bar.
+    context_rejections: dict = field(default_factory=dict)
 
     trades: list = field(default_factory=list)
     equity_curve: list = field(default_factory=list)
@@ -353,6 +359,7 @@ def build_engine_config_override(
     timeframes: list[str] | None = None,
     engines_enabled: dict[str, bool] | None = None,
     indicators: list[dict] | None = None,
+    context_filters: list[dict] | None = None,
 ) -> dict | None:
     """Backtesting Lab Pro Phase B/C/D (2026-07-27) — ad-hoc per-run
     overrides, merged over a real load_config() snapshot so every other
@@ -375,8 +382,15 @@ def build_engine_config_override(
     only ever filter/confirm/weight a decision the engine vote already
     produced (see confluence/indicator_filters.py's module docstring);
     they can never set direction/bias themselves.
+
+    context_filters (Context Filters, 2026-07-30): a list of confluence.
+    context_filters.ContextSpec-shaped dicts ({"name","mode","params",
+    "weight"}) — session/day-of-week/volatility-regime/market-regime/
+    direction. Stored verbatim under engine_config["context_filters"]
+    ["filters"]; same filter/confirm/weight-only constraint as
+    indicators, never a direction/bias source.
     """
-    if timeframes is None and engines_enabled is None and indicators is None:
+    if timeframes is None and engines_enabled is None and indicators is None and context_filters is None:
         return None
     from utils.helpers import load_config
     base = load_config()
@@ -390,6 +404,8 @@ def build_engine_config_override(
         }
     if indicators is not None:
         merged["indicators"] = {"filters": list(indicators)}
+    if context_filters is not None:
+        merged["context_filters"] = {"filters": list(context_filters)}
     return merged
 
 
@@ -629,6 +645,26 @@ def run_backtest(
                 if indicator_result.vetoed:
                     indicator_veto_blocked = True
 
+            # Context filters (2026-07-30) — ad-hoc, per-run session/
+            # day-of-week/volatility-regime/market-regime/direction
+            # filters. Same veto-or-nudge-only constraint as indicator
+            # filters — see confluence/context_filters.py's module
+            # docstring. Absent for every existing caller (engine_config
+            # has no "context_filters" key), so this is a no-op unless
+            # explicitly configured.
+            context_veto_blocked = False
+            context_result = None
+            context_specs = engine_config.get("context_filters", {}).get("filters")
+            if context_specs:
+                from confluence.context_filters import ContextSpec, evaluate_context_filters
+                c_specs = [ContextSpec(**s) for s in context_specs]
+                context_result = evaluate_context_filters(window, vote.winning_bias.value, c_specs)
+                adjusted_score = round(
+                    max(0.0, min(100.0, adjusted_score + context_result.score_adjustment)), 2
+                )
+                if context_result.vetoed:
+                    context_veto_blocked = True
+
             # H013 reversal veto — hard veto blocks, soft veto scales the
             # score by confidence_multiplier (identical to production).
             veto_blocked = False
@@ -655,6 +691,7 @@ def run_backtest(
                 and not contradiction.blocked
                 and not veto_blocked
                 and not indicator_veto_blocked
+                and not context_veto_blocked
                 and vote.winning_bias.value != "NEUTRAL"
                 and info_share_ok
             )
@@ -666,6 +703,10 @@ def run_backtest(
                     result.gate_rejections["indicator_filter"] += 1
                     name = indicator_result.veto_indicator
                     result.indicator_rejections[name] = result.indicator_rejections.get(name, 0) + 1
+                elif context_veto_blocked:
+                    result.gate_rejections["context_filter"] += 1
+                    cname = context_result.veto_context
+                    result.context_rejections[cname] = result.context_rejections.get(cname, 0) + 1
                 elif adjusted_score < min_score:
                     result.gate_rejections["score"] += 1
                 elif contradiction.blocked:
@@ -703,6 +744,7 @@ def run_backtest(
                 "adjusted_score": adjusted_score,
                 "regime": regime.regime.value if config.use_regime_weights else None,
                 "indicator_filters": indicator_result.per_indicator if indicator_result else None,
+                "context_filters": context_result.per_context if context_result else None,
             }
 
             open_trade = Trade(

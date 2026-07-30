@@ -326,6 +326,62 @@ def test_build_copilot_context_degrades_gracefully_on_missing_heading(monkeypatc
     assert ctx["reserved_backlog_ids"] == "Not available."
 
 
+def test_build_copilot_context_recent_mission_findings_none_when_no_missions():
+    from execution.routes.ai import _build_copilot_context
+
+    ctx = _build_copilot_context()
+    assert "recent_mission_findings" in ctx
+    assert ctx["recent_mission_findings"] is None
+
+
+def test_build_copilot_context_summarizes_a_real_finished_mission():
+    from backtest import mission_runner
+    from backtest.optimizer import MissionSearchSpace, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _TF_IDX_KEY
+    from execution.routes.ai import _build_copilot_context
+    from storage import research_missions
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",), ("H4",)),
+        engine_set_choices=(("nnfx",), ("nnfx", "price_action")),
+        indicator_set_choices=((),),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    research_missions.upsert_mission(
+        mission_id="copilot-ctx-mission", name="copilot-ctx-mission", sampler="random",
+        objective_metric="profit_factor", symbols=["EURUSD"], n_trials_per_symbol=25,
+        min_trades=1, seed=42, search_space=mission_runner._search_space_dict(space),
+        config={}, status="finished",
+    )
+    for i in range(25):
+        research_missions.record_trial(
+            mission_id="copilot-ctx-mission", trial_number=i, symbol="EURUSD", state="COMPLETE",
+            objective_value=1.0 + i * 0.01,
+            params={_TF_IDX_KEY: i % 2, _ENGINES_IDX_KEY: i % 2, _INDICATORS_IDX_KEY: 0,
+                    "sl_atr_multiplier": 2.0},
+            metrics={"profit_factor": 1.2}, trades=50, error=None, started_at="t", finished_at="t",
+        )
+
+    ctx = _build_copilot_context()
+    findings = ctx["recent_mission_findings"]
+    assert findings is not None
+    entry = next(f for f in findings if f["mission_id"] == "copilot-ctx-mission")
+    assert entry["symbols"] == ["EURUSD"]
+    assert entry["n_complete_trials"] == 25
+    assert "top_engine_by_lift" in entry
+
+
+def test_build_copilot_context_recent_mission_findings_degrades_gracefully(monkeypatch):
+    from execution.routes.ai import _build_copilot_context
+    from storage import research_missions
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated D1 outage")
+
+    monkeypatch.setattr(research_missions, "list_recent_missions", _boom)
+    ctx = _build_copilot_context()  # must not raise
+    assert ctx["recent_mission_findings"] is None
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

@@ -388,7 +388,58 @@ def _build_copilot_context() -> dict[str, Any]:
         "highest_registered_id": f"H{highest_id:03d}" if highest_id else None,
         "already_killed_ideas": dead_list or "Not available — see CLAUDE.md's dead list table directly.",
         "reserved_backlog_ids": backlog_reserved or "Not available.",
+        "recent_mission_findings": _recent_mission_findings(),
     }
+
+
+def _recent_mission_findings(limit: int = 3) -> list[dict[str, Any]] | None:
+    """AI Research Lab Phase 4 (2026-07-30) — grounds a suggestion in
+    real, recent Mission Center findings (backtest/meta_analysis.py),
+    NOT just the registry. Degrades to None on any failure (D1
+    unreachable, a malformed mission row, etc.) — this must never turn
+    the AI Copilot, which worked fine with zero D1 dependency before
+    Mission Center existed, into something that 500s over an unrelated
+    outage. Every finding is explicitly still EXPLORATORY — this is a
+    LEAD to steer the model's suggestion, never evidence it may cite as
+    proof."""
+    try:
+        from backtest.meta_analysis import compute_meta_analysis
+        from backtest.optimizer import search_space_from_dict
+        from storage import research_missions
+
+        findings = []
+        for mission in research_missions.list_recent_missions(limit=limit, status="finished"):
+            try:
+                space = search_space_from_dict(json.loads(mission["search_space_json"]))
+                trials = research_missions.leaderboard(mission["id"], limit=2000)
+                analysis = compute_meta_analysis(
+                    space, trials, sampler=mission["sampler"], mission_id=mission["id"],
+                )
+            except Exception as exc:
+                logger.debug(f"Copilot context: meta-analysis skipped for {mission.get('id')}: {exc}")
+                continue
+
+            entry: dict[str, Any] = {
+                "mission_id": mission["id"], "name": mission["name"],
+                "symbols": json.loads(mission["symbols_json"]),
+                "objective_metric": mission["objective_metric"],
+                "n_complete_trials": analysis.n_complete_trials,
+            }
+            if analysis.insufficient_data:
+                entry["note"] = analysis.note
+            else:
+                top_engines = sorted(analysis.engine_frequencies, key=lambda f: f.lift or 0, reverse=True)
+                top_timeframes = sorted(analysis.timeframe_frequencies, key=lambda f: f.lift or 0, reverse=True)
+                entry["top_engine_by_lift"] = top_engines[0].value if top_engines else None
+                entry["top_timeframe_by_lift"] = top_timeframes[0].value if top_timeframes else None
+                entry["consensus_bands"] = [
+                    {"risk_param": b.risk_param, "shape": b.shape} for b in analysis.consensus_bands
+                ]
+            findings.append(entry)
+        return findings or None
+    except Exception as exc:
+        logger.debug(f"Copilot context: recent mission findings unavailable: {exc}")
+        return None
 
 
 @router.post("/ai/suggest-hypothesis")

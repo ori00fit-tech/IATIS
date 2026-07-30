@@ -1909,9 +1909,9 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     # /research/symbols, /research/engines, /research/indicators,
     # /research/scenario-config, /research/datasets, /research/run-reports,
     # /research/dashboard-summary, /research/validation-config,
-    # /research/compare, and /research/integrity — all literal routes must
-    # still resolve to themselves, not be captured as
-    # hypothesis_id="manifests"/etc.
+    # /research/edge-library, /research/compare, and /research/integrity —
+    # all literal routes must still resolve to themselves, not be captured
+    # as hypothesis_id="manifests"/etc.
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
@@ -1921,8 +1921,58 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     assert client.get("/research/run-reports", headers=HDR).status_code == 200
     assert client.get("/research/dashboard-summary", headers=HDR).status_code == 200
     assert client.get("/research/validation-config", headers=HDR).status_code == 200
+    assert client.get("/research/edge-library", headers=HDR).status_code == 200
     assert client.get("/research/compare?ids=H015", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
+
+
+# ── Edge Library (AI Research Lab Phase 4, 2026-07-30) ─────────────────────
+
+def test_research_edge_library_requires_auth(client):
+    assert client.get("/research/edge-library").status_code == 401
+
+
+def test_research_edge_library_reflects_the_real_registry_today(client):
+    # Ground truth as of this writing: exactly 2 PASSED hypotheses exist
+    # (H009, H013), and BOTH are flagged by audit_passed_hypotheses() as
+    # missing a qualifying evidence block (no oos_trades/oos_pf/
+    # walk_forward/monte_carlo) — so the edge library is honestly empty
+    # today. If this test ever fails because a hypothesis newly qualifies,
+    # that is real, welcome news — update the assertion, don't just delete it.
+    r = client.get("/research/edge-library", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["qualifying_count"] == 0
+    assert body["by_symbol"] == {}
+    assert "promotion_criteria" in body and body["promotion_criteria"]["min_trades"] == 300
+
+
+def test_research_edge_library_includes_a_cleanly_qualifying_hypothesis(client, monkeypatch):
+    import execution.routes.research as m
+
+    monkeypatch.setattr(m, "_load_registry_hypotheses", lambda: {
+        "H900": {
+            "title": "Synthetic qualifying hypothesis for this test",
+            "status": "PASSED",
+            "evidence": {
+                "oos_trades": 350, "oos_pf": 1.4,
+                "walk_forward": True, "monte_carlo": True,
+                "symbols": ["EURUSD", "GBPUSD"],
+            },
+        },
+        "H901": {
+            "title": "PASSED but under-evidenced — must be excluded",
+            "status": "PASSED",
+            "evidence": {"oos_trades": 10},
+        },
+    })
+    r = client.get("/research/edge-library", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["qualifying_count"] == 1
+    assert set(body["by_symbol"].keys()) == {"EURUSD", "GBPUSD"}
+    assert body["by_symbol"]["EURUSD"][0]["id"] == "H900"
+    assert "H901" not in str(body["by_symbol"])
 
 
 def test_research_hypothesis_detail_finds_exact_manifest_link(client):

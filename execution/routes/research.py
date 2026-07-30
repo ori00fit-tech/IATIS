@@ -1209,6 +1209,65 @@ def _load_registry_hypotheses() -> dict:
     return _json.loads(registry_path.read_text()).get("hypotheses", {})
 
 
+@router.get("/research/edge-library")
+async def research_edge_library(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """AI Research Lab Phase 4 (2026-07-30) — read-only, computed-on-read
+    aggregation of registry.json entries that CLEANLY clear research/
+    edge_gate.py's own PROMOTION_CRITERIA. Reuses audit_passed_hypotheses()
+    rather than forking its checks (a PASSED hypothesis qualifies only if
+    it is NOT among that function's own flagged-as-under-evidenced
+    warnings), so the two can never silently drift apart. Never fed by a
+    Mission Center mission's exploratory trials — those produce a LEAD
+    (NO_EDGE/WEAK_LEAD/STRONG_LEAD, backtest/mission_validator.py),
+    a completely different, still-human-gated vocabulary and pipeline.
+
+    MUST stay registered before /research/{hypothesis_id} — same
+    single-segment literal-vs-path-param registration-order requirement
+    as /research/compare immediately below.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from research.edge_gate import PROMOTION_CRITERIA, audit_passed_hypotheses
+
+    hypotheses_raw = _load_registry_hypotheses()
+    warnings = audit_passed_hypotheses(hypotheses_raw)
+    flagged_ids = {w.split(" is PASSED", 1)[0] for w in warnings}
+
+    qualifying = {
+        hid: h for hid, h in hypotheses_raw.items()
+        if h.get("status") == "PASSED" and hid not in flagged_ids
+    }
+
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for hid, h in qualifying.items():
+        ev = h.get("evidence") or {}
+        symbols = ev.get("symbols") or ([ev["symbol"]] if ev.get("symbol") else None) or ["_unscoped"]
+        entry = {
+            "id": hid,
+            "title": (h.get("title") or "")[:160],
+            "oos_trades": ev.get("oos_trades"),
+            "oos_pf": ev.get("oos_pf"),
+        }
+        for sym in symbols:
+            by_symbol.setdefault(sym, []).append(entry)
+
+    return {
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "promotion_criteria": PROMOTION_CRITERIA,
+        "qualifying_count": len(qualifying),
+        "by_symbol": by_symbol,
+        "note": (
+            "Computed fresh on every call from research/results/registry.json "
+            "— never persisted, never fed by Mission Center's exploratory "
+            "trials. An empty result means no hypothesis currently carries "
+            "an evidence block meeting PROMOTION_CRITERIA (CLAUDE.md rule 3) "
+            "— an honest reflection of the current evidence base, not a bug."
+        ),
+    }
+
+
 @router.get("/research/compare")
 async def research_compare(
     ids: str = Query(..., description="Comma-separated hypothesis IDs, e.g. H013,H015,H017"),

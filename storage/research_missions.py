@@ -170,6 +170,28 @@ def get_mission(mission_id: str) -> dict[str, Any] | None:
     return {k: row[k] for k in row.keys()} if row else None
 
 
+def list_recent_missions(limit: int = 5, status: str | None = None) -> list[dict[str, Any]]:
+    """Newest first, optionally filtered to one status (e.g. "finished").
+    AI Research Lab Phase 4 (2026-07-30) — the accessor
+    execution/routes/ai.py's _build_copilot_context() needs to ground a
+    hypothesis suggestion in real, recent mission findings without
+    requiring a caller to already know mission IDs (unlike every other
+    function in this module)."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        if status is not None:
+            rows = con.execute(
+                "SELECT * FROM research_missions WHERE status=? ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM research_missions ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [{k: r[k] for k in r.keys()} for r in rows]
+
+
 def record_trial(
     mission_id: str,
     trial_number: int,

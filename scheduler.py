@@ -356,11 +356,28 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # with the standard per-key cooldown on any mismatch.
         if config.get("features", {}).get("broker_reconciliation", True):
             try:
-                from execution.reconciliation import format_alert, reconcile, store_result
+                from execution.reconciliation import format_alert, reconcile, repair_mismatches, store_result
                 rec = reconcile(config)
                 store_result(rec)  # the dashboard reads STORED results only
                 if rec.get("status") == "mismatch":
                     _send_error_once(key="reconciliation", message=format_alert(rec))
+                    # Auto-repair (2026-07-30): internal_only rows are pure
+                    # bookkeeping drift (broker already closed the position;
+                    # outcome_tracker never observed it) that otherwise
+                    # inflates open-risk/exposure forever — close them here
+                    # rather than waiting on a manual dashboard action.
+                    # Never fabricates win/loss (reconcile_close_signal only).
+                    if config.get("features", {}).get("reconciliation_auto_repair", True):
+                        try:
+                            repair = repair_mismatches(rec)
+                            if repair.get("repaired"):
+                                logger.warning(
+                                    f"Reconciliation auto-repair closed "
+                                    f"{len(repair['repaired'])} stale signal(s): "
+                                    f"{repair['repaired']}"
+                                )
+                        except Exception as exc:
+                            logger.warning(f"Reconciliation auto-repair failed (non-fatal): {exc}")
             except Exception as exc:
                 logger.warning(f"Reconciliation failed (non-fatal): {exc}")
 

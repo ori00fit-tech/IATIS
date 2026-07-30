@@ -217,6 +217,73 @@ def test_on_execution_event_zero_position_id_is_ignored(client):
     assert client._positions == {}
 
 
+def test_on_execution_event_unresolved_symbol_falls_back_to_synthetic_key(client):
+    """Same fallback as _on_reconcile_res (2026-07-30 fix) — without it, two
+    different unresolved-symbol positions would collide on a shared '' key,
+    silently overwriting or mis-closing each other."""
+    position = SimpleNamespace(
+        positionId=1, positionStatus=1, price=100.0, stopLoss=0.0, takeProfit=0.0,
+        tradeData=SimpleNamespace(symbolId=999, tradeSide=1, volume=1000),
+    )
+    client._on_execution_event(SimpleNamespace(executionType=2, position=position))
+    assert "SYMBOL_999" in client._positions
+    assert "" not in client._positions
+
+
+def test_on_execution_event_two_unresolved_symbols_do_not_collide(client):
+    p1 = SimpleNamespace(
+        positionId=1, positionStatus=1, price=1.0, stopLoss=0.0, takeProfit=0.0,
+        tradeData=SimpleNamespace(symbolId=111, tradeSide=1, volume=1000),
+    )
+    p2 = SimpleNamespace(
+        positionId=2, positionStatus=1, price=2.0, stopLoss=0.0, takeProfit=0.0,
+        tradeData=SimpleNamespace(symbolId=222, tradeSide=2, volume=2000),
+    )
+    client._on_execution_event(SimpleNamespace(executionType=2, position=p1))
+    client._on_execution_event(SimpleNamespace(executionType=2, position=p2))
+    assert client._positions["SYMBOL_111"].position_id == "1"
+    assert client._positions["SYMBOL_222"].position_id == "2"
+
+
+# ── SYMBOL_N re-resolution race fix ──────────────────────────────────────
+
+def test_reresolve_pending_symbol_ids_fixes_up_placeholder_after_symbols_load(client):
+    """ProtoOAReconcileRes answering before ProtoOASymbolsListRes leaves a
+    position under a synthetic 'SYMBOL_<id>' key — once the symbols list
+    actually arrives, it must be re-keyed to the real internal symbol."""
+    positions = [
+        SimpleNamespace(
+            positionId=1, price=100.0, stopLoss=0.0, takeProfit=0.0,
+            tradeData=SimpleNamespace(symbolId=6, tradeSide=1, volume=1000),
+        )
+    ]
+    client._on_reconcile_res(SimpleNamespace(position=positions))
+    assert "SYMBOL_6" in client._positions
+
+    symbols = [SimpleNamespace(symbolName="EURUSD", symbolId=6)]
+    client._on_symbols_list_res(client=None, message=SimpleNamespace(symbol=symbols))
+
+    assert "SYMBOL_6" not in client._positions
+    assert client._positions["EURUSD"].position_id == "1"
+
+
+def test_reresolve_pending_symbol_ids_leaves_genuinely_unmapped_alone(client):
+    """A symbol id the broker never returns in the symbols list (a real gap,
+    not a race) must stay under its synthetic key rather than vanish."""
+    positions = [
+        SimpleNamespace(
+            positionId=1, price=100.0, stopLoss=0.0, takeProfit=0.0,
+            tradeData=SimpleNamespace(symbolId=6, tradeSide=1, volume=1000),
+        )
+    ]
+    client._on_reconcile_res(SimpleNamespace(position=positions))
+
+    symbols = [SimpleNamespace(symbolName="XAUUSD", symbolId=2)]  # doesn't include id=6
+    client._on_symbols_list_res(client=None, message=SimpleNamespace(symbol=symbols))
+
+    assert "SYMBOL_6" in client._positions
+
+
 # ── _on_order_error_event ────────────────────────────────────────────────
 
 def test_on_order_error_event_never_raises(client):

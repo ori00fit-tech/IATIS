@@ -29,6 +29,8 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/risk-center/RiskCenter').then((m) => ({ default: m.RiskCenter }))),
   'execution-quality': lazy(() =>
     import('./modules/execution-quality/ExecutionQuality').then((m) => ({ default: m.ExecutionQuality }))),
+  reconciliation: lazy(() =>
+    import('./modules/reconciliation/Reconciliation').then((m) => ({ default: m.Reconciliation }))),
   'data-center': lazy(() =>
     import('./modules/data-center/DataCenter').then((m) => ({ default: m.DataCenter }))),
   'provider-eval': lazy(() =>

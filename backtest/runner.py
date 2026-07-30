@@ -341,6 +341,13 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
         exit_reason=trade.exit_reason,
         is_win=trade.pnl_usd > 0,
         regime=decision.get("regime") or "",
+        # Bug found live (2026-07-30): by_session was always 100% "Unknown"
+        # even though decision["session"] is real (backtest_engine.py sets
+        # it from the MQS gate's own session detection whenever use_mqs_gate
+        # is on, which is the default everywhere and never overridden by
+        # Mission Center's ad-hoc runs) — this field was simply never copied
+        # from decision into TradeRecord, unlike regime just above.
+        session=decision.get("session") or "",
         cf_score=decision.get("adjusted_score", 0.0),
         engine_votes=engine_votes,
         indicator_filters=decision.get("indicator_filters") or {},

@@ -16,6 +16,7 @@ import {
   SAMPLER_KEYS, OPTIMIZABLE_METRICS,
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial,
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
+  type ValidationRow,
 } from './api'
 
 const POLL_MS = 4000
@@ -830,16 +831,63 @@ function significanceFromLeaderboard(trials: MissionTrial[]): { banner: string; 
   }
 }
 
+// Edge Discovery Summary (2026-07-30) — one row per symbol in a
+// multi-symbol mission, showing its single best COMPLETE trial and
+// whether that exact trial has already been through Validate (Monte
+// Carlo + walk-forward + robustness), so "discover an edge per currency,
+// then act on it" doesn't require flipping through every symbol tab and
+// eyeballing a sorted column. Still never picks a winner across symbols
+// or writes anywhere — same report-everything, LEAD-not-evidence
+// contract as the rest of Mission Center.
+function bestTrialPerSymbol(trials: MissionTrial[]): Record<string, MissionTrial> {
+  const best: Record<string, MissionTrial> = {}
+  for (const t of trials) {
+    if (t.state !== 'COMPLETE' || t.objective_value == null) continue
+    const current = best[t.symbol]
+    if (!current || (current.objective_value ?? -Infinity) < t.objective_value) {
+      best[t.symbol] = t
+    }
+  }
+  return best
+}
+
+function latestValidationFor(validations: ValidationRow[], trial: MissionTrial): ValidationRow | null {
+  const matches = validations
+    .filter((v) => v.trial_number === trial.trial_number && v.trial_symbol === trial.symbol)
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+  return matches[0] ?? null
+}
+
+function ValidationStatusBadge({ validation }: { validation: ValidationRow | null }) {
+  if (!validation) return <span className="text-muted text-[0.75em]">not validated yet</span>
+  if (validation.status !== 'finished') return <StatusBadge status={validation.status} />
+  const verdict = validation.overall_verdict
+  const tone = verdict === 'STRONG_LEAD' ? 'exec' : verdict === 'WEAK_LEAD' ? 'marginal' : 'no-trade'
+  return (
+    <Badge tone={tone}>
+      {`${verdict ?? 'unknown'} (${validation.passing_symbols ?? 0}/${validation.total_symbols ?? 0})`}
+    </Badge>
+  )
+}
+
 function MissionDetail({ missionId }: { missionId: string }) {
   const { markUnauthenticated } = useAuth()
   const statusQuery = useApiQuery(['mission-status', missionId], () => getMissionStatus(missionId), POLL_MS, markUnauthenticated)
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
   const [leaderboardTrials, setLeaderboardTrials] = useState<MissionTrial[]>([])
+  const [allTrials, setAllTrials] = useState<MissionTrial[]>([])
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [draftStatus, setDraftStatus] = useState<Record<number, string>>({})
 
   const status: MissionStatusResponse | null = statusQuery.data
+  const validationsQuery = useApiQuery(
+    ['mission-validations', missionId],
+    () => listValidations(missionId).then((r) => r.validations),
+    POLL_MS,
+    markUnauthenticated,
+  )
+  const validations = validationsQuery.data ?? []
 
   useEffect(() => {
     let cancelled = false
@@ -849,10 +897,19 @@ function MissionDetail({ missionId }: { missionId: string }) {
     return () => { cancelled = true }
   }, [missionId, selectedSymbol, status?.progress.total])
 
+  useEffect(() => {
+    let cancelled = false
+    getMissionLeaderboard(missionId).then((r) => {
+      if (!cancelled) setAllTrials(r.trials)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [missionId, status?.progress.total])
+
   if (!status) return <Empty>Loading…</Empty>
 
   const symbols = Object.keys(status.progress.by_symbol)
   const isRunning = status.job_status === 'queued' || status.job_status === 'running'
+  const bestPerSymbol = bestTrialPerSymbol(allTrials)
 
   const cancel = async () => {
     setCancelling(true)
@@ -862,16 +919,28 @@ function MissionDetail({ missionId }: { missionId: string }) {
   const proposeAsDraft = async (t: MissionTrial) => {
     try {
       const metrics = t.metrics_json ? JSON.parse(t.metrics_json) : {}
+      const validation = latestValidationFor(validations, t)
+      const validationNote = validation && validation.status === 'finished'
+        ? `A Mission Center validation (Monte Carlo + walk-forward + robustness) was already run against ` +
+          `this exact trial: verdict=${validation.overall_verdict} (${validation.passing_symbols}/` +
+          `${validation.total_symbols} validation symbols passing, objective_metric=${validation.objective_metric}). ` +
+          `Still a LEAD, not registry evidence — see mission_center validation_id=${validation.id} for the full ` +
+          `per-symbol breakdown (criteria, Monte Carlo, walk-forward, robustness) before treating this as anything ` +
+          `more than a stronger-than-average candidate.`
+        : 'No Mission Center validation has been run against this exact trial yet — this is a raw, ' +
+          'single-run sampler result with no out-of-sample or Monte Carlo check at all. Strongly consider ' +
+          'clicking "Validate…" on this trial before writing falsification criteria.'
       const result = await saveHypothesisDraft({
         title: `Mission ${missionId} trial ${t.trial_number} (${t.symbol})`,
         statement: `A candidate configuration found by mission ${missionId} (sampler-driven search, ` +
           `symbol ${t.symbol}, trial #${t.trial_number}) showed objective_value=${t.objective_value} ` +
           `over ${t.trades} trades. This is a LEAD from an exploratory search, not a tested hypothesis.`,
-        why_this_might_be_true: 'Not yet reviewed — fill in before registering.',
+        why_this_might_be_true: `Not yet reviewed — fill in before registering. Validation context: ${validationNote}`,
         data_required: { symbol: t.symbol, params: JSON.parse(t.params_json), metrics },
         falsification_criteria: 'Not yet defined — must be written BEFORE re-testing (CLAUDE.md rule 1).',
         distinct_from_prior_kill: 'Not yet reviewed — check against CLAUDE.md\'s dead list before registering.',
-        notes: `Auto-generated from Mission Center. mission_id=${missionId}, trial_number=${t.trial_number}.`,
+        notes: `Auto-generated from Mission Center. mission_id=${missionId}, trial_number=${t.trial_number}.` +
+          (validation ? ` validation_id=${validation.id}.` : ''),
       })
       setDraftStatus((s) => ({ ...s, [t.trial_number]: result.file }))
     } catch (e) {
@@ -900,7 +969,16 @@ function MissionDetail({ missionId }: { missionId: string }) {
     },
   ]
 
+  const bestColumns: Column<MissionTrial>[] = [
+    ...columns,
+    {
+      header: 'Validation status',
+      render: (t) => <ValidationStatusBadge validation={latestValidationFor(validations, t)} />,
+    },
+  ]
+
   const sig = significanceFromLeaderboard(leaderboardTrials)
+  const bestRows = symbols.map((s) => bestPerSymbol[s]).filter((t): t is MissionTrial => !!t)
 
   return (
     <div className="flex flex-col gap-4">
@@ -962,6 +1040,28 @@ function MissionDetail({ missionId }: { missionId: string }) {
           )}
         </div>
       </Panel>
+
+      {symbols.length > 1 && (
+        <Panel
+          title="Edge Discovery Summary — Best Per Symbol"
+          right="one best COMPLETE trial per currency, never an auto-selected mission winner"
+        >
+          <div className="p-4 flex flex-col gap-3">
+            <div className="text-[0.78em] text-muted">
+              For each symbol searched in this mission, its single best-objective completed trial —
+              the fastest way to see "which currency has the most promising raw candidate," before
+              deciding which one to send through Validate and (if it survives) draft as a real
+              hypothesis. This never picks a winner across symbols or currencies — every symbol gets
+              its own row, and the full per-symbol leaderboard above still shows every trial.
+            </div>
+            {bestRows.length === 0 ? (
+              <Empty>No completed trials yet for any symbol.</Empty>
+            ) : (
+              <DataTable columns={bestColumns} rows={bestRows} rowKey={(t) => `${t.symbol}-best`} />
+            )}
+          </div>
+        </Panel>
+      )}
 
       <MetaAnalysisPanel missionId={missionId} />
       <ValidationsPanel missionId={missionId} />

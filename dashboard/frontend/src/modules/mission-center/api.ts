@@ -23,6 +23,7 @@ export interface MissionRequest {
   timeframes_choices: string[][]
   engine_set_choices: string[][]
   indicator_set_choices: Record<string, unknown>[][]
+  context_filter_set_choices: Record<string, unknown>[][]
   risk_param_ranges: Record<string, [number, number]>
   risk_param_grid: Record<string, number[]>
   oos_holdout_fraction?: number

@@ -36,7 +36,7 @@ from typing import Any
 
 import pandas as pd
 
-from backtest.metrics import BacktestMetrics, calculate_metrics
+from backtest.metrics import BacktestMetrics, TradeRecord, calculate_metrics
 from backtest.runner import trade_to_record
 from backtesting.backtest_engine import (
     ENGINE_KEYS,
@@ -134,6 +134,23 @@ class MissionSearchSpace:
         return d
 
 
+def search_space_from_dict(raw: dict[str, Any]) -> MissionSearchSpace:
+    """Inverse of the dict a mission's own `search_space_json` stores
+    (built by mission_runner.py's `_search_space_dict`). Single source of
+    truth for turning that stored dict back into a real MissionSearchSpace
+    — used by backtest/mission_validator.py (re-resolving a candidate
+    trial's exact point) and execution/routes/missions.py's meta-analysis
+    endpoint (Phase 3, 2026-07-30), so both reconstruct the space
+    identically rather than each hand-rolling their own tuplify logic."""
+    return MissionSearchSpace(
+        timeframes_choices=tuple(tuple(c) for c in raw["timeframes_choices"]),
+        engine_set_choices=tuple(tuple(c) for c in raw["engine_set_choices"]),
+        indicator_set_choices=tuple(tuple(c) for c in raw["indicator_set_choices"]),
+        risk_param_ranges={k: tuple(v) for k, v in raw.get("risk_param_ranges", {}).items()},
+        risk_param_grid={k: tuple(v) for k, v in raw.get("risk_param_grid", {}).items()},
+    )
+
+
 def suggest_point(trial: Any, space: MissionSearchSpace, grid_mode: bool) -> dict[str, Any]:
     """Calls trial.suggest_categorical for the tf/engine/indicator-set
     index and every risk param (grid_mode) or trial.suggest_float
@@ -219,6 +236,14 @@ class EvalResult:
     objective_value: float | None   # None => trial reported as PRUNED (insufficient trades)
     insufficient: bool
     trades: int
+    # AI Research Lab Phase 3 (2026-07-30) — optional, only populated when
+    # return_trades=True. mission_runner.py's own two call sites (train +
+    # holdout eval) never pass it, so their memory footprint across
+    # thousands of trials is unaffected. backtest/mission_validator.py is
+    # the one caller that needs the real closed-trade list, to feed
+    # backtest/monte_carlo.py's run_monte_carlo() for one specific,
+    # operator-chosen candidate.
+    trade_records: list[TradeRecord] | None = None
 
 
 # Finite sentinel used ONLY to feed the sampler's acquisition function —
@@ -244,12 +269,20 @@ def evaluate_point(
     point: dict[str, Any],
     min_trades: int,
     objective_metric: str,
+    return_trades: bool = False,
 ) -> EvalResult:
     """Generalizes backtest/robustness.py's `_run_point` to the full
     joint space: build_engine_config_override for timeframes/engines/
     indicators, BacktestConfig.from_profile for risk overrides,
     run_backtest, calculate_metrics — the exact same evaluation
     primitives every other backtest job in this codebase already uses.
+
+    return_trades (Phase 3, 2026-07-30): when True, the closed-trade
+    TradeRecord list is kept on the result (EvalResult.trade_records)
+    instead of discarded — needed by backtest/mission_validator.py to
+    feed backtest/monte_carlo.py's run_monte_carlo(). Defaults False so
+    mission_runner.py's ordinary per-trial evaluation (thousands of
+    trials per mission) keeps its existing, smaller memory footprint.
     """
     engine_config = build_engine_config_override(
         timeframes=point["timeframes"] or None,
@@ -260,10 +293,14 @@ def evaluate_point(
     bt = run_backtest(df, cfg, engine_config=engine_config)
     records = [trade_to_record(t, symbol) for t in bt.trades]
     metrics = calculate_metrics(records, initial_capital=cfg.initial_balance)
+    trade_records = records if return_trades else None
 
     trades = metrics.total_trades
     if trades < min_trades:
-        return EvalResult(metrics=metrics, objective_value=None, insufficient=True, trades=trades)
+        return EvalResult(
+            metrics=metrics, objective_value=None, insufficient=True,
+            trades=trades, trade_records=trade_records,
+        )
 
     raw_value = getattr(metrics, objective_metric)
     return EvalResult(
@@ -271,4 +308,5 @@ def evaluate_point(
         objective_value=_finite_objective(raw_value),
         insufficient=False,
         trades=trades,
+        trade_records=trade_records,
     )

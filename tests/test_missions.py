@@ -283,3 +283,232 @@ def test_missions_cancel_kills_running_job(client, monkeypatch):
     cancel = client.post(f"/research/missions/{mission_id}/cancel", headers=HDR)
     assert cancel.status_code == 200
     assert cancel.json()["status"] == "cancelled"
+
+
+# ── Phase 3: Meta-Analysis + Multi-Stage Validation ────────────────────────
+
+_VALID_VALIDATION_BODY = {
+    "trial_number": 0,
+    "trial_symbol": "EURUSD",
+    "validation_symbols": ["GBPUSD", "XAUUSD"],
+}
+
+
+def _seed_mission_and_trial(mission_id: str, state: str = "COMPLETE", n_complete: int = 1):
+    from backtest import mission_runner
+    from backtest.optimizer import MissionSearchSpace, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _TF_IDX_KEY
+    from storage import research_missions
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),),
+        engine_set_choices=(("nnfx", "price_action"),),
+        indicator_set_choices=((),),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    research_missions.upsert_mission(
+        mission_id=mission_id, name="test-mission", sampler="random", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=n_complete, min_trades=1, seed=42,
+        search_space=mission_runner._search_space_dict(space), config={}, status="finished",
+    )
+    for i in range(n_complete):
+        research_missions.record_trial(
+            mission_id=mission_id, trial_number=i, symbol="EURUSD",
+            state=state if i == 0 else "COMPLETE",
+            objective_value=1.2 + i * 0.01 if (state == "COMPLETE" or i > 0) else None,
+            params={_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0 + i * 0.01},
+            metrics={"profit_factor": 1.2}, trades=50 if (state == "COMPLETE" or i > 0) else 0,
+            error=None, started_at="t", finished_at="t",
+        )
+
+
+def test_missions_validate_requires_auth(client):
+    assert client.post("/research/missions/does-not-exist/validate", json=_VALID_VALIDATION_BODY).status_code == 401
+
+
+def test_missions_validate_404_unknown_mission(client):
+    r = client.post("/research/missions/does-not-exist/validate", json=_VALID_VALIDATION_BODY, headers=HDR)
+    assert r.status_code == 404
+
+
+def test_missions_validate_404_unknown_trial(client):
+    _seed_mission_and_trial("val-mission-a")
+    r = client.post(
+        "/research/missions/val-mission-a/validate",
+        json={**_VALID_VALIDATION_BODY, "trial_number": 999}, headers=HDR,
+    )
+    assert r.status_code == 404
+
+
+def test_missions_validate_rejects_non_complete_trial(client):
+    _seed_mission_and_trial("val-mission-b", state="PRUNED")
+    r = client.post("/research/missions/val-mission-b/validate", json=_VALID_VALIDATION_BODY, headers=HDR)
+    assert r.status_code == 400
+    assert "COMPLETE" in r.json()["detail"]
+
+
+def test_missions_validate_rejects_single_symbol(client):
+    _seed_mission_and_trial("val-mission-c")
+    r = client.post(
+        "/research/missions/val-mission-c/validate",
+        json={**_VALID_VALIDATION_BODY, "validation_symbols": ["GBPUSD"]}, headers=HDR,
+    )
+    assert r.status_code == 400
+    assert "at least 2" in r.json()["detail"]
+
+
+def test_missions_validate_rejects_unknown_validation_symbol(client):
+    _seed_mission_and_trial("val-mission-d")
+    r = client.post(
+        "/research/missions/val-mission-d/validate",
+        json={**_VALID_VALIDATION_BODY, "validation_symbols": ["ZZZFAKE", "GBPUSD"]}, headers=HDR,
+    )
+    assert r.status_code == 400
+    assert "Unknown symbol" in r.json()["detail"]
+
+
+def test_missions_validate_rejects_too_many_validation_symbols(client):
+    _seed_mission_and_trial("val-mission-e")
+    r = client.post(
+        "/research/missions/val-mission-e/validate",
+        json={**_VALID_VALIDATION_BODY, "validation_symbols": ["EURUSD"] * 11}, headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_validate_rejects_bad_start_end_order(client):
+    _seed_mission_and_trial("val-mission-f")
+    r = client.post(
+        "/research/missions/val-mission-f/validate",
+        json={**_VALID_VALIDATION_BODY, "start": "2024-06-01", "end": "2024-01-01"}, headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_validate_rejects_multipliers_without_baseline(client):
+    _seed_mission_and_trial("val-mission-g")
+    r = client.post(
+        "/research/missions/val-mission-g/validate",
+        json={**_VALID_VALIDATION_BODY, "rb_multipliers": [0.5, 0.8]}, headers=HDR,
+    )
+    assert r.status_code == 400
+    assert "1.0" in r.json()["detail"]
+
+
+def test_missions_validate_rejects_unknown_rb_param(client):
+    _seed_mission_and_trial("val-mission-h")
+    r = client.post(
+        "/research/missions/val-mission-h/validate",
+        json={**_VALID_VALIDATION_BODY, "rb_params": ["not_a_real_param"]}, headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def _wait_for_validation_terminal(client, mission_id: str, validation_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    body = {}
+    while time.monotonic() < deadline:
+        body = client.get(f"/research/missions/{mission_id}/validations/{validation_id}", headers=HDR).json()
+        job_status = body.get("job_status")
+        if job_status not in ("queued", "running"):
+            return body
+        time.sleep(0.05)
+    return body
+
+
+def test_missions_validate_builds_expected_argv_and_returns_validation_id(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-i")
+
+    r = client.post("/research/missions/val-mission-i/validate", json=_VALID_VALIDATION_BODY, headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "validation_id" in body and len(body["validation_id"]) > 0
+
+    _wait_for_validation_terminal(client, "val-mission-i", body["validation_id"])
+    argv = _FakeProc.captured_argv
+    assert "backtest.mission_validator" in argv
+    assert "--validation-id" in argv and body["validation_id"] in argv
+    assert "--mission-id" in argv and "val-mission-i" in argv
+    assert "--trial-number" in argv and "0" in argv
+    assert "--trial-symbol" in argv and "EURUSD" in argv
+    assert "--validation-symbols" in argv and "GBPUSD" in argv and "XAUUSD" in argv
+
+
+def test_missions_validations_list_requires_auth(client):
+    assert client.get("/research/missions/does-not-exist/validations").status_code == 401
+
+
+def test_missions_validations_list_empty_for_unknown_mission(client):
+    r = client.get("/research/missions/does-not-exist/validations", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["validations"] == []
+
+
+def test_missions_validations_list_includes_created_validation(client, monkeypatch):
+    # GET .../validations reads storage.research_mission_validations (D1),
+    # populated by the REAL backtest/mission_validator.py subprocess as it
+    # runs — _FakeProc (like _missions_list's own job-dict test) never
+    # actually invokes that module, so seed the D1 row directly here,
+    # exactly as run_validation()'s own first statement would.
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-j")
+    r = client.post("/research/missions/val-mission-j/validate", json=_VALID_VALIDATION_BODY, headers=HDR)
+    validation_id = r.json()["validation_id"]
+
+    from storage import research_mission_validations
+    research_mission_validations.upsert_validation(
+        validation_id=validation_id, mission_id="val-mission-j", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["GBPUSD", "XAUUSD"], objective_metric="profit_factor", criteria={},
+    )
+
+    listing = client.get("/research/missions/val-mission-j/validations", headers=HDR)
+    assert listing.status_code == 200
+    ids = [v["id"] for v in listing.json()["validations"]]
+    assert validation_id in ids
+
+
+def test_missions_validation_detail_requires_auth(client):
+    assert client.get("/research/missions/m/validations/v").status_code == 401
+
+
+def test_missions_validation_detail_404_when_unknown(client):
+    r = client.get("/research/missions/m/validations/does-not-exist", headers=HDR)
+    assert r.status_code == 404
+
+
+def test_missions_meta_analysis_requires_auth(client):
+    assert client.get("/research/missions/does-not-exist/meta-analysis").status_code == 401
+
+
+def test_missions_meta_analysis_404_unknown_mission(client):
+    r = client.get("/research/missions/does-not-exist/meta-analysis", headers=HDR)
+    assert r.status_code == 404
+
+
+def test_missions_meta_analysis_insufficient_data_shape(client):
+    _seed_mission_and_trial("val-mission-k", n_complete=3)
+    r = client.get("/research/missions/val-mission-k/meta-analysis", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["insufficient_data"] is True
+    assert body["n_complete_trials"] == 3
+
+
+def test_missions_meta_analysis_real_response_shape(client):
+    _seed_mission_and_trial("val-mission-l", n_complete=25)
+    r = client.get("/research/missions/val-mission-l/meta-analysis", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["insufficient_data"] is False
+    assert body["mission_id"] == "val-mission-l"
+    assert body["sampler"] == "random"
+    assert len(body["engine_frequencies"]) > 0
+    assert len(body["consensus_bands"]) == 1
+
+
+def test_missions_meta_analysis_rejects_bad_query_params(client):
+    _seed_mission_and_trial("val-mission-m", n_complete=25)
+    r = client.get("/research/missions/val-mission-m/meta-analysis?top_fraction=0", headers=HDR)
+    assert r.status_code == 400
+    r2 = client.get("/research/missions/val-mission-m/meta-analysis?n_bins=0", headers=HDR)
+    assert r2.status_code == 400

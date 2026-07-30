@@ -9,8 +9,10 @@ import { ENGINE_KEYS, SUPPORTED_TIMEFRAMES } from '../backtesting-lab/Backtestin
 import { getResearchSymbols, saveHypothesisDraft, type SymbolsResponse } from '../research-backtests/api'
 import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
+  createValidation, listValidations, getValidation, getMetaAnalysis,
   SAMPLER_KEYS, OPTIMIZABLE_METRICS,
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial,
+  type CriteriaEntry, type DimensionFrequency, type Verdict,
 } from './api'
 
 const POLL_MS = 4000
@@ -267,6 +269,245 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge tone={tone}>{status}</Badge>
 }
 
+function VerdictBadge({ verdict }: { verdict: Verdict | null }) {
+  if (!verdict) return <Badge tone="neutral">pending</Badge>
+  const tone = verdict === 'STRONG_LEAD' ? 'good' : verdict === 'WEAK_LEAD' ? 'marginal' : 'poor'
+  return <Badge tone={tone}>{verdict}</Badge>
+}
+
+// Per-trial "Validate…" action — never auto-picks a candidate, the
+// operator must open this on a specific COMPLETE row and choose the
+// cross-symbol validation set themselves (≥2 symbols, server-enforced).
+function ValidateAction({
+  missionId, trial, symbolsData,
+}: {
+  missionId: string
+  trial: MissionTrial
+  symbolsData: SymbolsResponse | null
+}) {
+  const [open, setOpen] = useState(false)
+  const [validationSymbols, setValidationSymbols] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+
+  if (trial.state !== 'COMPLETE') return <span className="text-muted text-[0.75em]">—</span>
+
+  const submit = async () => {
+    setError(null)
+    if (validationSymbols.length < 2) { setError('Pick at least 2 validation symbols.'); return }
+    setSubmitting(true)
+    try {
+      await createValidation(missionId, {
+        trial_number: trial.trial_number,
+        trial_symbol: trial.symbol,
+        validation_symbols: validationSymbols,
+      })
+      setOpen(false)
+      setDone(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} className="text-[0.75em] text-accent hover:underline">
+        {done ? 'Launched — see Validations below' : 'Validate…'}
+      </button>
+      {open && (
+        <div className="absolute z-20 right-0 mt-1 w-72 bg-panel border border-border rounded shadow-md p-3 flex flex-col gap-2">
+          <span className="text-[0.7em] text-muted uppercase">Validation symbols (≥2)</span>
+          <SymbolMultiSelect value={validationSymbols} onChange={setValidationSymbols} symbolsData={symbolsData} />
+          {error && <div className="text-red text-[0.75em]">{error}</div>}
+          <button onClick={submit} disabled={submitting}
+            className="px-3 py-1.5 rounded bg-accent text-bg font-bold text-[0.78em] disabled:opacity-50">
+            {submitting ? 'Launching…' : 'Run Validation'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FrequencyTable({ title, rows }: { title: string; rows: DimensionFrequency[] }) {
+  const sorted = [...rows].sort((a, b) => (b.lift ?? 0) - (a.lift ?? 0))
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[0.72em] text-muted uppercase tracking-[1px]">{title}</span>
+      <div className="flex flex-col gap-0.5">
+        {sorted.map((f) => (
+          <div key={f.value} className="flex items-center gap-2 text-[0.78em]">
+            <span className="font-mono w-24 truncate">{f.value}</span>
+            <span className="text-muted">top {(f.top_fraction * 100).toFixed(0)}%</span>
+            <span className="text-muted">all {(f.all_fraction * 100).toFixed(0)}%</span>
+            {f.lift != null && (
+              <span className={f.lift > 1.2 ? 'text-green' : f.lift < 0.8 ? 'text-red' : 'text-muted'}>
+                lift {f.lift.toFixed(2)}x
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MetaAnalysisPanel({ missionId }: { missionId: string }) {
+  const { markUnauthenticated } = useAuth()
+  const query = useApiQuery(['mission-meta-analysis', missionId], () => getMetaAnalysis(missionId), POLL_MS, markUnauthenticated)
+  const data = query.data
+
+  if (!data) return <Panel title="Meta-Analysis"><Empty>Loading…</Empty></Panel>
+
+  if (data.insufficient_data) {
+    return (
+      <Panel title="Meta-Analysis" right="what do the best trials share? (not just the single best number)">
+        <div className="p-4"><Empty>{data.note}</Empty></div>
+      </Panel>
+    )
+  }
+
+  return (
+    <Panel title="Meta-Analysis" right="retrospective pattern-spotting — a lead, not confirmation">
+      <div className="p-4 flex flex-col gap-4">
+        <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+          {data.note}
+        </div>
+        <div className="text-[0.78em] text-muted">
+          Top {data.top_n} of {data.n_complete_trials} completed trials (top {(data.top_fraction_used * 100).toFixed(0)}%) — sampler: {data.sampler}
+        </div>
+        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(260px,1fr))]">
+          <FrequencyTable title="Engines" rows={data.engine_frequencies} />
+          <FrequencyTable title="Timeframes" rows={data.timeframe_frequencies} />
+        </div>
+        {data.consensus_bands.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <span className="text-[0.72em] text-muted uppercase tracking-[1px]">Consensus bands (risk params) — plateau vs. spike</span>
+            {data.consensus_bands.map((band) => (
+              <div key={band.risk_param} className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 text-[0.8em]">
+                  <span className="font-mono">{band.risk_param}</span>
+                  <Badge tone={band.shape === 'PLATEAU' ? 'good' : band.shape === 'SPIKE' ? 'poor' : 'neutral'}>{band.shape}</Badge>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {band.bins.map((b, i) => (
+                    <div key={i} className={`px-2 py-1 rounded border text-[0.72em] ${b.n_trials > 0 ? 'border-border' : 'border-border/30 text-muted/50'}`}>
+                      <div>{b.bin_lo.toFixed(3)}–{b.bin_hi.toFixed(3)}</div>
+                      <div>n={b.n_trials}{b.mean_objective != null ? `, obj=${b.mean_objective.toFixed(3)}` : ''}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+function ValidationDetail({ missionId, validationId }: { missionId: string; validationId: string }) {
+  const { markUnauthenticated } = useAuth()
+  const query = useApiQuery(
+    ['mission-validation', missionId, validationId],
+    () => getValidation(missionId, validationId), POLL_MS, markUnauthenticated,
+  )
+  const data = query.data
+  if (!data) return <Empty>Loading…</Empty>
+  const v = data.validation
+
+  return (
+    <div className="border-t border-border pt-3 mt-1 flex flex-col gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <StatusBadge status={data.job_status ?? v?.status ?? 'unknown'} />
+        {v && <VerdictBadge verdict={v.overall_verdict} />}
+        {v && (
+          <span className="text-[0.78em] text-muted">
+            {v.passing_symbols ?? '—'}/{v.total_symbols ?? '—'} symbols passing
+          </span>
+        )}
+        {v?.error && <span className="text-red text-[0.78em]">{v.error}</span>}
+      </div>
+      {data.results.length === 0 ? (
+        <Empty>No per-symbol results yet.</Empty>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {data.results.map((r) => {
+            const breakdown: Record<string, CriteriaEntry> = r.criteria_breakdown_json
+              ? JSON.parse(r.criteria_breakdown_json) : {}
+            return (
+              <details key={r.symbol} className="border border-border rounded px-3 py-2">
+                <summary className="cursor-pointer text-[0.8em] flex items-center gap-2">
+                  <span className="font-mono w-20">{r.symbol}</span>
+                  <Badge tone={r.passed ? 'good' : 'poor'}>{r.passed ? 'passed' : 'failed'}</Badge>
+                  {r.error && <span className="text-red text-[0.75em]">{r.error}</span>}
+                </summary>
+                {Object.keys(breakdown).length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {Object.entries(breakdown).map(([criterion, c]) => (
+                      <div key={criterion} className="flex items-center gap-2 text-[0.75em] flex-wrap">
+                        <span className="w-52 text-muted">{criterion}</span>
+                        <span className="font-mono">{JSON.stringify(c.actual)}</span>
+                        <span className="text-muted">vs</span>
+                        <span className="font-mono">{JSON.stringify(c.threshold)}</span>
+                        <Badge tone={c.passed ? 'good' : 'poor'}>{c.passed ? 'pass' : 'fail'}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </details>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ValidationsPanel({ missionId }: { missionId: string }) {
+  const { markUnauthenticated } = useAuth()
+  const validationsQuery = useApiQuery(
+    ['mission-validations', missionId], () => listValidations(missionId), POLL_MS, markUnauthenticated,
+  )
+  const [selectedValidation, setSelectedValidation] = useState<string | null>(null)
+  const validations = validationsQuery.data?.validations ?? []
+
+  return (
+    <Panel title="Validations" right="Monte Carlo + walk-forward + robustness on one operator-chosen candidate">
+      <div className="p-4 flex flex-col gap-3">
+        {validations.length === 0 ? (
+          <Empty>No validations run yet — click "Validate…" on a completed trial above.</Empty>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {validations.map((v) => {
+              let syms: string[] = []
+              try { syms = JSON.parse(v.validation_symbols_json) } catch { /* ignore malformed row */ }
+              return (
+                <button key={v.id} onClick={() => setSelectedValidation(v.id)}
+                  className={`flex items-center justify-between px-3 py-2 rounded text-left text-[0.8em] border ${
+                    selectedValidation === v.id ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40'
+                  }`}>
+                  <span className="font-mono truncate max-w-[60%]">
+                    {v.trial_symbol} trial #{v.trial_number} → {syms.join(', ')}
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <StatusBadge status={v.status} />
+                    <VerdictBadge verdict={v.overall_verdict} />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {selectedValidation && <ValidationDetail missionId={missionId} validationId={selectedValidation} />}
+      </div>
+    </Panel>
+  )
+}
+
 function significanceFromLeaderboard(trials: MissionTrial[]): { banner: string; nTrials: number } | null {
   // The backend's own mission_significance_summary already computed this
   // and wrote it into the mission report file — the leaderboard endpoint
@@ -287,6 +528,7 @@ function significanceFromLeaderboard(trials: MissionTrial[]): { banner: string; 
 function MissionDetail({ missionId }: { missionId: string }) {
   const { markUnauthenticated } = useAuth()
   const statusQuery = useApiQuery(['mission-status', missionId], () => getMissionStatus(missionId), POLL_MS, markUnauthenticated)
+  const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
   const [leaderboardTrials, setLeaderboardTrials] = useState<MissionTrial[]>([])
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
@@ -346,6 +588,10 @@ function MissionDetail({ missionId }: { missionId: string }) {
               Propose as draft
             </button>
       ),
+    },
+    {
+      header: 'Validate',
+      render: (t) => <ValidateAction missionId={missionId} trial={t} symbolsData={symbolsQuery.data ?? null} />,
     },
   ]
 
@@ -411,6 +657,9 @@ function MissionDetail({ missionId }: { missionId: string }) {
           )}
         </div>
       </Panel>
+
+      <MetaAnalysisPanel missionId={missionId} />
+      <ValidationsPanel missionId={missionId} />
     </div>
   )
 }

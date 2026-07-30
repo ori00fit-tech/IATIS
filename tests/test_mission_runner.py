@@ -219,6 +219,8 @@ def test_cli_wires_all_json_flags_into_mission_search_space(monkeypatch, tmp_pat
         "--timeframes-choices", '[["H1"],["H4","D1","H1"]]',
         "--engine-set-choices", '[["nnfx","price_action"]]',
         "--indicator-set-choices", "[[]]",
+        "--context-filter-set-choices",
+        '[[],[{"name":"direction","mode":"entry_filter","params":{"allowed":["BULLISH"]},"weight":0}]]',
         "--risk-param-ranges", '{"sl_atr_multiplier":[1.0,3.0]}',
         "--output-dir", str(tmp_path / "reports"),
     ])
@@ -235,3 +237,7 @@ def test_cli_wires_all_json_flags_into_mission_search_space(monkeypatch, tmp_pat
     assert mc.search_space.timeframes_choices == (("H1",), ("H4", "D1", "H1"))
     assert mc.search_space.engine_set_choices == (("nnfx", "price_action"),)
     assert mc.search_space.risk_param_ranges == {"sl_atr_multiplier": (1.0, 3.0)}
+    assert mc.search_space.context_filter_set_choices == (
+        (),
+        ({"name": "direction", "mode": "entry_filter", "params": {"allowed": ["BULLISH"]}, "weight": 0},),
+    )

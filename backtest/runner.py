@@ -350,6 +350,7 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
                 # veto-count breakdown the operator explicitly asked for.
                 "gate_rejections": dict(r.engine_result.gate_rejections),
                 "indicator_rejections": dict(r.engine_result.indicator_rejections),
+                "context_rejections": dict(r.engine_result.context_rejections),
                 "trades": r.metrics.total_trades,
                 "win_rate": round(r.metrics.win_rate, 4),
                 "profit_factor": round(r.metrics.profit_factor, 3),

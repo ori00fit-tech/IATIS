@@ -96,6 +96,11 @@ class WalkForwardConfig:
             per-run indicator filter/confirmation/score-weight specs.
             None = no indicator layer, unchanged from every prior
             phase's behavior.
+        context_filters: Context Filters (2026-07-30) — ad-hoc per-run
+            session/day-of-week/volatility-regime/market-regime/
+            direction filter/confirmation/score-weight specs. None = no
+            context filter layer, unchanged from every prior phase's
+            behavior.
     """
 
     n_windows: int = 3
@@ -106,6 +111,7 @@ class WalkForwardConfig:
     timeframes: tuple[str, ...] | None = None
     engines: tuple[str, ...] | None = None
     indicators: tuple[dict, ...] | None = None
+    context_filters: tuple[dict, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -207,6 +213,7 @@ def run_walk_forward(
         timeframes=list(wf_config.timeframes) if wf_config.timeframes else None,
         engines_enabled={e: (e in wf_config.engines) for e in ENGINE_KEYS} if wf_config.engines else None,
         indicators=list(wf_config.indicators) if wf_config.indicators else None,
+        context_filters=list(wf_config.context_filters) if wf_config.context_filters else None,
     )
 
     for k, (frame, test_start, test_end) in enumerate(windows):

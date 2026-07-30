@@ -206,5 +206,5 @@ def test_distributions_for_covers_every_suggested_param():
     )
     dists = distributions_for(space, grid_mode=True)
     assert set(dists.keys()) == {
-        "__timeframes_idx", "__engines_idx", "__indicators_idx", "sl_atr_multiplier",
+        "__timeframes_idx", "__engines_idx", "__indicators_idx", "__context_idx", "sl_atr_multiplier",
     }

@@ -159,6 +159,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         timeframes=tuple(point["timeframes"]) if point["timeframes"] else None,
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
+        context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
     ))
 
     rb_result = run_robustness(symbol, df, RobustnessConfig(
@@ -167,6 +168,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         timeframes=tuple(point["timeframes"]) if point["timeframes"] else None,
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
+        context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
     ))
 
     breakdown = {

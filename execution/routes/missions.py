@@ -72,6 +72,7 @@ class _MissionRequest(BaseModel):
     timeframes_choices: list[list[str]]
     engine_set_choices: list[list[str]]
     indicator_set_choices: list[list[dict]] = [[]]
+    context_filter_set_choices: list[list[dict]] = [[]]
     risk_param_ranges: dict[str, tuple[float, float]] = {}
     risk_param_grid: dict[str, tuple[float, ...]] = {}
     oos_holdout_fraction: float | None = None
@@ -147,6 +148,7 @@ async def missions_create(
             timeframes_choices=tuple(tuple(c) for c in body.timeframes_choices),
             engine_set_choices=tuple(tuple(c) for c in body.engine_set_choices),
             indicator_set_choices=tuple(tuple(c) for c in body.indicator_set_choices),
+            context_filter_set_choices=tuple(tuple(c) for c in body.context_filter_set_choices),
             risk_param_ranges=body.risk_param_ranges,
             risk_param_grid=body.risk_param_grid,
         )
@@ -168,6 +170,7 @@ async def missions_create(
         "--timeframes-choices", json.dumps(body.timeframes_choices),
         "--engine-set-choices", json.dumps(body.engine_set_choices),
         "--indicator-set-choices", json.dumps(body.indicator_set_choices),
+        "--context-filter-set-choices", json.dumps(body.context_filter_set_choices),
     ]
     if body.start:
         argv += ["--start", body.start]

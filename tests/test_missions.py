@@ -179,6 +179,24 @@ def test_missions_create_rejects_unknown_timeframe_in_search_space(client):
     assert r.status_code == 400
 
 
+def test_missions_create_rejects_unknown_context_filter_name(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "context_filter_set_choices": [[{"name": "fear_greed", "mode": "entry_filter"}]]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_create_rejects_unknown_context_filter_mode(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "context_filter_set_choices": [[{"name": "direction", "mode": "bogus_mode"}]]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
 def test_missions_create_rejects_risk_param_out_of_bounds(client):
     r = client.post(
         "/research/missions",
@@ -233,6 +251,27 @@ def test_missions_create_builds_expected_argv_and_returns_mission_id(client, mon
     assert "--mission-id" in argv and body["mission_id"] in argv
     assert "--symbols" in argv and "EURUSD" in argv
     assert "--sampler" in argv and "random" in argv
+
+
+def test_missions_create_builds_expected_argv_with_context_filters(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    body = {
+        **_VALID_BODY,
+        "context_filter_set_choices": [[], [{"name": "direction", "mode": "entry_filter",
+                                              "params": {"allowed": ["BULLISH"]}, "weight": 0}]],
+    }
+    r = client.post("/research/missions", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    argv = _FakeProc.captured_argv
+    assert "--context-filter-set-choices" in argv
+    idx = argv.index("--context-filter-set-choices")
+    import json as _json
+
+    assert _json.loads(argv[idx + 1]) == body["context_filter_set_choices"]
 
 
 def test_missions_list_includes_created_mission(client, monkeypatch):

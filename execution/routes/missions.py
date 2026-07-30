@@ -298,3 +298,216 @@ async def missions_cancel(
         if job.finished_at is None:
             job.finished_at = datetime.now(timezone.utc).isoformat()
         return {"mission_id": mission_id, **_job_summary(job)}
+
+
+# ── Phase 3 (2026-07-30): Meta-Analysis + Multi-Stage Validation ──────────
+#
+# Meta-analysis is pure, read-only, computed fresh on every call from
+# already-stored trials (backtest/meta_analysis.py) — never persisted, no
+# new backtests. Validation is a new background job (backtest/
+# mission_validator.py) re-evaluating ONE operator-chosen COMPLETE trial
+# across operator-chosen validation symbols via Monte Carlo/walk-forward/
+# robustness — never auto-picked, never writing to registry.json/
+# config.yaml/config/engines.yaml (see mission_validator.py's own
+# module docstring for the full guarantee). A validation verdict
+# (NO_EDGE/WEAK_LEAD/STRONG_LEAD) is a LEAD, never a promotion.
+
+_MAX_VALIDATION_SYMBOLS = 10
+
+
+class _ValidationRequest(BaseModel):
+    """Validates ONE operator-chosen COMPLETE trial across operator-
+    chosen validation symbols — never auto-picked. See backtest/
+    mission_validator.py's module docstring for the full methodology and
+    safety guarantee."""
+    trial_number: int
+    trial_symbol: str
+    validation_symbols: list[str]
+    start: str | None = None
+    end: str | None = None
+    wf_windows: int = 3
+    wf_min_trades_per_window: int = 10
+    wf_warmup_bars: int = 210
+    # Mirrors backtest.robustness.DEFAULT_MULTIPLIERS/SWEEP_PARAMS — kept
+    # as literals here since backtest.* imports stay lazy in this file
+    # (optuna/pandas import cost only paid when a mission/validation
+    # route is actually hit).
+    rb_multipliers: list[float] = [0.5, 0.8, 1.0, 1.2, 1.5]
+    rb_params: list[str] = ["sl_atr_multiplier", "commission_pips", "slippage_pips", "min_rr"]
+    rb_min_trades: int = 10
+    mc_n_simulations: int = 1000
+    mc_seed: int = 42
+
+
+@router.post("/research/missions/{mission_id}/validate")
+async def missions_validate(
+    mission_id: str,
+    body: _ValidationRequest,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_missions
+
+    mission = research_missions.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found.")
+
+    trial_symbol = str(body.trial_symbol).upper().strip()
+    trial = research_missions.get_trial(mission_id, body.trial_number, trial_symbol)
+    if trial is None:
+        raise HTTPException(status_code=404, detail="Trial not found.")
+    if trial["state"] != "COMPLETE":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trial state is {trial['state']!r} — only COMPLETE trials can be validated.",
+        )
+
+    validation_symbols = [str(s).upper().strip() for s in body.validation_symbols if str(s).strip()]
+    if len(validation_symbols) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="validation_symbols must include at least 2 symbols — a single-symbol "
+                   "validation cannot distinguish an edge from curve-fitting.",
+        )
+    if len(validation_symbols) > _MAX_VALIDATION_SYMBOLS:
+        raise HTTPException(status_code=400, detail=f"at most {_MAX_VALIDATION_SYMBOLS} validation symbols per run.")
+    universe = _configured_symbol_universe()
+    unknown = sorted(set(validation_symbols) - universe)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown symbol(s) {unknown} — must be in the configured universe.")
+
+    if body.start is not None:
+        _validate_iso_date(body.start, "start")
+    if body.end is not None:
+        _validate_iso_date(body.end, "end")
+    if body.start and body.end and body.start > body.end:
+        raise HTTPException(status_code=400, detail="start must be <= end.")
+
+    if body.wf_windows < 2:
+        raise HTTPException(status_code=400, detail="wf_windows must be >= 2.")
+    if body.wf_min_trades_per_window < 1:
+        raise HTTPException(status_code=400, detail="wf_min_trades_per_window must be >= 1.")
+    if body.wf_warmup_bars < 1:
+        raise HTTPException(status_code=400, detail="wf_warmup_bars must be >= 1.")
+    if body.rb_min_trades < 1:
+        raise HTTPException(status_code=400, detail="rb_min_trades must be >= 1.")
+    if not (100 <= body.mc_n_simulations <= 20_000):
+        raise HTTPException(status_code=400, detail="mc_n_simulations must be 100-20000.")
+    if not body.rb_params:
+        raise HTTPException(status_code=400, detail="rb_params must have at least one entry.")
+    if 1.0 not in body.rb_multipliers:
+        raise HTTPException(status_code=400, detail="rb_multipliers must include 1.0 as the baseline point.")
+
+    from backtest.robustness import SWEEP_PARAMS
+    unknown_params = sorted(set(body.rb_params) - set(SWEEP_PARAMS))
+    if unknown_params:
+        raise HTTPException(status_code=400, detail=f"Unknown rb_params {unknown_params} — choose from {SWEEP_PARAMS}.")
+
+    validation_id = uuid.uuid4().hex[:12]
+    argv = list(_JOB_COMMANDS["mission_validate"]) + [
+        "--validation-id", validation_id,
+        "--mission-id", mission_id,
+        "--trial-number", str(body.trial_number),
+        "--trial-symbol", trial_symbol,
+        "--validation-symbols", *validation_symbols,
+        "--wf-windows", str(body.wf_windows),
+        "--wf-min-trades-per-window", str(body.wf_min_trades_per_window),
+        "--wf-warmup-bars", str(body.wf_warmup_bars),
+        "--rb-multipliers", *[str(m) for m in body.rb_multipliers],
+        "--rb-params", *body.rb_params,
+        "--rb-min-trades", str(body.rb_min_trades),
+        "--mc-simulations", str(body.mc_n_simulations),
+        "--mc-seed", str(body.mc_seed),
+    ]
+    if body.start:
+        argv += ["--start", body.start]
+    if body.end:
+        argv += ["--end", body.end]
+
+    with _jobs_lock:
+        job = _Job(validation_id, "mission_validate", argv=argv)
+        _jobs[validation_id] = job
+
+    from storage.audit_log import log_action
+    log_action(
+        "mission_validate_create", x_api_key=x_api_key, session_id=iatis_session,
+        detail=f"mission_validate ({validation_id}) mission={mission_id} trial={body.trial_number} "
+               f"({trial_symbol}) validation_symbols={validation_symbols}",
+    )
+
+    job.future = _job_executor.submit(_run_job, job)
+    return {"validation_id": validation_id, **_job_summary(job)}
+
+
+@router.get("/research/missions/{mission_id}/validations")
+async def missions_validations_list(
+    mission_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Every validation ever run for this mission, pass or fail — never
+    filtered to only the ones that reached STRONG_LEAD."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_mission_validations
+
+    return {"mission_id": mission_id, "validations": research_mission_validations.list_validations(mission_id)}
+
+
+@router.get("/research/missions/{mission_id}/validations/{validation_id}")
+async def missions_validation_detail(
+    mission_id: str,
+    validation_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_mission_validations
+
+    validation = research_mission_validations.get_validation(validation_id)
+    job = _jobs.get(validation_id)
+    if (validation is None or validation["mission_id"] != mission_id) and job is None:
+        raise HTTPException(status_code=404, detail="Validation not found.")
+
+    results = research_mission_validations.validation_results(validation_id) if validation else []
+    return {
+        "validation_id": validation_id,
+        "validation": validation,
+        "results": results,
+        "job_status": job.status if job else None,
+    }
+
+
+@router.get("/research/missions/{mission_id}/meta-analysis")
+async def missions_meta_analysis(
+    mission_id: str,
+    symbol: str | None = None,
+    top_fraction: float = 0.20,
+    n_bins: int = 5,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Retrospective pattern-spotting over an already-completed mission's
+    stored trials — see backtest/meta_analysis.py's module docstring for
+    the full caveat. Computed fresh on every call, never persisted."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_missions
+
+    mission = research_missions.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found.")
+    if not (0.0 < top_fraction <= 1.0):
+        raise HTTPException(status_code=400, detail="top_fraction must be in (0, 1].")
+    if not (1 <= n_bins <= 20):
+        raise HTTPException(status_code=400, detail="n_bins must be 1-20.")
+
+    from backtest.meta_analysis import compute_meta_analysis
+    from backtest.optimizer import search_space_from_dict
+
+    space = search_space_from_dict(json.loads(mission["search_space_json"]))
+    trials = research_missions.leaderboard(mission_id, symbol=symbol, limit=2000)
+    result = compute_meta_analysis(
+        space, trials, sampler=mission["sampler"], mission_id=mission_id, symbol=symbol,
+        top_fraction=top_fraction, n_bins=n_bins,
+    )
+    return result.to_dict()

@@ -90,6 +90,12 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # etc. — all server-validated before reaching argv, same pattern as
     # `backtest`'s own --symbols validation below).
     "research_mission": [sys.executable, "-m", "backtest.mission_runner"],
+    # AI Research Lab / Mission Center Phase 3 (2026-07-30) — multi-stage
+    # validation (Monte Carlo + walk-forward + robustness sweep, per
+    # operator-chosen validation symbol) of ONE operator-chosen mission
+    # trial. Same one-subprocess-per-job-slot model as research_mission.
+    # Full argv is built per-request in execution/routes/missions.py.
+    "mission_validate": [sys.executable, "-m", "backtest.mission_validator"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -105,6 +111,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "walk_forward": "Disjoint chronological OOS window consistency test (backtest/walk_forward.py). Requires --symbols. Fixed production parameters, no per-window optimization.",
     "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
     "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
+    "mission_validate": "Multi-stage validation (backtest/mission_validator.py) of one operator-chosen mission trial across operator-chosen validation symbols: re-evaluation + Monte Carlo + walk-forward + robustness sweep per symbol. Launched via POST /research/missions/{id}/validate, not this endpoint directly — result is a LEAD (NO_EDGE/WEAK_LEAD/STRONG_LEAD), never a registry.json promotion.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -124,6 +131,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "walk_forward": "research",
     "robustness": "research",
     "research_mission": "research",
+    "mission_validate": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -148,6 +156,14 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # ceiling exists purely so a misbehaving/unbounded mission can't
     # occupy a job slot forever if that internal check is ever bypassed.
     "research_mission": 21_600,  # 6h hard ceiling
+    # AI Research Lab / Mission Center Phase 3 (2026-07-30) — worst case
+    # per validation symbol is ~1 (direct eval) + wf_windows (default 3)
+    # + len(rb_params)*len(rb_multipliers) (default 4x5=20) backtests, so
+    # a multi-symbol validation is the same cost class as walk_forward/
+    # robustness's own 2400s timeouts, multiplied by symbol count. 3600s
+    # is a starting point, not a measurement — revisit if real runs need
+    # more headroom.
+    "mission_validate": 3_600,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against
@@ -156,11 +172,12 @@ _JOB_TIMEOUTS: dict[str, int] = {
 _PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
 
 # AI Research Lab / Mission Center Phase 2 (2026-07-28): bumped 2->3.
-# A mission can legitimately occupy one slot for hours (see
-# _JOB_TIMEOUTS["research_mission"]) — 3 keeps at least 2 slots free for
-# ordinary short ad-hoc jobs (backtest/robustness/hypothesis runs) while
-# one mission runs, without unbounding the pool.
-_job_executor = ThreadPoolExecutor(max_workers=3)
+# Phase 3 (2026-07-30): bumped 3->4 — an operator now often wants to run
+# a mission AND validate one of its trials (mission_validate) at the
+# same time, on top of ordinary ad-hoc jobs. 4 keeps at least 2 slots
+# free for short jobs while one mission + one validation both run,
+# without unbounding the pool.
+_job_executor = ThreadPoolExecutor(max_workers=4)
 _jobs: dict[str, "_Job"] = {}
 _jobs_lock = threading.Lock()
 

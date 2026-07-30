@@ -909,11 +909,14 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # research_mission added 2026-07-28 (AI Research Lab Phase 2): one
     # subprocess per whole mission (see execution/routes/missions.py) —
     # full argv built per-request there, not user-shaped.
+    # mission_validate added 2026-07-30 (AI Research Lab Phase 3): one
+    # subprocess per validation of a single operator-chosen mission
+    # trial — full argv also built per-request in missions.py.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
-        "walk_forward", "robustness", "research_mission",
+        "walk_forward", "robustness", "research_mission", "mission_validate",
     }
 
 
@@ -1624,8 +1627,8 @@ def test_experiments_cancel_unknown_job_404s(client):
 def test_experiments_cancel_a_queued_job(client, monkeypatch):
     """A job that has not yet been picked up by a worker thread: cancel
     must flip status to 'cancelled' via future.cancel() before _run_job
-    ever executes. Saturate the (AI Research Lab Phase 2, 2026-07-28:
-    2->3) worker pool with slow jobs first so the next submission stays
+    ever executes. Saturate the (AI Research Lab Phase 3, 2026-07-30:
+    3->4) worker pool with slow jobs first so the next submission stays
     queued long enough to cancel."""
     import execution.routes.experiments as m
 
@@ -1633,13 +1636,15 @@ def test_experiments_cancel_a_queued_job(client, monkeypatch):
         "blocker_job_a": [sys.executable, "-c", "import time; time.sleep(2)"],
         "blocker_job_b": [sys.executable, "-c", "import time; time.sleep(2)"],
         "blocker_job_c": [sys.executable, "-c", "import time; time.sleep(2)"],
+        "blocker_job_d": [sys.executable, "-c", "import time; time.sleep(2)"],
         "queued_job": [sys.executable, "-c", "print('should not run')"],
     })
 
     r_a = client.post("/experiments/run", json={"job": "blocker_job_a"}, headers=HDR)
     r_b = client.post("/experiments/run", json={"job": "blocker_job_b"}, headers=HDR)
     r_c = client.post("/experiments/run", json={"job": "blocker_job_c"}, headers=HDR)
-    assert r_a.status_code == 200 and r_b.status_code == 200 and r_c.status_code == 200
+    r_d = client.post("/experiments/run", json={"job": "blocker_job_d"}, headers=HDR)
+    assert r_a.status_code == 200 and r_b.status_code == 200 and r_c.status_code == 200 and r_d.status_code == 200
 
     r_q = client.post("/experiments/run", json={"job": "queued_job"}, headers=HDR)
     assert r_q.status_code == 200, r_q.text
@@ -1653,6 +1658,7 @@ def test_experiments_cancel_a_queued_job(client, monkeypatch):
     _wait_for_job(client, r_a.json()["job_id"])
     _wait_for_job(client, r_b.json()["job_id"])
     _wait_for_job(client, r_c.json()["job_id"])
+    _wait_for_job(client, r_d.json()["job_id"])
 
     final = client.get(f"/experiments/{job_id}", headers=HDR).json()
     assert final["status"] == "cancelled"

@@ -73,6 +73,13 @@ class _MissionRequest(BaseModel):
     engine_set_choices: list[list[str]]
     indicator_set_choices: list[list[dict]] = [[]]
     context_filter_set_choices: list[list[dict]] = [[]]
+    # Hypothesis Bundles (2026-07-30) — when set, REPLACES independent
+    # sampling of timeframes_choices/engine_set_choices/indicator_set_choices/
+    # context_filter_set_choices with one shared index over complete named
+    # bundles. See backtest/optimizer.py's module-level comment on
+    # _HYPOTHESIS_IDX_KEY for why this is a separate field rather than
+    # giving the 4 existing fields multiple choices each.
+    hypothesis_bundle_choices: list[dict] | None = None
     risk_param_ranges: dict[str, tuple[float, float]] = {}
     risk_param_grid: dict[str, tuple[float, ...]] = {}
     oos_holdout_fraction: float | None = None
@@ -149,6 +156,10 @@ async def missions_create(
             engine_set_choices=tuple(tuple(c) for c in body.engine_set_choices),
             indicator_set_choices=tuple(tuple(c) for c in body.indicator_set_choices),
             context_filter_set_choices=tuple(tuple(c) for c in body.context_filter_set_choices),
+            hypothesis_bundle_choices=(
+                tuple(dict(b) for b in body.hypothesis_bundle_choices)
+                if body.hypothesis_bundle_choices else None
+            ),
             risk_param_ranges=body.risk_param_ranges,
             risk_param_grid=body.risk_param_grid,
         )
@@ -180,6 +191,8 @@ async def missions_create(
         argv += ["--risk-param-ranges", json.dumps(body.risk_param_ranges)]
     if body.risk_param_grid:
         argv += ["--risk-param-grid", json.dumps(body.risk_param_grid)]
+    if body.hypothesis_bundle_choices:
+        argv += ["--hypothesis-bundle-choices", json.dumps(body.hypothesis_bundle_choices)]
     if body.oos_holdout_fraction is not None:
         argv += ["--oos-holdout-fraction", str(body.oos_holdout_fraction)]
     if body.max_wall_clock_seconds is not None:

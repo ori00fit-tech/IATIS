@@ -110,6 +110,9 @@ def _search_space_dict(space: MissionSearchSpace) -> dict:
         "engine_set_choices": [list(e) for e in space.engine_set_choices],
         "indicator_set_choices": [list(i) for i in space.indicator_set_choices],
         "context_filter_set_choices": [list(c) for c in space.context_filter_set_choices],
+        "hypothesis_bundle_choices": (
+            [dict(b) for b in space.hypothesis_bundle_choices] if space.hypothesis_bundle_choices else None
+        ),
         "risk_param_ranges": space.risk_param_ranges,
         "risk_param_grid": space.risk_param_grid,
     }
@@ -361,6 +364,11 @@ def main() -> None:
                         help='JSON, e.g. \'[[],[{"name":"rsi","mode":"entry_filter","params":{},"weight":0}]]\'')
     parser.add_argument("--context-filter-set-choices", type=str, default="[[]]",
                         help='JSON, e.g. \'[[],[{"name":"session","mode":"entry_filter","params":{},"weight":0}]]\'')
+    parser.add_argument("--hypothesis-bundle-choices", type=str, default=None,
+                        help='JSON list of named bundles, e.g. \'[{"name":"SMC only","timeframes":["H1"],'
+                             '"engines":["smc"],"indicators":[],"context_filters":[]}]\' — when set, REPLACES '
+                             '--timeframes-choices/--engine-set-choices/--indicator-set-choices/'
+                             '--context-filter-set-choices with one shared index over complete bundles.')
     parser.add_argument("--risk-param-ranges", type=str, default="{}",
                         help='JSON, e.g. \'{"sl_atr_multiplier":[1.0,4.0]}\' (random/tpe/nsga2)')
     parser.add_argument("--risk-param-grid", type=str, default="{}",
@@ -382,6 +390,10 @@ def main() -> None:
             engine_set_choices=_tuplify_choices(json.loads(args.engine_set_choices)),
             indicator_set_choices=_tuplify_choices(json.loads(args.indicator_set_choices)),
             context_filter_set_choices=_tuplify_choices(json.loads(args.context_filter_set_choices)),
+            hypothesis_bundle_choices=(
+                tuple(dict(b) for b in json.loads(args.hypothesis_bundle_choices))
+                if args.hypothesis_bundle_choices else None
+            ),
             risk_param_ranges={k: tuple(v) for k, v in json.loads(args.risk_param_ranges).items()},
             risk_param_grid={k: tuple(v) for k, v in json.loads(args.risk_param_grid).items()},
         )

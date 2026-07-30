@@ -247,6 +247,67 @@ def test_run_once_correlation_filter_considers_already_open_positions(synthetic_
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation auto-repair (2026-07-30)
+# ---------------------------------------------------------------------------
+
+def test_run_once_auto_repairs_internal_only_reconciliation_mismatch(synthetic_config, monkeypatch):
+    """A signal outcome_tracker still thinks is open, but the broker no
+    longer reports, must be closed automatically — this is what stops the
+    open-risk/exposure gate from being permanently inflated by stale rows
+    (the root cause of the live 'internal open=5, broker open=1' report)."""
+    from scheduler import run_once
+    from storage.outcome_tracker import get_open_signals, log_signal
+
+    synthetic_config["execution"] = {
+        **synthetic_config.get("execution", {}),
+        "ctrader_enabled": True, "dry_run": False,
+    }
+
+    log_signal(_fake_execute_report("EURUSD"))
+    assert len(get_open_signals()) == 1
+
+    class _FakeClient:
+        def get_open_positions(self):
+            return []  # broker reports nothing open -> EURUSD is internal_only
+
+    monkeypatch.setattr("core.data_providers.get_shared_ctrader_client", lambda: _FakeClient())
+
+    with patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert get_open_signals() == []
+
+
+def test_run_once_does_not_auto_repair_when_flag_disabled(synthetic_config, monkeypatch):
+    from scheduler import run_once
+    from storage.outcome_tracker import get_open_signals, log_signal
+
+    synthetic_config["execution"] = {
+        **synthetic_config.get("execution", {}),
+        "ctrader_enabled": True, "dry_run": False,
+    }
+    synthetic_config["features"] = {
+        **synthetic_config.get("features", {}),
+        "reconciliation_auto_repair": False,
+    }
+
+    log_signal(_fake_execute_report("EURUSD"))
+
+    class _FakeClient:
+        def get_open_positions(self):
+            return []
+
+    monkeypatch.setattr("core.data_providers.get_shared_ctrader_client", lambda: _FakeClient())
+
+    with patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert len(get_open_signals()) == 1  # left alone — flag was off
+
+
+# ---------------------------------------------------------------------------
 # startup message
 # ---------------------------------------------------------------------------
 

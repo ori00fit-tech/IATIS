@@ -87,6 +87,36 @@ async def reconciliation_endpoint(
         raise HTTPException(status_code=503, detail="Reconciliation history unavailable.")
 
 
+@router.post("/reconciliation/repair")
+async def reconciliation_repair_endpoint(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Manually repair the LAST STORED reconciliation mismatch ("Repair
+    Tracker" dashboard button). Closes internal-only outcome rows (never
+    fabricating win/loss — see storage/outcome_tracker.reconcile_close_
+    signal) so they stop inflating open-risk/exposure.
+
+    Reads the stored result only — same read-only-of-the-broker-session
+    rule as GET /reconciliation. This process must NEVER call reconcile()
+    itself (would open a second cTrader session, colliding with the
+    scheduler's single per-account session slot). The scheduler already
+    auto-repairs on every mismatch tick (features.reconciliation_auto_
+    repair, default on); this endpoint is for closing the gap between
+    ticks or after that flag is disabled.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from execution.reconciliation import last_result, repair_mismatches
+        result = last_result()
+        if not result:
+            return {"repaired": [], "skipped_no_open_signal": [], "reason": "no reconciliation stored yet"}
+        return repair_mismatches(result)
+    except Exception as exc:
+        logger.error(f"reconciliation repair failed: {exc}")
+        raise HTTPException(status_code=503, detail="Reconciliation repair unavailable.")
+
+
 @router.get("/execution-quality")
 async def execution_quality_endpoint(
     x_api_key: str | None = Header(default=None),

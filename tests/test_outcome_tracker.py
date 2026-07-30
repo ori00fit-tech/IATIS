@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from storage.outcome_tracker import (
     log_signal, close_signal, get_open_signals,
-    performance_summary, recent_signals, _pip_size
+    performance_summary, recent_signals, _pip_size,
+    reconcile_close_signal,
 )
 
 
@@ -111,6 +112,47 @@ def test_crypto_pnl_pips_not_exploded():
     close_signal(sid, 98_000.0, "win")
     recent = recent_signals(limit=1)
     assert recent[0]["pnl_pips"] == pytest.approx(200_000.0, rel=1e-3)
+
+
+def test_reconcile_close_signal_closes_without_fabricating_outcome():
+    signal_id = log_signal(_make_report())
+    ok = reconcile_close_signal(signal_id, notes="broker no longer reports this open")
+    assert ok is True
+
+    # No longer counted as open (fixes the open-risk/exposure inflation bug).
+    assert get_open_signals() == []
+
+    recent = recent_signals(limit=1)
+    row = recent[0]
+    assert row["outcome"] == "closed_unknown"
+    assert row["exit_time"] is not None
+    assert row["exit_price"] is None  # never guessed
+    assert row["pnl_usd"] is None
+    assert row["pnl_pips"] is None
+
+
+def test_reconcile_close_signal_never_counted_as_win_or_loss():
+    signal_id = log_signal(_make_report())
+    reconcile_close_signal(signal_id)
+    summary = performance_summary()
+    # wins/losses are exact-string-matched — 'closed_unknown' must never
+    # inflate either bucket, matching scripts/forward_review.py's own
+    # outcome IN ('win','loss','breakeven') allowlist behavior.
+    assert summary["wins"] == 0
+    assert summary["losses"] == 0
+
+
+def test_reconcile_close_signal_nonexistent_returns_false():
+    assert reconcile_close_signal("NOPE") is False
+
+
+def test_reconcile_close_signal_already_closed_returns_false():
+    signal_id = log_signal(_make_report())
+    close_signal(signal_id, 1.0640, "win")
+    # Already closed (outcome='win', not 'open') — reconcile_close_signal
+    # must not clobber a real, known outcome.
+    assert reconcile_close_signal(signal_id) is False
+    assert recent_signals(limit=1)[0]["outcome"] == "win"
 
 
 def test_regime_breakdown():

@@ -172,6 +172,64 @@ def last_result() -> dict[str, Any] | None:
     }
 
 
+def repair_mismatches(report: dict[str, Any]) -> dict[str, Any]:
+    """Close internal outcome rows for symbols the broker no longer holds.
+
+    ``report["internal_only"]`` means: outcome_tracker thinks a signal is
+    still open, but the broker disagrees. Nothing else in the codebase ever
+    resolves that drift (auto_close_outcomes() only closes on a price-based
+    TP/SL/time-stop match against the position's OWN stored levels — a
+    manual close, an off-level stop-out, or a tick where the symbol simply
+    wasn't fetched all leave the row open forever). Left unrepaired, this
+    directly inflates risk/live_portfolio_state.py's open-risk/exposure
+    count (each stale row = one more phantom risk_per_trade_max slot),
+    which can block every new EXECUTE decision on exposure that doesn't
+    exist at the broker.
+
+    Uses reconcile_close_signal() — never fabricates a win/loss/breakeven,
+    since the real exit price/outcome at the broker isn't known here.
+
+    Returns {"repaired": [signal_id, ...], "skipped_no_open_signal": [symbol, ...]}.
+    Never raises — a repair failure is reported, not fatal, matching this
+    module's existing "never gates" contract.
+    """
+    from storage.outcome_tracker import get_open_signals, reconcile_close_signal
+
+    repaired: list[str] = []
+    skipped: list[str] = []
+    internal_only = report.get("internal_only") or []
+    if not internal_only:
+        return {"repaired": repaired, "skipped_no_open_signal": skipped}
+
+    try:
+        open_signals = get_open_signals()
+    except Exception as exc:  # noqa: BLE001 — monitoring must not kill the run
+        logger.warning(f"reconciliation repair: could not read open signals: {exc}")
+        return {"repaired": repaired, "skipped_no_open_signal": list(internal_only)}
+
+    for symbol in internal_only:
+        matches = [r for r in open_signals if r.get("symbol") == symbol]
+        if not matches:
+            skipped.append(symbol)
+            continue
+        for row in matches:
+            signal_id = row.get("signal_id")
+            if not signal_id:
+                continue
+            try:
+                if reconcile_close_signal(
+                    signal_id,
+                    notes="reconciliation: broker no longer reports this position open",
+                ):
+                    repaired.append(signal_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"reconciliation repair: failed to close {signal_id}: {exc}")
+
+    if repaired:
+        logger.warning(f"reconciliation: repaired {len(repaired)} stale internal-only signal(s): {repaired}")
+    return {"repaired": repaired, "skipped_no_open_signal": skipped}
+
+
 def format_alert(report: dict[str, Any]) -> str:
     """Telegram-ready mismatch message."""
     return (

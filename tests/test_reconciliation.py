@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from execution.reconciliation import format_alert, reconcile
+from execution.reconciliation import format_alert, reconcile, repair_mismatches
 
 
 @dataclass
@@ -138,6 +138,45 @@ def test_store_and_read_roundtrip(fake_d1, broker, internal):
 def test_last_result_none_when_empty(fake_d1):
     from execution.reconciliation import last_result
     assert last_result() is None
+
+
+def test_repair_mismatches_closes_internal_only_signals(fake_d1):
+    from storage.outcome_tracker import get_open_signals, log_signal
+
+    log_signal({"symbol": "ETHUSD", "final_verdict": "EXECUTE",
+                "entry_price": 100.0, "stop_loss": 95.0, "take_profit": 110.0,
+                "confluence": {"score": 70, "vote": {"winning_bias": "BULLISH"}},
+                "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 0},
+                "engine_outputs": []})
+    assert len(get_open_signals()) == 1
+
+    report = {"internal_only": ["ETHUSD"]}
+    result = repair_mismatches(report)
+
+    assert len(result["repaired"]) == 1
+    assert result["skipped_no_open_signal"] == []
+    assert get_open_signals() == []  # exposure/open-risk stops counting it
+
+
+def test_repair_mismatches_skips_symbol_with_no_open_signal(fake_d1):
+    report = {"internal_only": ["GHOST"]}
+    result = repair_mismatches(report)
+    assert result["repaired"] == []
+    assert result["skipped_no_open_signal"] == ["GHOST"]
+
+
+def test_repair_mismatches_empty_internal_only_is_a_noop(fake_d1):
+    result = repair_mismatches({"internal_only": []})
+    assert result == {"repaired": [], "skipped_no_open_signal": []}
+
+
+def test_repair_mismatches_never_raises_on_storage_failure(monkeypatch):
+    def boom():
+        raise RuntimeError("d1 down")
+    monkeypatch.setattr("storage.outcome_tracker.get_open_signals", boom)
+    result = repair_mismatches({"internal_only": ["EURUSD"]})
+    assert result["repaired"] == []
+    assert result["skipped_no_open_signal"] == ["EURUSD"]
 
 
 def test_store_never_raises_on_d1_outage(monkeypatch):

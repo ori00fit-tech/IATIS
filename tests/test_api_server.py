@@ -492,6 +492,43 @@ def test_reconciliation_empty_contract(client):
     assert r.json()["status"] == "none"
 
 
+def test_reconciliation_repair_requires_auth(client):
+    assert client.post("/reconciliation/repair").status_code == 401
+
+
+def test_reconciliation_repair_with_no_stored_result(client):
+    r = client.post("/reconciliation/repair", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["repaired"] == []
+    assert "reason" in body
+
+
+def test_reconciliation_repair_closes_internal_only_signal(client):
+    from execution.reconciliation import store_result
+    from storage.outcome_tracker import get_open_signals, log_signal
+
+    log_signal({
+        "symbol": "EURJPY", "final_verdict": "EXECUTE",
+        "entry_price": 160.0, "stop_loss": 158.0, "take_profit": 165.0,
+        "confluence": {"score": 70, "vote": {"winning_bias": "BULLISH"}},
+        "regime": {"state": "TRENDING"}, "news": {"news_risk_score": 0},
+        "engine_outputs": [],
+    })
+    assert len(get_open_signals()) == 1
+
+    store_result({
+        "status": "mismatch", "checked_at": "t",
+        "broker_only": [], "internal_only": ["EURJPY"],
+        "n_broker": 0, "n_internal": 1,
+    })
+
+    r = client.post("/reconciliation/repair", headers=HDR)
+    assert r.status_code == 200
+    assert len(r.json()["repaired"]) == 1
+    assert get_open_signals() == []
+
+
 def _submitted_jobs(monkeypatch):
     """Capture jobs instead of executing them (a real backtest is
     CPU-minutes — the endpoint contract is what's under test)."""

@@ -256,6 +256,44 @@ def close_signal(
     return True
 
 
+def reconcile_close_signal(signal_id: str, notes: str = "") -> bool:
+    """Close a signal the broker no longer holds open, WITHOUT guessing an
+    outcome. Unlike ``close_signal()`` (which needs a real exit price to
+    compute win/loss/breakeven) and ``delete_signal()`` (for rows that were
+    never executed at all — no real economic event happened), this is for a
+    signal that DID execute for real but closed at the broker through a path
+    IATIS never observed (manual close, a stop-out at a slightly different
+    price than the stored SL, a weekend gap, a time this symbol simply
+    wasn't in that tick's price feed for auto_close_outcomes() to check).
+
+    Sets outcome='closed_unknown' — distinct from 'win'/'loss'/'breakeven'
+    so it can never inflate win_rate/profit_factor, and distinct from 'open'
+    so get_open_signals() (and therefore risk/live_portfolio_state.py's
+    open-risk/exposure calculation) stops counting it. scripts/
+    forward_review.py's D001/D002 rules use an explicit
+    outcome IN ('win','loss','breakeven') allowlist, so this is invisible
+    to them too — no evidence-rule impact, only a bookkeeping fix.
+
+    Used by execution/reconciliation.py's repair_mismatches() for symbols
+    the broker no longer reports as open. Returns False if not found.
+    """
+    _init_db()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT 1 FROM outcomes WHERE signal_id=? AND outcome='open'", (signal_id,)
+        ).fetchone()
+        if not row:
+            logger.warning(f"Signal {signal_id} not found (or not open) in outcome_tracker")
+            return False
+        con.execute(
+            "UPDATE outcomes SET exit_time=?, outcome='closed_unknown', notes=? WHERE signal_id=?",
+            (now, notes, signal_id),
+        )
+    logger.info(f"Outcome tracker: reconcile-closed {signal_id} (outcome unknown — {notes})")
+    return True
+
+
 def delete_signal(signal_id: str) -> bool:
     """Remove a signal row entirely — for a row that was never actually
     executed at the broker (no real economic event to record as win/loss/

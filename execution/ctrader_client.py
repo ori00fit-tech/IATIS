@@ -46,7 +46,7 @@ import fcntl
 import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from queue import Queue
@@ -708,9 +708,39 @@ class CTraderClient:
             self._set_state(ConnectionState.SYMBOLS_LOADED)
             # Kick off best-effort details fetch (needed for correct volumes).
             self._send_symbol_details_req(client, wanted_ids)
+            self._reresolve_pending_symbol_ids()
             self._maybe_ready()
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOASymbolsListRes: {exc}")
+
+    def _reresolve_pending_symbol_ids(self) -> None:
+        """Re-key any position still stored under a synthetic 'SYMBOL_<id>'
+        placeholder now that the symbols list has arrived.
+
+        Fixes a real, observed bug (2026-07-30, live: a broker-only
+        "SYMBOL_6" mismatch in reconciliation): ProtoOAReconcileRes can
+        answer before ProtoOASymbolsListRes finishes (the two requests are
+        sent together in _on_error_res's ALREADY_LOGGED_IN path and in the
+        normal bootstrap chain, but nothing guarantees response order), so
+        _on_reconcile_res's symbol-name lookup misses and falls back to the
+        synthetic key. Once the real symbol list is known, resolve it.
+        """
+        with self._lock:
+            placeholders = [s for s in self._positions if s.startswith("SYMBOL_")]
+            for placeholder in placeholders:
+                try:
+                    sym_id = int(placeholder[len("SYMBOL_"):])
+                except ValueError:
+                    continue
+                ct_name = self._symbol_id_to_name.get(sym_id, "")
+                if not ct_name:
+                    continue  # still genuinely unresolvable — not a race, a real gap
+                iatis_symbol = CTRADER_TO_IATIS.get(ct_name, ct_name)
+                if iatis_symbol == placeholder:
+                    continue
+                position = self._positions.pop(placeholder)
+                self._positions[iatis_symbol] = replace(position, symbol=iatis_symbol)
+                logger.info(f"🔁 Reconcile: resolved {placeholder} → {iatis_symbol}")
 
     def _on_symbol_details_res(self, message: Any) -> None:
         """Handle ProtoOASymbolByIdRes (full specs incl. lotSize/min/step)."""
@@ -805,7 +835,13 @@ class CTraderClient:
             trade_data = getattr(position, "tradeData", None)
             sym_id = int(getattr(trade_data, "symbolId", 0)) if trade_data else 0
             ct_name = self._symbol_id_to_name.get(sym_id, "")
-            iatis_symbol = CTRADER_TO_IATIS.get(ct_name, ct_name)
+            # Same synthetic-key fallback as _on_reconcile_res (2026-07-30
+            # fix): without it, two DIFFERENT unresolved-symbol positions
+            # would both key onto "" here — an open on one silently
+            # overwriting the other's tracked state, and a close on either
+            # popping whichever happened to be stored under "" (possibly
+            # the wrong one, or leaving a stale entry behind indefinitely).
+            iatis_symbol = CTRADER_TO_IATIS.get(ct_name, ct_name) or f"SYMBOL_{sym_id}"
 
             status = getattr(position, "positionStatus", None)
             with self._lock:

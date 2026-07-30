@@ -31,6 +31,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'journal', label: 'Trade Journal', hint: 'Every paper trade in detail: R, engines, notes, tags, equity curve', glyph: '✎', section: 'Live Ops' },
   { id: 'risk-center', label: 'Risk Center', hint: 'Exposure, RR compliance, R-distribution, per-symbol risk', glyph: '⛨', section: 'Live Ops' },
   { id: 'execution-quality', label: 'Execution Quality', hint: 'Real fills, slippage, TCA', glyph: '◈', section: 'Live Ops' },
+  { id: 'reconciliation', label: 'Portfolio Reconciliation', hint: 'Broker-vs-internal open positions, mismatch repair', glyph: '⚖', section: 'Live Ops' },
   { id: 'research', label: 'Research & Backtests', hint: 'Hypothesis registry, backtest runs, regime matrix', glyph: '⌕', section: 'Research & Backtests' },
   { id: 'backtesting-lab', label: 'Backtesting Lab', hint: 'Step-by-step experiment builder — dataset, symbols, strategy, execution', glyph: '🧪', section: 'Research & Backtests' },
   { id: 'backtesting-charts', label: 'Backtesting Charts', hint: 'Equity curve, per-symbol comparison, score calibration', glyph: '📈', section: 'Research & Backtests' },

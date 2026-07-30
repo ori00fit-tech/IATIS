@@ -72,9 +72,38 @@ def _init_db() -> None:
         logger.warning(f"shadow_book init failed (non-fatal): {exc}")
 
 
+GATE_LABELS: dict[str, str] = {
+    "data_validation": "Data validation failed",
+    "mqs": "Market Quality Score gate",
+    "info_share": "Informative engine share too low",
+    "quorum": "Too few engines agreeing",
+    "score": "Confluence score below minimum",
+    "contradiction": "Contradiction veto",
+    "reversal_veto": "Reversal veto",
+    "risk": "Risk Engine (RR / drawdown / exposure / correlation)",
+    "news": "News blackout",
+    "meta_or_regime": "Meta Decision Layer / regime downgrade",
+    "other": "Other / unclassified",
+}
+
+
 def classify_gate(report: dict) -> str:
     """Primary rejecting gate, in pipeline order. One label per decision so
-    the ledger's per-gate attribution is unambiguous."""
+    the ledger's per-gate attribution is unambiguous.
+
+    Also the single source of truth storage/decision_log.py's
+    summarize_decisions() reuses for its "Rejection Statistics" rollup —
+    previously that function derived its own, separately-incomplete reason
+    list (missed every MQS-gated NO_TRADE entirely, and grouped by the
+    exact interpolated fail_reasons string, e.g. "Confluence score 57.22
+    below minimum required 60", which fragments into a near-unique key per
+    decision instead of rolling up into one real category)."""
+    if "reason" in report and not report.get("confluence") and not report.get("risk"):
+        # main.py's pre-pipeline data-validation early return
+        # ({"final_verdict": "NO_TRADE", "reason": "Data validation failed: ..."})
+        # — no confluence/risk/news keys exist on this report shape at all.
+        return "data_validation"
+
     summary = (report.get("summary") or "")
     cf = report.get("confluence", {}) or {}
     reasons = " ".join(cf.get("fail_reasons", []) or [])

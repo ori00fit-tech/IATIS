@@ -514,3 +514,34 @@ async def missions_meta_analysis(
         top_fraction=top_fraction, n_bins=n_bins,
     )
     return result.to_dict()
+
+
+@router.get("/research/missions/{mission_id}/feature-mining")
+async def missions_feature_mining(
+    mission_id: str,
+    validation_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Aggregates the per-symbol feature_mining_json blobs already stored
+    for one validation run (backtest/mission_validator.py) — computed at
+    validation time, never re-run here, never a new backtest.
+    `validation_id` is required (unlike meta-analysis's optional `symbol`)
+    because feature mining is validation-scoped, not mission-trial-scoped:
+    research_mission_trials_v2 stores only aggregated metrics, never
+    trade-level detail, so there is nothing to mine at the mission level —
+    see backtest/mission_validator.py's module docstring for the full
+    validation architecture."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_mission_validations
+
+    validation = research_mission_validations.get_validation(validation_id)
+    if validation is None or validation["mission_id"] != mission_id:
+        raise HTTPException(status_code=404, detail="Validation not found.")
+
+    results = research_mission_validations.validation_results(validation_id)
+    blobs = [json.loads(r["feature_mining_json"]) for r in results if r.get("feature_mining_json")]
+
+    from backtest.feature_mining import pool_feature_mining_results
+    pooled = pool_feature_mining_results(blobs)
+    return {"mission_id": mission_id, "validation_id": validation_id, **pooled}

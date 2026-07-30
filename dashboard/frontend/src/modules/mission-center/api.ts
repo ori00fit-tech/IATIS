@@ -255,3 +255,51 @@ export interface MetaAnalysisResponse {
 
 export const getMetaAnalysis = (missionId: string, opts?: { symbol?: string; top_fraction?: number; n_bins?: number }) =>
   apiGet<MetaAnalysisResponse>(`/research/missions/${encodeURIComponent(missionId)}/meta-analysis`, opts)
+
+// ── Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30) ────────────
+// Mirrors backtest/feature_mining.py's dataclasses exactly. Retrospective,
+// descriptive, non-ML association analysis — see FeatureMiningPanel's own
+// "EXPLORATORY — NOT EVIDENCE" banner. Computed at validation time by
+// backtest/mission_validator.py; this endpoint only pools already-stored
+// per-symbol results, never runs a new backtest.
+
+export interface FeatureBinResult {
+  feature: string
+  bin_label: string
+  bin_index: number | null
+  n_trades: number
+  win_rate: number
+  mean_r: number
+  std_r: number | null
+  lift_win_rate: number | null
+  p_value: number | null
+  significance: 'INSUFFICIENT_DATA' | 'SURVIVES_CORRECTION' | 'NOMINAL_ONLY' | 'NOT_SIGNIFICANT'
+}
+
+export interface FeatureAssociation {
+  feature: string
+  feature_type: 'numeric' | 'categorical'
+  n_observed: number
+  overall_win_rate: number
+  bins: FeatureBinResult[]
+  insufficient_data: boolean
+  note: string
+}
+
+export interface FeatureMiningResponse {
+  mission_id: string
+  validation_id: string
+  n_trades_total: number
+  n_features_tested: number
+  bonferroni_alpha: number | null
+  associations: FeatureAssociation[]
+  caveat: string
+  insufficient_data: boolean
+  note: string
+}
+
+export const getFeatureMining = (missionId: string, validationId: string) =>
+  apiGet<FeatureMiningResponse>(
+    `/research/missions/${encodeURIComponent(missionId)}/feature-mining`,
+    { validation_id: validationId },
+  )

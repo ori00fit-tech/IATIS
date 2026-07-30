@@ -389,6 +389,7 @@ def _build_copilot_context() -> dict[str, Any]:
         "already_killed_ideas": dead_list or "Not available — see CLAUDE.md's dead list table directly.",
         "reserved_backlog_ids": backlog_reserved or "Not available.",
         "recent_mission_findings": _recent_mission_findings(),
+        "feature_mining_leads": _feature_mining_leads(),
     }
 
 
@@ -439,6 +440,49 @@ def _recent_mission_findings(limit: int = 3) -> list[dict[str, Any]] | None:
         return findings or None
     except Exception as exc:
         logger.debug(f"Copilot context: recent mission findings unavailable: {exc}")
+        return None
+
+
+def _feature_mining_leads(limit: int = 3) -> list[dict[str, Any]] | None:
+    """Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30) — grounds
+    a suggestion in real, recent feature-mining leads (backtest/
+    feature_mining.py, computed at validation time by backtest/
+    mission_validator.py). Same treatment as _recent_mission_findings():
+    a LEAD, never evidence. Degrades to None on any failure (D1
+    unreachable, malformed row, etc.) — must never turn this endpoint,
+    which worked fine before Mission Center existed, into something that
+    500s over an unrelated D1 outage."""
+    try:
+        from backtest.feature_mining import pool_feature_mining_results
+        from storage import research_mission_validations
+
+        leads = []
+        for validation in research_mission_validations.list_recent_finished_validations(limit=limit):
+            try:
+                results = research_mission_validations.validation_results(validation["id"])
+                blobs = [json.loads(r["feature_mining_json"]) for r in results if r.get("feature_mining_json")]
+                if not blobs:
+                    continue
+                pooled = pool_feature_mining_results(blobs)
+            except Exception as exc:
+                logger.debug(f"Copilot context: feature mining skipped for {validation.get('id')}: {exc}")
+                continue
+            if pooled.get("insufficient_data"):
+                continue
+            top = sorted(
+                (a for a in pooled["associations"] if not a.get("insufficient_data")),
+                key=lambda a: max((b["lift_win_rate"] or 0) for b in a["bins"]) if a["bins"] else 0,
+                reverse=True,
+            )[:3]
+            if not top:
+                continue
+            leads.append({
+                "mission_id": validation["mission_id"], "validation_id": validation["id"],
+                "top_features": [{"feature": a["feature"], "note": "descriptive association only"} for a in top],
+            })
+        return leads or None
+    except Exception as exc:
+        logger.debug(f"Copilot context: feature-mining leads unavailable: {exc}")
         return None
 
 

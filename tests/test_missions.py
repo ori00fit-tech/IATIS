@@ -551,3 +551,77 @@ def test_missions_meta_analysis_rejects_bad_query_params(client):
     assert r.status_code == 400
     r2 = client.get("/research/missions/val-mission-m/meta-analysis?n_bins=0", headers=HDR)
     assert r2.status_code == 400
+
+
+# ── Feature Mining (2026-07-30) ─────────────────────────────────────────────
+
+def test_missions_feature_mining_requires_auth(client):
+    assert client.get("/research/missions/does-not-exist/feature-mining?validation_id=v").status_code == 401
+
+
+def test_missions_feature_mining_404_unknown_validation(client):
+    r = client.get("/research/missions/does-not-exist/feature-mining?validation_id=does-not-exist", headers=HDR)
+    assert r.status_code == 404
+
+
+def test_missions_feature_mining_404_validation_belongs_to_different_mission(client):
+    from storage import research_mission_validations
+
+    research_mission_validations.upsert_validation(
+        validation_id="v-fm-mismatch", mission_id="val-mission-n", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD", "GBPUSD"], objective_metric="profit_factor", criteria={},
+    )
+    r = client.get(
+        "/research/missions/some-other-mission/feature-mining?validation_id=v-fm-mismatch", headers=HDR,
+    )
+    assert r.status_code == 404
+
+
+def test_missions_feature_mining_insufficient_data_shape(client):
+    from storage import research_mission_validations
+
+    research_mission_validations.upsert_validation(
+        validation_id="v-fm-empty", mission_id="val-mission-o", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    r = client.get("/research/missions/val-mission-o/feature-mining?validation_id=v-fm-empty", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["insufficient_data"] is True
+    assert body["mission_id"] == "val-mission-o"
+    assert body["validation_id"] == "v-fm-empty"
+
+
+def test_missions_feature_mining_real_response_shape(client):
+    from storage import research_mission_validations
+
+    research_mission_validations.upsert_validation(
+        validation_id="v-fm-real", mission_id="val-mission-p", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    fm_blob = {
+        "n_trades_total": 40, "n_features_tested": 1, "bonferroni_alpha": 0.05, "insufficient_data": False,
+        "associations": [{
+            "feature": "regime", "feature_type": "categorical", "n_observed": 40, "overall_win_rate": 0.5,
+            "insufficient_data": False, "note": "",
+            "bins": [{
+                "feature": "regime", "bin_label": "TRENDING", "bin_index": None, "n_trades": 40,
+                "win_rate": 0.5, "mean_r": 0.1, "std_r": 1.0, "lift_win_rate": 1.0,
+                "p_value": 0.9, "significance": "NOT_SIGNIFICANT",
+            }],
+        }],
+    }
+    research_mission_validations.record_validation_result(
+        validation_id="v-fm-real", symbol="EURUSD", passed=True,
+        metrics={}, monte_carlo={}, walk_forward={}, robustness={},
+        criteria_breakdown={}, feature_mining=fm_blob, error=None, started_at="t1", finished_at="t2",
+    )
+    r = client.get("/research/missions/val-mission-p/feature-mining?validation_id=v-fm-real", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["insufficient_data"] is False
+    assert body["mission_id"] == "val-mission-p"
+    assert body["validation_id"] == "v-fm-real"
+    assert body["n_trades_total"] == 40
+    assert len(body["associations"]) == 1
+    assert body["associations"][0]["feature"] == "regime"

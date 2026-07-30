@@ -171,7 +171,8 @@ class MarketStructureEngine(BaseEngine):
             )
 
         # Analyze current (decision-TF) and macro (higher-TF) structure
-        h1_highs, h1_lows = _swing_points(df_cur.tail(100), window=3)
+        h1_window = df_cur.tail(100)
+        h1_highs, h1_lows = _swing_points(h1_window, window=3)
         h4_highs, h4_lows = _swing_points(df_macro.tail(60), window=2)
 
         h1_struct = _classify_structure(h1_highs, h1_lows)
@@ -236,6 +237,16 @@ class MarketStructureEngine(BaseEngine):
         last_h1_low = h1_lows[-1][1] if h1_lows else 0
         reasons.append(f"Last H1 swing: high={last_h1_high:.5f}, low={last_h1_low:.5f}")
 
+        # Feature Mining Phase 1 (2026-07-30) — swing bar-ages, needed for a
+        # "how many bars since the last swing high/low" feature. idx is
+        # positional within h1_window (the tail(100) slice already used
+        # above for _swing_points), so age is relative to that slice's last
+        # bar, matching the decision-time snapshot everywhere else in raw.
+        last_high_idx = h1_highs[-1][0] if h1_highs else None
+        last_low_idx = h1_lows[-1][0] if h1_lows else None
+        last_high_bar_age = (len(h1_window) - 1 - last_high_idx) if last_high_idx is not None else None
+        last_low_bar_age = (len(h1_window) - 1 - last_low_idx) if last_low_idx is not None else None
+
         return EngineOutput(
             engine_name="MarketStructure",
             bias=bias,
@@ -251,5 +262,15 @@ class MarketStructureEngine(BaseEngine):
                 "h1_strength": h1_struct["strength"],
                 "h4_strength": h4_struct["strength"],
                 "aligned": h1_bias == h4_bias,
+                # Feature Mining Phase 1 (2026-07-30) — additive only, never
+                # consulted by bias/score/control-flow above.
+                "h1_structure_hh": h1_struct.get("structure_hh"),
+                "h1_structure_hl": h1_struct.get("structure_hl"),
+                "h1_structure_lh": h1_struct.get("structure_lh"),
+                "h1_structure_ll": h1_struct.get("structure_ll"),
+                "last_h1_high": last_h1_high,
+                "last_h1_low": last_h1_low,
+                "last_high_bar_age": last_high_bar_age,
+                "last_low_bar_age": last_low_bar_age,
             },
         )

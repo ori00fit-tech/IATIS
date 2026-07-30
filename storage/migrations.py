@@ -96,6 +96,18 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE outcomes ADD COLUMN tags TEXT",
         ],
     ),
+    (
+        4,
+        "feature_mining_column",
+        # Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30):
+        # backtest/mission_validator.py now records a per-symbol
+        # backtest.feature_mining.FeatureMiningResult alongside the existing
+        # monte_carlo/walk_forward/robustness blobs. Diagnostic only — never
+        # a criterion, never registry.json/config.yaml evidence.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN feature_mining_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -146,6 +158,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE outcomes" in s for s in statements):
                 from storage import outcome_tracker
                 outcome_tracker._init_db()
+            if any("ALTER TABLE research_mission_validation_results" in s for s in statements):
+                from storage import research_mission_validations
+                research_mission_validations._init(con)
             for sql in statements:
                 try:
                     con.execute(sql)

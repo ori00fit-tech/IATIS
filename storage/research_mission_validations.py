@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS research_mission_validation_results (
     walk_forward_json        TEXT,
     robustness_json          TEXT,
     criteria_breakdown_json  TEXT NOT NULL,       -- {criterion: {actual, threshold, passed}} — every one, always
+    feature_mining_json      TEXT,                -- Feature Mining Phase 1 (2026-07-30) — diagnostic only, never a criterion
     error                    TEXT,
     started_at               TEXT NOT NULL,
     finished_at              TEXT NOT NULL,
@@ -177,24 +178,45 @@ def record_validation_result(
     error: str | None,
     started_at: str,
     finished_at: str,
+    feature_mining: dict | None = None,
 ) -> None:
     """Always INSERT — one row per (validation_id, symbol), written
-    exactly once as backtest/mission_validator.py finishes that symbol."""
+    exactly once as backtest/mission_validator.py finishes that symbol.
+    feature_mining (Phase 1, 2026-07-30) is diagnostic-only — it never
+    participates in `passed`/`criteria_breakdown`."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
             """INSERT INTO research_mission_validation_results
                (validation_id, symbol, passed, metrics_json, monte_carlo_json,
                 walk_forward_json, robustness_json, criteria_breakdown_json,
-                error, started_at, finished_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                feature_mining_json, error, started_at, finished_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (validation_id, symbol, 1 if passed else 0,
              json.dumps(metrics) if metrics is not None else None,
              json.dumps(monte_carlo) if monte_carlo is not None else None,
              json.dumps(walk_forward) if walk_forward is not None else None,
              json.dumps(robustness) if robustness is not None else None,
-             json.dumps(criteria_breakdown), error, started_at, finished_at),
+             json.dumps(criteria_breakdown),
+             json.dumps(feature_mining) if feature_mining is not None else None,
+             error, started_at, finished_at),
         )
+
+
+def list_recent_finished_validations(limit: int = 5) -> list[dict[str, Any]]:
+    """Newest-first finished validations across every mission. Feature
+    Mining / Hypothesis Discovery Phase 1 (2026-07-30) — mirrors
+    storage.research_missions.list_recent_missions() exactly; the accessor
+    execution/routes/ai.py's _feature_mining_leads() needs to ground a
+    hypothesis suggestion in real, recent feature-mining leads without
+    already knowing validation IDs."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(
+            "SELECT * FROM research_mission_validations WHERE status=? ORDER BY finished_at DESC LIMIT ?",
+            ("finished", limit),
+        ).fetchall()
+    return [{k: r[k] for k in r.keys()} for r in rows]
 
 
 def validation_results(validation_id: str) -> list[dict[str, Any]]:

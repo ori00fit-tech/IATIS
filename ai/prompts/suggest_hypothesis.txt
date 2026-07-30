@@ -37,11 +37,21 @@ Rules:
   mission finding is not out-of-sample-tested and has not survived
   Monte Carlo/walk-forward/cross-symbol validation — do not describe it
   as validated, confirmed, or an edge.
+- The context may also include "feature_mining_leads" — descriptive,
+  non-ML statistical associations between decision-time features (e.g.
+  Wyckoff spring events, D1/H1 alignment, ATR percentile) and trade
+  outcome, computed WITHOUT any trained classifier (see CLAUDE.md's dead
+  list, H033, for why no model is trained here). Treat these exactly
+  like recent_mission_findings: a LEAD that may steer what to
+  investigate, never evidence, never a claim of predictive power. A
+  feature-mining lead has not been out-of-sample tested, Monte-Carlo
+  tested, or walk-forward tested — do not describe it as validated,
+  confirmed, causal, or an edge.
 - Return JSON only. No prose before or after the JSON object. No
   markdown code fences.
 
 Hypothesis registry summary, already-killed ideas, research backlog,
-and recent Mission Center findings (if any):
+recent Mission Center findings, and feature-mining leads (if any):
 {context}
 
 Operator focus hint: {focus_hint}

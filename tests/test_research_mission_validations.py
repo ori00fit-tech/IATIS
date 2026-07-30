@@ -98,3 +98,53 @@ def test_record_and_read_validation_results():
     assert gbpusd["error"] == "no data"
 
     assert rmv.validation_results("no-such-validation") == []
+
+
+def test_feature_mining_json_round_trips():
+    rmv.upsert_validation(
+        validation_id="v-fm", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    fm_blob = {"n_trades_total": 42, "insufficient_data": False, "associations": []}
+    rmv.record_validation_result(
+        validation_id="v-fm", symbol="EURUSD", passed=True,
+        metrics={"profit_factor": 1.3}, monte_carlo={}, walk_forward={}, robustness={},
+        criteria_breakdown={}, feature_mining=fm_blob, error=None, started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-fm")
+    assert len(results) == 1
+    import json
+    assert json.loads(results[0]["feature_mining_json"]) == fm_blob
+
+
+def test_feature_mining_json_absent_when_not_provided():
+    rmv.upsert_validation(
+        validation_id="v-fm-none", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    rmv.record_validation_result(
+        validation_id="v-fm-none", symbol="EURUSD", passed=False,
+        metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
+        criteria_breakdown={}, error="no data", started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-fm-none")
+    assert results[0]["feature_mining_json"] is None
+
+
+def test_list_recent_finished_validations_newest_first_and_status_filtered():
+    rmv.upsert_validation(
+        validation_id="v-recent-a", mission_id="m-recent", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    rmv.set_validation_status("v-recent-a", "finished", finished=True, overall_verdict="WEAK_LEAD",
+                               passing_symbols=1, total_symbols=1)
+    rmv.upsert_validation(
+        validation_id="v-recent-b", mission_id="m-recent", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    rmv.set_validation_status("v-recent-b", "running", started=True)
+
+    rows = rmv.list_recent_finished_validations(limit=10)
+    ids = {r["id"] for r in rows}
+    assert "v-recent-a" in ids
+    assert "v-recent-b" not in ids

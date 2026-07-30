@@ -209,7 +209,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [

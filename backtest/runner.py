@@ -196,6 +196,106 @@ def load_symbol_data(
 # Adapter: engine Trade → analytics TradeRecord
 # ─────────────────────────────────────────────────────────────────────────
 
+def _build_features(decision: dict, entry_price: float, atr_val: float | None) -> dict:
+    """Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30) —
+    flattens decision-time context into TradeRecord.features. Every field
+    is OMITTED (never fabricated as 0/None-filled) when its source gate
+    was off for this run — see TradeRecord.features' own docstring for the
+    flat-vs-nested rationale. Pure function, no side effects."""
+    features: dict = {}
+    engine_votes = {e["engine"]: e for e in decision.get("engines", [])}
+
+    def _raw(engine: str) -> dict:
+        return (engine_votes.get(engine) or {}).get("raw") or {}
+
+    if decision.get("regime") is not None:
+        features["regime"] = decision["regime"]
+    if decision.get("volatility") is not None:
+        features["volatility"] = decision["volatility"]
+    if decision.get("atr_value") is not None:
+        features["atr_value"] = decision["atr_value"]
+    if decision.get("info_share") is not None:
+        features["info_share"] = decision["info_share"]
+    if decision.get("session"):
+        features["session"] = decision["session"]
+
+    mtf = decision.get("mtf")
+    if mtf:
+        features["mtf_d1_bias"] = mtf.get("d1_bias")
+        features["mtf_d1_adx"] = mtf.get("d1_adx")
+        features["mtf_confirming"] = mtf.get("confirming")
+
+    veto = decision.get("reversal_veto")
+    if veto:
+        features["veto_reversal_count"] = veto.get("reversal_count")
+        features["veto_trend_bias"] = veto.get("trend_bias")
+        features["veto_reversal_bias"] = veto.get("reversal_bias")
+        features["veto_confidence_multiplier"] = veto.get("confidence_multiplier")
+        features["veto_soft_veto"] = veto.get("soft_veto")
+
+    contradiction_reasons = decision.get("contradiction_reasons")
+    if contradiction_reasons is not None:
+        features["contradiction_count"] = len(contradiction_reasons)
+
+    mqs = decision.get("mqs")
+    if mqs:
+        features["mqs_score"] = mqs.get("mqs_score")
+        features["mqs_grade"] = mqs.get("grade")
+        features["mqs_atr_percentile"] = mqs.get("atr_percentile")
+        features["mqs_volatility_grade"] = mqs.get("volatility_grade")
+        features["mqs_day_penalty"] = mqs.get("day_penalty")
+
+    ms_raw = _raw("MarketStructure")
+    if ms_raw:
+        features["market_structure_h1_event"] = ms_raw.get("h1_event")
+        features["market_structure_h1_strength"] = ms_raw.get("h1_strength")
+        features["market_structure_aligned"] = ms_raw.get("aligned")
+        features["market_structure_last_high_bar_age"] = ms_raw.get("last_high_bar_age")
+        features["market_structure_last_low_bar_age"] = ms_raw.get("last_low_bar_age")
+
+    div_raw = _raw("Divergence")
+    if div_raw:
+        features["divergence_rsi_divergence"] = div_raw.get("rsi_divergence")
+        features["divergence_macd_divergence"] = div_raw.get("macd_divergence")
+        features["divergence_rsi_div_strength"] = div_raw.get("rsi_div_strength")
+
+    wy_raw = _raw("Wyckoff")
+    if wy_raw:
+        features["wyckoff_event"] = wy_raw.get("event")
+        features["wyckoff_event_strength_pct"] = wy_raw.get("event_strength_pct")
+        vol_analysis = wy_raw.get("volume_analysis") or {}
+        if "vol_ratio" in vol_analysis:
+            features["wyckoff_vol_ratio"] = vol_analysis.get("vol_ratio")
+
+    ict_raw = _raw("ICT")
+    if ict_raw:
+        features["ict_zone"] = ict_raw.get("zone")
+        features["ict_zone_pct"] = ict_raw.get("zone_pct")
+        features["ict_is_killzone"] = ict_raw.get("is_killzone")
+
+    nnfx_raw = _raw("NNFX")
+    if nnfx_raw:
+        features["nnfx_price_vs_ema200_pct"] = nnfx_raw.get("price_vs_ema200_pct")
+        features["nnfx_adx"] = nnfx_raw.get("adx")
+
+    quant_raw = _raw("Quant")
+    if quant_raw:
+        features["quant_atr_percentile"] = quant_raw.get("atr_percentile")
+        features["quant_roc_10"] = quant_raw.get("roc_10")
+
+    # Derived (2026-07-30) — computed here, not stored anywhere else.
+    ema200 = nnfx_raw.get("ema200") if nnfx_raw else None
+    if ema200 is not None and atr_val is not None and atr_val > 0:
+        features["derived_ema200_distance_atr"] = (entry_price - ema200) / atr_val
+
+    last_high = ms_raw.get("last_h1_high") if ms_raw else None
+    last_low = ms_raw.get("last_h1_low") if ms_raw else None
+    if last_high and last_low and last_high != last_low:
+        features["derived_retracement_pct"] = (entry_price - last_low) / (last_high - last_low) * 100.0
+
+    return features
+
+
 def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
     """Convert an engine ``Trade`` into an analytics ``TradeRecord``.
 
@@ -244,6 +344,7 @@ def trade_to_record(trade: Trade, symbol: str) -> TradeRecord:
         cf_score=decision.get("adjusted_score", 0.0),
         engine_votes=engine_votes,
         indicator_filters=decision.get("indicator_filters") or {},
+        features=_build_features(decision, trade.entry_price, decision.get("atr_value")),
     )
 
 

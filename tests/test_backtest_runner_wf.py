@@ -126,6 +126,90 @@ def test_adapter_handles_missing_decision_gracefully():
     assert rec.engine_votes == {}
     assert rec.cf_score == 0.0
     assert rec.regime == ""
+    assert rec.features == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Feature Mining Phase 1 (2026-07-30): TradeRecord.features population
+# ─────────────────────────────────────────────────────────────────────────
+
+def _decision_with_full_context() -> dict:
+    return {
+        "engines": [
+            {"engine": "MarketStructure", "bias": "BULLISH", "score": 60.0, "reasons": [], "raw": {
+                "h1_event": "BOS", "h1_strength": 65, "aligned": True,
+                "last_high_bar_age": 3, "last_low_bar_age": 10,
+                "last_h1_high": 1.1050, "last_h1_low": 1.0950,
+            }},
+            {"engine": "NNFX", "bias": "BULLISH", "score": 70.0, "reasons": [], "raw": {
+                "ema200": 1.0980, "adx": 28.5, "price_vs_ema200_pct": 0.5,
+            }},
+        ],
+        "winning_bias": "BULLISH", "agree_count": 2, "score": 85.0, "adjusted_score": 87.0,
+        "regime": "TRENDING", "volatility": "normal", "atr_value": 0.0025, "info_share": 0.7,
+        "session": "London",
+        "mtf": {"d1_bias": "BULLISH", "d1_adx": 30.0, "d1_ema20": 1.10, "d1_ema50": 1.09, "confirming": True},
+        "reversal_veto": {
+            "reversal_count": 0, "reversal_engines": [], "trend_bias": "BULLISH",
+            "reversal_bias": "NONE", "confidence_multiplier": 1.0, "soft_veto": False,
+        },
+        "contradiction_reasons": [],
+        "mqs": {
+            "mqs_score": 72.0, "grade": "GOOD", "should_trade": True, "session": "London",
+            "active_sessions": ["London"], "atr_percentile": 0.4, "volatility_grade": "normal",
+            "day_penalty": 0.0, "reasons": [],
+        },
+        "indicator_filters": None, "context_filters": None,
+    }
+
+
+def test_build_features_flattens_full_decision_context():
+    rec = trade_to_record(_trade(decision=_decision_with_full_context(), entry_price=1.1000), "EURUSD")
+    f = rec.features
+    assert f["regime"] == "TRENDING"
+    assert f["volatility"] == "normal"
+    assert f["atr_value"] == 0.0025
+    assert f["info_share"] == 0.7
+    assert f["session"] == "London"
+    assert f["mtf_d1_bias"] == "BULLISH"
+    assert f["mtf_confirming"] is True
+    assert f["veto_reversal_count"] == 0
+    assert f["veto_trend_bias"] == "BULLISH"
+    assert f["contradiction_count"] == 0
+    assert f["mqs_score"] == 72.0
+    assert f["mqs_grade"] == "GOOD"
+    assert f["market_structure_h1_event"] == "BOS"
+    assert f["market_structure_last_high_bar_age"] == 3
+    assert f["nnfx_price_vs_ema200_pct"] == 0.5
+    assert f["nnfx_adx"] == 28.5
+    # Derived: (entry - ema200) / atr_val = (1.1000 - 1.0980) / 0.0025
+    assert f["derived_ema200_distance_atr"] == pytest.approx((1.1000 - 1.0980) / 0.0025)
+    # Derived: (entry - last_low) / (last_high - last_low) * 100
+    assert f["derived_retracement_pct"] == pytest.approx((1.1000 - 1.0950) / (1.1050 - 1.0950) * 100)
+
+
+def test_build_features_omits_fields_when_source_gate_off():
+    # A run with use_mtf_confirmation/use_reversal_veto/use_mqs_gate=False
+    # produces decision["mtf"]/["reversal_veto"]/["mqs"] = None — the
+    # feature dict must simply omit those keys, never fabricate them.
+    decision = _decision_with_full_context()
+    decision["mtf"] = None
+    decision["reversal_veto"] = None
+    decision["mqs"] = None
+    decision["session"] = ""
+    rec = trade_to_record(_trade(decision=decision), "EURUSD")
+    f = rec.features
+    assert "mtf_d1_bias" not in f
+    assert "veto_reversal_count" not in f
+    assert "mqs_score" not in f
+    assert "session" not in f
+    # Fields from unaffected gates are still present.
+    assert f["regime"] == "TRENDING"
+
+
+def test_build_features_empty_dict_for_missing_decision():
+    rec = trade_to_record(_trade(decision=None), "EURUSD")
+    assert rec.features == {}
 
 
 # ─────────────────────────────────────────────────────────────────────────

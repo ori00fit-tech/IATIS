@@ -382,6 +382,65 @@ def test_build_copilot_context_recent_mission_findings_degrades_gracefully(monke
     assert ctx["recent_mission_findings"] is None
 
 
+def test_build_copilot_context_feature_mining_leads_none_when_no_validations():
+    from execution.routes.ai import _build_copilot_context
+
+    ctx = _build_copilot_context()
+    assert "feature_mining_leads" in ctx
+    assert ctx["feature_mining_leads"] is None
+
+
+def test_build_copilot_context_summarizes_real_feature_mining_leads():
+    from execution.routes.ai import _build_copilot_context
+    from storage import research_mission_validations
+
+    research_mission_validations.upsert_validation(
+        validation_id="copilot-fm-validation", mission_id="copilot-fm-mission", trial_number=0,
+        trial_symbol="EURUSD", validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    research_mission_validations.set_validation_status(
+        "copilot-fm-validation", "finished", finished=True,
+        overall_verdict="WEAK_LEAD", passing_symbols=0, total_symbols=1,
+    )
+    fm_blob = {
+        "n_trades_total": 40, "n_features_tested": 1, "insufficient_data": False,
+        "associations": [{
+            "feature": "regime", "feature_type": "categorical", "n_observed": 40, "overall_win_rate": 0.5,
+            "insufficient_data": False, "note": "",
+            "bins": [{
+                "feature": "regime", "bin_label": "TRENDING", "bin_index": None, "n_trades": 40,
+                "win_rate": 0.6, "mean_r": 0.3, "std_r": 1.0, "lift_win_rate": 1.2,
+                "p_value": 0.2, "significance": "NOT_SIGNIFICANT",
+            }],
+        }],
+    }
+    research_mission_validations.record_validation_result(
+        validation_id="copilot-fm-validation", symbol="EURUSD", passed=False,
+        metrics={}, monte_carlo={}, walk_forward={}, robustness={},
+        criteria_breakdown={}, feature_mining=fm_blob, error=None, started_at="t1", finished_at="t2",
+    )
+
+    ctx = _build_copilot_context()
+    leads = ctx["feature_mining_leads"]
+    assert leads is not None
+    entry = next(l for l in leads if l["validation_id"] == "copilot-fm-validation")
+    assert entry["mission_id"] == "copilot-fm-mission"
+    assert entry["top_features"][0]["feature"] == "regime"
+    assert entry["top_features"][0]["note"] == "descriptive association only"
+
+
+def test_build_copilot_context_feature_mining_leads_degrades_gracefully(monkeypatch):
+    from execution.routes.ai import _build_copilot_context
+    from storage import research_mission_validations
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated D1 outage")
+
+    monkeypatch.setattr(research_mission_validations, "list_recent_finished_validations", _boom)
+    ctx = _build_copilot_context()  # must not raise
+    assert ctx["feature_mining_leads"] is None
+
+
 def test_budget(client):
     with patch("core.twelve_data_client.RateLimiter.remaining_today", return_value=750):
         r = client.get("/budget", headers=HDR)

@@ -77,6 +77,21 @@ class TradeRecord:
     # confirmation/score-weight involvement at entry, when an ad-hoc
     # indicator override was configured for this run (empty otherwise).
     indicator_filters: dict = field(default_factory=dict)
+    # Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30) —
+    # flattened, analysis-ready decision-time context, populated in
+    # backtest/runner.py's trade_to_record() from this trade's engine_votes
+    # (already-nested raw dicts) plus the decision snapshot's mtf/
+    # reversal_veto/mqs/atr_value/volatility/info_share/contradiction_reasons
+    # objects (backtesting/backtest_engine.py). FLAT (not nested per engine,
+    # unlike indicator_filters/context_filters, which are keyed by an
+    # ad-hoc per-run-configured name set) because features are keyed by a
+    # fixed, known-in-advance name set — backtest/feature_mining.py can
+    # iterate feature names directly with no engine-specific unpacking. A
+    # field is OMITTED (never fabricated) when its source gate was off for
+    # this run. Empty for any TradeRecord built outside run_backtest()'s
+    # loop, same "absent means not configured" convention as
+    # indicator_filters.
+    features: dict = field(default_factory=dict)
 
 
 @dataclass

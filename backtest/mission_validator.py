@@ -63,6 +63,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backtest.feature_mining import compute_feature_mining
 from backtest.metrics import json_safe
 from backtest.monte_carlo import run_monte_carlo
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
@@ -150,6 +151,12 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         eval_result.trade_records or [], n_simulations=vc.mc_n_simulations, seed=vc.mc_seed,
     )
 
+    # Feature Mining / Hypothesis Discovery Phase 1 (2026-07-30) — diagnostic
+    # only, never participates in criteria_breakdown/passed/overall_verdict
+    # below. See backtest/feature_mining.py's module docstring for why this
+    # is deliberately non-ML (not the same technique family as H033).
+    feature_mining_result = compute_feature_mining(eval_result.trade_records or [])
+
     wf_result = run_walk_forward(symbol, df, WalkForwardConfig(
         n_windows=vc.wf_windows,
         min_pf=VALIDATION_CRITERIA["min_profit_factor"],
@@ -203,6 +210,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "walk_forward": json_safe(wf_result.to_dict()),
         "robustness": json_safe(rb_result.to_dict()),
         "criteria_breakdown": json_safe(breakdown),
+        "feature_mining": json_safe(feature_mining_result.to_dict()),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -252,7 +260,8 @@ def run_validation(vc: ValidationConfig) -> None:
                 validation_id=vc.validation_id, symbol=symbol, passed=result["passed"],
                 metrics=result["metrics"], monte_carlo=result["monte_carlo"],
                 walk_forward=result["walk_forward"], robustness=result["robustness"],
-                criteria_breakdown=result["criteria_breakdown"], error=None,
+                criteria_breakdown=result["criteria_breakdown"],
+                feature_mining=result["feature_mining"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -261,7 +270,8 @@ def run_validation(vc: ValidationConfig) -> None:
             research_mission_validations.record_validation_result(
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
-                criteria_breakdown={}, error=str(exc), started_at=now, finished_at=now,
+                criteria_breakdown={}, feature_mining=None, error=str(exc),
+                started_at=now, finished_at=now,
             )
 
     total = len(vc.validation_symbols)
@@ -289,7 +299,7 @@ def _write_report(vc: ValidationConfig, overall: str, passing: int, total: int) 
     for r in raw_results:
         parsed = dict(r)
         for key in ("metrics_json", "monte_carlo_json", "walk_forward_json",
-                    "robustness_json", "criteria_breakdown_json"):
+                    "robustness_json", "criteria_breakdown_json", "feature_mining_json"):
             value = parsed.pop(key, None)
             parsed[key.removesuffix("_json")] = json.loads(value) if value else None
         results.append(parsed)

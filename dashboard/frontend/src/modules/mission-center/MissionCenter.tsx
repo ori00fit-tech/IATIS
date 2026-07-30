@@ -9,10 +9,10 @@ import { ENGINE_KEYS, SUPPORTED_TIMEFRAMES, FILTER_MODES } from '../backtesting-
 import { getResearchSymbols, saveHypothesisDraft, type SymbolsResponse } from '../research-backtests/api'
 import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
-  createValidation, listValidations, getValidation, getMetaAnalysis,
+  createValidation, listValidations, getValidation, getMetaAnalysis, getFeatureMining,
   SAMPLER_KEYS, OPTIMIZABLE_METRICS,
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial,
-  type CriteriaEntry, type DimensionFrequency, type Verdict,
+  type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
 } from './api'
 
 const POLL_MS = 4000
@@ -534,6 +534,84 @@ function MetaAnalysisPanel({ missionId }: { missionId: string }) {
   )
 }
 
+function FeatureAssociationTable({ association }: { association: FeatureAssociation }) {
+  if (association.insufficient_data) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-[0.78em] font-mono text-accent">{association.feature}</span>
+        <span className="text-muted text-[0.72em]">{association.note}</span>
+      </div>
+    )
+  }
+  const bins = [...association.bins].sort((a, b) => (b.lift_win_rate ?? 0) - (a.lift_win_rate ?? 0))
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[0.78em] font-mono text-accent">{association.feature}</span>
+        <span className="text-muted text-[0.7em]">({association.feature_type}, n={association.n_observed}, baseline WR {(association.overall_win_rate * 100).toFixed(0)}%)</span>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {bins.map((b, i) => (
+          <div key={i} className="flex items-center gap-2 text-[0.75em] flex-wrap">
+            <span className="w-40 truncate">{b.bin_label}</span>
+            <span className="text-muted">n={b.n_trades}</span>
+            <span className="text-muted">WR {(b.win_rate * 100).toFixed(0)}%</span>
+            {b.lift_win_rate != null && (
+              <span className={b.lift_win_rate > 1.2 ? 'text-green' : b.lift_win_rate < 0.8 ? 'text-red' : 'text-muted'}>
+                lift {b.lift_win_rate.toFixed(2)}x
+              </span>
+            )}
+            <Badge tone={b.significance === 'SURVIVES_CORRECTION' ? 'good' : b.significance === 'NOMINAL_ONLY' ? 'marginal' : 'neutral'}>
+              {b.significance}
+            </Badge>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FeatureMiningPanel({ missionId, validationId }: { missionId: string; validationId: string }) {
+  const { markUnauthenticated } = useAuth()
+  const query = useApiQuery(
+    ['mission-feature-mining', missionId, validationId],
+    () => getFeatureMining(missionId, validationId), POLL_MS, markUnauthenticated,
+  )
+  const data = query.data
+  if (!data) return <Panel title="Feature Mining"><Empty>Loading…</Empty></Panel>
+
+  if (data.insufficient_data) {
+    return (
+      <Panel title="Feature Mining" right="retrospective, descriptive, non-ML — a lead, not confirmation">
+        <div className="p-4"><Empty>{data.note || 'Not enough trades yet for feature association analysis.'}</Empty></div>
+      </Panel>
+    )
+  }
+
+  const sorted = [...data.associations].sort((a, b) => {
+    const liftA = a.insufficient_data ? 0 : Math.max(0, ...a.bins.map((bin) => bin.lift_win_rate ?? 0))
+    const liftB = b.insufficient_data ? 0 : Math.max(0, ...b.bins.map((bin) => bin.lift_win_rate ?? 0))
+    return liftB - liftA
+  })
+
+  return (
+    <Panel title="Feature Mining" right="retrospective, descriptive, non-ML — a lead, not confirmation">
+      <div className="p-4 flex flex-col gap-4">
+        <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+          {data.caveat}
+        </div>
+        <div className="text-[0.78em] text-muted">
+          {data.n_trades_total} trades pooled across validation symbols — {data.n_features_tested} feature(s) tested
+          {data.bonferroni_alpha != null && ` (Bonferroni alpha = ${data.bonferroni_alpha.toFixed(6)})`}
+        </div>
+        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
+          {sorted.map((a) => <FeatureAssociationTable key={a.feature} association={a} />)}
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
 function ValidationDetail({ missionId, validationId }: { missionId: string; validationId: string }) {
   const { markUnauthenticated } = useAuth()
   const query = useApiQuery(
@@ -588,6 +666,7 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
           })}
         </div>
       )}
+      {v?.status === 'finished' && <FeatureMiningPanel missionId={missionId} validationId={validationId} />}
     </div>
   )
 }

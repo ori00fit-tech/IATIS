@@ -745,6 +745,31 @@ def run_backtest(
                 "regime": regime.regime.value if config.use_regime_weights else None,
                 "indicator_filters": indicator_result.per_indicator if indicator_result else None,
                 "context_filters": context_result.per_context if context_result else None,
+                # Feature Mining Phase 1 (2026-07-30) — real values already
+                # computed above for gating, previously discarded once their
+                # boolean check was done. Each guarded exactly like "regime"
+                # above: mtf_res/veto/mqs are local vars scoped inside their
+                # own "if config.use_X:" block, so referencing them
+                # unconditionally would NameError when that gate is off for
+                # an ablation run.
+                "volatility": regime.volatility if config.use_regime_weights else None,
+                "atr_value": atr_val,
+                "info_share": (
+                    informative_weight_share(outputs, active_weights) if min_info_share > 0 else None
+                ),
+                "mtf": {
+                    "d1_bias": mtf_res.d1_bias, "d1_adx": mtf_res.d1_adx,
+                    "d1_ema20": mtf_res.d1_ema20, "d1_ema50": mtf_res.d1_ema50,
+                    "confirming": mtf_res.confirming,
+                } if config.use_mtf_confirmation else None,
+                "reversal_veto": {
+                    "reversal_count": veto.reversal_count, "reversal_engines": veto.reversal_engines,
+                    "trend_bias": veto.trend_bias, "reversal_bias": veto.reversal_bias,
+                    "confidence_multiplier": veto.confidence_multiplier, "soft_veto": veto.soft_veto,
+                } if config.use_reversal_veto else None,
+                "contradiction_reasons": contradiction.reasons,
+                "mqs": mqs.to_dict() if config.use_mqs_gate else None,
+                "session": mqs.session if config.use_mqs_gate else "",
             }
 
             open_trade = Trade(

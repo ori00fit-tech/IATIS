@@ -179,6 +179,38 @@ def test_one_symbol_failure_does_not_abort_other_symbols(tmp_path):
     assert mission["status"] == "finished"
 
 
+def test_transient_cancellation_check_failure_does_not_mark_a_successful_mission_failed(tmp_path, monkeypatch):
+    """Regression (found live, 2026-07-30): a mission whose every trial
+    completed successfully was shown as status='failed' in the dashboard.
+    Root cause: the cancellation-check read (get_mission, a real D1
+    round-trip) was unguarded — a transient read error there propagated
+    all the way up and overwrote the final status, even though nothing
+    about the actual trials had gone wrong. _is_cancelled() must fail
+    OPEN (treat a read error as "not cancelled"), never poison the run."""
+    _write_dataset(tmp_path)
+    mc = _small_config(tmp_path, "mission-transient-check-fail")
+
+    from backtest import mission_runner as m
+    real_get_mission = research_missions.get_mission
+
+    def flaky_get_mission(mission_id):
+        raise RuntimeError("D1 proxy timeout (transient)")
+
+    monkeypatch.setattr(m.research_missions, "get_mission", flaky_get_mission)
+    try:
+        run_mission(mc)
+    finally:
+        monkeypatch.setattr(m.research_missions, "get_mission", real_get_mission)
+
+    trials = research_missions.existing_trials("mission-transient-check-fail", "EURUSD")
+    assert len(trials) == 2
+    assert all(t["state"] == "COMPLETE" for t in trials)
+
+    mission = research_missions.get_mission("mission-transient-check-fail")
+    assert mission["status"] == "finished"
+    assert mission["error"] is None
+
+
 # ── Report generation ──────────────────────────────────────────────────────
 
 def test_mission_report_written_with_exploratory_banner(tmp_path):

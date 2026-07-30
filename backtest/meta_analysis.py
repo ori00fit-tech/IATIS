@@ -250,7 +250,17 @@ def compute_meta_analysis(
     top_resolved = resolved[:top_n]
 
     engine_freqs = [_frequency("engine", e, top_resolved, resolved, "engines") for e in ENGINE_KEYS]
-    all_timeframes = sorted({tf for choice in space.timeframes_choices for tf in choice})
+    # Hypothesis Bundles (2026-07-30): timeframes_choices is vestigial in
+    # bundle mode (each bundle carries its own timeframes) — enumerate
+    # from the bundles actually used, not the unused flat field, or every
+    # timeframe outside the placeholder entry would silently get zero
+    # frequency rows.
+    if space.hypothesis_bundle_choices:
+        all_timeframes = sorted({
+            tf for b in space.hypothesis_bundle_choices for tf in b.get("timeframes", [])
+        })
+    else:
+        all_timeframes = sorted({tf for choice in space.timeframes_choices for tf in choice})
     timeframe_freqs = [
         _frequency("timeframe", tf, top_resolved, resolved, "timeframes") for tf in all_timeframes
     ]

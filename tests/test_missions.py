@@ -274,6 +274,72 @@ def test_missions_create_builds_expected_argv_with_context_filters(client, monke
     assert _json.loads(argv[idx + 1]) == body["context_filter_set_choices"]
 
 
+def test_missions_create_builds_expected_argv_with_hypothesis_bundles(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    bundles = [
+        {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+        {"name": "NNFX + Wyckoff", "timeframes": ["H4"], "engines": ["nnfx", "wyckoff"], "indicators": [], "context_filters": []},
+    ]
+    body = {**_VALID_BODY, "hypothesis_bundle_choices": bundles}
+    r = client.post("/research/missions", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    argv = _FakeProc.captured_argv
+    assert "--hypothesis-bundle-choices" in argv
+    idx = argv.index("--hypothesis-bundle-choices")
+    import json as _json
+
+    assert _json.loads(argv[idx + 1]) == bundles
+
+
+def test_missions_create_without_hypothesis_bundles_omits_the_flag(client, monkeypatch):
+    # Regression guard: a request without hypothesis_bundle_choices must
+    # build argv byte-identical to before this feature existed — no
+    # --hypothesis-bundle-choices flag appended at all.
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post("/research/missions", json=_VALID_BODY, headers=HDR)
+    assert r.status_code == 200, r.text
+    _wait_for_terminal(client, r.json()["mission_id"])
+    assert "--hypothesis-bundle-choices" not in _FakeProc.captured_argv
+
+
+def test_missions_create_rejects_hypothesis_bundle_blank_name(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "hypothesis_bundle_choices": [
+            {"name": "", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+        ]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_create_rejects_hypothesis_bundle_duplicate_names(client):
+    bundle = {"name": "Same Name", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "hypothesis_bundle_choices": [bundle, dict(bundle)]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+    assert "unique" in r.json()["detail"]
+
+
+def test_missions_create_rejects_hypothesis_bundle_unknown_engine(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "hypothesis_bundle_choices": [
+            {"name": "Bad", "timeframes": ["H1"], "engines": ["not_a_real_engine"], "indicators": [], "context_filters": []},
+        ]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
 def test_missions_list_includes_created_mission(client, monkeypatch):
     monkeypatch.setattr("subprocess.Popen", _FakeProc)
     r = client.post("/research/missions", json=_VALID_BODY, headers=HDR)

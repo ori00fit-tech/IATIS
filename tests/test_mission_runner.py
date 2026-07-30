@@ -273,3 +273,66 @@ def test_cli_wires_all_json_flags_into_mission_search_space(monkeypatch, tmp_pat
         (),
         ({"name": "direction", "mode": "entry_filter", "params": {"allowed": ["BULLISH"]}, "weight": 0},),
     )
+    assert mc.search_space.hypothesis_bundle_choices is None
+
+
+def test_cli_wires_hypothesis_bundle_choices(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    captured: dict = {}
+
+    def fake_run_mission(mc: MissionConfig) -> None:
+        captured["mc"] = mc
+
+    monkeypatch.setattr(mission_runner, "run_mission", fake_run_mission)
+    bundles = [
+        {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+        {"name": "NNFX + Wyckoff", "timeframes": ["H4"], "engines": ["nnfx", "wyckoff"], "indicators": [], "context_filters": []},
+    ]
+    monkeypatch.setattr(sys, "argv", [
+        "mission_runner.py",
+        "--mission-id", "cli-hypothesis-test",
+        "--symbols", "eurusd",
+        "--data-dir", str(tmp_path),
+        "--sampler", "random",
+        "--n-trials-per-symbol", "3",
+        "--timeframes-choices", '[["H1"]]',
+        "--engine-set-choices", '[["nnfx"]]',
+        "--hypothesis-bundle-choices", json.dumps(bundles),
+        "--risk-param-ranges", '{"sl_atr_multiplier":[1.0,3.0]}',
+        "--output-dir", str(tmp_path / "reports"),
+    ])
+    mission_runner.main()
+
+    mc = captured["mc"]
+    assert mc.search_space.hypothesis_bundle_choices == tuple(bundles)
+
+
+def test_mission_run_with_hypothesis_bundles_uses_both_bundles(tmp_path):
+    # The authoritative live-run proof — 2 hypothesis bundles with
+    # genuinely different engine sets, run through the real mission
+    # orchestrator on synthetic data, must produce trials for BOTH.
+    _write_dataset(tmp_path)
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+            {"name": "NNFX + Wyckoff + Price Action", "timeframes": ["H1"], "engines": ["nnfx", "wyckoff", "price_action"], "indicators": [], "context_filters": []},
+        ),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    mc = MissionConfig(
+        mission_id="mission-hypothesis-bundle-run", name="test-hypothesis-mission",
+        symbols=("EURUSD",), data_dir=tmp_path, start=None, end=None,
+        sampler="random", n_trials_per_symbol=12, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-hypothesis-bundle-run", "EURUSD")
+    import json as _json
+    seen_bundle_indices = {_json.loads(t["params_json"])["__hypothesis_idx"] for t in trials}
+    assert seen_bundle_indices == {0, 1}  # both hypotheses actually got tried

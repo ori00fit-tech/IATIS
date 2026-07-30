@@ -14,7 +14,7 @@ import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
   createValidation, listValidations, getValidation, getMetaAnalysis, getFeatureMining,
   SAMPLER_KEYS, OPTIMIZABLE_METRICS,
-  type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial,
+  type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial, type MissionRow,
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
   type ValidationRow,
 } from './api'
@@ -303,6 +303,97 @@ function IndicatorFiltersBuilder({
   )
 }
 
+// Hypothesis Bundles (2026-07-30) — an atomic {timeframes, engines,
+// indicators, context filters} combo, named by the operator. Fixes a real,
+// live-diagnosed bug: the flat Timeframes/Engines/Indicator Filters/
+// Context Filters controls above each only ever build ONE choice, so a
+// mission's sampler only ever varied risk params (PF clustered ~1.0 as a
+// direct result). This lets the operator define N genuinely different
+// named hypotheses ("SMC only", "SMC + London + Trending", ...) and search
+// across them as discrete, atomic candidates — see backtest/optimizer.py's
+// hypothesis_bundle_choices for why this is a shared index, not 4
+// independent ones (independent indices would explore the Cartesian
+// product of bundle PIECES, not the operator's actual discrete ideas).
+interface HypothesisBundleRowState {
+  name: string
+  timeframes: string[]
+  engines: string[]
+  indicatorFilters: IndicatorFilterState[]
+  contextFilters: ContextFilterRowState[]
+}
+
+function blankBundle(name = ''): HypothesisBundleRowState {
+  return { name, timeframes: ['H1'], engines: [], indicatorFilters: [], contextFilters: [] }
+}
+
+function HypothesisBundleBuilder({
+  bundles, setBundles,
+}: {
+  bundles: HypothesisBundleRowState[]
+  setBundles: (b: HypothesisBundleRowState[]) => void
+}) {
+  const updateAt = (idx: number, patch: Partial<HypothesisBundleRowState>) =>
+    setBundles(bundles.map((b, i) => (i === idx ? { ...b, ...patch } : b)))
+  const removeAt = (idx: number) => setBundles(bundles.filter((_, i) => i !== idx))
+  const duplicateAt = (idx: number) => {
+    const copy = { ...bundles[idx], name: `${bundles[idx].name} (copy)` }
+    setBundles([...bundles.slice(0, idx + 1), copy, ...bundles.slice(idx + 1)])
+  }
+  const toggleTimeframeAt = (idx: number, tf: string) => {
+    const b = bundles[idx]
+    updateAt(idx, { timeframes: b.timeframes.includes(tf) ? b.timeframes.filter((t) => t !== tf) : [...b.timeframes, tf] })
+  }
+  const toggleEngineAt = (idx: number, e: string) => {
+    const b = bundles[idx]
+    updateAt(idx, { engines: b.engines.includes(e) ? b.engines.filter((x) => x !== e) : [...b.engines, e] })
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[0.78em] bg-accent/10 border border-accent/30 text-accent rounded px-3 py-2">
+        Each hypothesis is searched as one atomic, named candidate — the mission's sampler picks WHICH hypothesis to
+        try per trial (plus risk-param sensitivity within it), never mixes pieces across hypotheses.
+      </div>
+      {bundles.map((b, idx) => (
+        <div key={idx} className="rounded-lg border border-border bg-surface/40 px-3.5 py-3 flex flex-col gap-2.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              value={b.name}
+              onChange={(e) => updateAt(idx, { name: e.target.value })}
+              placeholder={`Hypothesis ${idx + 1} name, e.g. "SMC + London + Trending"`}
+              className="flex-1 min-w-[220px] bg-bg border border-border rounded px-2 py-1.5 text-[0.82em] text-text font-bold"
+            />
+            <button onClick={() => duplicateAt(idx)} className="text-[0.72em] text-muted hover:text-accent">Duplicate</button>
+            <button onClick={() => removeAt(idx)} className="text-[0.72em] text-red hover:underline">Remove</button>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.68em] text-muted uppercase">Timeframes</span>
+            <MultiCheckbox options={SUPPORTED_TIMEFRAMES} value={b.timeframes} onToggle={(tf) => toggleTimeframeAt(idx, tf)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.68em] text-muted uppercase">Engines</span>
+            <MultiCheckbox options={ENGINE_KEYS} value={b.engines} onToggle={(e) => toggleEngineAt(idx, e)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.68em] text-muted uppercase">Indicator filters</span>
+            <IndicatorFiltersBuilder rows={b.indicatorFilters} setRows={(r) => updateAt(idx, { indicatorFilters: r })} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.68em] text-muted uppercase">Context filters</span>
+            <ContextFiltersBuilder rows={b.contextFilters} setRows={(r) => updateAt(idx, { contextFilters: r })} />
+          </div>
+        </div>
+      ))}
+      <button
+        onClick={() => setBundles([...bundles, blankBundle()])}
+        className="self-start px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.78em] hover:bg-accent/10"
+      >
+        + Add Hypothesis
+      </button>
+    </div>
+  )
+}
+
 function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void }) {
   const { markUnauthenticated } = useAuth()
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
@@ -320,6 +411,8 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
   const [maxWallClock, setMaxWallClock] = useState<number | ''>('')
   const [contextFilters, setContextFilters] = useState<ContextFilterRowState[]>([])
   const [indicatorFilters, setIndicatorFilters] = useState<IndicatorFilterState[]>([])
+  const [hypothesisMode, setHypothesisMode] = useState(false)
+  const [bundles, setBundles] = useState<HypothesisBundleRowState[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -335,21 +428,37 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
       return next
     })
 
+  const toIndicatorSpecs = (rows: IndicatorFilterState[]) =>
+    rows.map((r) => ({ name: r.name, mode: r.mode, params: r.params, weight: r.weight }))
+  const toContextSpecs = (rows: ContextFilterRowState[]) =>
+    rows.map((r) => ({
+      name: r.name,
+      mode: r.mode,
+      params: r.allowed.length > 0 ? { [r.name === 'day_of_week' ? 'allowed_days' : 'allowed']: r.allowed } : {},
+      weight: r.weight,
+    }))
+
   const submit = async () => {
     setError(null)
     if (symbols.length === 0) { setError('Select at least one symbol.'); return }
-    if (timeframes.length === 0) { setError('Select at least one timeframe.'); return }
-    if (engines.length === 0) { setError('Select at least one engine.'); return }
+    if (hypothesisMode) {
+      if (bundles.length === 0) { setError('Add at least one hypothesis.'); return }
+      for (const b of bundles) {
+        if (!b.name.trim()) { setError('Every hypothesis needs a name.'); return }
+        if (b.timeframes.length === 0) { setError(`Hypothesis "${b.name}": select at least one timeframe.`); return }
+        if (b.engines.length === 0) { setError(`Hypothesis "${b.name}": select at least one engine.`); return }
+      }
+      const names = bundles.map((b) => b.name.trim())
+      if (new Set(names).size !== names.length) { setError('Hypothesis names must be unique.'); return }
+    } else {
+      if (timeframes.length === 0) { setError('Select at least one timeframe.'); return }
+      if (engines.length === 0) { setError('Select at least one engine.'); return }
+    }
 
     setSubmitting(true)
     try {
-      const indicatorSpecs = indicatorFilters.map((r) => ({ name: r.name, mode: r.mode, params: r.params, weight: r.weight }))
-      const contextSpecs = contextFilters.map((r) => ({
-        name: r.name,
-        mode: r.mode,
-        params: r.allowed.length > 0 ? { [r.name === 'day_of_week' ? 'allowed_days' : 'allowed']: r.allowed } : {},
-        weight: r.weight,
-      }))
+      const indicatorSpecs = toIndicatorSpecs(indicatorFilters)
+      const contextSpecs = toContextSpecs(contextFilters)
       const body: MissionRequest = {
         name: name || undefined,
         symbols,
@@ -358,10 +467,24 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
         objective_metric: objectiveMetric,
         min_trades: 10,
         seed: 42,
-        timeframes_choices: [timeframes],
-        engine_set_choices: [engines],
-        indicator_set_choices: [indicatorSpecs],
-        context_filter_set_choices: [contextSpecs],
+        // Vestigial-but-valid placeholders when hypothesisMode is on — the
+        // backend ignores these 4 fields once hypothesis_bundle_choices is
+        // set (see backtest/optimizer.py's resolve_point() branch), but
+        // they're still required by validation, so reuse the FIRST
+        // hypothesis's own definition rather than sending meaningless data.
+        timeframes_choices: [hypothesisMode ? bundles[0].timeframes : timeframes],
+        engine_set_choices: [hypothesisMode ? bundles[0].engines : engines],
+        indicator_set_choices: [hypothesisMode ? toIndicatorSpecs(bundles[0].indicatorFilters) : indicatorSpecs],
+        context_filter_set_choices: [hypothesisMode ? toContextSpecs(bundles[0].contextFilters) : contextSpecs],
+        hypothesis_bundle_choices: hypothesisMode
+          ? bundles.map((b) => ({
+              name: b.name.trim(),
+              timeframes: b.timeframes,
+              engines: b.engines,
+              indicators: toIndicatorSpecs(b.indicatorFilters),
+              context_filters: toContextSpecs(b.contextFilters),
+            }))
+          : undefined,
         risk_param_ranges: riskRanges,
         risk_param_grid: {},
         max_wall_clock_seconds: maxWallClock === '' ? undefined : maxWallClock,
@@ -417,14 +540,40 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
           </div>
         </div>
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase">Timeframes (this run only)</span>
-          <MultiCheckbox options={SUPPORTED_TIMEFRAMES} value={timeframes} onToggle={toggleTimeframe} />
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase">Engine set (this run only)</span>
-          <MultiCheckbox options={ENGINE_KEYS} value={engines} onToggle={toggleEngine} />
-        </div>
+        <label className="flex items-center gap-2 text-[0.78em] text-text cursor-pointer">
+          <input type="checkbox" checked={hypothesisMode} onChange={(e) => setHypothesisMode(e.target.checked)} />
+          <span className="font-bold">Search across named hypotheses</span>
+          <span className="text-muted">
+            (engine + timeframe + context combos) instead of one fixed combo — without this, only risk params vary.
+          </span>
+        </label>
+
+        {hypothesisMode ? (
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.7em] text-muted uppercase">Hypotheses</span>
+            <HypothesisBundleBuilder bundles={bundles} setBundles={setBundles} />
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Timeframes (this run only)</span>
+              <MultiCheckbox options={SUPPORTED_TIMEFRAMES} value={timeframes} onToggle={toggleTimeframe} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Engine set (this run only)</span>
+              <MultiCheckbox options={ENGINE_KEYS} value={engines} onToggle={toggleEngine} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Indicator filters (this run only)</span>
+              <IndicatorFiltersBuilder rows={indicatorFilters} setRows={setIndicatorFilters} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Context filters (this run only)</span>
+              <ContextFiltersBuilder rows={contextFilters} setRows={setContextFilters} />
+            </div>
+          </>
+        )}
+
         <div className="flex flex-col gap-1">
           <span className="text-[0.7em] text-muted uppercase">Risk params to search (ranges)</span>
           <div className="flex flex-wrap gap-3">
@@ -446,14 +595,6 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
               </label>
             ))}
           </div>
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase">Indicator filters (this run only)</span>
-          <IndicatorFiltersBuilder rows={indicatorFilters} setRows={setIndicatorFilters} />
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase">Context filters (this run only)</span>
-          <ContextFiltersBuilder rows={contextFilters} setRows={setContextFilters} />
         </div>
 
         {error && <div className="text-red text-[0.8em]">{error}</div>}
@@ -851,6 +992,26 @@ function bestTrialPerSymbol(trials: MissionTrial[]): Record<string, MissionTrial
   return best
 }
 
+// Hypothesis Bundles (2026-07-30) — resolved purely client-side from data
+// already fetched (mission.search_space_json + trial.params_json), no new
+// backend endpoint. Returns null for every pre-existing, non-bundle-mode
+// mission (regression-safe: renders as '—' wherever used).
+function hypothesisNameFor(mission: MissionRow | null | undefined, trial: MissionTrial): string | null {
+  if (!mission?.search_space_json) return null
+  try {
+    const bundles = JSON.parse(mission.search_space_json).hypothesis_bundle_choices as
+      | { name: string }[]
+      | null
+      | undefined
+    if (!bundles) return null
+    const idx = JSON.parse(trial.params_json).__hypothesis_idx as number | undefined
+    if (idx == null) return null
+    return bundles[idx]?.name ?? null
+  } catch {
+    return null
+  }
+}
+
 function latestValidationFor(validations: ValidationRow[], trial: MissionTrial): ValidationRow | null {
   const matches = validations
     .filter((v) => v.trial_number === trial.trial_number && v.trial_symbol === trial.symbol)
@@ -920,6 +1081,7 @@ function MissionDetail({ missionId }: { missionId: string }) {
     try {
       const metrics = t.metrics_json ? JSON.parse(t.metrics_json) : {}
       const validation = latestValidationFor(validations, t)
+      const hypothesisName = hypothesisNameFor(status.mission, t)
       const validationNote = validation && validation.status === 'finished'
         ? `A Mission Center validation (Monte Carlo + walk-forward + robustness) was already run against ` +
           `this exact trial: verdict=${validation.overall_verdict} (${validation.passing_symbols}/` +
@@ -930,11 +1092,13 @@ function MissionDetail({ missionId }: { missionId: string }) {
         : 'No Mission Center validation has been run against this exact trial yet — this is a raw, ' +
           'single-run sampler result with no out-of-sample or Monte Carlo check at all. Strongly consider ' +
           'clicking "Validate…" on this trial before writing falsification criteria.'
+      const hypothesisLabel = hypothesisName ? ` — Hypothesis "${hypothesisName}"` : ''
       const result = await saveHypothesisDraft({
-        title: `Mission ${missionId} trial ${t.trial_number} (${t.symbol})`,
+        title: `Mission ${missionId} trial ${t.trial_number}${hypothesisLabel} (${t.symbol})`,
         statement: `A candidate configuration found by mission ${missionId} (sampler-driven search, ` +
-          `symbol ${t.symbol}, trial #${t.trial_number}) showed objective_value=${t.objective_value} ` +
-          `over ${t.trades} trades. This is a LEAD from an exploratory search, not a tested hypothesis.`,
+          `symbol ${t.symbol}, trial #${t.trial_number}${hypothesisName ? `, hypothesis "${hypothesisName}"` : ''}) ` +
+          `showed objective_value=${t.objective_value} over ${t.trades} trades. This is a LEAD from an ` +
+          `exploratory search, not a tested hypothesis.`,
         why_this_might_be_true: `Not yet reviewed — fill in before registering. Validation context: ${validationNote}`,
         data_required: { symbol: t.symbol, params: JSON.parse(t.params_json), metrics },
         falsification_criteria: 'Not yet defined — must be written BEFORE re-testing (CLAUDE.md rule 1).',
@@ -950,6 +1114,7 @@ function MissionDetail({ missionId }: { missionId: string }) {
 
   const columns: Column<MissionTrial>[] = [
     { header: 'Symbol', render: (t) => t.symbol },
+    { header: 'Hypothesis', render: (t) => hypothesisNameFor(status.mission, t) ?? '—' },
     { header: 'Trial #', render: (t) => t.trial_number, align: 'right', accessorFn: (t) => t.trial_number },
     { header: 'State', render: (t) => <StatusBadge status={t.state.toLowerCase()} /> },
     { header: 'Objective', render: (t) => t.objective_value != null ? t.objective_value.toFixed(3) : '—', align: 'right', accessorFn: (t) => t.objective_value ?? -Infinity, sortingFn: 'basic' },

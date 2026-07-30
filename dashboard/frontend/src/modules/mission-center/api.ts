@@ -10,6 +10,19 @@ export const OPTIMIZABLE_METRICS = [
   'expectancy_r', 'sqn', 'recovery_factor', 'win_rate',
 ] as const
 
+// Hypothesis Bundles (2026-07-30) — an atomic {timeframes, engines,
+// indicators, context_filters} combo, named by the operator. When present
+// on a request, REPLACES independent sampling of the 4 flat *_choices
+// fields below with one shared index over complete bundles — see
+// backtest/optimizer.py's module-level comment on _HYPOTHESIS_IDX_KEY.
+export interface HypothesisBundleSpec {
+  name: string
+  timeframes: string[]
+  engines: string[]
+  indicators: Record<string, unknown>[]
+  context_filters: Record<string, unknown>[]
+}
+
 export interface MissionRequest {
   name?: string
   symbols: string[]
@@ -24,6 +37,7 @@ export interface MissionRequest {
   engine_set_choices: string[][]
   indicator_set_choices: Record<string, unknown>[][]
   context_filter_set_choices: Record<string, unknown>[][]
+  hypothesis_bundle_choices?: HypothesisBundleSpec[]
   risk_param_ranges: Record<string, [number, number]>
   risk_param_grid: Record<string, number[]>
   oos_holdout_fraction?: number

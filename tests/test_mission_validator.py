@@ -165,6 +165,48 @@ def test_run_validation_records_every_symbol_and_writes_report(tmp_path):
     assert len(report["results"]) == 2
 
 
+def test_run_validation_reconstructs_hypothesis_bundle_mode_trial_correctly(tmp_path):
+    # Hypothesis Bundles (2026-07-30): the whole design bet was that
+    # run_validation()'s existing search_space_from_dict() + resolve_point()
+    # two-liner needs ZERO changes to correctly re-resolve a bundle-mode
+    # trial's exact point. Prove it end-to-end, not just in isolation.
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+            {"name": "NNFX + Price Action", "timeframes": ["H1"], "engines": ["nnfx", "price_action"], "indicators": [], "context_filters": []},
+        ),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    research_missions.upsert_mission(
+        mission_id="val-hypothesis-bundle", name="test-hypothesis-mission", sampler="random",
+        objective_metric="profit_factor", symbols=["EURUSD"], n_trials_per_symbol=1, min_trades=1,
+        seed=42, search_space=mission_runner._search_space_dict(space), config={}, status="finished",
+    )
+    research_missions.record_trial(
+        mission_id="val-hypothesis-bundle", trial_number=0, symbol="EURUSD", state="COMPLETE",
+        objective_value=1.2, params={"__hypothesis_idx": 1, "sl_atr_multiplier": 2.0},
+        metrics={"profit_factor": 1.2}, trades=50, error=None, started_at="t", finished_at="t",
+    )
+
+    vc = _small_vc(tmp_path, "v-hypothesis-bundle", "val-hypothesis-bundle")
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-hypothesis-bundle")
+    assert validation is not None
+    assert validation["status"] == "finished"
+    results = research_mission_validations.validation_results("v-hypothesis-bundle")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    # No crash reconstructing the bundle-mode point, and every symbol still
+    # got a real evaluated result (not silently skipped/errored).
+    for r in results:
+        assert r["error"] is None
+
+
 def test_rejects_non_complete_trial(tmp_path):
     _write_dataset(tmp_path, "EURUSD")
     _write_dataset(tmp_path, "GBPUSD")

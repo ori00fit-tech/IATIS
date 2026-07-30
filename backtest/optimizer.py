@@ -61,6 +61,18 @@ _INDICATORS_IDX_KEY = "__indicators_idx"
 _CONTEXT_IDX_KEY = "__context_idx"
 _INTERNAL_KEYS = (_TF_IDX_KEY, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _CONTEXT_IDX_KEY)
 
+# Hypothesis Bundles (2026-07-30) — an alternate, opt-in indexing mode. The
+# 4 keys above are sampled INDEPENDENTLY (see suggest_point()), so giving
+# every one of them multiple choices explores their full Cartesian product,
+# not N discrete "hypotheses" (a real gap found live: an operator's mission
+# only ever varied risk params because every one of those 4 dimensions had
+# exactly one choice — PF clustered tightly around 1.0 as a direct result).
+# hypothesis_bundle_choices lets an operator define N complete, named
+# bundles (timeframes+engines+indicators+context together) and samples ONE
+# shared index across all of them atomically instead.
+_HYPOTHESIS_IDX_KEY = "__hypothesis_idx"
+_HYPOTHESIS_INTERNAL_KEYS = (_HYPOTHESIS_IDX_KEY,)
+
 
 def _validate_indicator_spec(spec: dict) -> None:
     if spec.get("name") not in INDICATOR_KEYS:
@@ -74,6 +86,22 @@ def _validate_context_spec(spec: dict) -> None:
         raise ValueError(f"unknown context filter {spec.get('name')!r} — choose from {CONTEXT_KEYS}")
     if spec.get("mode") not in FILTER_MODES:
         raise ValueError(f"unknown context filter mode {spec.get('mode')!r} — choose from {FILTER_MODES}")
+
+
+def _validate_hypothesis_bundle(bundle: dict) -> None:
+    name = bundle.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"hypothesis bundle missing a non-blank 'name': {bundle!r}")
+    unknown_tf = set(bundle.get("timeframes", [])) - set(SUPPORTED_TIMEFRAMES)
+    if unknown_tf:
+        raise ValueError(f"hypothesis {name!r}: unknown timeframe(s) {unknown_tf} — choose from {SUPPORTED_TIMEFRAMES}")
+    unknown_eng = set(bundle.get("engines", [])) - set(ENGINE_KEYS)
+    if unknown_eng:
+        raise ValueError(f"hypothesis {name!r}: unknown engine(s) {unknown_eng} — choose from {ENGINE_KEYS}")
+    for spec in bundle.get("indicators", []):
+        _validate_indicator_spec(spec)
+    for spec in bundle.get("context_filters", []):
+        _validate_context_spec(spec)
 
 
 @dataclass(frozen=True)
@@ -97,6 +125,13 @@ class MissionSearchSpace:
     # (no context filter layer) so existing callers that never pass this
     # keep working unchanged.
     context_filter_set_choices: tuple[tuple[dict, ...], ...] = ((),)
+    # Hypothesis Bundles (2026-07-30) — opt-in, defaults to None so every
+    # existing caller/stored search_space_json (missions created before
+    # this shipped) constructs and behaves byte-identically. When set,
+    # this REPLACES independent sampling of the 4 dimensions above with
+    # one shared index over complete named bundles — see the module-level
+    # comment above _HYPOTHESIS_IDX_KEY for why.
+    hypothesis_bundle_choices: tuple[dict, ...] | None = None
     risk_param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     risk_param_grid: dict[str, tuple[float, ...]] = field(default_factory=dict)
 
@@ -127,6 +162,15 @@ class MissionSearchSpace:
             for spec in context_set:
                 _validate_context_spec(spec)
 
+        if self.hypothesis_bundle_choices is not None:
+            if not self.hypothesis_bundle_choices:
+                raise ValueError("hypothesis_bundle_choices must have at least one entry (or be None)")
+            names = [b.get("name") for b in self.hypothesis_bundle_choices]
+            if len(set(names)) != len(names):
+                raise ValueError(f"hypothesis_bundle_choices names must be unique, got {names}")
+            for bundle in self.hypothesis_bundle_choices:
+                _validate_hypothesis_bundle(bundle)
+
         allowed_risk_fields = set(RISK_OVERRIDE_FIELDS)
         for name in {**self.risk_param_ranges, **self.risk_param_grid}:
             if name not in allowed_risk_fields:
@@ -137,10 +181,13 @@ class MissionSearchSpace:
         mission's n_trials_per_symbol to this, since re-asking past
         exhaustion just cycles/duplicates points (verified against the
         installed optuna's real GridSampler behavior, not assumed)."""
-        n = (
-            len(self.timeframes_choices) * len(self.engine_set_choices)
-            * len(self.indicator_set_choices) * len(self.context_filter_set_choices)
-        )
+        if self.hypothesis_bundle_choices:
+            n = len(self.hypothesis_bundle_choices)
+        else:
+            n = (
+                len(self.timeframes_choices) * len(self.engine_set_choices)
+                * len(self.indicator_set_choices) * len(self.context_filter_set_choices)
+            )
         for choices in self.risk_param_grid.values():
             n *= len(choices)
         return n
@@ -149,12 +196,16 @@ class MissionSearchSpace:
         """The dict GridSampler's constructor needs — every param name
         that suggest_point()/suggest_categorical() will use, mapped to
         its full static choice list."""
-        d: dict[str, list] = {
-            _TF_IDX_KEY: list(range(len(self.timeframes_choices))),
-            _ENGINES_IDX_KEY: list(range(len(self.engine_set_choices))),
-            _INDICATORS_IDX_KEY: list(range(len(self.indicator_set_choices))),
-            _CONTEXT_IDX_KEY: list(range(len(self.context_filter_set_choices))),
-        }
+        d: dict[str, list]
+        if self.hypothesis_bundle_choices:
+            d = {_HYPOTHESIS_IDX_KEY: list(range(len(self.hypothesis_bundle_choices)))}
+        else:
+            d = {
+                _TF_IDX_KEY: list(range(len(self.timeframes_choices))),
+                _ENGINES_IDX_KEY: list(range(len(self.engine_set_choices))),
+                _INDICATORS_IDX_KEY: list(range(len(self.indicator_set_choices))),
+                _CONTEXT_IDX_KEY: list(range(len(self.context_filter_set_choices))),
+            }
         d.update({k: list(v) for k, v in self.risk_param_grid.items()})
         return d
 
@@ -175,6 +226,10 @@ def search_space_from_dict(raw: dict[str, Any]) -> MissionSearchSpace:
         # before Context Filters shipped has no such key in its stored
         # search_space_json.
         context_filter_set_choices=tuple(tuple(c) for c in raw.get("context_filter_set_choices", [[]])),
+        hypothesis_bundle_choices=(
+            tuple(dict(b) for b in raw["hypothesis_bundle_choices"])
+            if raw.get("hypothesis_bundle_choices") else None
+        ),
         risk_param_ranges={k: tuple(v) for k, v in raw.get("risk_param_ranges", {}).items()},
         risk_param_grid={k: tuple(v) for k, v in raw.get("risk_param_grid", {}).items()},
     )
@@ -188,10 +243,13 @@ def suggest_point(trial: Any, space: MissionSearchSpace, grid_mode: bool) -> dic
     research_mission_trials.params_json. resolve_point() derives the
     human-readable form on demand, so there is exactly one place params
     can drift from what was actually sampled."""
-    trial.suggest_categorical(_TF_IDX_KEY, list(range(len(space.timeframes_choices))))
-    trial.suggest_categorical(_ENGINES_IDX_KEY, list(range(len(space.engine_set_choices))))
-    trial.suggest_categorical(_INDICATORS_IDX_KEY, list(range(len(space.indicator_set_choices))))
-    trial.suggest_categorical(_CONTEXT_IDX_KEY, list(range(len(space.context_filter_set_choices))))
+    if space.hypothesis_bundle_choices:
+        trial.suggest_categorical(_HYPOTHESIS_IDX_KEY, list(range(len(space.hypothesis_bundle_choices))))
+    else:
+        trial.suggest_categorical(_TF_IDX_KEY, list(range(len(space.timeframes_choices))))
+        trial.suggest_categorical(_ENGINES_IDX_KEY, list(range(len(space.engine_set_choices))))
+        trial.suggest_categorical(_INDICATORS_IDX_KEY, list(range(len(space.indicator_set_choices))))
+        trial.suggest_categorical(_CONTEXT_IDX_KEY, list(range(len(space.context_filter_set_choices))))
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
             trial.suggest_categorical(name, list(choices))
@@ -212,12 +270,29 @@ def resolve_point(space: MissionSearchSpace, raw_params: dict[str, Any]) -> dict
     trial recorded before Context Filters shipped (its params_json has
     no __context_idx key) — defaults to index 0, which is always the
     empty-choice entry MissionSearchSpace.context_filter_set_choices
-    defaults to."""
-    timeframes = list(space.timeframes_choices[raw_params[_TF_IDX_KEY]])
-    engines = list(space.engine_set_choices[raw_params[_ENGINES_IDX_KEY]])
-    indicators = list(space.indicator_set_choices[raw_params[_INDICATORS_IDX_KEY]])
-    context_filters = list(space.context_filter_set_choices[raw_params.get(_CONTEXT_IDX_KEY, 0)])
-    risk_overrides = {k: v for k, v in raw_params.items() if k not in _INTERNAL_KEYS}
+    defaults to.
+
+    Hypothesis Bundles (2026-07-30): when space.hypothesis_bundle_choices
+    is set, raw_params carries __hypothesis_idx instead of the 4
+    individual index keys — timeframes/engines/indicators/context_filters
+    all come from that one picked bundle atomically. The OUTPUT SHAPE is
+    identical either way (same 5 keys) — every caller (evaluate_point,
+    mission_validator.run_validation, the meta-analysis endpoint) reads
+    this dict without needing to know which branch produced it."""
+    if space.hypothesis_bundle_choices:
+        bundle = space.hypothesis_bundle_choices[raw_params[_HYPOTHESIS_IDX_KEY]]
+        timeframes = list(bundle.get("timeframes", []))
+        engines = list(bundle.get("engines", []))
+        indicators = list(bundle.get("indicators", []))
+        context_filters = list(bundle.get("context_filters", []))
+        internal_keys: tuple[str, ...] = _HYPOTHESIS_INTERNAL_KEYS
+    else:
+        timeframes = list(space.timeframes_choices[raw_params[_TF_IDX_KEY]])
+        engines = list(space.engine_set_choices[raw_params[_ENGINES_IDX_KEY]])
+        indicators = list(space.indicator_set_choices[raw_params[_INDICATORS_IDX_KEY]])
+        context_filters = list(space.context_filter_set_choices[raw_params.get(_CONTEXT_IDX_KEY, 0)])
+        internal_keys = _INTERNAL_KEYS
+    risk_overrides = {k: v for k, v in raw_params.items() if k not in internal_keys}
     return {
         "timeframes": timeframes, "engines": engines,
         "indicators": indicators, "context_filters": context_filters,
@@ -232,12 +307,20 @@ def distributions_for(space: MissionSearchSpace, grid_mode: bool) -> dict[str, A
     state=...) for a resumed mission's already-completed trials."""
     import optuna
 
-    dists: dict[str, Any] = {
-        _TF_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.timeframes_choices)))),
-        _ENGINES_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.engine_set_choices)))),
-        _INDICATORS_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.indicator_set_choices)))),
-        _CONTEXT_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.context_filter_set_choices)))),
-    }
+    dists: dict[str, Any]
+    if space.hypothesis_bundle_choices:
+        dists = {
+            _HYPOTHESIS_IDX_KEY: optuna.distributions.CategoricalDistribution(
+                list(range(len(space.hypothesis_bundle_choices)))
+            ),
+        }
+    else:
+        dists = {
+            _TF_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.timeframes_choices)))),
+            _ENGINES_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.engine_set_choices)))),
+            _INDICATORS_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.indicator_set_choices)))),
+            _CONTEXT_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.context_filter_set_choices)))),
+        }
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
             dists[name] = optuna.distributions.CategoricalDistribution(list(choices))

@@ -208,3 +208,164 @@ def test_distributions_for_covers_every_suggested_param():
     assert set(dists.keys()) == {
         "__timeframes_idx", "__engines_idx", "__indicators_idx", "__context_idx", "sl_atr_multiplier",
     }
+
+
+# ── Hypothesis Bundles (2026-07-30) ──────────────────────────────────────
+# Regression coverage for the live-diagnosed bug: an operator's mission
+# only ever varied risk params because timeframes/engines/indicators/
+# context each had exactly one choice, so the sampler always picked index
+# 0 for all four. hypothesis_bundle_choices lets the operator define named,
+# atomic combinations searched as ONE dimension instead.
+
+_BUNDLE_SMC = {
+    "name": "SMC only", "timeframes": ["H1"], "engines": ["smc"],
+    "indicators": [], "context_filters": [],
+}
+_BUNDLE_NNFX = {
+    "name": "NNFX + Wyckoff", "timeframes": ["H4"], "engines": ["nnfx", "wyckoff"],
+    "indicators": [], "context_filters": [],
+}
+
+
+def _bundle_space(**kwargs) -> MissionSearchSpace:
+    defaults = dict(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),),
+        hypothesis_bundle_choices=(_BUNDLE_SMC, _BUNDLE_NNFX),
+        risk_param_ranges={"sl_atr_multiplier": (1.0, 3.0)},
+    )
+    defaults.update(kwargs)
+    return MissionSearchSpace(**defaults)
+
+
+def test_hypothesis_bundle_choices_defaults_to_none_and_is_backward_compatible():
+    space = _small_space()
+    assert space.hypothesis_bundle_choices is None
+
+
+def test_hypothesis_bundle_rejects_blank_name():
+    with pytest.raises(ValueError, match="name"):
+        _bundle_space(hypothesis_bundle_choices=({"name": "", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},))
+
+
+def test_hypothesis_bundle_rejects_duplicate_names():
+    dup = {**_BUNDLE_NNFX, "name": _BUNDLE_SMC["name"]}
+    with pytest.raises(ValueError, match="unique"):
+        _bundle_space(hypothesis_bundle_choices=(_BUNDLE_SMC, dup))
+
+
+def test_hypothesis_bundle_rejects_unknown_engine():
+    bad = {**_BUNDLE_SMC, "engines": ["not_a_real_engine"]}
+    with pytest.raises(ValueError, match="engine"):
+        _bundle_space(hypothesis_bundle_choices=(bad,))
+
+
+def test_hypothesis_bundle_rejects_unknown_timeframe():
+    bad = {**_BUNDLE_SMC, "timeframes": ["M5"]}
+    with pytest.raises(ValueError, match="timeframe"):
+        _bundle_space(hypothesis_bundle_choices=(bad,))
+
+
+def test_hypothesis_bundle_rejects_empty_tuple():
+    with pytest.raises(ValueError, match="hypothesis_bundle_choices"):
+        _bundle_space(hypothesis_bundle_choices=())
+
+
+def test_suggest_point_hypothesis_mode_only_suggests_hypothesis_idx():
+    space = _bundle_space()
+    study = optuna.create_study(sampler=make_sampler("random", 42, space, grid_mode=False))
+    trial = study.ask()
+    raw = suggest_point(trial, space, grid_mode=False)
+    assert "__hypothesis_idx" in raw
+    assert raw["__hypothesis_idx"] in (0, 1)
+    assert "__timeframes_idx" not in raw
+    assert "__engines_idx" not in raw
+    assert "__indicators_idx" not in raw
+    assert "__context_idx" not in raw
+    assert "sl_atr_multiplier" in raw
+
+
+def test_resolve_point_hypothesis_mode_pulls_atomic_bundle():
+    space = _bundle_space()
+    raw = {"__hypothesis_idx": 1, "sl_atr_multiplier": 2.2}
+    point = resolve_point(space, raw)
+    assert point["timeframes"] == ["H4"]
+    assert point["engines"] == ["nnfx", "wyckoff"]
+    assert point["indicators"] == []
+    assert point["context_filters"] == []
+    assert point["risk_overrides"] == {"sl_atr_multiplier": 2.2}
+
+
+def test_resolve_point_output_shape_identical_in_both_modes():
+    # Load-bearing design property: evaluate_point()/mission_validator.py/
+    # the meta-analysis endpoint must never need to know which branch
+    # produced this dict.
+    bundle_point = resolve_point(_bundle_space(), {"__hypothesis_idx": 0, "sl_atr_multiplier": 2.0})
+    flat_point = resolve_point(_small_space(), {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "sl_atr_multiplier": 2.0})
+    assert set(bundle_point.keys()) == set(flat_point.keys()) == {
+        "timeframes", "engines", "indicators", "context_filters", "risk_overrides",
+    }
+
+
+def test_distributions_for_hypothesis_mode():
+    space = _bundle_space(risk_param_ranges={}, risk_param_grid={"sl_atr_multiplier": (1.5, 2.0)})
+    dists = distributions_for(space, grid_mode=True)
+    assert set(dists.keys()) == {"__hypothesis_idx", "sl_atr_multiplier"}
+
+
+def test_grid_size_hypothesis_mode_uses_bundle_count_not_cartesian_product():
+    space = _bundle_space(risk_param_ranges={}, risk_param_grid={"sl_atr_multiplier": (1.5, 2.0)})
+    assert space.grid_size() == 2 * 2  # 2 bundles x 2 risk-grid values, NOT 1x1x1x2x2
+
+
+def test_grid_search_space_dict_hypothesis_mode():
+    space = _bundle_space(risk_param_ranges={}, risk_param_grid={"sl_atr_multiplier": (1.5, 2.0)})
+    d = space.grid_search_space_dict()
+    assert d["__hypothesis_idx"] == [0, 1]
+    assert "__timeframes_idx" not in d
+
+
+def test_hypothesis_bundle_choices_round_trips_through_search_space_from_dict():
+    from backtest.optimizer import search_space_from_dict
+    space = _bundle_space()
+    raw = {
+        "timeframes_choices": [list(c) for c in space.timeframes_choices],
+        "engine_set_choices": [list(c) for c in space.engine_set_choices],
+        "indicator_set_choices": [list(c) for c in space.indicator_set_choices],
+        "context_filter_set_choices": [list(c) for c in space.context_filter_set_choices],
+        "hypothesis_bundle_choices": [dict(b) for b in space.hypothesis_bundle_choices],
+        "risk_param_ranges": space.risk_param_ranges,
+        "risk_param_grid": space.risk_param_grid,
+    }
+    reconstructed = search_space_from_dict(raw)
+    assert reconstructed.hypothesis_bundle_choices == space.hypothesis_bundle_choices
+
+
+def test_search_space_from_dict_backward_compatible_without_hypothesis_bundle_choices():
+    from backtest.optimizer import search_space_from_dict
+    raw = {
+        "timeframes_choices": [["H1"]], "engine_set_choices": [["nnfx"]],
+        "indicator_set_choices": [[]],
+        # no hypothesis_bundle_choices key at all — a mission stored before this shipped.
+        "risk_param_ranges": {"sl_atr_multiplier": [1.0, 3.0]},
+        "risk_param_grid": {},
+    }
+    space = search_space_from_dict(raw)
+    assert space.hypothesis_bundle_choices is None
+
+
+def test_hypothesis_bundles_are_actually_sampled_not_stuck_on_index_zero():
+    # The authoritative behavior-change proof — the literal bug the
+    # operator found: with real bundles that differ in engines, a real
+    # sampler run across several trials must pick BOTH bundles, not
+    # always index 0 (which is exactly what happened when every dimension
+    # had only one choice).
+    space = _bundle_space()
+    study = optuna.create_study(sampler=make_sampler("random", 42, space, grid_mode=False), direction="maximize")
+    seen_indices = set()
+    for _ in range(20):
+        trial = study.ask()
+        raw = suggest_point(trial, space, grid_mode=False)
+        seen_indices.add(raw["__hypothesis_idx"])
+        study.tell(trial, 1.0)
+    assert seen_indices == {0, 1}

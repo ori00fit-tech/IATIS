@@ -185,3 +185,78 @@ def test_rejects_bad_n_bins_and_top_fraction():
         compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", top_fraction=0.0)
     with pytest.raises(ValueError):
         compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", top_fraction=1.5)
+
+
+# ── Hypothesis Bundles (2026-07-30) ──────────────────────────────────────
+
+_BUNDLE_SMC_H1 = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+_BUNDLE_NNFX_H4 = {"name": "NNFX + Wyckoff", "timeframes": ["H4"], "engines": ["nnfx", "wyckoff"], "indicators": [], "context_filters": []}
+
+
+def _hypothesis_space(**kwargs) -> MissionSearchSpace:
+    defaults = dict(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),),
+        hypothesis_bundle_choices=(_BUNDLE_SMC_H1, _BUNDLE_NNFX_H4),
+        risk_param_ranges={"sl_atr_multiplier": (1.0, 3.0)},
+    )
+    defaults.update(kwargs)
+    return MissionSearchSpace(**defaults)
+
+
+def _hypothesis_row(
+    trial_number: int, hypothesis_idx: int, objective_value: float = 1.0,
+    sl_atr_multiplier: float = 2.0, trades: int = 50,
+) -> dict:
+    params = {"__hypothesis_idx": hypothesis_idx, "sl_atr_multiplier": sl_atr_multiplier}
+    return {
+        "mission_id": "m1", "trial_number": trial_number, "symbol": "EURUSD", "state": "COMPLETE",
+        "objective_value": objective_value, "params_json": json.dumps(params),
+        "metrics_json": None, "trades": trades, "error": None,
+        "started_at": "t", "finished_at": "t",
+    }
+
+
+def test_engine_and_timeframe_frequencies_resolve_correctly_in_hypothesis_bundle_mode():
+    # Proves resolve_point()'s unchanged output shape carries hypothesis-
+    # bundle-mode trials through compute_meta_analysis() correctly with
+    # zero code changes beyond the all_timeframes fix.
+    space = _hypothesis_space()
+    # Top 5 (best objective) all picked bundle 0 (SMC/H1); the rest bundle 1 (NNFX+Wyckoff/H4).
+    trials = []
+    for i in range(20):
+        objective = 2.0 - i * 0.05
+        idx = 0 if i < 5 else 1
+        trials.append(_hypothesis_row(i, hypothesis_idx=idx, objective_value=objective))
+
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", top_fraction=0.25)
+    assert result.insufficient_data is False
+    assert result.top_n == 5
+
+    smc_freq = next(f for f in result.engine_frequencies if f.value == "smc")
+    assert smc_freq.top_count == 5
+    assert smc_freq.all_count == 5
+
+    nnfx_freq = next(f for f in result.engine_frequencies if f.value == "nnfx")
+    assert nnfx_freq.top_count == 0
+    assert nnfx_freq.all_count == 15
+
+    # The all_timeframes fix: H4 (only used by bundle 1, never in the
+    # vestigial flat timeframes_choices=(("H1",),)) must still get a row.
+    h4_freq = next(f for f in result.timeframe_frequencies if f.value == "H4")
+    assert h4_freq.all_count == 15
+    h1_freq = next(f for f in result.timeframe_frequencies if f.value == "H1")
+    assert h1_freq.all_count == 5
+
+
+def test_all_timeframes_enumeration_uses_bundles_not_vestigial_flat_field():
+    # Direct regression pin for the one-line fix: a bundle-mode space
+    # whose flat timeframes_choices contains a timeframe NO bundle uses
+    # at all must not show that phantom timeframe, and must show every
+    # real bundle timeframe.
+    space = _hypothesis_space(timeframes_choices=(("D1",),))  # vestigial, unused in bundle mode
+    trials = [_hypothesis_row(i, hypothesis_idx=i % 2, objective_value=1.0) for i in range(20)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    values = {f.value for f in result.timeframe_frequencies}
+    assert values == {"H1", "H4"}
+    assert "D1" not in values

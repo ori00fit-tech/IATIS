@@ -83,6 +83,35 @@ def test_gate_classification_pipeline_order():
     assert sb.classify_gate(r2) == "meta_or_regime"
 
 
+def test_gate_classification_market_quality():
+    r = {
+        "final_verdict": "NO_TRADE",
+        "summary": "NO_TRADE: Market Quality Score=32/100 (POOR) — dead session",
+        "market_quality": {"score": 32, "grade": "POOR"},
+        "current_price": 1.0,
+        "bar_high": 1.0, "bar_low": 1.0,
+    }
+    assert sb.classify_gate(r) == "mqs"
+
+
+def test_gate_classification_data_validation_failure():
+    # main.py's pre-pipeline validation early return — no confluence/risk
+    # keys at all, distinct from every other NO_TRADE shape.
+    r = {"final_verdict": "NO_TRADE", "reason": "Data validation failed: bad bars"}
+    assert sb.classify_gate(r) == "data_validation"
+
+
+def test_gate_labels_cover_every_classify_gate_return_value():
+    # A category classify_gate() can return but GATE_LABELS doesn't know
+    # about would silently fall back to the raw code (e.g. "meta_or_regime"
+    # instead of a readable label) wherever GATE_LABELS is used to render
+    # UI/summary text — this pins the two dicts can't drift apart.
+    import inspect
+    source = inspect.getsource(sb.classify_gate)
+    for category in sb.GATE_LABELS:
+        assert f'"{category}"' in source, f"GATE_LABELS has {category!r} with no matching classify_gate() branch"
+
+
 # ── Resolution & ledger ──────────────────────────────────────────────────
 
 def test_shadow_closes_on_intrabar_tp_and_ledger_attributes_gate():

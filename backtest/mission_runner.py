@@ -127,6 +127,20 @@ def _tell_safely(study: optuna.Study, trial: optuna.trial.Trial, **kwargs) -> No
         logger.info("Grid sampler exhausted its search space — trial still recorded.")
 
 
+def _is_cancelled(mission_id: str) -> bool:
+    """Whether the operator marked this mission cancelled — fails OPEN
+    (returns False) on any read error. A transient D1 hiccup checking
+    "was I cancelled?" must never be treated as "yes", since that would
+    silently abort (or mislabel "failed") an otherwise healthy mission
+    over a monitoring blip rather than a real cancellation."""
+    try:
+        mission = research_missions.get_mission(mission_id)
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        logger.warning(f"Mission {mission_id}: cancellation check failed (non-fatal, assuming not cancelled): {exc}")
+        return False
+    return bool(mission and mission.get("status") == "cancelled")
+
+
 def _split_train_holdout(df, holdout_fraction: float):
     split_idx = int(len(df) * (1 - holdout_fraction))
     split_idx = max(1, min(split_idx, len(df) - 1))
@@ -171,17 +185,23 @@ def run_mission(mc: MissionConfig) -> None:
             ) >= mc.max_wall_clock_seconds:
                 logger.info(f"Mission {mc.mission_id}: wall-clock budget reached, stopping.")
                 break
-            mission = research_missions.get_mission(mc.mission_id)
-            if mission and mission.get("status") == "cancelled":
+            if _is_cancelled(mc.mission_id):
                 logger.info(f"Mission {mc.mission_id}: cancelled, stopping.")
                 break
     except Exception as exc:  # noqa: BLE001 — a mission-level crash must still finalize status
         mission_error = str(exc)
         logger.error(f"Mission {mc.mission_id} failed: {exc}")
 
+    # A transient D1 read hiccup here must never overwrite an otherwise-
+    # fully-successful mission's status with "failed" (found live,
+    # 2026-07-30: a mission with 24/24 trials COMPLETE, 0 pruned/failed,
+    # still showed status="failed" — traced to this exact cancellation-
+    # check call being unguarded). _is_cancelled() fails OPEN (treats a
+    # read error as "not cancelled") — the same "monitoring must not kill
+    # the run" contract execution/reconciliation.py and scheduler.py
+    # already apply everywhere else in this codebase.
     final_status = "failed" if mission_error else "finished"
-    mission = research_missions.get_mission(mc.mission_id)
-    if mission and mission.get("status") == "cancelled":
+    if _is_cancelled(mc.mission_id):
         final_status = "cancelled"
     research_missions.set_mission_status(mc.mission_id, final_status, error=mission_error, finished=True)
 
@@ -231,8 +251,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
             time.monotonic() - t0
         ) >= mc.max_wall_clock_seconds:
             return
-        mission = research_missions.get_mission(mc.mission_id)
-        if mission and mission.get("status") == "cancelled":
+        if _is_cancelled(mc.mission_id):
             return
 
         trial = study.ask()

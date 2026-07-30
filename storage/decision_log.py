@@ -136,8 +136,25 @@ def filter_decisions(
 
 def summarize_decisions(path: Path | str | None = None) -> dict:
     """Quick aggregate stats: how often does the system trade vs abstain,
-    and what are the most common NO_TRADE reasons?
+    and — the root-cause-of-"why does it never EXECUTE" tool — what
+    category is actually rejecting NO_TRADEs, as a clean rollup.
+
+    Classification is delegated to storage.shadow_book.classify_gate(),
+    the same ordered gate-inspection logic the shadow book already uses
+    for its per-gate P&L ledger — a single source of truth rather than a
+    second, independently-drifting reason-extraction implementation.
+    Fixes two real gaps the prior inline version had: it never inspected
+    Market-Quality-Score-gated NO_TRADEs at all (contributed zero to this
+    summary, even though MQS is a real, frequently-firing live gate), and
+    it grouped by the exact interpolated fail_reasons string (e.g.
+    "Confluence score 57.22 below minimum required 60"), which is
+    near-unique per decision and never rolls up into a usable category —
+    the operator's own repeated ask ("Rejection Statistics — % by
+    category: Risk/News/Confluence/Engines") needs fixed buckets, not a
+    list of one-off strings.
     """
+    from storage.shadow_book import GATE_LABELS, classify_gate
+
     decisions = read_decisions(path)  # path=None resolves inside read_decisions
     if not decisions:
         return {"total": 0, "execute": 0, "no_trade": 0, "no_trade_reasons": {}}
@@ -150,19 +167,9 @@ def summarize_decisions(path: Path | str | None = None) -> dict:
         if d["final_verdict"] != "NO_TRADE":
             continue
         report = d.get("report", {})
-        # top-level data validation failure
-        if "reason" in report:
-            key = report["reason"]
-            reason_counts[key] = reason_counts.get(key, 0) + 1
-            continue
-        # confluence/contradiction/risk-level reasons
-        confluence = report.get("confluence", {})
-        for r in confluence.get("fail_reasons", []):
-            reason_counts[r] = reason_counts.get(r, 0) + 1
-        risk = report.get("risk", {})
-        if risk and risk.get("passed") is False:
-            for r in risk.get("reasons", []):
-                reason_counts[r] = reason_counts.get(r, 0) + 1
+        gate = classify_gate(report)
+        label = GATE_LABELS.get(gate, gate)
+        reason_counts[label] = reason_counts.get(label, 0) + 1
 
     return {
         "total": len(decisions),

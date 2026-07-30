@@ -132,13 +132,34 @@ def test_summarize_decisions_counts_correctly(tmp_log_path):
     assert summary["total"] == 3
     assert summary["execute"] == 1
     assert summary["no_trade"] == 2
-    assert summary["no_trade_reasons"]["Only 1 engine(s) agree, minimum required is 3"] == 2
+    # Categorized rollup (storage.shadow_book.classify_gate), not the raw
+    # interpolated string — "engine(s) agree" classifies as "quorum".
+    assert summary["no_trade_reasons"]["Too few engines agreeing"] == 2
 
 
 def test_summarize_decisions_handles_validation_failure_reason(tmp_log_path):
     log_decision({"final_verdict": "NO_TRADE", "reason": "Data validation failed: bad bars"}, path=tmp_log_path)
     summary = summarize_decisions(tmp_log_path)
-    assert summary["no_trade_reasons"]["Data validation failed: bad bars"] == 1
+    assert summary["no_trade_reasons"]["Data validation failed"] == 1
+
+
+def test_summarize_decisions_counts_market_quality_gated_no_trades(tmp_log_path):
+    # Regression: the prior inline reason-extraction never inspected the
+    # MQS-gate's report shape at all — MQS-blocked NO_TRADEs silently
+    # contributed ZERO to no_trade_reasons, even though MQS is a real,
+    # frequently-firing live gate. classify_gate() covers it.
+    log_decision(
+        {
+            "final_verdict": "NO_TRADE",
+            "symbol": "EURUSD",
+            "summary": "NO_TRADE: Market Quality Score=32/100 (POOR) — dead session",
+            "market_quality": {"score": 32, "grade": "POOR"},
+        },
+        path=tmp_log_path,
+    )
+    summary = summarize_decisions(tmp_log_path)
+    assert summary["no_trade"] == 1
+    assert summary["no_trade_reasons"]["Market Quality Score gate"] == 1
 
 
 # ---------- filter_decisions (Decision Explorer, module 7) ----------

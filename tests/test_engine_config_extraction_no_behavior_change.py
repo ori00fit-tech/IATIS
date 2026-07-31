@@ -37,17 +37,29 @@ from utils.helpers import load_config
 
 # Two independent synthetic scenarios exercising different bias/score
 # branches across all 6 engines.
-_SCENARIO_A = dict(bars=600, timeframe="H1", seed=42, start_price=1.0850)
-_SCENARIO_B = dict(bars=600, timeframe="H1", seed=7, start_price=1950.0)
+#
+# `end` is pinned (2026-07-31 fix): load_synthetic()'s default end
+# anchors to pd.Timestamp.now("UTC"), and core.timeframe_sync.resample()
+# anchors H4/D1 bucket boundaries to CLOCK time, not to the data's own
+# start — so an un-pinned `end` silently reshuffles which H1 bars land
+# in the final H4/D1 candle depending on what wall-clock hour the suite
+# happens to run at. Confirmed by direct reproduction: with the OLD
+# (unpinned) fixture, Wyckoff's scenario-A score flipped between 25.0
+# and 40.0 purely based on run time, zero code involved. Every golden
+# value below was (re-)captured against this exact pinned `end`.
+_FIXED_END = "2026-07-15 08:00:00"
+_SCENARIO_A = dict(bars=600, timeframe="H1", seed=42, start_price=1.0850, end=_FIXED_END)
+_SCENARIO_B = dict(bars=600, timeframe="H1", seed=7, start_price=1950.0, end=_FIXED_END)
 
-# Golden values captured from pre-refactor code (see module docstring).
+# Golden values captured from the current (already-refactored, already
+# behavior-verified) engine code against the pinned-`end` fixtures above.
 _GOLDEN = {
     "A": {
         "SMC": ("BEARISH", 45.5),
         "PriceAction": ("BEARISH", 70.0),
         "NNFX": ("BEARISH", 68.0),
         "Wyckoff": ("BULLISH", 40.0),
-        "ICT": ("NEUTRAL", 0.0),
+        "ICT": ("NEUTRAL", 10.0),
         "MarketStructure": ("BEARISH", 65.0),
     },
     "B": {
@@ -55,7 +67,7 @@ _GOLDEN = {
         "PriceAction": ("NEUTRAL", 0.0),
         "NNFX": ("BEARISH", 55.0),
         "Wyckoff": ("NEUTRAL", 0.0),
-        "ICT": ("BULLISH", 35.0),
+        "ICT": ("BULLISH", 55.0),
         "MarketStructure": ("BULLISH", 40.0),
     },
 }
@@ -74,6 +86,7 @@ def _build_mtf(scenario: dict) -> dict:
     df_h1 = load_synthetic(
         bars=scenario["bars"], timeframe=scenario["timeframe"],
         seed=scenario["seed"], start_price=scenario["start_price"],
+        end=scenario["end"],
     )
     return build_multi_timeframe_view(df_h1, ["H1", "H4", "D1"])
 

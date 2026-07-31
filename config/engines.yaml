@@ -87,6 +87,7 @@ thresholds:
   smc:
     swing_window: 3
     lookback: 6
+    base_score_max: 65.0
     mixed_score: 20.0
     pick_tf_min_bars: 100
     fvg_lookback: 30

@@ -156,6 +156,128 @@ def _volume_analysis(df: pd.DataFrame, lookback: int = 20) -> dict:
     }
 
 
+def extract_features(df: pd.DataFrame, t: dict) -> dict:
+    """Feature Extraction layer (Confluence Engine Overhaul Phase 2) —
+    trading-range/spring-upthrust/volume facts decide() needs. Pure
+    function of (df, thresholds), no bias/score logic."""
+    range_low, range_high, in_range = _identify_trading_range(
+        df,
+        lookback=t.get("range_lookback", 40),
+        range_atr_max=t.get("range_atr_max", 8.0),
+        recent_lookback=t.get("range_recent_lookback", 10),
+    )
+    current = float(df["close"].iloc[-1])
+    event, strength = _detect_spring_upthrust(
+        df, range_low, range_high, tolerance=t.get("spring_tolerance", 0.002),
+    )
+    vol = _volume_analysis(df)
+
+    return {
+        "range_low": range_low, "range_high": range_high, "in_range": in_range,
+        "current": current, "event": event, "strength": strength, "vol": vol,
+    }
+
+
+def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
+    """Decision Logic layer (Confluence Engine Overhaul Phase 2) — turns
+    an extract_features() snapshot into a bias/score opinion via
+    Wyckoff's staged range -> spring/upthrust -> position -> volume
+    confirmation sequence. Pure function of (features, thresholds)."""
+    range_low, range_high, in_range = (
+        features["range_low"], features["range_high"], features["in_range"],
+    )
+    current = features["current"]
+    event, strength, vol = features["event"], features["strength"], features["vol"]
+
+    reasons: list[str] = []
+    score = 0.0
+    bias = Bias.NEUTRAL
+
+    if in_range:
+        reasons.append(
+            f"Price in Wyckoff trading range "
+            f"[{range_low:.5f} – {range_high:.5f}] "
+            f"(consolidation phase)"
+        )
+
+    spring_upthrust_score = t.get("spring_upthrust_score", 45.0)
+    if event == "spring":
+        bias = Bias.BULLISH
+        score += spring_upthrust_score
+        reasons.append(
+            f"SPRING detected: false breakdown below {range_low:.5f}, "
+            f"closed back inside range — Wyckoff bullish reversal signal "
+            f"(penetration: {strength:.2f}%)"
+        )
+    elif event == "upthrust":
+        bias = Bias.BEARISH
+        score += spring_upthrust_score
+        reasons.append(
+            f"UPTHRUST detected: false breakout above {range_high:.5f}, "
+            f"closed back inside range — Wyckoff bearish reversal signal "
+            f"(penetration: {strength:.2f}%)"
+        )
+
+    range_position_score = t.get("range_position_score", 25.0)
+    range_position_low_pct = t.get("range_position_low_pct", 0.25)
+    range_position_high_pct = t.get("range_position_high_pct", 0.75)
+    if event == "none" and in_range:
+        range_pct = (current - range_low) / (range_high - range_low) if range_high != range_low else 0.5
+        if range_pct < range_position_low_pct:
+            bias = Bias.BULLISH
+            score += range_position_score
+            reasons.append(
+                f"Price at bottom of range ({range_pct:.0%}) — "
+                f"potential Wyckoff accumulation zone"
+            )
+        elif range_pct > range_position_high_pct:
+            bias = Bias.BEARISH
+            score += range_position_score
+            reasons.append(
+                f"Price at top of range ({range_pct:.0%}) — "
+                f"potential Wyckoff distribution zone"
+            )
+
+    stopping_volume_score = t.get("stopping_volume_score", 20.0)
+    climax_score = t.get("climax_score", 15.0)
+    no_demand_score = t.get("no_demand_score", 15.0)
+    no_supply_score = t.get("no_supply_score", 15.0)
+    if vol.get("available"):
+        if vol.get("stopping_volume") and bias == Bias.BULLISH:
+            score += stopping_volume_score
+            reasons.append(
+                f"Stopping volume detected (vol_ratio={vol['vol_ratio']}x) — "
+                f"absorption of selling, confirms bullish Wyckoff"
+            )
+        elif vol.get("climax") and event == "none":
+            score += climax_score
+            reasons.append(
+                f"Climax volume (vol_ratio={vol['vol_ratio']}x) — "
+                f"potential trend exhaustion"
+            )
+        elif vol.get("no_demand") and bias == Bias.BEARISH:
+            score += no_demand_score
+            reasons.append("No demand (low vol + narrow up bar) — weak buying, confirms bearish")
+        elif vol.get("no_supply") and bias == Bias.BULLISH:
+            score += no_supply_score
+            reasons.append("No supply (low vol + narrow down bar) — weak selling, confirms bullish")
+    else:
+        reasons.append("Volume unavailable (FX) — Wyckoff analysis is price-only")
+
+    if not reasons or (not in_range and event == "none"):
+        reasons.append("No clear Wyckoff pattern — price not in identifiable structure")
+        bias = Bias.NEUTRAL
+        score = 0.0
+
+    score_cap = t.get("score_cap", 75.0)
+    score_neutral_floor = t.get("score_neutral_floor", 20.0)
+    score = min(round(score, 1), score_cap)
+    if score < score_neutral_floor:
+        bias = Bias.NEUTRAL
+
+    return bias, score, reasons
+
+
 class WyckoffEngine(BaseEngine):
     name = "Wyckoff"
 
@@ -178,115 +300,18 @@ class WyckoffEngine(BaseEngine):
                 reasons=[f"Insufficient data for Wyckoff analysis (need {min_bars}+ bars)"],
             )
 
-        reasons = []
-        score = 0.0
-        bias = Bias.NEUTRAL
-
-        # 1. Identify trading range
-        range_low, range_high, in_range = _identify_trading_range(
-            df,
-            lookback=t.get("range_lookback", 40),
-            range_atr_max=t.get("range_atr_max", 8.0),
-            recent_lookback=t.get("range_recent_lookback", 10),
-        )
-        current = float(df["close"].iloc[-1])
-
-        if in_range:
-            reasons.append(
-                f"Price in Wyckoff trading range "
-                f"[{range_low:.5f} – {range_high:.5f}] "
-                f"(consolidation phase)"
-            )
-
-        spring_upthrust_score = t.get("spring_upthrust_score", 45.0)
-        # 2. Detect Spring or Upthrust
-        event, strength = _detect_spring_upthrust(
-            df, range_low, range_high, tolerance=t.get("spring_tolerance", 0.002),
-        )
-
-        if event == "spring":
-            bias = Bias.BULLISH
-            score += spring_upthrust_score
-            reasons.append(
-                f"SPRING detected: false breakdown below {range_low:.5f}, "
-                f"closed back inside range — Wyckoff bullish reversal signal "
-                f"(penetration: {strength:.2f}%)"
-            )
-        elif event == "upthrust":
-            bias = Bias.BEARISH
-            score += spring_upthrust_score
-            reasons.append(
-                f"UPTHRUST detected: false breakout above {range_high:.5f}, "
-                f"closed back inside range — Wyckoff bearish reversal signal "
-                f"(penetration: {strength:.2f}%)"
-            )
-
-        range_position_score = t.get("range_position_score", 25.0)
-        range_position_low_pct = t.get("range_position_low_pct", 0.25)
-        range_position_high_pct = t.get("range_position_high_pct", 0.75)
-        # 3. Position in range (if no spring/upthrust)
-        if event == "none" and in_range:
-            range_pct = (current - range_low) / (range_high - range_low) if range_high != range_low else 0.5
-            if range_pct < range_position_low_pct:
-                bias = Bias.BULLISH
-                score += range_position_score
-                reasons.append(
-                    f"Price at bottom of range ({range_pct:.0%}) — "
-                    f"potential Wyckoff accumulation zone"
-                )
-            elif range_pct > range_position_high_pct:
-                bias = Bias.BEARISH
-                score += range_position_score
-                reasons.append(
-                    f"Price at top of range ({range_pct:.0%}) — "
-                    f"potential Wyckoff distribution zone"
-                )
-
-        stopping_volume_score = t.get("stopping_volume_score", 20.0)
-        climax_score = t.get("climax_score", 15.0)
-        no_demand_score = t.get("no_demand_score", 15.0)
-        no_supply_score = t.get("no_supply_score", 15.0)
-        # 4. Volume analysis (metals/indices/crypto only)
-        vol = _volume_analysis(df)
-        if vol.get("available"):
-            if vol.get("stopping_volume") and bias == Bias.BULLISH:
-                score += stopping_volume_score
-                reasons.append(
-                    f"Stopping volume detected (vol_ratio={vol['vol_ratio']}x) — "
-                    f"absorption of selling, confirms bullish Wyckoff"
-                )
-            elif vol.get("climax") and event == "none":
-                score += climax_score
-                reasons.append(
-                    f"Climax volume (vol_ratio={vol['vol_ratio']}x) — "
-                    f"potential trend exhaustion"
-                )
-            elif vol.get("no_demand") and bias == Bias.BEARISH:
-                score += no_demand_score
-                reasons.append("No demand (low vol + narrow up bar) — weak buying, confirms bearish")
-            elif vol.get("no_supply") and bias == Bias.BULLISH:
-                score += no_supply_score
-                reasons.append("No supply (low vol + narrow down bar) — weak selling, confirms bullish")
-        else:
-            reasons.append("Volume unavailable (FX) — Wyckoff analysis is price-only")
-
-        if not reasons or (not in_range and event == "none"):
-            reasons.append("No clear Wyckoff pattern — price not in identifiable structure")
-            bias = Bias.NEUTRAL
-            score = 0.0
-
-        score_cap = t.get("score_cap", 75.0)
-        score_neutral_floor = t.get("score_neutral_floor", 20.0)
-        score = min(round(score, 1), score_cap)
-        if score < score_neutral_floor:
-            bias = Bias.NEUTRAL
+        features = extract_features(df, t)
+        bias, score, reasons = decide(features, t)
 
         raw = {
             "timeframe_used": tf,
-            "trading_range": {"low": range_low, "high": range_high, "in_range": in_range},
-            "event": event,
-            "event_strength_pct": strength,
-            "volume_analysis": vol,
+            "trading_range": {
+                "low": features["range_low"], "high": features["range_high"],
+                "in_range": features["in_range"],
+            },
+            "event": features["event"],
+            "event_strength_pct": features["strength"],
+            "volume_analysis": features["vol"],
         }
 
         return EngineOutput(
@@ -295,4 +320,5 @@ class WyckoffEngine(BaseEngine):
             score=score,
             reasons=reasons,
             raw=raw,
+            features=features,
         )

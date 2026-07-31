@@ -33,6 +33,30 @@ class EngineOutput:
     reasons: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)   # engine-specific details (zones, levels, etc.)
 
+    # Confluence Engine Overhaul Phase 2 (2026-07-31) — additive-only,
+    # never read by tally_votes()/the live gate (those still consult only
+    # bias/score). `features` is the Feature-Extraction-layer snapshot an
+    # engine's decide() logic actually consumed — a clean, decision-
+    # agnostic record of what was measured, produced by the
+    # extract_features()/decide() split now used by smc/price_action/
+    # nnfx/wyckoff/ict/market_structure (see each engine module). The
+    # remaining fields all default to "no measured evidence yet": none of
+    # today's engines has a backtested win-rate behind its score, so
+    # fabricating a probability/expected-return number here would be
+    # exactly the false precision CLAUDE.md's evidence discipline warns
+    # against. They exist so a FUTURE engine variant that has been through
+    # Mission Center validation (Backtesting Lab Pro Phase C/D lineage)
+    # can report real, measured values through the same schema, and so
+    # every engine "speaks the same statistical language" once any of
+    # them actually have evidence — without a second schema migration.
+    features: dict = field(default_factory=dict)
+    probability: float | None = None
+    confidence_interval: tuple[float, float] | None = None
+    expected_return: float | None = None
+    expected_drawdown: float | None = None
+    sample_size: int | None = None
+    evidence_level: str = "HEURISTIC"   # HEURISTIC | MEASURED (no engine is MEASURED yet)
+
     def to_dict(self) -> dict:
         return {
             "engine": self.engine_name,
@@ -40,6 +64,13 @@ class EngineOutput:
             "score": round(self.score, 2),
             "reasons": self.reasons,
             "raw": self.raw,
+            "features": self.features,
+            "probability": self.probability,
+            "confidence_interval": list(self.confidence_interval) if self.confidence_interval else None,
+            "expected_return": self.expected_return,
+            "expected_drawdown": self.expected_drawdown,
+            "sample_size": self.sample_size,
+            "evidence_level": self.evidence_level,
         }
 
 

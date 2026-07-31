@@ -101,6 +101,135 @@ def _detect_judas_swing(
     return False, "none"
 
 
+def extract_features(mtf_data: dict[str, pd.DataFrame], t: dict) -> dict:
+    """Feature Extraction layer (Confluence Engine Overhaul Phase 2) —
+    session/dealing-range/zone/judas-swing/trend facts decide() needs.
+    Pure function of (mtf_data, thresholds), no bias/score logic."""
+    min_bars = t.get("min_bars", 30)
+    tf_session = "H1" if "H1" in mtf_data else next(iter(mtf_data))
+    tf_range = "H4" if "H4" in mtf_data and len(mtf_data["H4"]) >= min_bars else tf_session
+    df_session = mtf_data[tf_session]
+    df_range = mtf_data[tf_range]
+
+    session = detect_session_from_df(df_session)
+    current_price = float(df_session["close"].iloc[-1])
+
+    # Dealing range on H4 (wider, more structural) — 20 H4 bars = ~3 days
+    range_low, range_high = _dealing_range(df_range, lookback=t.get("dealing_range_lookback", 20))
+    zone, pct = _premium_discount_zone(
+        current_price, range_low, range_high,
+        premium_pct=t.get("premium_pct", 0.60),
+        discount_pct=t.get("discount_pct", 0.40),
+    )
+    is_judas, judas_dir = _detect_judas_swing(df_session, session)
+
+    h1_df = mtf_data.get("H1", df_session)
+    in_uptrend = in_downtrend = False
+    trend_buffer_pct = t.get("trend_buffer_pct", 0.001)
+    if len(h1_df) >= 50:
+        ema20 = float(h1_df["close"].ewm(span=t.get("trend_ema_fast", 20)).mean().iloc[-1])
+        ema50 = float(h1_df["close"].ewm(span=t.get("trend_ema_slow", 50)).mean().iloc[-1])
+        in_uptrend = ema20 > ema50 * (1 + trend_buffer_pct)
+        in_downtrend = ema20 < ema50 * (1 - trend_buffer_pct)
+
+    return {
+        "tf_session": tf_session, "tf_range": tf_range, "session": session,
+        "range_low": range_low, "range_high": range_high,
+        "zone": zone, "pct": pct, "is_judas": is_judas, "judas_dir": judas_dir,
+        "in_uptrend": in_uptrend, "in_downtrend": in_downtrend,
+    }
+
+
+def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
+    """Decision Logic layer (Confluence Engine Overhaul Phase 2) — turns
+    an extract_features() snapshot into a bias/score opinion via ICT's
+    zone -> killzone -> judas-swing confirmation sequence. Pure function
+    of (features, thresholds)."""
+    session = features["session"]
+    zone, pct = features["zone"], features["pct"]
+    is_judas, judas_dir = features["is_judas"], features["judas_dir"]
+    in_uptrend, in_downtrend = features["in_uptrend"], features["in_downtrend"]
+
+    reasons: list[str] = []
+    score = 0.0
+    bias = Bias.NEUTRAL
+
+    # --- Premium/Discount zone bias (with trend filter) ---
+    # ICT: sell from premium, buy from discount — BUT only in non-trending markets
+    zone_score = t.get("zone_score", 35.0)
+    if zone == "DISCOUNT":
+        # Buy from discount only if not in a strong downtrend
+        if not in_downtrend:
+            bias = Bias.BULLISH
+            score += zone_score
+            reasons.append(
+                f"Price in DISCOUNT zone ({pct:.0%} of range) — "
+                f"ICT expects bullish move toward equilibrium"
+            )
+        else:
+            # Downtrend: discount is not a reversal signal, stay neutral
+            reasons.append(
+                f"Price in DISCOUNT zone ({pct:.0%}) but H1 downtrend active — "
+                f"no reversal bias (trend filter)"
+            )
+    elif zone == "PREMIUM":
+        # Sell from premium only if not in a strong uptrend
+        if not in_uptrend:
+            bias = Bias.BEARISH
+            score += zone_score
+            reasons.append(
+                f"Price in PREMIUM zone ({pct:.0%} of range) — "
+                f"ICT expects bearish move toward equilibrium"
+            )
+        else:
+            reasons.append(
+                f"Price in PREMIUM zone ({pct:.0%}) but H1 uptrend active — "
+                f"no reversal bias (trend filter)"
+            )
+    else:
+        reasons.append(f"Price at EQUILIBRIUM ({pct:.0%}) — no zone bias")
+
+    # --- Killzone bonus ---
+    killzone_score = t.get("killzone_score", 20.0)
+    if session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap"):
+        score += killzone_score
+        reasons.append(
+            f"In {session.primary_session} killzone "
+            f"(session hour {session.session_hour} UTC)"
+        )
+
+    # --- Judas swing confirmation ---
+    judas_confirm_score = t.get("judas_confirm_score", 20.0)
+    judas_conflict_penalty = t.get("judas_conflict_penalty", 10.0)
+    if is_judas:
+        if judas_dir == "up" and bias == Bias.BEARISH:
+            score += judas_confirm_score
+            reasons.append(
+                "Judas swing UP detected — false breakout above range, "
+                "confirms BEARISH reversal"
+            )
+        elif judas_dir == "down" and bias == Bias.BULLISH:
+            score += judas_confirm_score
+            reasons.append(
+                "Judas swing DOWN detected — false breakout below range, "
+                "confirms BULLISH reversal"
+            )
+        else:
+            reasons.append(
+                f"Judas swing {judas_dir.upper()} detected but "
+                f"conflicts with zone bias — reducing confidence"
+            )
+            score = max(0, score - judas_conflict_penalty)
+
+    # cap score
+    score = min(round(score, 1), t.get("score_cap", 80.0))
+
+    if score < t.get("score_neutral_floor", 20.0):
+        bias = Bias.NEUTRAL
+
+    return bias, score, reasons
+
+
 class ICTEngine(BaseEngine):
     """ICT methodology engine — killzones, premium/discount, judas swing."""
 
@@ -111,13 +240,8 @@ class ICTEngine(BaseEngine):
         min_bars = t.get("min_bars", 30)
 
         # Use H1 for session/killzone (intraday timing)
-        # Use H4 for dealing range (wider structural context)
         tf_session = "H1" if "H1" in mtf_data else next(iter(mtf_data))
-        tf_range = "H4" if "H4" in mtf_data and len(mtf_data["H4"]) >= min_bars else tf_session
-        df_session = mtf_data[tf_session]
-        df_range = mtf_data[tf_range]
-
-        if len(df_session) < min_bars:
+        if len(mtf_data[tf_session]) < min_bars:
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
@@ -125,117 +249,36 @@ class ICTEngine(BaseEngine):
                 reasons=["Insufficient data for ICT analysis"],
             )
 
-        session = detect_session_from_df(df_session)
-        current_price = float(df_session["close"].iloc[-1])
+        features = extract_features(mtf_data, t)
+        bias, score, reasons = decide(features, t)
 
-        dealing_range_lookback = t.get("dealing_range_lookback", 20)
-        # Dealing range on H4 (wider, more structural) — 20 H4 bars = ~3 days
-        range_low, range_high = _dealing_range(df_range, lookback=dealing_range_lookback)
-        zone, pct = _premium_discount_zone(
-            current_price, range_low, range_high,
-            premium_pct=t.get("premium_pct", 0.60),
-            discount_pct=t.get("discount_pct", 0.40),
-        )
-        is_judas, judas_dir = _detect_judas_swing(df_session, session)
-
-        reasons = []
-        score = 0.0
-        bias = Bias.NEUTRAL
-
-        # --- Premium/Discount zone bias (with trend filter) ---
-        # ICT: sell from premium, buy from discount — BUT only in non-trending markets
-        h1_df = mtf_data.get("H1", df_session)
-        in_uptrend = in_downtrend = False
-        trend_ema_fast = t.get("trend_ema_fast", 20)
-        trend_ema_slow = t.get("trend_ema_slow", 50)
-        trend_buffer_pct = t.get("trend_buffer_pct", 0.001)
-        if len(h1_df) >= 50:
-            ema20 = float(h1_df["close"].ewm(span=trend_ema_fast).mean().iloc[-1])
-            ema50 = float(h1_df["close"].ewm(span=trend_ema_slow).mean().iloc[-1])
-            in_uptrend = ema20 > ema50 * (1 + trend_buffer_pct)
-            in_downtrend = ema20 < ema50 * (1 - trend_buffer_pct)
-
-        zone_score = t.get("zone_score", 35.0)
-        if zone == "DISCOUNT":
-            # Buy from discount only if not in a strong downtrend
-            if not in_downtrend:
-                bias = Bias.BULLISH
-                score += zone_score
-                reasons.append(
-                    f"Price in DISCOUNT zone ({pct:.0%} of range) — "
-                    f"ICT expects bullish move toward equilibrium"
-                )
-            else:
-                # Downtrend: discount is not a reversal signal, stay neutral
-                reasons.append(
-                    f"Price in DISCOUNT zone ({pct:.0%}) but H1 downtrend active — "
-                    f"no reversal bias (trend filter)"
-                )
-        elif zone == "PREMIUM":
-            # Sell from premium only if not in a strong uptrend
-            if not in_uptrend:
-                bias = Bias.BEARISH
-                score += zone_score
-                reasons.append(
-                    f"Price in PREMIUM zone ({pct:.0%} of range) — "
-                    f"ICT expects bearish move toward equilibrium"
-                )
-            else:
-                reasons.append(
-                    f"Price in PREMIUM zone ({pct:.0%}) but H1 uptrend active — "
-                    f"no reversal bias (trend filter)"
-                )
-        else:
-            reasons.append(f"Price at EQUILIBRIUM ({pct:.0%}) — no zone bias")
-
-        # --- Killzone bonus ---
-        killzone_score = t.get("killzone_score", 20.0)
-        if session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap"):
-            score += killzone_score
-            reasons.append(
-                f"In {session.primary_session} killzone "
-                f"(session hour {session.session_hour} UTC)"
-            )
-
-        # --- Judas swing confirmation ---
-        judas_confirm_score = t.get("judas_confirm_score", 20.0)
-        judas_conflict_penalty = t.get("judas_conflict_penalty", 10.0)
-        if is_judas:
-            if judas_dir == "up" and bias == Bias.BEARISH:
-                score += judas_confirm_score
-                reasons.append(
-                    "Judas swing UP detected — false breakout above range, "
-                    "confirms BEARISH reversal"
-                )
-            elif judas_dir == "down" and bias == Bias.BULLISH:
-                score += judas_confirm_score
-                reasons.append(
-                    "Judas swing DOWN detected — false breakout below range, "
-                    "confirms BULLISH reversal"
-                )
-            else:
-                reasons.append(
-                    f"Judas swing {judas_dir.upper()} detected but "
-                    f"conflicts with zone bias — reducing confidence"
-                )
-                score = max(0, score - judas_conflict_penalty)
-
-        # cap score
-        score = min(round(score, 1), t.get("score_cap", 80.0))
-
-        if score < t.get("score_neutral_floor", 20.0):
-            bias = Bias.NEUTRAL
+        session = features["session"]
+        # JSON-safe copy for EngineOutput.features — decide() above needs
+        # the real SessionContext object's attributes, but a Feature
+        # Extraction snapshot meant for storage/analysis should be plain
+        # primitives, matching this codebase's Feature Mining convention.
+        output_features = {
+            **features,
+            "session": {
+                "primary_session": session.primary_session,
+                "active_sessions": session.active_sessions,
+                "is_overlap": session.is_overlap,
+                "is_session_open": session.is_session_open,
+                "session_hour": session.session_hour,
+                "volatility_expectation": session.volatility_expectation,
+            },
+        }
 
         raw = {
-            "timeframe_session": tf_session,
-            "timeframe_range": tf_range,
+            "timeframe_session": features["tf_session"],
+            "timeframe_range": features["tf_range"],
             "session": session.primary_session,
             "active_sessions": session.active_sessions,
             "is_killzone": session.is_session_open,
-            "zone": zone,
-            "zone_pct": pct,
-            "dealing_range": {"low": range_low, "high": range_high},
-            "judas_swing": judas_dir if is_judas else "none",
+            "zone": features["zone"],
+            "zone_pct": features["pct"],
+            "dealing_range": {"low": features["range_low"], "high": features["range_high"]},
+            "judas_swing": features["judas_dir"] if features["is_judas"] else "none",
         }
 
         return EngineOutput(
@@ -244,4 +287,5 @@ class ICTEngine(BaseEngine):
             score=score,
             reasons=reasons,
             raw=raw,
+            features=output_features,
         )

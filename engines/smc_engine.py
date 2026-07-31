@@ -51,6 +51,91 @@ def find_swing_points(df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
     return pd.DataFrame({"swing_high": swing_high, "swing_low": swing_low})
 
 
+def _count_swing_direction(series) -> tuple[int, int]:
+    """Count consecutive pairs in `series` that are rising vs falling."""
+    rising = falling = 0
+    vals = list(series)
+    for i in range(1, len(vals)):
+        if vals[i] > vals[i - 1]:
+            rising += 1
+        elif vals[i] < vals[i - 1]:
+            falling += 1
+    return rising, falling
+
+
+def extract_structural_features(df: pd.DataFrame, window: int = 3, lookback: int = 6) -> dict:
+    """Feature Extraction layer (Confluence Engine Overhaul Phase 2) —
+    swing-point stats structural_bias's decide step needs. Pure function
+    of (df, window, lookback), no bias/score logic."""
+    swings = find_swing_points(df, window=window)
+    swing_highs = df["high"][swings["swing_high"]].tail(lookback)
+    swing_lows = df["low"][swings["swing_low"]].tail(lookback)
+
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return {"insufficient": True}
+
+    highs_rising, highs_falling = _count_swing_direction(swing_highs)
+    lows_rising, lows_falling = _count_swing_direction(swing_lows)
+    total_pairs = len(swing_highs) - 1 + len(swing_lows) - 1
+
+    return {
+        "insufficient": total_pairs == 0,
+        "total_pairs": total_pairs,
+        "bullish_pairs": highs_rising + lows_rising,
+        "bearish_pairs": highs_falling + lows_falling,
+    }
+
+
+def decide_structural_bias(
+    features: dict, base_score_max: float = 65.0, mixed_score: float = 20.0,
+) -> tuple[Bias, float, list[str]]:
+    """Decision Logic layer (Confluence Engine Overhaul Phase 2) — turns
+    extract_structural_features()'s swing-pair counts into a bias/score
+    opinion via majority vote.
+
+    Scoring:
+        score = (agreeing_pairs / total_pairs) * base_score_max
+        e.g. 5/5 pairs agreeing -> score=65 (strong)
+             3/5 pairs agreeing -> score=39 (weak, may not pass threshold)
+
+    HH + HL majority -> BULLISH
+    LH + LL majority -> BEARISH
+    Mixed / insufficient -> NEUTRAL
+    """
+    if features.get("insufficient"):
+        if "total_pairs" not in features:
+            return Bias.NEUTRAL, 0.0, ["Not enough swing points to determine structure"]
+        return Bias.NEUTRAL, 0.0, ["Not enough swing pairs to vote"]
+
+    total_pairs = features["total_pairs"]
+    bullish_pairs = features["bullish_pairs"]
+    bearish_pairs = features["bearish_pairs"]
+    bull_ratio = bullish_pairs / total_pairs
+    bear_ratio = bearish_pairs / total_pairs
+
+    if bull_ratio > 0.5:
+        score = round(bull_ratio * base_score_max, 1)
+        reasons = [
+            f"Bullish structure: {bullish_pairs}/{total_pairs} swing pairs rising "
+            f"(HH+HL majority)"
+        ]
+        return Bias.BULLISH, score, reasons
+
+    if bear_ratio > 0.5:
+        score = round(bear_ratio * base_score_max, 1)
+        reasons = [
+            f"Bearish structure: {bearish_pairs}/{total_pairs} swing pairs falling "
+            f"(LH+LL majority)"
+        ]
+        return Bias.BEARISH, score, reasons
+
+    reasons = [
+        f"Mixed structure: {bullish_pairs} bullish vs {bearish_pairs} bearish pairs "
+        f"out of {total_pairs} — no clear majority"
+    ]
+    return Bias.NEUTRAL, mixed_score, reasons
+
+
 def structural_bias(
     df: pd.DataFrame,
     window: int = 3,
@@ -64,69 +149,12 @@ def structural_bias(
     comparing only the last two. This makes the bias more robust to
     short-term noise — a single counter-swing doesn't flip the bias.
 
-    Scoring:
-        score = (agreeing_pairs / total_pairs) * 65
-        e.g. 5/5 pairs agreeing → score=65 (strong)
-             3/5 pairs agreeing → score=39 (weak, may not pass threshold)
-
-    HH + HL majority → BULLISH
-    LH + LL majority → BEARISH
-    Mixed / insufficient → NEUTRAL
+    Thin wrapper over extract_structural_features()/decide_structural_bias()
+    (Confluence Engine Overhaul Phase 2) — kept for backward compatibility,
+    since research/experiments scripts and tests call this directly.
     """
-    swings = find_swing_points(df, window=window)
-    swing_highs = df["high"][swings["swing_high"]].tail(lookback)
-    swing_lows = df["low"][swings["swing_low"]].tail(lookback)
-
-    reasons = []
-
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return Bias.NEUTRAL, 0.0, ["Not enough swing points to determine structure"]
-
-    # count consecutive pairs that are rising vs falling
-    def _count_direction(series):
-        rising = falling = 0
-        vals = list(series)
-        for i in range(1, len(vals)):
-            if vals[i] > vals[i - 1]:
-                rising += 1
-            elif vals[i] < vals[i - 1]:
-                falling += 1
-        return rising, falling
-
-    highs_rising, highs_falling = _count_direction(swing_highs)
-    lows_rising, lows_falling = _count_direction(swing_lows)
-
-    total_pairs = len(swing_highs) - 1 + len(swing_lows) - 1
-    bullish_pairs = highs_rising + lows_rising
-    bearish_pairs = highs_falling + lows_falling
-
-    if total_pairs == 0:
-        return Bias.NEUTRAL, 0.0, ["Not enough swing pairs to vote"]
-
-    bull_ratio = bullish_pairs / total_pairs
-    bear_ratio = bearish_pairs / total_pairs
-
-    if bull_ratio > 0.5:
-        score = round(bull_ratio * base_score_max, 1)
-        reasons.append(
-            f"Bullish structure: {bullish_pairs}/{total_pairs} swing pairs rising "
-            f"(HH+HL majority)"
-        )
-        return Bias.BULLISH, score, reasons
-
-    if bear_ratio > 0.5:
-        score = round(bear_ratio * base_score_max, 1)
-        reasons.append(
-            f"Bearish structure: {bearish_pairs}/{total_pairs} swing pairs falling "
-            f"(LH+LL majority)"
-        )
-        return Bias.BEARISH, score, reasons
-
-    reasons.append(
-        f"Mixed structure: {bullish_pairs} bullish vs {bearish_pairs} bearish pairs "
-        f"out of {total_pairs} — no clear majority"
-    )
-    return Bias.NEUTRAL, mixed_score, reasons
+    features = extract_structural_features(df, window=window, lookback=lookback)
+    return decide_structural_bias(features, base_score_max=base_score_max, mixed_score=mixed_score)
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +259,76 @@ def detect_bos_choch(df: pd.DataFrame, window: int = 3) -> dict:
     return {"event": "none", "direction": "none"}
 
 
+def extract_full_spec_features(df: pd.DataFrame, t: dict) -> dict:
+    """Feature Extraction layer for the full-spec branch (Confluence
+    Engine Overhaul Phase 2) — fvg/order-block/bos-choch detector output,
+    no score-modulation logic."""
+    fvg = detect_fair_value_gaps(df, lookback=t.get("fvg_lookback", 30))
+    ob = detect_order_blocks(
+        df,
+        lookback=t.get("order_block_lookback", 30),
+        displacement_atr=t.get("order_block_displacement_atr", 1.0),
+    )
+    bos = detect_bos_choch(df, window=t.get("bos_choch_window", 3))
+    components = {
+        "fvg": fvg.get("direction", "none"),
+        "order_block": ob.get("direction", "none"),
+        "bos_choch": bos.get("direction", "none"),
+    }
+    return {"fvg": fvg, "order_block": ob, "bos_choch": bos, "components": components}
+
+
+def decide_full_spec_modulation(
+    bias: Bias, score: float, reasons: list[str], components: dict, t: dict,
+) -> tuple[Bias, float, list[str]]:
+    """Decision Logic layer for the full-spec branch — modulates the
+    structural bias/score/reasons from decide_structural_bias() using the
+    detector directions in `components`. Two-stage decision by design:
+    this stage's INPUT is itself a prior decision, not raw features —
+    the structural vote must exist before full-spec components can
+    confirm/oppose it."""
+    reasons = list(reasons)
+    component_weights = {
+        "bos_choch": t.get("component_weight_bos_choch", 12.0),
+        "fvg": t.get("component_weight_fvg", 8.0),
+        "order_block": t.get("component_weight_order_block", 8.0),
+    }
+    full_spec_score_cap = t.get("full_spec_score_cap", 85.0)
+    full_spec_neutral_floor = t.get("full_spec_neutral_floor", 20.0)
+    full_spec_mixed_lean_score = t.get("full_spec_mixed_lean_score", 28.0)
+
+    if bias != Bias.NEUTRAL:
+        side = "bullish" if bias == Bias.BULLISH else "bearish"
+        other = "bearish" if side == "bullish" else "bullish"
+        for name, direction in components.items():
+            w = component_weights[name]
+            if direction == side:
+                score = min(score + w, full_spec_score_cap)
+                reasons.append(f"{name} aligns {side} (+{w:.0f})")
+            elif direction == other:
+                score = max(score - w, 0.0)
+                reasons.append(f"{name} opposes structure (-{w:.0f})")
+        if score < full_spec_neutral_floor:
+            # Modulation drove conviction below the vote threshold —
+            # an abstain, consistent with voting_system's cliff.
+            bias = Bias.NEUTRAL
+            reasons.append("Full-spec opposition reduced conviction below threshold — NEUTRAL")
+    else:
+        # No structural majority: 2+ agreeing components give a weak,
+        # honest lean (score 28 — above the conviction threshold, below
+        # any solo-carry level).
+        for side, b in (("bullish", Bias.BULLISH), ("bearish", Bias.BEARISH)):
+            agreeing = [n for n, d in components.items() if d == side]
+            if len(agreeing) >= 2:
+                bias, score = b, full_spec_mixed_lean_score
+                reasons.append(
+                    f"Structure mixed but {'+'.join(agreeing)} agree {side} — weak {side} lean"
+                )
+                break
+
+    return bias, score, reasons
+
+
 class SMCEngine(BaseEngine):
     name = "SMC"
 
@@ -243,15 +341,19 @@ class SMCEngine(BaseEngine):
         t = self.thresholds
         swing_window = t.get("swing_window", 3)
         lookback = t.get("lookback", 6)
+        base_score_max = t.get("base_score_max", 65.0)
+        mixed_score = t.get("mixed_score", 20.0)
 
         # Use the highest available timeframe for structural bias (more reliable
         # than the lowest timeframe, consistent with SMC's "HTF bias first" principle)
         tf = self._pick_timeframe(mtf_data)
         df = mtf_data[tf]
 
-        bias, score, reasons = structural_bias(
-            df, window=swing_window, lookback=lookback,
+        structural_features = extract_structural_features(df, window=swing_window, lookback=lookback)
+        bias, score, reasons = decide_structural_bias(
+            structural_features, base_score_max=base_score_max, mixed_score=mixed_score,
         )
+        features = {"structural": structural_features}
 
         if not self.full_spec:
             raw = {
@@ -264,67 +366,25 @@ class SMCEngine(BaseEngine):
                 "liquidity_zones": "NOT_IMPLEMENTED (H001/H002/H002b FAILED — deliberate)",
             }
             return EngineOutput(engine_name=self.name, bias=bias, score=score,
-                                reasons=reasons, raw=raw)
+                                reasons=reasons, raw=raw, features=features)
 
         # --- Full-spec confluence (score modulation, never an entry) ---
-        fvg = detect_fair_value_gaps(df, lookback=t.get("fvg_lookback", 30))
-        ob = detect_order_blocks(
-            df,
-            lookback=t.get("order_block_lookback", 30),
-            displacement_atr=t.get("order_block_displacement_atr", 1.0),
+        full_spec_features = extract_full_spec_features(df, t)
+        features["full_spec"] = full_spec_features
+        bias, score, reasons = decide_full_spec_modulation(
+            bias, score, reasons, full_spec_features["components"], t,
         )
-        bos = detect_bos_choch(df, window=t.get("bos_choch_window", 3))
-        components = {"fvg": fvg.get("direction", "none"),
-                      "order_block": ob.get("direction", "none"),
-                      "bos_choch": bos.get("direction", "none")}
-        component_weights = {
-            "bos_choch": t.get("component_weight_bos_choch", 12.0),
-            "fvg": t.get("component_weight_fvg", 8.0),
-            "order_block": t.get("component_weight_order_block", 8.0),
-        }
-        full_spec_score_cap = t.get("full_spec_score_cap", 85.0)
-        full_spec_neutral_floor = t.get("full_spec_neutral_floor", 20.0)
-        full_spec_mixed_lean_score = t.get("full_spec_mixed_lean_score", 28.0)
-
-        if bias != Bias.NEUTRAL:
-            side = "bullish" if bias == Bias.BULLISH else "bearish"
-            other = "bearish" if side == "bullish" else "bullish"
-            for name, direction in components.items():
-                w = component_weights[name]
-                if direction == side:
-                    score = min(score + w, full_spec_score_cap)
-                    reasons.append(f"{name} aligns {side} (+{w:.0f})")
-                elif direction == other:
-                    score = max(score - w, 0.0)
-                    reasons.append(f"{name} opposes structure (-{w:.0f})")
-            if score < full_spec_neutral_floor:
-                # Modulation drove conviction below the vote threshold —
-                # an abstain, consistent with voting_system's cliff.
-                bias = Bias.NEUTRAL
-                reasons.append("Full-spec opposition reduced conviction below threshold — NEUTRAL")
-        else:
-            # No structural majority: 2+ agreeing components give a weak,
-            # honest lean (score 28 — above the conviction threshold, below
-            # any solo-carry level).
-            for side, b in (("bullish", Bias.BULLISH), ("bearish", Bias.BEARISH)):
-                agreeing = [n for n, d in components.items() if d == side]
-                if len(agreeing) >= 2:
-                    bias, score = b, full_spec_mixed_lean_score
-                    reasons.append(
-                        f"Structure mixed but {'+'.join(agreeing)} agree {side} — weak {side} lean"
-                    )
-                    break
 
         raw = {
             "timeframe_used": tf,
             "full_spec": True,
-            "order_blocks": ob,
-            "fvg": fvg,
-            "bos_choch": bos,
+            "order_blocks": full_spec_features["order_block"],
+            "fvg": full_spec_features["fvg"],
+            "bos_choch": full_spec_features["bos_choch"],
             "liquidity_zones": "NOT_IMPLEMENTED (H001/H002/H002b FAILED — deliberate)",
         }
         return EngineOutput(engine_name=self.name, bias=bias, score=round(score, 1),
-                            reasons=reasons, raw=raw)
+                            reasons=reasons, raw=raw, features=features)
 
     def _pick_timeframe(self, mtf_data: dict[str, pd.DataFrame]) -> str:
         """Pick the highest timeframe that has enough bars for reliable

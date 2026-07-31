@@ -51,13 +51,37 @@ enabled:
 # behavior by tests/test_engine_config_extraction_no_behavior_change.py.
 # Each engine reads its own sub-key via self.thresholds.get(name,
 # CURRENT_HARDCODED_VALUE) — so an incomplete or missing thresholds block
-# degrades to identical behavior, never a crash. macro/divergence/
-# sentiment are deliberately NOT extracted here — their Phase 3 rebuilds
-# replace their thresholds wholesale, so extracting soon-to-be-discarded
-# numbers now would be wasted work. quant WAS fully rebuilt in Phase 3a
-# (2026-08-01) — its thresholds block below is config-first from day
-# one, not a post-hoc extraction of legacy magic numbers.
+# degrades to identical behavior, never a crash. macro/sentiment are
+# deliberately NOT extracted here — their Phase 3 rebuilds replace their
+# thresholds wholesale, so extracting soon-to-be-discarded numbers now
+# would be wasted work. quant (Phase 3a, 2026-08-01) and divergence
+# (Phase 3b, 2026-08-01) were both fully rebuilt — their thresholds
+# blocks below are config-first from day one, not a post-hoc extraction
+# of legacy magic numbers.
 thresholds:
+  divergence:
+    min_bars: 80
+    atr_period: 14
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    rsi_overbought: 70
+    rsi_oversold: 30
+    swing_min_move_atr_mult: 1.5
+    swing_min_bars_between: 3
+    regular_base_score: 55.0
+    regular_magnitude_scale: 1000.0
+    regular_magnitude_cap: 25.0
+    hidden_score: 40.0
+    triple_bonus: 15.0
+    macd_confirm_bonus: 15.0
+    macd_only_scale: 0.75
+    mtf_confirm_bonus: 10.0
+    mtf_conflict_penalty: 5.0
+    score_cap: 90.0
+    score_neutral_floor: 15.0
+
   quant:
     min_bars: 100
 
@@ -261,7 +285,7 @@ thresholds:
 # changes materially, so research manifests can be cross-referenced to a
 # specific engine version rather than just a git commit.
 versions:
-  divergence: "1.0"
+  divergence: "2.0"
   ict: "1.0"
   macro: "1.0"
   market_structure: "1.0"

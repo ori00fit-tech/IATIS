@@ -312,3 +312,136 @@ def realized_volatility(returns: pd.Series, bars_per_year: float) -> float | Non
     if len(r) < 2:
         return None
     return float(round(r.std(ddof=1) * np.sqrt(bars_per_year), 6))
+
+
+# ---------------------------------------------------------------------------
+# Confluence Engine Overhaul Phase 3b (2026-08-01) — swing/divergence
+# primitives for engines/divergence_engine.py's rebuild.
+# ---------------------------------------------------------------------------
+
+
+def rsi_wilder(series: pd.Series, period: int = 14) -> pd.Series:
+    """Wilder-smoothed RSI (EWM, alpha=1/period) — the textbook-original
+    RSI formula. Genuinely different from rsi()'s SMA-smoothed variant
+    above, not a duplicate to unify away: Phase 1 (Confluence Engine
+    Overhaul, 2026-07-31) explicitly deferred this exact decision to
+    Divergence's own Phase 3 rebuild, since Wilder's smoothing is the
+    standard formula for RSI and divergence detection specifically
+    benefits from its steadier response — collapsing it onto the SMA
+    variant used elsewhere would be a downgrade, not a cleanup. Matches
+    engines/divergence_engine.py's pre-rebuild _rsi() exactly."""
+    delta = series.diff()
+    gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+    rs = gain / loss.replace(0, 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
+def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series]:
+    """MACD line + signal line (EWM). Matches
+    engines/divergence_engine.py's pre-rebuild _macd() exactly —
+    centralized here now that it has a second consumer, matching this
+    module's own indicator-unification charter (was divergence-only)."""
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
+def zigzag_pivots(
+    series: pd.Series, atr: pd.Series, min_move_atr_mult: float = 1.5, min_bars_between: int = 3
+) -> pd.DataFrame:
+    """ZigZag-style swing-pivot detector for a single Series (price OR
+    an indicator like RSI/MACD histogram) — confirms a new pivot only
+    when the series has reversed by >= min_move_atr_mult * atr from the
+    running extreme AND at least min_bars_between bars separate that
+    extreme from the last CONFIRMED pivot. Replaces naive rolling-window
+    local-extrema detection (which treats every tiny wiggle as a "swing")
+    with a magnitude+spacing filtered detector — deliberately does NOT
+    add a separate rate-of-change/"angle" filter on top of the ATR-
+    magnitude one: both answer "was this a real move," and stacking a
+    second, correlated filter adds complexity without a clear
+    incremental signal.
+
+    Tracks an "open" extreme (`confirmed_idx/val/type` — the most recent
+    swing point, still revisable) and a `candidate` for the OPPOSITE
+    type forming since then. Every bar that makes the open extreme MORE
+    extreme simply revises it in place (discarding any candidate
+    accumulated so far, since a move that erases the candidate's own
+    starting point makes that candidate spurious by construction — e.g.
+    a "candidate high" formed after a low that price has since undercut
+    was never a real swing). Only once the candidate clears BOTH the
+    magnitude threshold (vs. the open extreme) AND the spacing threshold
+    (candidate's own bar position vs. the open extreme's) does the open
+    extreme get written out as a final pivot and the candidate becomes
+    the new open extreme. This self-correcting design is what lets a
+    reversal blocked only by spacing keep deepening correctly instead of
+    getting permanently stuck the first time magnitude alone is (too
+    early) satisfied. The final open extreme at the end of the series is
+    never written out — it is, by definition, not yet confirmed.
+
+    Returns a DataFrame indexed like `series` with columns:
+      pivot_type:  'high' | 'low' | NaN
+      pivot_value: float | NaN (set only on confirmed-pivot bars)
+    """
+    values = series.to_numpy()
+    atr_values = atr.reindex(series.index).to_numpy()
+    n = len(values)
+
+    pivot_type = np.full(n, np.nan, dtype=object)
+    pivot_value = np.full(n, np.nan)
+
+    # Find the first valid (non-NaN value + non-NaN atr) bar to seed the open extreme.
+    start = 0
+    while start < n and (np.isnan(values[start]) or np.isnan(atr_values[start])):
+        start += 1
+    if start >= n:
+        return pd.DataFrame({"pivot_type": pivot_type, "pivot_value": pivot_value}, index=series.index)
+
+    confirmed_idx, confirmed_val = start, values[start]
+    confirmed_type: str | None = None  # 'low' or 'high' — undetermined until the first directional move
+    candidate_idx: int | None = None
+    candidate_val: float | None = None
+
+    for i in range(start + 1, n):
+        v = values[i]
+        a = atr_values[i]
+        if np.isnan(v) or np.isnan(a):
+            continue
+
+        if confirmed_type is None:
+            if v > confirmed_val:
+                confirmed_type, candidate_idx, candidate_val = "low", i, v
+            elif v < confirmed_val:
+                confirmed_type, candidate_idx, candidate_val = "high", i, v
+            continue
+
+        if confirmed_type == "low":
+            if v <= confirmed_val:
+                confirmed_idx, confirmed_val = i, v
+                candidate_idx, candidate_val = None, None
+                continue
+            if candidate_val is None or v > candidate_val:
+                candidate_idx, candidate_val = i, v
+            if (candidate_val - confirmed_val) >= min_move_atr_mult * a and (candidate_idx - confirmed_idx) >= min_bars_between:
+                pivot_type[confirmed_idx] = "low"
+                pivot_value[confirmed_idx] = confirmed_val
+                confirmed_type = "high"
+                confirmed_idx, confirmed_val = candidate_idx, candidate_val
+                candidate_idx, candidate_val = None, None
+        else:  # confirmed_type == "high"
+            if v >= confirmed_val:
+                confirmed_idx, confirmed_val = i, v
+                candidate_idx, candidate_val = None, None
+                continue
+            if candidate_val is None or v < candidate_val:
+                candidate_idx, candidate_val = i, v
+            if (confirmed_val - candidate_val) >= min_move_atr_mult * a and (candidate_idx - confirmed_idx) >= min_bars_between:
+                pivot_type[confirmed_idx] = "high"
+                pivot_value[confirmed_idx] = confirmed_val
+                confirmed_type = "low"
+                confirmed_idx, confirmed_val = candidate_idx, candidate_val
+                candidate_idx, candidate_val = None, None
+
+    return pd.DataFrame({"pivot_type": pivot_type, "pivot_value": pivot_value}, index=series.index)

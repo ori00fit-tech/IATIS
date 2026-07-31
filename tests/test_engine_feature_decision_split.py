@@ -25,6 +25,9 @@ import pytest
 from core.data_loader import load_synthetic
 from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias, EngineOutput
+from engines.divergence_engine import DivergenceEngine
+from engines.divergence_engine import decide as div_decide
+from engines.divergence_engine import extract_features as div_extract
 from engines.ict_engine import ICTEngine
 from engines.ict_engine import decide as ict_decide
 from engines.ict_engine import extract_features as ict_extract
@@ -266,6 +269,43 @@ def test_quant_decide_is_pure():
 
 def test_quant_analyze_populates_features_field():
     out = QuantEngine().analyze(_mtf(seed=42))
+    assert isinstance(out.features, dict)
+    assert len(out.features) > 0
+    assert out.evidence_level == "HEURISTIC"
+    assert out.probability is None
+
+
+# ---------------------------------------------------------------------------
+# Divergence (Confluence Engine Overhaul Phase 3b, 2026-08-01) — same
+# purity properties, following this file's own established per-engine
+# pattern. Divergence's own dedicated test file
+# (tests/test_divergence_engine_v2.py) covers its engine-level behavior
+# (pattern detection, MTF confirmation, degeneracy cases) in depth —
+# these three tests only pin the same structural property this file
+# already pins for every other engine. extract_features(mtf_data, t, tf)
+# takes the full mtf_data dict (not just df), since Multi-timeframe
+# confirmation genuinely needs the coarser frame's own data — matching
+# ict_engine's/quant_engine's own precedent that "whatever inputs the
+# facts need" is the real pattern.
+# ---------------------------------------------------------------------------
+
+def test_divergence_extract_features_is_pure():
+    mtf = _mtf(seed=1)
+    f1 = div_extract(mtf, {}, "H1")
+    f2 = div_extract(mtf, {}, "H1")
+    assert f1 == f2
+
+
+def test_divergence_decide_is_pure():
+    mtf = _mtf(seed=1)
+    features = div_extract(mtf, {}, "H1")
+    r1 = div_decide(features, {})
+    r2 = div_decide(features, {})
+    assert r1 == r2
+
+
+def test_divergence_analyze_populates_features_field():
+    out = DivergenceEngine().analyze(_mtf(seed=42))
     assert isinstance(out.features, dict)
     assert len(out.features) > 0
     assert out.evidence_level == "HEURISTIC"

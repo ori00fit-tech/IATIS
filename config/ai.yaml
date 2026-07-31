@@ -31,7 +31,19 @@ fallback_order: [gemini, openai, anthropic]
 
 model: gemini-flash-latest
 temperature: 0.1
-max_tokens: 1200
+# 1200 -> 3072 (2026-07-31): AIAnalyzer.suggest_next_hypothesis's prompt
+# (ai/prompts/suggest_hypothesis.txt) grew to 13 mostly-free-text fields
+# (observation/effect_size/confidence/possible_explanation/
+# suggested_experiments/priority added on top of the original 7) during
+# the Edge Discovery phase — 1200 was calibrated for the original,
+# shorter shape and was observed live hitting Gemini's MAX_TOKENS finish
+# reason (truncated JSON -> "Provider returned non-JSON response",
+# ai/ai_analyzer.py's suggest_next_hypothesis returning status=error with
+# no usable suggestion). This is a global default shared by every AI
+# method (explain_trade/news_analysis/macro_analysis/research_qa/
+# summarize all stay well under it); operators can still raise it further
+# per-deployment via POST /ai/settings without a redeploy.
+max_tokens: 3072
 timeout: 20
 cache:
   news_ttl_min: 20

@@ -143,7 +143,10 @@ def test_load_config_ai_matches_pre_split_behavior():
     assert ai_cfg["enabled"] is True
     assert ai_cfg["model"] == "gemini-flash-latest"
     assert ai_cfg["temperature"] == 0.1
-    assert ai_cfg["max_tokens"] == 1200
+    # 1200 -> 3072 (2026-07-31): observed live truncating
+    # suggest_next_hypothesis's now-13-field response (Gemini MAX_TOKENS ->
+    # unparseable JSON) — see config/ai.yaml's own dated comment.
+    assert ai_cfg["max_tokens"] == 3072
     assert ai_cfg["timeout"] == 20
     assert ai_cfg["cache"] == {"news_ttl_min": 20, "macro_ttl_min": 60}
     # New provider-resolution structure resolves to the same effective

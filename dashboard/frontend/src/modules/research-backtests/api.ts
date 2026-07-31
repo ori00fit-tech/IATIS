@@ -302,6 +302,15 @@ export interface HypothesisSuggestion {
   falsification_criteria: string
   distinct_from_prior_kill: string
   notes: string
+  // Hypothesis Candidate Report fields (Edge Discovery, 2026-07-31) —
+  // fully AI-authored, never computed. Optional: the non-AI
+  // proposeAsDraft() call site (Mission Center) never populates these.
+  observation?: string
+  effect_size?: string
+  confidence?: string
+  possible_explanation?: string
+  suggested_experiments?: string[]
+  priority?: string
 }
 
 export interface SuggestHypothesisResponse extends Partial<HypothesisSuggestion> {

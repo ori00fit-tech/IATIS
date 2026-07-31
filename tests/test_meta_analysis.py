@@ -40,7 +40,7 @@ def _space(**kwargs) -> MissionSearchSpace:
 def _row(
     trial_number: int, state: str = "COMPLETE", objective_value: float | None = 1.0,
     tf_idx: int = 0, engine_idx: int = 0, indicator_idx: int = 0,
-    sl_atr_multiplier: float = 2.0, trades: int = 50,
+    sl_atr_multiplier: float = 2.0, trades: int = 50, metrics: dict | None = None,
 ) -> dict:
     params = {
         _TF_IDX_KEY: tf_idx, _ENGINES_IDX_KEY: engine_idx, _INDICATORS_IDX_KEY: indicator_idx,
@@ -49,7 +49,8 @@ def _row(
     return {
         "mission_id": "m1", "trial_number": trial_number, "symbol": "EURUSD", "state": state,
         "objective_value": objective_value, "params_json": json.dumps(params),
-        "metrics_json": None, "trades": trades, "error": None,
+        "metrics_json": json.dumps(metrics) if metrics is not None else None,
+        "trades": trades, "error": None,
         "started_at": "t", "finished_at": "t",
     }
 
@@ -260,3 +261,205 @@ def test_all_timeframes_enumeration_uses_bundles_not_vestigial_flat_field():
     values = {f.value for f in result.timeframe_frequencies}
     assert values == {"H1", "H4"}
     assert "D1" not in values
+
+
+# ── Edge Discovery (2026-07-31) — cross-trial consensus, pooled 3-way
+# breakdown, ranked opportunities ─────────────────────────────────────────
+
+def _direction_bucket(win_rate: float, trades: int = 20) -> dict:
+    wins = round(win_rate / 100 * trades)
+    return {"trades": trades, "wins": wins, "win_rate": win_rate, "pnl": 1.0}
+
+
+def _consensus_trial(i: int, buy_wr: float, sell_wr: float) -> dict:
+    return _row(i, objective_value=1.0, metrics={
+        "by_direction": {"BUY": _direction_bucket(buy_wr), "SELL": _direction_bucket(sell_wr)},
+    })
+
+
+def test_cross_trial_consensus_direction_claim_correct_k_and_n():
+    # 8 trials favor BUY, 2 favor SELL -> k=8, n=10.
+    trials = [_consensus_trial(i, 70.0, 40.0) for i in range(8)]
+    trials += [_consensus_trial(8 + i, 30.0, 60.0) for i in range(2)]
+    trials += [_row(100 + i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 10)]
+    space = _space()
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.insufficient_data is False
+    claim = next(
+        c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "win_rate"
+    )
+    assert claim.dominant_value == "BUY"
+    assert claim.other_value == "SELL"
+    assert claim.n_trials_compared == 10
+    assert claim.trials_favor_dominant == 8
+    assert claim.fraction_favor_dominant == pytest.approx(0.8)
+    assert claim.p_value is not None
+    assert claim.significance in ("SURVIVES_CORRECTION", "NOMINAL_ONLY", "NOT_SIGNIFICANT")
+    assert "8/10" in claim.claim_text
+    assert "BUY" in claim.claim_text
+
+
+def test_cross_trial_consensus_excludes_unknown_regime_and_session():
+    space = _space()
+    trials = [
+        _row(i, objective_value=1.0, metrics={"by_regime": {"Unknown": _direction_bucket(60.0)}})
+        for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)
+    ]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    regime_claim = next(c for c in result.cross_trial_consensus if c.dimension == "regime" and c.metric == "win_rate")
+    # Every trial's by_regime only has an "Unknown" bucket; TRENDING/RANGING
+    # (the only pair regime claims are computed over) are never present, so
+    # no trial can contribute -> the claim degrades to insufficient data
+    # rather than fabricating a comparison against a gate-off fallback.
+    assert regime_claim.n_trials_compared == 0
+    assert regime_claim.significance == "INSUFFICIENT_DATA"
+
+
+def test_cross_trial_consensus_insufficient_data_below_min_trials_per_claim():
+    space = _space()
+    # Only 3 trials carry a real by_direction split (below _MIN_TRIALS_PER_CLAIM=5),
+    # padded to clear the outer MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS floor.
+    trials = [_consensus_trial(i, 70.0, 40.0) for i in range(3)]
+    trials += [_row(100 + i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 3)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    claim = next(
+        c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "win_rate"
+    )
+    assert claim.significance == "INSUFFICIENT_DATA"
+    assert claim.p_value is None
+
+
+def test_cross_trial_consensus_profit_factor_claim_skips_trials_missing_pf_field():
+    space = _space()
+    # Old-shape trials (predate this feature): BUY beats SELL on win_rate,
+    # but no profit_factor key on either bucket at all.
+    old_buy = {"trades": 20, "wins": 12, "win_rate": 60.0, "pnl": 1.0}
+    old_sell = {"trades": 20, "wins": 8, "win_rate": 40.0, "pnl": -1.0}
+    # New-shape trials: same win_rate split, plus a real profit_factor.
+    new_buy = {**old_buy, "profit_factor": 3.0}
+    new_sell = {**old_sell, "profit_factor": 0.5}
+
+    old_trials = [
+        _row(i, objective_value=1.0, metrics={"by_direction": {"BUY": old_buy, "SELL": old_sell}})
+        for i in range(6)
+    ]
+    new_trials = [
+        _row(6 + i, objective_value=1.0, metrics={"by_direction": {"BUY": new_buy, "SELL": new_sell}})
+        for i in range(6)
+    ]
+    padding = [_row(100 + i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 12)]
+    result = compute_meta_analysis(space, old_trials + new_trials + padding, sampler="tpe", mission_id="m1")
+
+    pf_claim = next(c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "profit_factor")
+    wr_claim = next(c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "win_rate")
+    assert pf_claim.n_trials_compared == 6   # only the new-shape trials carry a profit_factor key
+    assert wr_claim.n_trials_compared == 12  # win_rate is present on every trial, old and new alike
+
+
+def test_pooled_breakdown_sums_across_all_complete_trials_not_just_top_n():
+    space = _space()
+    trials = []
+    for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS):
+        trials.append(_row(i, objective_value=float(20 - i), metrics={
+            "by_direction_regime_session": {
+                "BUY|RANGING|London": {"trades": 10, "wins": 6, "win_rate": 60.0, "pnl": 50.0,
+                                         "gross_profit": 60.0, "gross_loss": 10.0, "profit_factor": 6.0},
+            },
+        }))
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", top_fraction=0.1)
+    assert result.top_n < MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS  # confirms top-N really is a small slice
+    full_combo = next(
+        r for r in result.pooled_breakdown
+        if r.level == "direction+regime+session" and r.direction == "BUY"
+    )
+    assert full_combo.trades == 10 * MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS  # pooled across ALL, not just top_n
+
+
+def test_pooled_breakdown_all_seven_levels_present_and_correctly_grouped():
+    space = _space()
+    trials = [_row(i, objective_value=1.0, metrics={
+        "by_direction_regime_session": {
+            "BUY|RANGING|London": {"trades": 10, "wins": 6, "win_rate": 60.0, "pnl": 50.0,
+                                     "gross_profit": 60.0, "gross_loss": 10.0, "profit_factor": 6.0},
+            "SELL|TRENDING|Asia": {"trades": 5, "wins": 1, "win_rate": 20.0, "pnl": -30.0,
+                                     "gross_profit": 5.0, "gross_loss": 35.0, "profit_factor": 5 / 35},
+        },
+    }) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    levels = {r.level for r in result.pooled_breakdown}
+    assert levels == {
+        "direction", "regime", "session", "direction+regime", "direction+session",
+        "regime+session", "direction+regime+session",
+    }
+    direction_regime_row = next(
+        r for r in result.pooled_breakdown if r.level == "direction+regime" and r.direction == "BUY" and r.regime == "RANGING"
+    )
+    three_way_row = next(
+        r for r in result.pooled_breakdown
+        if r.level == "direction+regime+session" and r.direction == "BUY" and r.regime == "RANGING" and r.session == "London"
+    )
+    assert direction_regime_row.trades == three_way_row.trades
+
+
+def test_opportunity_candidates_excludes_unknown_and_below_min_trades():
+    space = _space()
+    trials = [_row(i, objective_value=1.0, metrics={
+        "by_direction_regime_session": {
+            "BUY|RANGING|Unknown": {"trades": 500, "wins": 400, "win_rate": 80.0, "pnl": 5000.0,
+                                      "gross_profit": 5100.0, "gross_loss": 10.0, "profit_factor": 510.0},
+            "BUY|RANGING|London": {"trades": 3, "wins": 3, "win_rate": 100.0, "pnl": 30.0,
+                                     "gross_profit": 30.0, "gross_loss": 0.0, "profit_factor": float("inf")},
+        },
+    }) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", min_trades_for_pooled=10)
+    labels = {c.label for c in result.opportunity_candidates}
+    assert not any("Unknown" in label for label in labels)
+    # London combo has only 3*20=60 trades pooled but the per-trial floor
+    # doesn't multiply -- confirm the actual filter is on pooled trades.
+    for c in result.opportunity_candidates:
+        assert c.trades >= 10
+
+
+def test_opportunity_candidates_ranked_by_effect_size_times_trades_descending():
+    space = _space()
+    trials = [_row(i, objective_value=1.0, metrics={
+        "by_direction_regime_session": {
+            "BUY|RANGING|London": {"trades": 100, "wins": 60, "win_rate": 60.0, "pnl": 500.0,
+                                     "gross_profit": 600.0, "gross_loss": 300.0, "profit_factor": 2.0},
+            "SELL|TRENDING|Asia": {"trades": 100, "wins": 50, "win_rate": 50.0, "pnl": 10.0,
+                                     "gross_profit": 100.0, "gross_loss": 90.0, "profit_factor": 100 / 90},
+        },
+    }) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", min_trades_for_pooled=10)
+    scores = [c.rank_score for c in result.opportunity_candidates]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_opportunity_candidates_handles_infinite_profit_factor_without_crashing():
+    space = _space()
+    trials = [_row(i, objective_value=1.0, metrics={
+        "by_direction_regime_session": {
+            "BUY|RANGING|London": {"trades": 50, "wins": 50, "win_rate": 100.0, "pnl": 500.0,
+                                     "gross_profit": 500.0, "gross_loss": 0.0, "profit_factor": float("inf")},
+        },
+    }) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1", min_trades_for_pooled=10)
+    assert len(result.opportunity_candidates) > 0
+    assert result.opportunity_candidates[0].profit_factor == float("inf")
+
+
+def test_insufficient_data_leaves_new_fields_empty():
+    space = _space()
+    trials = [_row(i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 1)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.cross_trial_consensus == []
+    assert result.pooled_breakdown == []
+    assert result.opportunity_candidates == []
+
+
+def test_compute_meta_analysis_backward_compatible_default_kwarg():
+    space = _space()
+    trials = [_row(i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    # Old 8-positional/keyword-arg call signature (no min_trades_for_pooled) still works.
+    result = compute_meta_analysis(space, trials, "tpe", "m1", None, 0.20, 5, 5)
+    assert result.insufficient_data is False

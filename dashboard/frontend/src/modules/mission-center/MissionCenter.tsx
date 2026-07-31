@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { KpiCard } from '../../components/KpiCard'
@@ -19,10 +19,11 @@ import type { BreakdownBucket } from '../backtesting-charts/api'
 import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
   createValidation, listValidations, getValidation, getMetaAnalysis, getFeatureMining,
-  SAMPLER_KEYS, OPTIMIZABLE_METRICS,
+  SAMPLER_KEYS, OPTIMIZABLE_METRICS, formatPossiblyInfinite,
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial, type MissionRow,
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
-  type ValidationRow,
+  type ValidationRow, type ConsensusClaim, type PooledBreakdownRow, type OpportunityCandidate,
+  type PrefillRequest, type PossiblyInfinite,
 } from './api'
 
 const POLL_MS = 4000
@@ -400,7 +401,13 @@ function HypothesisBundleBuilder({
   )
 }
 
-function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void }) {
+function MissionBuilder({
+  onCreated, prefillRequest, onPrefillConsumed,
+}: {
+  onCreated: (missionId: string) => void
+  prefillRequest?: PrefillRequest | null
+  onPrefillConsumed?: () => void
+}) {
   const { markUnauthenticated } = useAuth()
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
 
@@ -421,6 +428,38 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
   const [bundles, setBundles] = useState<HypothesisBundleRowState[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [prefillNotice, setPrefillNotice] = useState(false)
+
+  // Edge Discovery (2026-07-31) — "Pre-fill…" from TopOpportunitiesPanel.
+  // Only ever pre-fills the form; the operator still picks engines/
+  // timeframes and clicks Launch Mission themselves — never auto-submits.
+  useEffect(() => {
+    if (!prefillRequest) return
+    setHypothesisMode(true)
+    const contextRows: ContextFilterRowState[] = []
+    if (prefillRequest.direction) {
+      // TradeRecord.direction is BUY/SELL; ContextSpec's "direction" filter
+      // uses BULLISH/BEARISH (confluence/context_filters.py) — translate.
+      contextRows.push({
+        name: 'direction', mode: 'entry_filter',
+        allowed: [prefillRequest.direction === 'BUY' ? 'BULLISH' : 'BEARISH'], weight: 0,
+      })
+    }
+    if (prefillRequest.regime) {
+      contextRows.push({ name: 'market_regime', mode: 'entry_filter', allowed: [prefillRequest.regime], weight: 0 })
+    }
+    if (prefillRequest.session) {
+      contextRows.push({ name: 'session', mode: 'entry_filter', allowed: [prefillRequest.session], weight: 0 })
+    }
+    setBundles([{ ...blankBundle(prefillRequest.label), contextFilters: contextRows }])
+    setPrefillNotice(true)
+    onPrefillConsumed?.()
+    // onPrefillConsumed is a fresh inline closure every render (`() =>
+    // setPrefillRequest(null)` in MissionCenter()); including it below
+    // would re-run this effect on every re-render, not just when a new
+    // prefillRequest actually arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillRequest])
 
   const toggleTimeframe = (tf: string) =>
     setTimeframes((prev) => (prev.includes(tf) ? prev.filter((t) => t !== tf) : [...prev, tf]))
@@ -553,6 +592,13 @@ function MissionBuilder({ onCreated }: { onCreated: (missionId: string) => void 
             (engine + timeframe + context combos) instead of one fixed combo — without this, only risk params vary.
           </span>
         </label>
+
+        {prefillNotice && (
+          <div className="flex items-center gap-2 text-[0.75em] text-accent bg-accent/10 border border-accent/30 rounded px-3 py-2">
+            <span>Pre-filled from Top Unexplored Opportunities — pick engines/timeframes, then Launch Mission when ready.</span>
+            <button onClick={() => setPrefillNotice(false)} className="ml-auto text-muted hover:text-accent">Dismiss</button>
+          </div>
+        )}
 
         {hypothesisMode ? (
           <div className="flex flex-col gap-1">
@@ -729,6 +775,58 @@ function FrequencyTable({ title, rows }: { title: string; rows: DimensionFrequen
   )
 }
 
+// Edge Discovery (2026-07-31) — real, computed cross-trial claims (exact
+// binomial sign test), never AI narrative. Always emitted for the fixed
+// 16-claim family; INSUFFICIENT_DATA claims are hidden here (they carry
+// no useful text), not silently dropped from the underlying data.
+function ConsensusClaimsPanel({ claims }: { claims: ConsensusClaim[] }) {
+  const usable = claims.filter((c) => c.significance !== 'INSUFFICIENT_DATA')
+  if (usable.length === 0) {
+    return <Empty>Not enough trials yet to compare direction/regime/session pairs.</Empty>
+  }
+  const tone = (s: ConsensusClaim['significance']) =>
+    s === 'SURVIVES_CORRECTION' ? 'good' : s === 'NOMINAL_ONLY' ? 'marginal' : 'neutral'
+  return (
+    <div className="flex flex-col gap-1.5">
+      {usable.map((c, i) => (
+        <div key={i} className="flex items-start gap-2 text-[0.8em]">
+          <Badge tone={tone(c.significance)}>{c.significance}</Badge>
+          <span>{c.claim_text}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function pfSortValue(pf: PossiblyInfinite): number {
+  if (pf === 'Infinity') return Number.POSITIVE_INFINITY
+  if (pf === '-Infinity') return Number.NEGATIVE_INFINITY
+  if (pf === 'NaN') return Number.NEGATIVE_INFINITY
+  return pf
+}
+
+// Every tree level (1-way/2-way/3-way) shows up as its own row here —
+// derived from ONE pooled 3-way field, so "BUY", "BUY + RANGING", and
+// "BUY + RANGING + London" are all real, independently-computed rows.
+function PooledBreakdownTable({ rows }: { rows: PooledBreakdownRow[] }) {
+  const sorted = [...rows].sort((a, b) => pfSortValue(b.profit_factor) - pfSortValue(a.profit_factor))
+  const columns: Column<PooledBreakdownRow>[] = [
+    { header: 'Combo', render: (r) => [r.direction, r.regime, r.session].filter(Boolean).join(' + ') },
+    { header: 'Trades', render: (r) => r.trades, align: 'right', accessorFn: (r) => r.trades, sortingFn: 'basic' },
+    { header: 'Win Rate', render: (r) => `${r.win_rate.toFixed(1)}%`, align: 'right' },
+    {
+      header: 'PF', render: (r) => formatPossiblyInfinite(r.profit_factor, 2),
+      align: 'right', accessorFn: (r) => pfSortValue(r.profit_factor), sortingFn: 'basic',
+    },
+    {
+      header: 'PnL',
+      render: (r) => <span className={r.pnl >= 0 ? 'text-green' : 'text-red'}>{r.pnl >= 0 ? '+' : ''}{r.pnl.toFixed(2)}</span>,
+      align: 'right',
+    },
+  ]
+  return <DataTable columns={columns} rows={sorted} rowKey={(r) => `${r.level}:${r.direction ?? ''}:${r.regime ?? ''}:${r.session ?? ''}`} />
+}
+
 function MetaAnalysisPanel({ missionId }: { missionId: string }) {
   const { markUnauthenticated } = useAuth()
   const query = useApiQuery(['mission-meta-analysis', missionId], () => getMetaAnalysis(missionId), POLL_MS, markUnauthenticated)
@@ -778,6 +876,73 @@ function MetaAnalysisPanel({ missionId }: { missionId: string }) {
             ))}
           </div>
         )}
+        {data.cross_trial_consensus.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <span className="text-[0.72em] text-muted uppercase tracking-[1px]">
+              Cross-trial consensus — real, computed (exact binomial sign test), pooled across all {data.n_complete_trials} trials
+            </span>
+            <ConsensusClaimsPanel claims={data.cross_trial_consensus} />
+          </div>
+        )}
+        {data.pooled_breakdown.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <span className="text-[0.72em] text-muted uppercase tracking-[1px]">
+              Pooled direction × regime × session breakdown — sorted by PF, sortable by any column
+            </span>
+            <PooledBreakdownTable rows={data.pooled_breakdown} />
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+// Ranked SUGGESTIONS ONLY — never auto-selected, never auto-run. Clicking
+// "Pre-fill…" only populates MissionBuilder's already-built hypothesisMode
+// form below; the operator still picks engines/timeframes and clicks
+// Launch Mission themselves.
+function TopOpportunitiesPanel({
+  missionId, onRequestPrefill,
+}: {
+  missionId: string
+  onRequestPrefill: (req: PrefillRequest) => void
+}) {
+  const { markUnauthenticated } = useAuth()
+  const query = useApiQuery(['mission-meta-analysis', missionId], () => getMetaAnalysis(missionId), POLL_MS, markUnauthenticated)
+  const data = query.data
+  if (!data || data.insufficient_data) return null
+  const candidates = data.opportunity_candidates
+  if (candidates.length === 0) return null
+
+  const columns: Column<OpportunityCandidate>[] = [
+    { header: 'Combo', render: (c) => c.label },
+    { header: 'Trades', render: (c) => c.trades, align: 'right' },
+    { header: 'PF', render: (c) => formatPossiblyInfinite(c.profit_factor, 2), align: 'right' },
+    { header: 'Effect size', render: (c) => formatPossiblyInfinite(c.effect_size, 3), align: 'right' },
+    {
+      header: 'Pre-fill…',
+      render: (c) => (
+        <button
+          onClick={() => onRequestPrefill({ direction: c.direction, regime: c.regime, session: c.session, label: c.label })}
+          className="text-[0.75em] text-accent hover:underline"
+        >
+          Pre-fill →
+        </button>
+      ),
+    },
+  ]
+
+  return (
+    <Panel
+      title="Top Unexplored Opportunities"
+      right="ranked SUGGESTIONS ONLY — never auto-run. Pre-fill a new hypothesis below, you launch it yourself."
+    >
+      <div className="p-4">
+        <DataTable
+          columns={columns}
+          rows={candidates}
+          rowKey={(c) => `${c.level}:${c.direction ?? ''}:${c.regime ?? ''}:${c.session ?? ''}`}
+        />
       </div>
     </Panel>
   )
@@ -1049,7 +1214,10 @@ function ValidationStatusBadge({ validation }: { validation: ValidationRow | nul
 // focus_hint in this trial's own numbers, exactly like a human copying
 // them into the box themselves would. Nothing here is auto-generated or
 // auto-registered; every trial's exploratory status is unchanged.
-function buildTrialFocusHint(trial: MissionTrial, hypothesisName: string | null, metrics: Record<string, unknown>): string {
+function buildTrialFocusHint(
+  trial: MissionTrial, hypothesisName: string | null, metrics: Record<string, unknown>,
+  consensusClaims?: ConsensusClaim[],
+): string {
   const parts = [
     `Mission trial #${trial.trial_number}${hypothesisName ? ` ("${hypothesisName}")` : ''}, symbol ${trial.symbol}, ` +
       `objective=${trial.objective_value ?? '—'}, trades=${trial.trades}.`,
@@ -1066,21 +1234,36 @@ function buildTrialFocusHint(trial: MissionTrial, hypothesisName: string | null,
   summarize('By regime', metrics.by_regime)
   summarize('By direction', metrics.by_direction)
   summarize('By session', metrics.by_session)
+  // Edge Discovery (2026-07-31) — richer grounding: real, computed
+  // consensus across ALL trials in this mission, not just this one.
+  const significant = (consensusClaims ?? [])
+    .filter((c) => c.significance !== 'INSUFFICIENT_DATA')
+    .sort((a, b) => (b.confidence_pct ?? 0) - (a.confidence_pct ?? 0))
+    .slice(0, 3)
+  if (significant.length > 0) {
+    parts.push('Mission-wide cross-trial consensus: ' + significant.map((c) => c.claim_text).join(' '))
+  }
   return parts.join(' ')
 }
 
 function TrialBreakdownPanel({
-  trial, hypothesisName, onClose,
+  trial, hypothesisName, missionId, onClose,
 }: {
   trial: MissionTrial
   hypothesisName: string | null
+  missionId: string
   onClose: () => void
 }) {
+  const { markUnauthenticated } = useAuth()
   const metrics: Record<string, unknown> = trial.metrics_json ? JSON.parse(trial.metrics_json) : {}
   const byRegime = (metrics.by_regime ?? {}) as Record<string, BreakdownBucket>
   const byDirection = (metrics.by_direction ?? {}) as Record<string, BreakdownBucket>
   const bySession = (metrics.by_session ?? {}) as Record<string, BreakdownBucket>
   const hasBreakdown = Object.keys(byRegime).length > 0 || Object.keys(byDirection).length > 0 || Object.keys(bySession).length > 0
+
+  // Same query key MetaAnalysisPanel/TopOpportunitiesPanel already use for
+  // this mission — React Query dedupes, no duplicate network call.
+  const metaQuery = useApiQuery(['mission-meta-analysis', missionId], () => getMetaAnalysis(missionId), POLL_MS, markUnauthenticated)
 
   const [ai, setAi] = useState<{ triggered: boolean; loading: boolean; error: string | null; data: SuggestHypothesisResponse | null }>({
     triggered: false, loading: false, error: null, data: null,
@@ -1091,7 +1274,8 @@ function TrialBreakdownPanel({
     setAi({ triggered: true, loading: true, error: null, data: null })
     setDraftFile(null)
     try {
-      const data = await suggestHypothesis(buildTrialFocusHint(trial, hypothesisName, metrics))
+      const hint = buildTrialFocusHint(trial, hypothesisName, metrics, metaQuery.data?.cross_trial_consensus)
+      const data = await suggestHypothesis(hint)
       setAi({ triggered: true, loading: false, error: null, data })
     } catch (e) {
       setAi({ triggered: true, loading: false, error: e instanceof Error ? e.message : String(e), data: null })
@@ -1106,6 +1290,9 @@ function TrialBreakdownPanel({
         why_this_might_be_true: ai.data.why_this_might_be_true ?? '',
         data_required: ai.data.data_required ?? {}, falsification_criteria: ai.data.falsification_criteria ?? '',
         distinct_from_prior_kill: ai.data.distinct_from_prior_kill ?? '', notes: ai.data.notes ?? '',
+        observation: ai.data.observation ?? '', effect_size: ai.data.effect_size ?? '',
+        confidence: ai.data.confidence ?? '', possible_explanation: ai.data.possible_explanation ?? '',
+        suggested_experiments: ai.data.suggested_experiments ?? [], priority: ai.data.priority ?? '',
       })
       setDraftFile(result.file)
     } catch (e) {
@@ -1147,7 +1334,32 @@ function TrialBreakdownPanel({
                 <div className="flex flex-col gap-2 text-[0.82em]">
                   <div className="font-bold text-accent">{ai.data.title}</div>
                   <div>{ai.data.statement}</div>
+                  {ai.data.priority && (
+                    <Badge tone={ai.data.priority === 'HIGH' ? 'exec' : ai.data.priority === 'MEDIUM' ? 'marginal' : 'neutral'}>
+                      {`Priority: ${ai.data.priority}`}
+                    </Badge>
+                  )}
+                  {ai.data.observation && (
+                    <div className="text-muted"><span className="font-bold text-text">Observation:</span> {ai.data.observation}</div>
+                  )}
+                  {(ai.data.effect_size || ai.data.confidence) && (
+                    <div className="text-muted">
+                      <span className="font-bold text-text">Effect size:</span> {ai.data.effect_size || '—'}
+                      {'  '}<span className="font-bold text-text">Confidence:</span> {ai.data.confidence || '—'}
+                    </div>
+                  )}
                   <div className="text-muted"><span className="font-bold text-text">Why:</span> {ai.data.why_this_might_be_true}</div>
+                  {ai.data.possible_explanation && (
+                    <div className="text-muted"><span className="font-bold text-text">Possible explanation:</span> {ai.data.possible_explanation}</div>
+                  )}
+                  {ai.data.suggested_experiments && ai.data.suggested_experiments.length > 0 && (
+                    <div className="text-muted">
+                      <span className="font-bold text-text">Suggested experiments:</span>
+                      <ul className="list-disc list-inside">
+                        {ai.data.suggested_experiments.map((exp, i) => <li key={i}>{exp}</li>)}
+                      </ul>
+                    </div>
+                  )}
                   <div className="text-muted"><span className="font-bold text-text">Falsification:</span> {ai.data.falsification_criteria}</div>
                   <div className="text-muted"><span className="font-bold text-text">Distinct from prior kill:</span> {ai.data.distinct_from_prior_kill}</div>
                   {draftFile
@@ -1163,7 +1375,12 @@ function TrialBreakdownPanel({
   )
 }
 
-function MissionDetail({ missionId }: { missionId: string }) {
+function MissionDetail({
+  missionId, onRequestPrefill,
+}: {
+  missionId: string
+  onRequestPrefill: (req: PrefillRequest) => void
+}) {
   const { markUnauthenticated } = useAuth()
   const statusQuery = useApiQuery(['mission-status', missionId], () => getMissionStatus(missionId), POLL_MS, markUnauthenticated)
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
@@ -1351,6 +1568,7 @@ function MissionDetail({ missionId }: { missionId: string }) {
         <TrialBreakdownPanel
           trial={breakdownTrial}
           hypothesisName={hypothesisNameFor(status.mission, breakdownTrial)}
+          missionId={missionId}
           onClose={() => setBreakdownTrial(null)}
         />
       )}
@@ -1378,6 +1596,7 @@ function MissionDetail({ missionId }: { missionId: string }) {
       )}
 
       <MetaAnalysisPanel missionId={missionId} />
+      <TopOpportunitiesPanel missionId={missionId} onRequestPrefill={onRequestPrefill} />
       <ValidationsPanel missionId={missionId} />
     </div>
   )
@@ -1385,16 +1604,29 @@ function MissionDetail({ missionId }: { missionId: string }) {
 
 export function MissionCenter() {
   const [selectedMission, setSelectedMission] = useState<string | null>(null)
+  const [prefillRequest, setPrefillRequest] = useState<PrefillRequest | null>(null)
+  const builderAnchorRef = useRef<HTMLDivElement>(null)
+
+  const requestPrefill = (req: PrefillRequest) => {
+    setPrefillRequest(req)
+    builderAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <MissionBuilder onCreated={setSelectedMission} />
+      <div ref={builderAnchorRef}>
+        <MissionBuilder
+          onCreated={setSelectedMission}
+          prefillRequest={prefillRequest}
+          onPrefillConsumed={() => setPrefillRequest(null)}
+        />
+      </div>
       <div className="grid gap-4 grid-cols-[280px_1fr] items-start">
         <Panel title="Missions">
           <MissionsList selected={selectedMission} onSelect={setSelectedMission} />
         </Panel>
         {selectedMission ? (
-          <MissionDetail missionId={selectedMission} />
+          <MissionDetail missionId={selectedMission} onRequestPrefill={requestPrefill} />
         ) : (
           <Panel title="Mission Detail"><Empty>Select a mission to see its progress and leaderboard.</Empty></Panel>
         )}

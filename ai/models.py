@@ -141,6 +141,19 @@ class HypothesisSuggestion:
     falsification_criteria: str = ""
     distinct_from_prior_kill: str = ""
     notes: str = ""
+    # Hypothesis Candidate Report fields (Edge Discovery, 2026-07-31) —
+    # fully AI-authored, NOT computed. "effect_size"/"confidence" are the
+    # model's own qualitative judgment in plain words (e.g. "Very large",
+    # "Medium"), distinct from the real, computed cross-trial consensus
+    # numbers (backtest.meta_analysis.ConsensusClaim) that may be present
+    # in the grounding context — the prompt explicitly forbids the model
+    # from fabricating a statistic of its own.
+    observation: str = ""
+    effect_size: str = ""
+    confidence: str = ""
+    possible_explanation: str = ""
+    suggested_experiments: list = field(default_factory=list)
+    priority: str = ""  # HIGH | MEDIUM | LOW
     provider: str = ""
     status: str = "ok"
     error: str = ""
@@ -155,6 +168,12 @@ class HypothesisSuggestion:
             "falsification_criteria": self.falsification_criteria,
             "distinct_from_prior_kill": self.distinct_from_prior_kill,
             "notes": self.notes,
+            "observation": self.observation,
+            "effect_size": self.effect_size,
+            "confidence": self.confidence,
+            "possible_explanation": self.possible_explanation,
+            "suggested_experiments": self.suggested_experiments,
+            "priority": self.priority,
             "provider": self.provider,
             "status": self.status,
             "error": self.error,

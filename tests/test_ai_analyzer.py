@@ -376,7 +376,13 @@ def test_ai_analyzer_suggest_next_hypothesis_ok(monkeypatch):
         '"data_required": {"symbols": ["BTCUSD"], "timeframes": ["H4"], "date_range": "2022-2026", "min_sample_size": "300"}, '
         '"falsification_criteria": "PASS if OOS PF >= 1.2 at n >= 300; FAIL otherwise.", '
         '"distinct_from_prior_kill": "Not the crypto_volume experiment (traded volume) — this is order-flow imbalance, a different signal.", '
-        '"notes": "n/a"}'
+        '"notes": "n/a", '
+        '"observation": "BUY trades outperformed SELL in recent missions.", '
+        '"effect_size": "Very large", '
+        '"confidence": "Medium", '
+        '"possible_explanation": "Current engines may identify bullish continuation better than bearish reversals.", '
+        '"suggested_experiments": ["BUY ONLY", "Disable SELL", "BUY during London only"], '
+        '"priority": "HIGH"}'
     )
     with patch.object(GeminiProvider, "_chat", return_value=fake_json):
         result = analyzer.suggest_next_hypothesis({"registry_summary": []}, focus_hint="crypto order flow")
@@ -384,6 +390,10 @@ def test_ai_analyzer_suggest_next_hypothesis_ok(monkeypatch):
     assert result["title"] == "Order-flow imbalance on crypto"
     assert result["data_required"]["symbols"] == ["BTCUSD"]
     assert "crypto_volume" in result["distinct_from_prior_kill"]
+    assert result["effect_size"] == "Very large"
+    assert result["confidence"] == "Medium"
+    assert result["suggested_experiments"] == ["BUY ONLY", "Disable SELL", "BUY during London only"]
+    assert result["priority"] == "HIGH"
 
 
 def test_ai_analyzer_suggest_next_hypothesis_rejects_missing_required_fields(monkeypatch):
@@ -396,6 +406,46 @@ def test_ai_analyzer_suggest_next_hypothesis_rejects_missing_required_fields(mon
         result = analyzer.suggest_next_hypothesis({})
     assert result["status"] == "error"
     assert "required fields" in result["error"].lower()
+
+
+_FULL_VALID_SUGGESTION_JSON = (
+    '{"title": "t", "statement": "s", "why_this_might_be_true": "w", '
+    '"data_required": {}, "falsification_criteria": "f", "distinct_from_prior_kill": "d", "notes": "", '
+    '"observation": "o", "effect_size": "Medium", "confidence": "Medium", "possible_explanation": "p", '
+    '"suggested_experiments": ["BUY ONLY"], "priority": "MEDIUM"}'
+)
+
+
+def test_ai_analyzer_suggest_next_hypothesis_rejects_missing_hypothesis_candidate_fields(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    # Has the original 4 required fields but is missing effect_size.
+    fake_json = (
+        '{"title": "t", "statement": "s", "falsification_criteria": "f", "distinct_from_prior_kill": "d", '
+        '"observation": "o", "confidence": "Medium", "possible_explanation": "p", '
+        '"suggested_experiments": ["BUY ONLY"], "priority": "MEDIUM"}'
+    )
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.suggest_next_hypothesis({})
+    assert result["status"] == "error"
+
+
+def test_ai_analyzer_suggest_next_hypothesis_rejects_bad_priority_enum(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = _FULL_VALID_SUGGESTION_JSON.replace('"priority": "MEDIUM"', '"priority": "URGENT"')
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.suggest_next_hypothesis({})
+    assert result["status"] == "error"
+
+
+def test_ai_analyzer_suggest_next_hypothesis_rejects_empty_suggested_experiments_list(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = _FULL_VALID_SUGGESTION_JSON.replace('"suggested_experiments": ["BUY ONLY"]', '"suggested_experiments": []')
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.suggest_next_hypothesis({})
+    assert result["status"] == "error"
 
 
 def test_ai_analyzer_suggest_next_hypothesis_handles_provider_error(monkeypatch):

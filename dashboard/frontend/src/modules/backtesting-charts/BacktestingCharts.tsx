@@ -636,6 +636,11 @@ export function PerformanceBreakdownTable({ title, buckets }: { title: string; b
     { header: 'Trades', render: (r) => r.bucket.trades, align: 'right' },
     { header: 'Win Rate', render: (r) => `${r.bucket.win_rate.toFixed(1)}%`, align: 'right' },
     {
+      header: 'PF',
+      render: (r) => (r.bucket.profit_factor != null ? formatPossiblyInfinite(r.bucket.profit_factor, 2) : '—'),
+      align: 'right',
+    },
+    {
       header: 'PnL',
       render: (r) => (
         <span className={r.bucket.pnl >= 0 ? 'text-green' : 'text-red'}>

@@ -1,4 +1,7 @@
 import { apiGet, apiPost } from '../../lib/api'
+import { formatPossiblyInfinite, type PossiblyInfinite } from '../backtesting-charts/api'
+
+export { formatPossiblyInfinite, type PossiblyInfinite }
 
 // AI Research Lab / Mission Center Phase 3 (2026-07-28) — thin client over
 // execution/routes/missions.py. Every field here mirrors that module's
@@ -252,6 +255,65 @@ export interface ConsensusBand {
   shape: 'PLATEAU' | 'SPIKE' | 'INCONCLUSIVE'
 }
 
+// Edge Discovery (2026-07-31) — mirrors backtest/meta_analysis.py's 3 new
+// dataclasses exactly. cross_trial_consensus is a real, computed exact
+// binomial sign test over trial-level outcomes — never AI narrative.
+// pooled_breakdown/opportunity_candidates derive from ONE flat pooled
+// 3-way field (backtest/metrics.py's by_direction_regime_session), so
+// every tree level (1-way/2-way/3-way) shows up as its own row here.
+export interface ConsensusClaim {
+  dimension: 'direction' | 'regime' | 'session'
+  metric: 'win_rate' | 'profit_factor'
+  dominant_value: string
+  other_value: string
+  n_trials_compared: number
+  trials_favor_dominant: number
+  fraction_favor_dominant: number
+  p_value: number | null
+  confidence_pct: number | null
+  significance: 'INSUFFICIENT_DATA' | 'SURVIVES_CORRECTION' | 'NOMINAL_ONLY' | 'NOT_SIGNIFICANT'
+  claim_text: string
+}
+
+export interface PooledBreakdownRow {
+  direction: string | null
+  regime: string | null
+  session: string | null
+  level: string
+  trades: number
+  wins: number
+  win_rate: number
+  pnl: number
+  gross_profit: number
+  gross_loss: number
+  profit_factor: PossiblyInfinite
+}
+
+// Ranked SUGGESTIONS ONLY — never auto-selected, never auto-run. rank_score
+// is real, honestly-labeled effect_size x trades, not a fabricated
+// "information gain" statistic.
+export interface OpportunityCandidate {
+  direction: string | null
+  regime: string | null
+  session: string | null
+  level: string
+  trades: number
+  profit_factor: PossiblyInfinite
+  effect_size: PossiblyInfinite
+  rank_score: PossiblyInfinite
+  label: string
+}
+
+// A human-triggered pre-fill request from TopOpportunitiesPanel into
+// MissionBuilder's already-built hypothesisMode/ContextFiltersBuilder —
+// never auto-submits a mission.
+export interface PrefillRequest {
+  direction: string | null
+  regime: string | null
+  session: string | null
+  label: string
+}
+
 export interface MetaAnalysisResponse {
   mission_id: string
   symbol: string | null
@@ -264,6 +326,9 @@ export interface MetaAnalysisResponse {
   engine_frequencies: DimensionFrequency[]
   timeframe_frequencies: DimensionFrequency[]
   consensus_bands: ConsensusBand[]
+  cross_trial_consensus: ConsensusClaim[]
+  pooled_breakdown: PooledBreakdownRow[]
+  opportunity_candidates: OpportunityCandidate[]
   note: string
 }
 

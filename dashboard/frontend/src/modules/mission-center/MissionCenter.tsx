@@ -1238,6 +1238,12 @@ function hypothesisNameFor(mission: MissionRow | null | undefined, trial: Missio
 }
 
 function latestValidationFor(validations: ValidationRow[], trial: MissionTrial): ValidationRow | null {
+  // Defensive: validationsQuery.data should always be an array (backend
+  // always returns validations: []), but a caught, silently-swallowed
+  // ".filter is not a function" was reported here in production — guard
+  // rather than assume, matching this file's own tolerant-parsing
+  // convention elsewhere (bundle/preset field fallbacks).
+  if (!Array.isArray(validations)) return null
   const matches = validations
     .filter((v) => v.trial_number === trial.trial_number && v.trial_symbol === trial.symbol)
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
@@ -1512,6 +1518,11 @@ function MissionDetail({
       })
       setDraftStatus((s) => ({ ...s, [t.trial_number]: result.file }))
     } catch (e) {
+      // Log the full error (with stack) — the Draft cell below only ever
+      // shows a short, truncated message, and this catch previously
+      // swallowed the exception entirely (nothing reached window.onerror/
+      // console.error, so the built-in Console tab showed nothing either).
+      console.error(`proposeAsDraft failed for mission ${missionId} trial ${t.trial_number}:`, e)
       setDraftStatus((s) => ({ ...s, [t.trial_number]: `error: ${e instanceof Error ? e.message : String(e)}` }))
     }
   }
@@ -1534,7 +1545,12 @@ function MissionDetail({
     {
       header: 'Draft', render: (t) => (
         draftStatus[t.trial_number]
-          ? <span className="text-[0.75em] text-muted truncate max-w-[160px] inline-block">{draftStatus[t.trial_number]}</span>
+          ? <span
+              title={draftStatus[t.trial_number]}
+              className={`text-[0.75em] whitespace-normal break-words inline-block max-w-[220px] ${draftStatus[t.trial_number].startsWith('error:') ? 'text-red' : 'text-muted'}`}
+            >
+              {draftStatus[t.trial_number]}
+            </span>
           : <button onClick={() => proposeAsDraft(t)} className="text-[0.75em] text-accent hover:underline">
               Propose as draft
             </button>

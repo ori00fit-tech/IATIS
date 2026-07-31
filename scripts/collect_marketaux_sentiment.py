@@ -21,18 +21,19 @@ Design:
     Append-only, human-inspectable, trivially resumable.
   - Rate budget: MarketAux free tier is 100 req/day (verified against the
     real endpoint 2026-07-14, per marketaux_client.py's own docstring).
-    Covers all 14 currently-mapped symbols (12 FX + BTCUSD + ETHUSD) in one
-    run = 14 requests. Run via iatis-marketaux-collect.timer at a cadence
-    that stays well under budget (default suggestion: every 4h = 6 runs/day
-    x 14 = 84 req/day, leaving headroom).
-  - XAUUSD is NOT in MARKETAUX_SYMBOL_MAP yet (deliberately — the client's
-    own comment says metals use different entity naming on MarketAux's
-    side, unconfirmed) even though it's one of H021's THREE priority
-    "carrier" symbols per the registered decision rule. This script does
-    NOT guess a mapping. Use --probe-xauusd to test candidate symbol
-    strings against the live API and report which one(s) return real
-    entity matches — a human decides whether to add the mapping from that
-    evidence, this script never does it silently.
+    Covers all 15 currently-mapped symbols (12 FX + BTCUSD + ETHUSD +
+    XAUUSD) in one run = 15 requests. Run via iatis-marketaux-collect.timer
+    at a cadence that stays well under budget (default suggestion: every
+    4h = 6 runs/day x 15 = 90 req/day, leaving headroom).
+  - XAUUSD mapping RESOLVED 2026-07-24: --probe-xauusd against the live API
+    found "GOLD" returns real entity matches (3/3); "XAUUSD", "XAU/USD",
+    "XAU" all returned zero. fundamentals/marketaux_client.py's
+    MARKETAUX_SYMBOL_MAP now maps XAUUSD -> GOLD, so all three of H021's
+    priority "carrier" symbols (XAUUSD, BTCUSD, ETHUSD) are covered. This
+    flag remains available to re-probe other unmapped symbols (e.g. if a
+    future symbol needs the same treatment) — a human still decides
+    whether to add any new mapping from the evidence it reports, this
+    script never does so silently.
 
 Usage (VPS — needs MARKETAUX_API_KEY in .env):
     python3 -m scripts.collect_marketaux_sentiment              # one collection run, all mapped symbols

@@ -55,6 +55,17 @@ class BaseEngine(ABC):
     # while keeping H4/H1 in mtf_data as auxiliary context.
     decision_tf: str = "H1"
 
+    # Confluence Engine Overhaul Phase 1 (config extraction) — set from
+    # config/engines.yaml's engines.thresholds.<engine_key> by whoever
+    # builds the engines (main.build_active_engines / the backtest engine
+    # construction loop), mirroring the existing decision_tf/full_spec
+    # attribute-assignment pattern exactly. Empty by default so a
+    # zero-arg-constructed engine (every test/script that never sets this)
+    # falls through to each engine's own hardcoded default via
+    # self.thresholds.get(key, DEFAULT) — identical behavior to before
+    # this attribute existed.
+    thresholds: dict = {}
+
     def decision_frame(self, mtf_data: dict[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
         """Return (label, df) for the configured decision timeframe,
         falling back to H1 and then to the first available frame —

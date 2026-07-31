@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from engines.base_engine import BaseEngine, Bias, EngineOutput
+from utils.indicators import rsi as _rsi_series
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,21 +55,27 @@ class NNFXEngine(BaseEngine):
     name = "NNFX"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
+        t = self.thresholds
         tf, df = self.decision_frame(mtf_data)
 
-        if len(df) < 210:
+        min_bars = t.get("min_bars", 210)
+        if len(df) < min_bars:
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
                 score=0.0,
-                reasons=["Insufficient data for NNFX analysis (need 210+ bars for EMA200)"],
+                reasons=[f"Insufficient data for NNFX analysis (need {min_bars}+ bars for EMA200)"],
             )
 
         close = df["close"]
-        ema50 = _ema(close, 50)
-        ema100 = _ema(close, 100)
-        ema200 = _ema(close, 200)
-        adx = _adx(df, 14)
+        ema_fast = t.get("ema_fast", 50)
+        ema_mid = t.get("ema_mid", 100)
+        ema_slow = t.get("ema_slow", 200)
+        ema50 = _ema(close, ema_fast)
+        ema100 = _ema(close, ema_mid)
+        ema200 = _ema(close, ema_slow)
+        adx_period = t.get("adx_period", 14)
+        adx = _adx(df, adx_period)
 
         current = float(close.iloc[-1])
         e50 = float(ema50.iloc[-1])
@@ -80,60 +87,67 @@ class NNFXEngine(BaseEngine):
         score = 0.0
         bias = Bias.NEUTRAL
 
+        baseline_score = t.get("baseline_score", 25.0)
         # --- Baseline: EMA200 ---
         if current > e200:
             bias = Bias.BULLISH
-            score += 25.0
+            score += baseline_score
             reasons.append(f"Price above EMA200 ({e200:.5f}) — bullish baseline")
         elif current < e200:
             bias = Bias.BEARISH
-            score += 25.0
+            score += baseline_score
             reasons.append(f"Price below EMA200 ({e200:.5f}) — bearish baseline")
 
+        stack_aligned_score = t.get("stack_aligned_score", 20.0)
+        stack_weak_score = t.get("stack_weak_score", 5.0)
         # --- EMA stack confirmation ---
         if bias == Bias.BULLISH and e50 > e100 > e200:
-            score += 20.0
+            score += stack_aligned_score
             reasons.append("EMA stack aligned bullish (50>100>200)")
         elif bias == Bias.BEARISH and e50 < e100 < e200:
-            score += 20.0
+            score += stack_aligned_score
             reasons.append("EMA stack aligned bearish (50<100<200)")
         elif bias != Bias.NEUTRAL:
             reasons.append("EMA stack not fully aligned — weak confirmation")
-            score += 5.0
+            score += stack_weak_score
 
+        adx_strong = t.get("adx_strong", 25)
+        adx_strong_score = t.get("adx_strong_score", 20.0)
+        adx_moderate = t.get("adx_moderate", 15)
+        adx_moderate_score = t.get("adx_moderate_score", 8.0)
+        adx_weak_penalty = t.get("adx_weak_penalty", 15.0)
+        adx_weak_neutral_floor = t.get("adx_weak_neutral_floor", 15.0)
         # --- ADX strength filter ---
-        if adx_val >= 25:
-            score += 20.0
-            reasons.append(f"ADX={adx_val:.1f} ≥ 25 — trending market, strong confirmation")
-        elif adx_val >= 15:
-            score += 8.0
+        if adx_val >= adx_strong:
+            score += adx_strong_score
+            reasons.append(f"ADX={adx_val:.1f} ≥ {adx_strong} — trending market, strong confirmation")
+        elif adx_val >= adx_moderate:
+            score += adx_moderate_score
             reasons.append(f"ADX={adx_val:.1f} — moderate trend strength")
         else:
-            reasons.append(f"ADX={adx_val:.1f} < 15 — weak trend, NNFX cautions against entry")
-            score = max(0, score - 15)
-            if score < 15:
+            reasons.append(f"ADX={adx_val:.1f} < {adx_moderate} — weak trend, NNFX cautions against entry")
+            score = max(0, score - adx_weak_penalty)
+            if score < adx_weak_neutral_floor:
                 bias = Bias.NEUTRAL
 
         # --- RSI second confirmation (NNFX methodology) ---
-        rsi_period = 14
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(rsi_period).mean()
-        loss = (-delta.clip(upper=0)).rolling(rsi_period).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
+        rsi_period = t.get("rsi_period", 14)
+        rsi = _rsi_series(close, rsi_period)
         rsi_val = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
 
+        rsi_confirm_score = t.get("rsi_confirm_score", 15.0)
+        rsi_conflict_penalty = t.get("rsi_conflict_penalty", 10.0)
         if bias == Bias.BULLISH and rsi_val > 50:
-            score += 15.0
+            score += rsi_confirm_score
             reasons.append(f"RSI={rsi_val:.1f} confirms bullish (>50)")
         elif bias == Bias.BEARISH and rsi_val < 50:
-            score += 15.0
+            score += rsi_confirm_score
             reasons.append(f"RSI={rsi_val:.1f} confirms bearish (<50)")
         elif bias != Bias.NEUTRAL:
             reasons.append(f"RSI={rsi_val:.1f} does not confirm direction — reduced confidence")
-            score = max(0, score - 10)
+            score = max(0, score - rsi_conflict_penalty)
 
-        score = min(round(score, 1), 80.0)
+        score = min(round(score, 1), t.get("score_cap", 80.0))
 
         raw = {
             "timeframe_used": tf,

@@ -39,7 +39,11 @@ def _dealing_range(df: pd.DataFrame, lookback: int = 20) -> tuple[float, float]:
 
 
 def _premium_discount_zone(
-    current_price: float, range_low: float, range_high: float
+    current_price: float,
+    range_low: float,
+    range_high: float,
+    premium_pct: float = 0.60,
+    discount_pct: float = 0.40,
 ) -> tuple[str, float]:
     """Position of price within the dealing range.
 
@@ -51,9 +55,9 @@ def _premium_discount_zone(
         return "EQUILIBRIUM", 0.5
 
     pct = (current_price - range_low) / (range_high - range_low)
-    if pct >= 0.60:
+    if pct >= premium_pct:
         zone = "PREMIUM"
-    elif pct <= 0.40:
+    elif pct <= discount_pct:
         zone = "DISCOUNT"
     else:
         zone = "EQUILIBRIUM"
@@ -103,14 +107,17 @@ class ICTEngine(BaseEngine):
     name = "ICT"
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
+        t = self.thresholds
+        min_bars = t.get("min_bars", 30)
+
         # Use H1 for session/killzone (intraday timing)
         # Use H4 for dealing range (wider structural context)
         tf_session = "H1" if "H1" in mtf_data else next(iter(mtf_data))
-        tf_range = "H4" if "H4" in mtf_data and len(mtf_data["H4"]) >= 30 else tf_session
+        tf_range = "H4" if "H4" in mtf_data and len(mtf_data["H4"]) >= min_bars else tf_session
         df_session = mtf_data[tf_session]
         df_range = mtf_data[tf_range]
 
-        if len(df_session) < 30:
+        if len(df_session) < min_bars:
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
@@ -121,9 +128,14 @@ class ICTEngine(BaseEngine):
         session = detect_session_from_df(df_session)
         current_price = float(df_session["close"].iloc[-1])
 
+        dealing_range_lookback = t.get("dealing_range_lookback", 20)
         # Dealing range on H4 (wider, more structural) — 20 H4 bars = ~3 days
-        range_low, range_high = _dealing_range(df_range, lookback=20)
-        zone, pct = _premium_discount_zone(current_price, range_low, range_high)
+        range_low, range_high = _dealing_range(df_range, lookback=dealing_range_lookback)
+        zone, pct = _premium_discount_zone(
+            current_price, range_low, range_high,
+            premium_pct=t.get("premium_pct", 0.60),
+            discount_pct=t.get("discount_pct", 0.40),
+        )
         is_judas, judas_dir = _detect_judas_swing(df_session, session)
 
         reasons = []
@@ -134,17 +146,21 @@ class ICTEngine(BaseEngine):
         # ICT: sell from premium, buy from discount — BUT only in non-trending markets
         h1_df = mtf_data.get("H1", df_session)
         in_uptrend = in_downtrend = False
+        trend_ema_fast = t.get("trend_ema_fast", 20)
+        trend_ema_slow = t.get("trend_ema_slow", 50)
+        trend_buffer_pct = t.get("trend_buffer_pct", 0.001)
         if len(h1_df) >= 50:
-            ema20 = float(h1_df["close"].ewm(span=20).mean().iloc[-1])
-            ema50 = float(h1_df["close"].ewm(span=50).mean().iloc[-1])
-            in_uptrend = ema20 > ema50 * 1.001    # 0.1% buffer
-            in_downtrend = ema20 < ema50 * 0.999
+            ema20 = float(h1_df["close"].ewm(span=trend_ema_fast).mean().iloc[-1])
+            ema50 = float(h1_df["close"].ewm(span=trend_ema_slow).mean().iloc[-1])
+            in_uptrend = ema20 > ema50 * (1 + trend_buffer_pct)
+            in_downtrend = ema20 < ema50 * (1 - trend_buffer_pct)
 
+        zone_score = t.get("zone_score", 35.0)
         if zone == "DISCOUNT":
             # Buy from discount only if not in a strong downtrend
             if not in_downtrend:
                 bias = Bias.BULLISH
-                score += 35.0
+                score += zone_score
                 reasons.append(
                     f"Price in DISCOUNT zone ({pct:.0%} of range) — "
                     f"ICT expects bullish move toward equilibrium"
@@ -159,7 +175,7 @@ class ICTEngine(BaseEngine):
             # Sell from premium only if not in a strong uptrend
             if not in_uptrend:
                 bias = Bias.BEARISH
-                score += 35.0
+                score += zone_score
                 reasons.append(
                     f"Price in PREMIUM zone ({pct:.0%} of range) — "
                     f"ICT expects bearish move toward equilibrium"
@@ -173,23 +189,26 @@ class ICTEngine(BaseEngine):
             reasons.append(f"Price at EQUILIBRIUM ({pct:.0%}) — no zone bias")
 
         # --- Killzone bonus ---
+        killzone_score = t.get("killzone_score", 20.0)
         if session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap"):
-            score += 20.0
+            score += killzone_score
             reasons.append(
                 f"In {session.primary_session} killzone "
                 f"(session hour {session.session_hour} UTC)"
             )
 
         # --- Judas swing confirmation ---
+        judas_confirm_score = t.get("judas_confirm_score", 20.0)
+        judas_conflict_penalty = t.get("judas_conflict_penalty", 10.0)
         if is_judas:
             if judas_dir == "up" and bias == Bias.BEARISH:
-                score += 20.0
+                score += judas_confirm_score
                 reasons.append(
                     "Judas swing UP detected — false breakout above range, "
                     "confirms BEARISH reversal"
                 )
             elif judas_dir == "down" and bias == Bias.BULLISH:
-                score += 20.0
+                score += judas_confirm_score
                 reasons.append(
                     "Judas swing DOWN detected — false breakout below range, "
                     "confirms BULLISH reversal"
@@ -199,12 +218,12 @@ class ICTEngine(BaseEngine):
                     f"Judas swing {judas_dir.upper()} detected but "
                     f"conflicts with zone bias — reducing confidence"
                 )
-                score = max(0, score - 10)
+                score = max(0, score - judas_conflict_penalty)
 
         # cap score
-        score = min(round(score, 1), 80.0)
+        score = min(round(score, 1), t.get("score_cap", 80.0))
 
-        if score < 20:
+        if score < t.get("score_neutral_floor", 20.0):
             bias = Bias.NEUTRAL
 
         raw = {

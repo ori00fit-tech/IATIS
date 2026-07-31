@@ -38,21 +38,34 @@ from engines.base_engine import BaseEngine, Bias, EngineOutput
 
 
 def _swing_points(df: pd.DataFrame, window: int = 3) -> tuple[list, list]:
-    """Return (highs, lows) as lists of (idx, price) tuples."""
+    """Return (highs, lows) as lists of (idx, price) tuples.
+
+    Unified onto utils.indicators.find_swings (the same rolling-window
+    detector smc_engine.find_swing_points already used) — Confluence
+    Engine Overhaul Phase 1. Verified bit-identical to this function's
+    prior standalone loop implementation on a real synthetic corpus
+    before the swap; positional (not label) indices, matching the old
+    loop's `i` semantics exactly."""
+    from utils.indicators import find_swings
+
+    swing_high, swing_low = find_swings(df, window=window)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
 
-    highs, lows = [], []
-    for i in range(window, len(df) - window):
-        if high.iloc[i] == high.iloc[i - window:i + window + 1].max():
-            highs.append((i, float(high.iloc[i])))
-        if low.iloc[i] == low.iloc[i - window:i + window + 1].min():
-            lows.append((i, float(low.iloc[i])))
+    highs = [(int(pos), float(high.iloc[pos])) for pos in np.where(swing_high.to_numpy())[0]]
+    lows = [(int(pos), float(low.iloc[pos])) for pos in np.where(swing_low.to_numpy())[0]]
 
     return highs, lows
 
 
-def _classify_structure(highs: list, lows: list) -> dict:
+def _classify_structure(
+    highs: list,
+    lows: list,
+    bos_strength: float = 65,
+    choch_strength: float = 75,
+    ranging_strength: float = 20,
+    weak_structure_strength: float = 45,
+) -> dict:
     """Classify market structure from recent swings.
 
     Returns dict with:
@@ -111,13 +124,15 @@ def _classify_structure(highs: list, lows: list) -> dict:
     # Calculate strength based on consistency
     if bullish_structure:
         trend = "bullish"
-        strength = 65 if last_event == "BOS" else (75 if last_event in ("CHoCH", "MSS") else 45)
+        strength = bos_strength if last_event == "BOS" else (
+            choch_strength if last_event in ("CHoCH", "MSS") else weak_structure_strength)
     elif bearish_structure:
         trend = "bearish"
-        strength = 65 if last_event == "BOS" else (75 if last_event in ("CHoCH", "MSS") else 45)
+        strength = bos_strength if last_event == "BOS" else (
+            choch_strength if last_event in ("CHoCH", "MSS") else weak_structure_strength)
     else:
         trend = "ranging"
-        strength = 20
+        strength = ranging_strength
 
     return {
         "trend": trend,
@@ -155,6 +170,23 @@ class MarketStructureEngine(BaseEngine):
         return None
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
+        t = self.thresholds
+        min_bars = t.get("min_bars", 30)
+        h1_window_size = t.get("h1_window", 3)
+        h4_window_size = t.get("h4_window", 2)
+        h1_lookback_bars = t.get("h1_lookback_bars", 100)
+        h4_lookback_bars = t.get("h4_lookback_bars", 60)
+        aligned_bonus = t.get("aligned_bonus", 10.0)
+        aligned_score_cap = t.get("aligned_score_cap", 85.0)
+        disagree_score = t.get("disagree_score", 50.0)
+        h1_only_score = t.get("h1_only_score", 40.0)
+        structure_kwargs = {
+            "bos_strength": t.get("bos_strength", 65),
+            "choch_strength": t.get("choch_strength", 75),
+            "ranging_strength": t.get("ranging_strength", 20),
+            "weak_structure_strength": t.get("weak_structure_strength", 45),
+        }
+
         # Current structure on the decision TF (was hardcoded H1); macro
         # context one timeframe higher (was hardcoded H4).
         _tf, df_cur = self.decision_frame(mtf_data)
@@ -162,7 +194,7 @@ class MarketStructureEngine(BaseEngine):
         if df_macro is None:
             df_macro = df_cur
 
-        if len(df_cur) < 30:
+        if len(df_cur) < min_bars:
             return EngineOutput(
                 engine_name="MarketStructure",
                 bias=Bias.NEUTRAL,
@@ -171,12 +203,12 @@ class MarketStructureEngine(BaseEngine):
             )
 
         # Analyze current (decision-TF) and macro (higher-TF) structure
-        h1_window = df_cur.tail(100)
-        h1_highs, h1_lows = _swing_points(h1_window, window=3)
-        h4_highs, h4_lows = _swing_points(df_macro.tail(60), window=2)
+        h1_window = df_cur.tail(h1_lookback_bars)
+        h1_highs, h1_lows = _swing_points(h1_window, window=h1_window_size)
+        h4_highs, h4_lows = _swing_points(df_macro.tail(h4_lookback_bars), window=h4_window_size)
 
-        h1_struct = _classify_structure(h1_highs, h1_lows)
-        h4_struct = _classify_structure(h4_highs, h4_lows)
+        h1_struct = _classify_structure(h1_highs, h1_lows, **structure_kwargs)
+        h4_struct = _classify_structure(h4_highs, h4_lows, **structure_kwargs)
 
         reasons = []
         score = 0.0
@@ -193,7 +225,7 @@ class MarketStructureEngine(BaseEngine):
                 bias = Bias.BULLISH
                 score = h1_struct["strength"]
                 if h1_event in ("CHoCH", "MSS"):
-                    score = min(score + 10, 85)
+                    score = min(score + aligned_bonus, aligned_score_cap)
                     reasons.append(f"H1 {h1_event} bullish confirmed by H4 bullish structure")
                 else:
                     reasons.append(f"H1+H4 bullish structure (BOS continuation)")
@@ -201,7 +233,7 @@ class MarketStructureEngine(BaseEngine):
                 bias = Bias.BEARISH
                 score = h1_struct["strength"]
                 if h1_event in ("CHoCH", "MSS"):
-                    score = min(score + 10, 85)
+                    score = min(score + aligned_bonus, aligned_score_cap)
                     reasons.append(f"H1 {h1_event} bearish confirmed by H4 bearish structure")
                 else:
                     reasons.append(f"H1+H4 bearish structure (BOS continuation)")
@@ -210,21 +242,21 @@ class MarketStructureEngine(BaseEngine):
         elif h1_event in ("CHoCH", "MSS") and h1_event_dir != "none":
             if h1_event_dir == "bullish":
                 bias = Bias.BULLISH
-                score = 50  # lower confidence — H4 disagrees
+                score = disagree_score  # lower confidence — H4 disagrees
                 reasons.append(f"H1 {h1_event} bullish but H4 still {h4_bias} — early reversal")
             else:
                 bias = Bias.BEARISH
-                score = 50
+                score = disagree_score
                 reasons.append(f"H1 {h1_event} bearish but H4 still {h4_bias} — early reversal")
 
         # Only H1 structure
         elif h1_bias != "ranging":
             if h1_bias == "bullish":
                 bias = Bias.BULLISH
-                score = 40
+                score = h1_only_score
             else:
                 bias = Bias.BEARISH
-                score = 40
+                score = h1_only_score
             reasons.append(f"H1 {h1_bias} structure (H4 ranging/insufficient)")
 
         else:

@@ -4,11 +4,13 @@
 # top-level `engines` key by utils/helpers.py::load_config().
 #
 # CODE READS ONLY: engines.smc_full_spec, engines.crypto_positioning_modulator,
-# engines.enabled.<name> (bool). `versions` below is metadata for humans
-# only — nothing in main.py, confluence/, or the individual engine
-# modules reads it. It exists so engine iterations can be compared over
-# time without guessing which code version produced which
-# research/results manifest.
+# engines.enabled.<name> (bool), engines.thresholds.<name> (Confluence
+# Engine Overhaul Phase 1 — pure config extraction, see `thresholds:`
+# below; every value there is unchanged from its prior hardcoded default).
+# `versions` below is metadata for humans only — nothing in main.py,
+# confluence/, or the individual engine modules reads it. It exists so
+# engine iterations can be compared over time without guessing which code
+# version produced which research/results manifest.
 #
 # Frozen per CLAUDE.md: engines enabled = smc, price_action, nnfx,
 # wyckoff (prod4), kept by burden-of-proof (H015 closed: no robust
@@ -39,6 +41,131 @@ enabled:
   sentiment: false
   smc: true
   wyckoff: true
+
+# Confluence Engine Overhaul Phase 1 (indicator unification & config
+# extraction) — every hardcoded scoring/threshold constant from the 6
+# engines NOT slated for a Phase 3 full rebuild (smc, price_action, nnfx,
+# wyckoff, ict, market_structure), transcribed at TODAY's exact values.
+# This is a PURE REFACTOR: moving WHERE these numbers live, never WHAT
+# they mean or how they combine — verified bit-identical to pre-refactor
+# behavior by tests/test_engine_config_extraction_no_behavior_change.py.
+# Each engine reads its own sub-key via self.thresholds.get(name,
+# CURRENT_HARDCODED_VALUE) — so an incomplete or missing thresholds block
+# degrades to identical behavior, never a crash. quant/macro/divergence/
+# sentiment are deliberately NOT extracted here — Phase 3 replaces their
+# thresholds wholesale, so extracting soon-to-be-discarded numbers now
+# would be wasted work.
+thresholds:
+  price_action:
+    min_bars: 30
+    rsi_period: 14
+    rsi_bull: 55
+    rsi_bear: 45
+    rsi_momentum_score: 30.0
+    rsi_overbought: 70
+    rsi_overbought_score: 15.0
+    rsi_oversold: 30
+    rsi_oversold_score: 15.0
+    bb_period: 20
+    bb_std: 2.0
+    bb_upper_pct: 0.8
+    bb_upper_score: 20.0
+    bb_lower_pct: 0.2
+    bb_lower_score: 20.0
+    bb_mid_score: 10.0
+    pattern_score: 25.0
+    doji_dampen: 0.7
+    momentum_bars: 5
+    momentum_atr_period: 14
+    momentum_threshold: 0.5
+    momentum_score: 20.0
+    breakout_score: 15.0
+    breakout_lookback: 20
+    bull_score_min: 30.0
+    score_cap: 80.0
+
+  smc:
+    swing_window: 3
+    lookback: 6
+    mixed_score: 20.0
+    pick_tf_min_bars: 100
+    fvg_lookback: 30
+    order_block_lookback: 30
+    order_block_displacement_atr: 1.0
+    bos_choch_window: 3
+    component_weight_bos_choch: 12.0
+    component_weight_fvg: 8.0
+    component_weight_order_block: 8.0
+    full_spec_score_cap: 85.0
+    full_spec_neutral_floor: 20.0
+    full_spec_mixed_lean_score: 28.0
+
+  nnfx:
+    min_bars: 210
+    ema_fast: 50
+    ema_mid: 100
+    ema_slow: 200
+    adx_period: 14
+    baseline_score: 25.0
+    stack_aligned_score: 20.0
+    stack_weak_score: 5.0
+    adx_strong: 25
+    adx_strong_score: 20.0
+    adx_moderate: 15
+    adx_moderate_score: 8.0
+    adx_weak_penalty: 15.0
+    adx_weak_neutral_floor: 15.0
+    rsi_period: 14
+    rsi_confirm_score: 15.0
+    rsi_conflict_penalty: 10.0
+    score_cap: 80.0
+
+  wyckoff:
+    min_bars: 40
+    range_lookback: 40
+    spring_tolerance: 0.002
+    range_atr_max: 8.0
+    range_recent_lookback: 10
+    spring_upthrust_score: 45.0
+    range_position_score: 25.0
+    range_position_low_pct: 0.25
+    range_position_high_pct: 0.75
+    stopping_volume_score: 20.0
+    climax_score: 15.0
+    no_demand_score: 15.0
+    no_supply_score: 15.0
+    score_cap: 75.0
+    score_neutral_floor: 20.0
+
+  ict:
+    min_bars: 30
+    dealing_range_lookback: 20
+    premium_pct: 0.60
+    discount_pct: 0.40
+    zone_score: 35.0
+    killzone_score: 20.0
+    judas_confirm_score: 20.0
+    judas_conflict_penalty: 10.0
+    trend_ema_fast: 20
+    trend_ema_slow: 50
+    trend_buffer_pct: 0.001
+    score_cap: 80.0
+    score_neutral_floor: 20.0
+
+  market_structure:
+    min_bars: 30
+    h1_window: 3
+    h4_window: 2
+    h1_lookback_bars: 100
+    h4_lookback_bars: 60
+    aligned_bonus: 10.0
+    aligned_score_cap: 85.0
+    disagree_score: 50.0
+    h1_only_score: 40.0
+    bos_strength: 65
+    choch_strength: 75
+    ranging_strength: 20
+    weak_structure_strength: 45
 
 # Metadata only (see file header) — bump when an engine's internal logic
 # changes materially, so research manifests can be cross-referenced to a

@@ -34,6 +34,7 @@ visible and greppable instead of hidden in three inline copies.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -63,3 +64,55 @@ def range_atr(df: pd.DataFrame, period: int = 14) -> float:
     from atr(); do not "upgrade" call sites without a pre-registered
     hypothesis."""
     return float((df["high"] - df["low"]).tail(period).mean())
+
+
+# ---------------------------------------------------------------------------
+# Confluence Engine Overhaul Phase 1 (indicator unification) — each function
+# below is byte-identical to an existing engine's own formula, moved here so
+# the same math has one home instead of N independently-maintained copies.
+# See CLAUDE.md's Confluence Engine Overhaul plan section: RSI here matches
+# price_action_engine/quant_engine/nnfx_engine's SMA-smoothed formula exactly
+# — divergence_engine's own EWM-smoothed RSI is a genuinely DIFFERENT
+# formula (not a duplicate) and stays where it is until Phase 3 rebuilds it.
+# ---------------------------------------------------------------------------
+
+
+def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """SMA-smoothed RSI — matches price_action_engine.py/quant_engine.py/
+    nnfx_engine.py's previously-duplicated formula exactly."""
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def bollinger_bands(
+    series: pd.Series, period: int = 20, n_std: float = 2.0
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """(upper, mid, lower) bands — matches price_action_engine.py's
+    formula exactly. Returns SMA +/- n_std * rolling std."""
+    ma = series.rolling(period).mean()
+    sd = series.rolling(period).std()
+    return ma + n_std * sd, ma, ma - n_std * sd
+
+
+def roc(series: pd.Series, period: int = 10) -> pd.Series:
+    """Rate of change (%) — matches quant_engine.py's formula exactly.
+    Centralized here for consistency; quant_engine.py itself is NOT
+    migrated onto this in Phase 1 (it's a Phase 3 full-rebuild target —
+    see the Confluence Engine Overhaul plan)."""
+    return series.pct_change(periods=period) * 100
+
+
+def find_swings(df: pd.DataFrame, window: int = 3) -> tuple[pd.Series, pd.Series]:
+    """(swing_high, swing_low) boolean Series aligned to df's index — a
+    bar whose high/low is the max/min within +/- `window` bars on either
+    side. Matches smc_engine.py's find_swing_points formula exactly
+    (confirmed bit-identical to market_structure_engine.py's own
+    independent loop-based implementation before this unification)."""
+    highs = df["high"]
+    lows = df["low"]
+    swing_high = highs == highs.rolling(window=2 * window + 1, center=True).max()
+    swing_low = lows == lows.rolling(window=2 * window + 1, center=True).min()
+    return swing_high.fillna(False), swing_low.fillna(False)

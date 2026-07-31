@@ -149,3 +149,72 @@ def test_mar_ratio_equals_calmar_ratio():
     trades = [_trade(pnl=100, rr=1.0), _trade(pnl=-50, rr=-0.5), _trade(pnl=80, rr=0.8)]
     m = calculate_metrics(trades)
     assert m.mar_ratio == m.calmar_ratio
+
+
+# ── Edge Discovery (2026-07-31) — by_direction_regime_session + PF on
+# by_regime/by_direction/by_session/by_direction_regime_session ──────────
+
+def _full_trade(pnl, direction="BUY", regime="", session="", is_win=None) -> TradeRecord:
+    if is_win is None:
+        is_win = pnl > 0
+    return TradeRecord(
+        trade_id="t", symbol="EURUSD", direction=direction,
+        entry_time=pd_ts(0), exit_time=pd_ts(1),
+        entry_price=1.1, exit_price=1.1, stop_loss=1.09, take_profit=1.12,
+        position_size=1.0, pnl_usd=pnl, is_win=is_win, regime=regime, session=session,
+    )
+
+
+def test_by_direction_regime_session_key_format_and_pooling():
+    trades = [
+        _full_trade(100, direction="BUY", regime="TRENDING", session="London"),
+        _full_trade(50, direction="BUY", regime="TRENDING", session="London"),
+        _full_trade(-30, direction="SELL", regime="RANGING", session="Asia"),
+    ]
+    m = calculate_metrics(trades)
+    assert m.by_direction_regime_session["BUY|TRENDING|London"]["trades"] == 2
+    assert m.by_direction_regime_session["BUY|TRENDING|London"]["wins"] == 2
+    assert m.by_direction_regime_session["BUY|TRENDING|London"]["pnl"] == pytest.approx(150)
+    assert m.by_direction_regime_session["SELL|RANGING|Asia"]["trades"] == 1
+    assert m.by_direction_regime_session["SELL|RANGING|Asia"]["wins"] == 0
+
+
+def test_by_direction_regime_session_unknown_fallback():
+    trades = [_full_trade(100, direction="BUY", regime="", session="")]
+    m = calculate_metrics(trades)
+    assert "BUY|Unknown|Unknown" in m.by_direction_regime_session
+
+
+def test_profit_factor_added_to_by_direction_by_session_by_regime_but_not_by_engine():
+    trades = [
+        TradeRecord(
+            trade_id="t1", symbol="EURUSD", direction="BUY", entry_time=pd_ts(0), exit_time=pd_ts(1),
+            entry_price=1.1, exit_price=1.1, stop_loss=1.09, take_profit=1.12, position_size=1.0,
+            pnl_usd=100, is_win=True, regime="TRENDING", session="London",
+            engine_votes={"nnfx": {"bias": "BULLISH"}},
+        ),
+        _full_trade(-40, direction="SELL", regime="RANGING", session="Asia", is_win=False),
+    ]
+    m = calculate_metrics(trades)
+    assert "profit_factor" in m.by_direction["BUY"]
+    assert "profit_factor" in m.by_regime["TRENDING"]
+    assert "profit_factor" in m.by_session["London"]
+    assert "profit_factor" in m.by_direction_regime_session["BUY|TRENDING|London"]
+    assert "profit_factor" not in m.by_engine["nnfx"]
+
+
+def test_bucket_profit_factor_matches_top_level_convention_zero_losses():
+    trades = [_full_trade(100, direction="BUY", regime="TRENDING", session="London")]
+    m = calculate_metrics(trades)
+    assert m.by_direction["BUY"]["profit_factor"] == float("inf")
+    assert m.by_direction_regime_session["BUY|TRENDING|London"]["profit_factor"] == float("inf")
+
+
+def test_bucket_profit_factor_real_ratio():
+    trades = [
+        _full_trade(100, direction="BUY", regime="TRENDING", session="London"),
+        _full_trade(-25, direction="BUY", regime="TRENDING", session="London"),
+    ]
+    m = calculate_metrics(trades)
+    bucket = m.by_direction_regime_session["BUY|TRENDING|London"]
+    assert bucket["profit_factor"] == pytest.approx(4.0)

@@ -47,11 +47,37 @@ Rules:
   feature-mining lead has not been out-of-sample tested, Monte-Carlo
   tested, or walk-forward tested — do not describe it as validated,
   confirmed, causal, or an edge.
+- The context may also include "cross_trial_consensus" — real, computed
+  claims from a Mission Center mission (an exact binomial sign test over
+  many trials, e.g. "BUY win_rate exceeded SELL win_rate in 43/50
+  trials, p=0.002"). You may cite these EXACT numbers verbatim in
+  "observation" or "possible_explanation" if they support your
+  suggestion. Treat them the same as recent_mission_findings/
+  feature_mining_leads: a real, computed LEAD, never proof, never
+  out-of-sample-tested.
+- "observation", "effect_size", "confidence", "possible_explanation",
+  "suggested_experiments", and "priority" are a structured "Hypothesis
+  Candidate" report, matching this platform's own reporting convention:
+  - "observation": what pattern you are pointing at, in plain language.
+  - "effect_size" and "confidence" are YOUR OWN qualitative judgment in
+    plain words (e.g. "Very large", "Medium") — never a number you
+    invented, and never phrased as a statistical claim of significance.
+    If real cross_trial_consensus/mission-finding numbers support your
+    judgment, cite them in "observation" instead, quoted exactly as
+    given.
+  - "possible_explanation": your best guess at the underlying mechanism,
+    clearly speculative.
+  - "suggested_experiments": a list of concrete, falsifiable next
+    configurations to test (e.g. "BUY ONLY", "Disable SELL", "BUY
+    during London only") — never a vague "test more" or "investigate
+    further".
+  - "priority" must be exactly one of "HIGH", "MEDIUM", "LOW".
 - Return JSON only. No prose before or after the JSON object. No
   markdown code fences.
 
 Hypothesis registry summary, already-killed ideas, research backlog,
-recent Mission Center findings, and feature-mining leads (if any):
+recent Mission Center findings, cross-trial consensus, and feature-mining
+leads (if any):
 {context}
 
 Operator focus hint: {focus_hint}
@@ -64,5 +90,11 @@ Return exactly this JSON shape:
   "data_required": {{"symbols": [], "timeframes": [], "date_range": "", "min_sample_size": ""}},
   "falsification_criteria": "",
   "distinct_from_prior_kill": "",
-  "notes": ""
+  "notes": "",
+  "observation": "",
+  "effect_size": "",
+  "confidence": "",
+  "possible_explanation": "",
+  "suggested_experiments": [],
+  "priority": ""
 }}

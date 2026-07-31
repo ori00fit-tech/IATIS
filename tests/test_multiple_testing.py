@@ -14,6 +14,7 @@ import math
 import pytest
 
 from backtest.multiple_testing import (
+    binomial_sign_test_p_value,
     bonferroni_alpha,
     classify_significance,
     expected_false_positives,
@@ -90,3 +91,45 @@ def test_mission_significance_summary_count_matches_hand_computed():
     assert summary["expected_false_positives_at_p05"] == pytest.approx(50.0)
     assert "EXPLORATORY — NOT EVIDENCE" in summary["banner"]
     assert "1000 trials" in summary["banner"]
+
+
+# ── Edge Discovery (2026-07-31) — binomial_sign_test_p_value ─────────────
+
+def test_binomial_sign_test_p_value_matches_hand_computed():
+    # k=8, n=10, p=0.5: two-tailed exact binomial p-value.
+    # P(X=8) + P(X=9) + P(X=10) [upper tail] doubled by symmetry (and
+    # equal to summing every i with pmf(i) <= pmf(8), which for n=10,
+    # p=0.5 is exactly {0,1,2,8,9,10}).
+    n, k = 10, 8
+
+    def pmf(i):
+        return math.comb(n, i) * (0.5 ** n)
+
+    expected = sum(pmf(i) for i in range(n + 1) if pmf(i) <= pmf(k) * (1 + 1e-9))
+    assert binomial_sign_test_p_value(k, n) == pytest.approx(expected, rel=1e-9)
+
+
+def test_binomial_sign_test_p_value_symmetric_for_complementary_k():
+    assert binomial_sign_test_p_value(8, 10) == pytest.approx(binomial_sign_test_p_value(2, 10))
+    assert binomial_sign_test_p_value(43, 50) == pytest.approx(binomial_sign_test_p_value(7, 50))
+
+
+def test_binomial_sign_test_p_value_one_at_exact_midpoint():
+    # k == n/2 exactly -> every outcome has pmf <= pmf(k) is false in
+    # general, but the midpoint itself must always yield p=1.0 for even n
+    # under p=0.5 (the mode of the distribution).
+    assert binomial_sign_test_p_value(5, 10) == pytest.approx(1.0)
+
+
+def test_binomial_sign_test_p_value_small_for_lopsided_outcome():
+    # 43 of 50 favoring one side should be a strong, clearly significant
+    # signal (comfortably below 0.001).
+    p = binomial_sign_test_p_value(43, 50)
+    assert p is not None
+    assert p < 0.001
+
+
+def test_binomial_sign_test_p_value_none_when_undefined():
+    assert binomial_sign_test_p_value(0, 0) is None
+    assert binomial_sign_test_p_value(-1, 10) is None
+    assert binomial_sign_test_p_value(11, 10) is None

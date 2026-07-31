@@ -518,6 +518,7 @@ async def missions_meta_analysis(
         raise HTTPException(status_code=400, detail="n_bins must be 1-20.")
 
     from backtest.meta_analysis import compute_meta_analysis
+    from backtest.metrics import json_safe
     from backtest.optimizer import search_space_from_dict
 
     space = search_space_from_dict(json.loads(mission["search_space_json"]))
@@ -526,7 +527,11 @@ async def missions_meta_analysis(
         space, trials, sampler=mission["sampler"], mission_id=mission_id, symbol=symbol,
         top_fraction=top_fraction, n_bins=n_bins,
     )
-    return result.to_dict()
+    # Edge Discovery (2026-07-31): pooled_breakdown/opportunity_candidates
+    # can carry a real, correct float('inf') profit_factor (zero losing
+    # trades) — json.dumps emits the bare token `Infinity` for that by
+    # default, which is not valid JSON (see json_safe()'s own docstring).
+    return json_safe(result.to_dict())
 
 
 @router.get("/research/missions/{mission_id}/feature-mining")

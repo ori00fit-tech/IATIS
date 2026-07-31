@@ -436,6 +436,15 @@ def _recent_mission_findings(limit: int = 3) -> list[dict[str, Any]] | None:
                 entry["consensus_bands"] = [
                     {"risk_param": b.risk_param, "shape": b.shape} for b in analysis.consensus_bands
                 ]
+                # Edge Discovery (2026-07-31) — real, computed cross-trial
+                # claims (exact binomial sign test), same LEAD-not-evidence
+                # treatment as everything else in this entry.
+                significant_claims = sorted(
+                    (c for c in analysis.cross_trial_consensus if c.significance != "INSUFFICIENT_DATA"),
+                    key=lambda c: c.confidence_pct or 0, reverse=True,
+                )[:3]
+                if significant_claims:
+                    entry["cross_trial_consensus"] = [c.claim_text for c in significant_claims]
             findings.append(entry)
         return findings or None
     except Exception as exc:
@@ -542,12 +551,23 @@ def _slugify(title: str) -> str:
     return slug or "untitled"
 
 
+def _render_experiments_list(items: Any) -> str:
+    cleaned = [str(i).strip() for i in (items if isinstance(items, list) else []) if str(i).strip()]
+    return "\n".join(f"- {i}" for i in cleaned) if cleaned else "(none provided)"
+
+
 def _render_draft_markdown(body: dict[str, Any], timestamp: str) -> str:
     def _s(key: str) -> str:
         return str(body.get(key) or "").strip()
 
     data_required = body.get("data_required") or {}
 
+    # Edge Discovery (2026-07-31) — Observation/Effect Size/Confidence/
+    # Possible explanation/Suggested experiments/Priority are a newer,
+    # optional "Hypothesis Candidate" report shape (see
+    # ai/models.HypothesisSuggestion). The non-AI proposeAsDraft() call
+    # site in Mission Center never populates these, so every one degrades
+    # to "(not provided)"/"(none provided)" rather than a KeyError.
     return f"""<!-- AI-GENERATED DRAFT — NOT REVIEWED — NOT A REGISTRATION.
      Per CLAUDE.md rule 1, this must be reviewed, refined, and manually
      registered in research/results/registry.json (with its own ID)
@@ -563,6 +583,26 @@ def _render_draft_markdown(body: dict[str, Any], timestamp: str) -> str:
 
 ## Why this might be true
 {_s("why_this_might_be_true")}
+
+## Observation
+{_s("observation") or "(not provided)"}
+
+## Effect Size
+{_s("effect_size") or "(not provided)"}
+<!-- AI's own qualitative judgment, not a computed statistic -->
+
+## Confidence
+{_s("confidence") or "(not provided)"}
+<!-- AI's own qualitative judgment, not a computed statistic -->
+
+## Possible explanation
+{_s("possible_explanation") or "(not provided)"}
+
+## Suggested experiments
+{_render_experiments_list(body.get("suggested_experiments"))}
+
+## Priority
+{_s("priority") or "(not provided)"}
 
 ## Data required
 {json.dumps(data_required, indent=2)}

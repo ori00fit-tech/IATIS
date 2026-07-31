@@ -457,12 +457,17 @@ def run_backtest(
         DivergenceEngine, MarketStructureEngine, SentimentEngine,
     )))
     enabled = engine_config.get("engines", {}).get("enabled", {})
+    all_thresholds = engine_config.get("engines", {}).get("thresholds", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
             engine = cls()
             # Same decision timeframe the production pipeline uses
             # (main.build_active_engines) — gate/vote parity.
             engine.decision_tf = timeframes[0] if timeframes else "H1"
+            # Confluence Engine Overhaul Phase 1 — same
+            # config.engines.thresholds source, gate/vote parity with
+            # main.build_active_engines.
+            engine.thresholds = all_thresholds.get(key, {})
             if key == "smc":
                 # H017 flag parity with main.build_active_engines — the A/B
                 # (scripts/smc_fullspec_ab.py) flips this through the config.

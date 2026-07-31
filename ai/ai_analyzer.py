@@ -392,7 +392,9 @@ class AIAnalyzer:
 
     _REQUIRED_SUGGESTION_FIELDS = (
         "title", "statement", "falsification_criteria", "distinct_from_prior_kill",
+        "observation", "effect_size", "confidence", "possible_explanation",
     )
+    _VALID_PRIORITIES = ("HIGH", "MEDIUM", "LOW")
 
     def suggest_next_hypothesis(self, context: dict, focus_hint: str = "") -> dict:
         """Draft a candidate for the operator's NEXT research hypothesis —
@@ -416,6 +418,11 @@ class AIAnalyzer:
             ).to_dict()
 
         missing = [f for f in self._REQUIRED_SUGGESTION_FIELDS if not str(raw.get(f, "")).strip()]
+        suggested_experiments = raw.get("suggested_experiments")
+        if not isinstance(suggested_experiments, list) or not suggested_experiments:
+            missing.append("suggested_experiments")
+        if raw.get("priority") not in self._VALID_PRIORITIES:
+            missing.append("priority")
         if missing:
             logger.warning(f"AIAnalyzer.suggest_next_hypothesis: response missing fields {missing}")
             return HypothesisSuggestion(
@@ -432,6 +439,12 @@ class AIAnalyzer:
             falsification_criteria=raw.get("falsification_criteria", ""),
             distinct_from_prior_kill=raw.get("distinct_from_prior_kill", ""),
             notes=raw.get("notes", ""),
+            observation=raw.get("observation", ""),
+            effect_size=raw.get("effect_size", ""),
+            confidence=raw.get("confidence", ""),
+            possible_explanation=raw.get("possible_explanation", ""),
+            suggested_experiments=list(suggested_experiments or []),
+            priority=raw.get("priority", ""),
             provider=self._provider.name,
             status="ok",
         ).to_dict()

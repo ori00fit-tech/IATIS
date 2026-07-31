@@ -305,6 +305,64 @@ def test_ai_save_hypothesis_draft_writes_real_file(client, tmp_path, monkeypatch
     assert "Not the crypto_volume experiment." in content
 
 
+def test_ai_save_hypothesis_draft_writes_new_sections_when_present(client, tmp_path, monkeypatch):
+    import execution.routes.ai as m
+
+    monkeypatch.setattr(m, "_DRAFTS_DIR", tmp_path)
+    r = client.post(
+        "/ai/save-hypothesis-draft",
+        json={
+            "title": "BUY-only bias candidate",
+            "statement": "BUY trades outperform SELL trades.",
+            "falsification_criteria": "PASS if OOS PF >= 1.2.",
+            "distinct_from_prior_kill": "n/a",
+            "observation": "BUY produced +420 USD, SELL produced -1912 USD.",
+            "effect_size": "Very large",
+            "confidence": "Medium",
+            "possible_explanation": "Current engines may identify bullish continuation better than bearish reversals.",
+            "suggested_experiments": ["BUY ONLY", "Disable SELL", "BUY during London only"],
+            "priority": "HIGH",
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    written = tmp_path / r.json()["file"].split("/")[-1]
+    content = written.read_text()
+    assert "## Observation" in content
+    assert "BUY produced +420 USD" in content
+    assert "## Effect Size" in content
+    assert "Very large" in content
+    assert "## Confidence" in content
+    assert "## Possible explanation" in content
+    assert "## Suggested experiments" in content
+    assert "- BUY ONLY" in content
+    assert "- Disable SELL" in content
+    assert "## Priority" in content
+    assert "HIGH" in content
+
+
+def test_ai_save_hypothesis_draft_degrades_gracefully_when_new_fields_absent(client, tmp_path, monkeypatch):
+    import execution.routes.ai as m
+
+    monkeypatch.setattr(m, "_DRAFTS_DIR", tmp_path)
+    # Simulates the non-AI proposeAsDraft() call site (Mission Center),
+    # which never populates the Hypothesis Candidate report fields.
+    r = client.post(
+        "/ai/save-hypothesis-draft",
+        json={
+            "title": "Mission trial candidate",
+            "statement": "s", "falsification_criteria": "f", "distinct_from_prior_kill": "d",
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    written = tmp_path / r.json()["file"].split("/")[-1]
+    content = written.read_text()
+    assert "(not provided)" in content
+    assert "## Suggested experiments" in content
+    assert "(none provided)" in content
+
+
 def test_build_copilot_context_includes_real_registry_and_dead_list():
     from execution.routes.ai import _build_copilot_context
 

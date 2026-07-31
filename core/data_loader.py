@@ -31,18 +31,35 @@ def load_synthetic(
     start_price: float = 1.0850,
     timeframe: str = "H1",
     seed: int | None = None,
+    end: pd.Timestamp | str | None = None,
 ) -> pd.DataFrame:
     """Generate a synthetic but structurally plausible OHLCV series.
 
     Not a price predictor, not calibrated to any real instrument — only
     meant to exercise the pipeline end to end during Phase 1.
+
+    `end` defaults to `pd.Timestamp.now("UTC")` (original behavior,
+    unchanged for every existing caller). Pass a FIXED `end` for any
+    test that resamples the result to H4/D1 and asserts an exact value:
+    `core.timeframe_sync.resample()`'s `df.resample(rule)` anchors to
+    clock time, not to the data's own start, so the wall-clock-anchored
+    default silently reshuffles which H1 bars fall into the final H4/D1
+    candles from one test run to the next (real bug found 2026-07-31 —
+    see tests/test_engine_config_extraction_no_behavior_change.py, whose
+    Wyckoff golden value flipped between 25.0/40.0 purely based on what
+    hour the suite happened to run at, with zero code change involved).
     """
     rng = np.random.default_rng(seed)
 
     freq_map = {"M15": "15min", "H1": "1h", "H4": "4h", "D1": "1D"}
     freq = freq_map.get(timeframe, "1h")
 
-    timestamps = pd.date_range(end=pd.Timestamp.now("UTC"), periods=bars, freq=freq)
+    if end is None:
+        end_ts = pd.Timestamp.now("UTC")
+    else:
+        end_ts = pd.Timestamp(end)
+        end_ts = end_ts.tz_localize("UTC") if end_ts.tzinfo is None else end_ts.tz_convert("UTC")
+    timestamps = pd.date_range(end=end_ts, periods=bars, freq=freq)
 
     # random walk with mild drift + volatility clustering, just enough
     # structure for regime/SMC stub logic to have something to chew on

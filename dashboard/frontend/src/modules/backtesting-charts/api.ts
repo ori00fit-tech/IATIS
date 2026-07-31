@@ -120,15 +120,18 @@ export interface ChartCandle {
   close: number
 }
 
-// Per-category performance split (backtest/metrics.py:280-309) — every key
-// present in one of these dicts has trades > 0 by construction (win_rate is
-// only ever added there once a category has at least one trade), so these
-// fields are safe as required, not optional.
+// Per-category performance split (backtest/metrics.py) — every key present
+// in one of these dicts has trades > 0 by construction (win_rate is only
+// ever added there once a category has at least one trade), so these
+// fields are safe as required, not optional. profit_factor (Edge
+// Discovery, 2026-07-31) is optional: files/trials recorded before that
+// phase carry no such key on these buckets.
 export interface BreakdownBucket {
   trades: number
   wins: number
   win_rate: number
   pnl: number
+  profit_factor?: PossiblyInfinite
 }
 
 // Results page (2026-07-27) — already-computed BacktestMetrics fields,

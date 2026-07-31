@@ -170,6 +170,14 @@ class BacktestMetrics:
     by_regime:        dict  = field(default_factory=dict)
     by_symbol:        dict  = field(default_factory=dict)
     by_engine:        dict  = field(default_factory=dict)
+    # Edge Discovery (2026-07-31) — one flat pooled 3-way cross, keyed
+    # "DIRECTION|REGIME|SESSION" (e.g. "BUY|RANGING|London"). by_direction/
+    # by_session/by_regime above are three SEPARATE single-dimension
+    # breakdowns — none tells you the direction of trades within a regime
+    # bucket. All tree levels (1-way/2-way/3-way) can be derived from this
+    # one field by grouping on key parts and summing (see
+    # backtest/meta_analysis.py's pooling helpers).
+    by_direction_regime_session: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
@@ -397,30 +405,59 @@ def calculate_metrics(
         if subset:
             wins = sum(1 for t in subset if t.is_win)
             pnl  = sum(t.pnl_usd for t in subset)
+            gp   = sum(p for p in (t.pnl_usd for t in subset) if p > 0)
+            gl   = abs(sum(p for p in (t.pnl_usd for t in subset) if p < 0))
             m.by_direction[direction] = {
                 "trades": len(subset), "wins": wins,
                 "win_rate": wins/len(subset)*100, "pnl": pnl,
+                "gross_profit": gp, "gross_loss": gl,
             }
 
     # By session
     for t in closed:
         s = t.session or "Unknown"
         if s not in m.by_session:
-            m.by_session[s] = {"trades": 0, "wins": 0, "pnl": 0.0}
+            m.by_session[s] = {"trades": 0, "wins": 0, "pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0}
         m.by_session[s]["trades"] += 1
         m.by_session[s]["pnl"]    += t.pnl_usd
         if t.is_win:
             m.by_session[s]["wins"] += 1
+        if t.pnl_usd > 0:
+            m.by_session[s]["gross_profit"] += t.pnl_usd
+        elif t.pnl_usd < 0:
+            m.by_session[s]["gross_loss"] += abs(t.pnl_usd)
 
     # By regime
     for t in closed:
         r = t.regime or "Unknown"
         if r not in m.by_regime:
-            m.by_regime[r] = {"trades": 0, "wins": 0, "pnl": 0.0}
+            m.by_regime[r] = {"trades": 0, "wins": 0, "pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0}
         m.by_regime[r]["trades"] += 1
         m.by_regime[r]["pnl"]    += t.pnl_usd
         if t.is_win:
             m.by_regime[r]["wins"] += 1
+        if t.pnl_usd > 0:
+            m.by_regime[r]["gross_profit"] += t.pnl_usd
+        elif t.pnl_usd < 0:
+            m.by_regime[r]["gross_loss"] += abs(t.pnl_usd)
+
+    # By direction+regime+session (3-way pooled cross) — Edge Discovery
+    # (2026-07-31). See the field's own docstring on BacktestMetrics for
+    # why this is one flat compound-keyed dict rather than 7 separate
+    # fields.
+    for t in closed:
+        key = f"{t.direction or 'Unknown'}|{t.regime or 'Unknown'}|{t.session or 'Unknown'}"
+        b = m.by_direction_regime_session.setdefault(
+            key, {"trades": 0, "wins": 0, "pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0}
+        )
+        b["trades"] += 1
+        b["pnl"]    += t.pnl_usd
+        if t.is_win:
+            b["wins"] += 1
+        if t.pnl_usd > 0:
+            b["gross_profit"] += t.pnl_usd
+        elif t.pnl_usd < 0:
+            b["gross_loss"] += abs(t.pnl_usd)
 
     # By engine — unlike direction/session/regime (exactly one category per
     # trade), multiple engines can vote on the same trade (TradeRecord.
@@ -435,10 +472,15 @@ def calculate_metrics(
             if t.is_win:
                 m.by_engine[engine_name]["wins"] += 1
 
-    # Win rates per category
-    for cat_dict in (m.by_session, m.by_regime, m.by_direction, m.by_engine):
+    # Win rates per category. by_engine deliberately gets no profit_factor
+    # (an engine's votes span overlapping trades — different semantics
+    # than the mutually-exclusive direction/session/regime buckets).
+    for cat_dict in (m.by_session, m.by_regime, m.by_direction, m.by_engine, m.by_direction_regime_session):
         for v in cat_dict.values():
             if isinstance(v, dict) and v.get("trades", 0) > 0:
                 v["win_rate"] = v.get("wins", 0) / v["trades"] * 100
+                if "gross_profit" in v:
+                    gp, gl = v["gross_profit"], v["gross_loss"]
+                    v["profit_factor"] = (gp / gl) if gl > 0 else float("inf")
 
     return m

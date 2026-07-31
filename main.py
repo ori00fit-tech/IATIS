@@ -124,6 +124,7 @@ def build_active_engines(config: dict) -> list:
     dtf = decision_timeframe(config)
     symbol = config.get("data", {}).get("symbol", "")
     smc_full_spec = bool(config.get("engines", {}).get("smc_full_spec", False))
+    all_thresholds = config.get("engines", {}).get("thresholds", {})
     engines = []
     for key, cls in _ALL_ENGINES.items():
         if enabled.get(key, False):
@@ -132,6 +133,13 @@ def build_active_engines(config: dict) -> list:
             # Symbol context — SentimentEngine keys its COT cache on this;
             # it previously defaulted to "UNKNOWN" so COT could never load.
             engine._symbol = symbol
+            # Confluence Engine Overhaul Phase 1 (config extraction) —
+            # empty dict for any engine without a thresholds sub-block
+            # (quant/macro/divergence/sentiment today), which is
+            # identical behavior to before this attribute existed since
+            # each engine's own self.thresholds.get(key, DEFAULT) falls
+            # through to its hardcoded default.
+            engine.thresholds = all_thresholds.get(key, {})
             if key == "smc":
                 # H017: full-spec SMC (OB+FVG+BOS/CHoCH as internal
                 # confluence) — off by default until the A/B justifies it.

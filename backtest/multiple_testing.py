@@ -57,6 +57,26 @@ def trial_p_value(mean_r: float, std_r: float, n: int) -> float | None:
     return 2 * (1 - normal_cdf(abs(z)))
 
 
+def binomial_sign_test_p_value(k: int, n: int, p: float = 0.5) -> float | None:
+    """Exact two-tailed binomial (sign) test p-value for observing k
+    'successes' out of n independent trials under a null hypothesis of
+    p (default 0.5) — via math.comb, no scipy. Distinct from
+    trial_p_value() above, which is a z-test on a CONTINUOUS mean
+    R-multiple; this is for trial-level count/consensus claims like
+    'BUY win_rate exceeded SELL win_rate in 43 of 50 trials' (Edge
+    Discovery, 2026-07-31). Returns None (never a fabricated value) when
+    undefined: n<1 or k out of [0, n]."""
+    if n < 1 or not (0 <= k <= n):
+        return None
+
+    def _pmf(i: int) -> float:
+        return math.comb(n, i) * (p ** i) * ((1 - p) ** (n - i))
+
+    p_k = _pmf(k)
+    total = sum(_pmf(i) for i in range(n + 1) if _pmf(i) <= p_k * (1 + 1e-9))
+    return min(1.0, total)
+
+
 def classify_significance(
     p_value: float | None, n_trials: int, family_alpha: float = 0.05
 ) -> str:

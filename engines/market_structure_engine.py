@@ -38,21 +38,34 @@ from engines.base_engine import BaseEngine, Bias, EngineOutput
 
 
 def _swing_points(df: pd.DataFrame, window: int = 3) -> tuple[list, list]:
-    """Return (highs, lows) as lists of (idx, price) tuples."""
+    """Return (highs, lows) as lists of (idx, price) tuples.
+
+    Unified onto utils.indicators.find_swings (the same rolling-window
+    detector smc_engine.find_swing_points already used) — Confluence
+    Engine Overhaul Phase 1. Verified bit-identical to this function's
+    prior standalone loop implementation on a real synthetic corpus
+    before the swap; positional (not label) indices, matching the old
+    loop's `i` semantics exactly."""
+    from utils.indicators import find_swings
+
+    swing_high, swing_low = find_swings(df, window=window)
     high = df["high"].astype(float)
     low = df["low"].astype(float)
 
-    highs, lows = [], []
-    for i in range(window, len(df) - window):
-        if high.iloc[i] == high.iloc[i - window:i + window + 1].max():
-            highs.append((i, float(high.iloc[i])))
-        if low.iloc[i] == low.iloc[i - window:i + window + 1].min():
-            lows.append((i, float(low.iloc[i])))
+    highs = [(int(pos), float(high.iloc[pos])) for pos in np.where(swing_high.to_numpy())[0]]
+    lows = [(int(pos), float(low.iloc[pos])) for pos in np.where(swing_low.to_numpy())[0]]
 
     return highs, lows
 
 
-def _classify_structure(highs: list, lows: list) -> dict:
+def _classify_structure(
+    highs: list,
+    lows: list,
+    bos_strength: float = 65,
+    choch_strength: float = 75,
+    ranging_strength: float = 20,
+    weak_structure_strength: float = 45,
+) -> dict:
     """Classify market structure from recent swings.
 
     Returns dict with:
@@ -111,13 +124,15 @@ def _classify_structure(highs: list, lows: list) -> dict:
     # Calculate strength based on consistency
     if bullish_structure:
         trend = "bullish"
-        strength = 65 if last_event == "BOS" else (75 if last_event in ("CHoCH", "MSS") else 45)
+        strength = bos_strength if last_event == "BOS" else (
+            choch_strength if last_event in ("CHoCH", "MSS") else weak_structure_strength)
     elif bearish_structure:
         trend = "bearish"
-        strength = 65 if last_event == "BOS" else (75 if last_event in ("CHoCH", "MSS") else 45)
+        strength = bos_strength if last_event == "BOS" else (
+            choch_strength if last_event in ("CHoCH", "MSS") else weak_structure_strength)
     else:
         trend = "ranging"
-        strength = 20
+        strength = ranging_strength
 
     return {
         "trend": trend,
@@ -127,6 +142,120 @@ def _classify_structure(highs: list, lows: list) -> dict:
         "structure_lh": lh, "structure_ll": ll,
         "strength": strength,
     }
+
+
+def extract_features(df_cur: pd.DataFrame, df_macro: pd.DataFrame, t: dict) -> dict:
+    """Feature Extraction layer (Confluence Engine Overhaul Phase 2) —
+    H1/H4 swing-point classification decide() needs. Pure function of
+    (df_cur, df_macro, thresholds), no bias/score logic."""
+    h1_lookback_bars = t.get("h1_lookback_bars", 100)
+    h4_lookback_bars = t.get("h4_lookback_bars", 60)
+    structure_kwargs = {
+        "bos_strength": t.get("bos_strength", 65),
+        "choch_strength": t.get("choch_strength", 75),
+        "ranging_strength": t.get("ranging_strength", 20),
+        "weak_structure_strength": t.get("weak_structure_strength", 45),
+    }
+
+    h1_window = df_cur.tail(h1_lookback_bars)
+    h1_highs, h1_lows = _swing_points(h1_window, window=t.get("h1_window", 3))
+    h4_highs, h4_lows = _swing_points(df_macro.tail(h4_lookback_bars), window=t.get("h4_window", 2))
+
+    h1_struct = _classify_structure(h1_highs, h1_lows, **structure_kwargs)
+    h4_struct = _classify_structure(h4_highs, h4_lows, **structure_kwargs)
+
+    last_h1_high = h1_highs[-1][1] if h1_highs else 0
+    last_h1_low = h1_lows[-1][1] if h1_lows else 0
+    # Feature Mining Phase 1 (2026-07-30) — swing bar-ages, needed for a
+    # "how many bars since the last swing high/low" feature. idx is
+    # positional within h1_window (the tail(N) slice used above for
+    # _swing_points), so age is relative to that slice's last bar,
+    # matching the decision-time snapshot everywhere else in raw.
+    last_high_idx = h1_highs[-1][0] if h1_highs else None
+    last_low_idx = h1_lows[-1][0] if h1_lows else None
+    last_high_bar_age = (len(h1_window) - 1 - last_high_idx) if last_high_idx is not None else None
+    last_low_bar_age = (len(h1_window) - 1 - last_low_idx) if last_low_idx is not None else None
+
+    return {
+        "h1_struct": h1_struct,
+        "h4_struct": h4_struct,
+        "last_h1_high": last_h1_high,
+        "last_h1_low": last_h1_low,
+        "last_high_bar_age": last_high_bar_age,
+        "last_low_bar_age": last_low_bar_age,
+    }
+
+
+def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
+    """Decision Logic layer (Confluence Engine Overhaul Phase 2) — turns
+    an extract_features() snapshot into a bias/score opinion via H1/H4
+    trend-agreement voting. Pure function of (features, thresholds)."""
+    h1_struct, h4_struct = features["h1_struct"], features["h4_struct"]
+    h1_bias = h1_struct["trend"]
+    h4_bias = h4_struct["trend"]
+    h1_event = h1_struct["last_event"]
+    h1_event_dir = h1_struct["last_event_bias"]
+
+    aligned_bonus = t.get("aligned_bonus", 10.0)
+    aligned_score_cap = t.get("aligned_score_cap", 85.0)
+    disagree_score = t.get("disagree_score", 50.0)
+    h1_only_score = t.get("h1_only_score", 40.0)
+
+    reasons: list[str] = []
+    score = 0.0
+    bias = Bias.NEUTRAL
+
+    # Both timeframes agree — strong signal
+    if h1_bias == h4_bias and h1_bias != "ranging":
+        if h1_bias == "bullish":
+            bias = Bias.BULLISH
+            score = h1_struct["strength"]
+            if h1_event in ("CHoCH", "MSS"):
+                score = min(score + aligned_bonus, aligned_score_cap)
+                reasons.append(f"H1 {h1_event} bullish confirmed by H4 bullish structure")
+            else:
+                reasons.append(f"H1+H4 bullish structure (BOS continuation)")
+        else:
+            bias = Bias.BEARISH
+            score = h1_struct["strength"]
+            if h1_event in ("CHoCH", "MSS"):
+                score = min(score + aligned_bonus, aligned_score_cap)
+                reasons.append(f"H1 {h1_event} bearish confirmed by H4 bearish structure")
+            else:
+                reasons.append(f"H1+H4 bearish structure (BOS continuation)")
+
+    # H1 CHoCH/MSS against H4 trend — high priority reversal signal
+    elif h1_event in ("CHoCH", "MSS") and h1_event_dir != "none":
+        if h1_event_dir == "bullish":
+            bias = Bias.BULLISH
+            score = disagree_score  # lower confidence — H4 disagrees
+            reasons.append(f"H1 {h1_event} bullish but H4 still {h4_bias} — early reversal")
+        else:
+            bias = Bias.BEARISH
+            score = disagree_score
+            reasons.append(f"H1 {h1_event} bearish but H4 still {h4_bias} — early reversal")
+
+    # Only H1 structure
+    elif h1_bias != "ranging":
+        if h1_bias == "bullish":
+            bias = Bias.BULLISH
+            score = h1_only_score
+        else:
+            bias = Bias.BEARISH
+            score = h1_only_score
+        reasons.append(f"H1 {h1_bias} structure (H4 ranging/insufficient)")
+
+    else:
+        reasons.append(f"H1 ranging (HH={h1_struct['structure_hh']}, "
+                       f"HL={h1_struct['structure_hl']}, "
+                       f"LH={h1_struct['structure_lh']}, "
+                       f"LL={h1_struct['structure_ll']})")
+
+    reasons.append(
+        f"Last H1 swing: high={features['last_h1_high']:.5f}, low={features['last_h1_low']:.5f}"
+    )
+
+    return bias, score, reasons
 
 
 class MarketStructureEngine(BaseEngine):
@@ -155,6 +284,9 @@ class MarketStructureEngine(BaseEngine):
         return None
 
     def analyze(self, mtf_data: dict[str, pd.DataFrame]) -> EngineOutput:
+        t = self.thresholds
+        min_bars = t.get("min_bars", 30)
+
         # Current structure on the decision TF (was hardcoded H1); macro
         # context one timeframe higher (was hardcoded H4).
         _tf, df_cur = self.decision_frame(mtf_data)
@@ -162,7 +294,7 @@ class MarketStructureEngine(BaseEngine):
         if df_macro is None:
             df_macro = df_cur
 
-        if len(df_cur) < 30:
+        if len(df_cur) < min_bars:
             return EngineOutput(
                 engine_name="MarketStructure",
                 bias=Bias.NEUTRAL,
@@ -170,107 +302,34 @@ class MarketStructureEngine(BaseEngine):
                 reasons=["Insufficient data"],
             )
 
-        # Analyze current (decision-TF) and macro (higher-TF) structure
-        h1_window = df_cur.tail(100)
-        h1_highs, h1_lows = _swing_points(h1_window, window=3)
-        h4_highs, h4_lows = _swing_points(df_macro.tail(60), window=2)
-
-        h1_struct = _classify_structure(h1_highs, h1_lows)
-        h4_struct = _classify_structure(h4_highs, h4_lows)
-
-        reasons = []
-        score = 0.0
-        bias = Bias.NEUTRAL
-
-        h1_bias = h1_struct["trend"]
-        h4_bias = h4_struct["trend"]
-        h1_event = h1_struct["last_event"]
-        h1_event_dir = h1_struct["last_event_bias"]
-
-        # Both timeframes agree — strong signal
-        if h1_bias == h4_bias and h1_bias != "ranging":
-            if h1_bias == "bullish":
-                bias = Bias.BULLISH
-                score = h1_struct["strength"]
-                if h1_event in ("CHoCH", "MSS"):
-                    score = min(score + 10, 85)
-                    reasons.append(f"H1 {h1_event} bullish confirmed by H4 bullish structure")
-                else:
-                    reasons.append(f"H1+H4 bullish structure (BOS continuation)")
-            else:
-                bias = Bias.BEARISH
-                score = h1_struct["strength"]
-                if h1_event in ("CHoCH", "MSS"):
-                    score = min(score + 10, 85)
-                    reasons.append(f"H1 {h1_event} bearish confirmed by H4 bearish structure")
-                else:
-                    reasons.append(f"H1+H4 bearish structure (BOS continuation)")
-
-        # H1 CHoCH/MSS against H4 trend — high priority reversal signal
-        elif h1_event in ("CHoCH", "MSS") and h1_event_dir != "none":
-            if h1_event_dir == "bullish":
-                bias = Bias.BULLISH
-                score = 50  # lower confidence — H4 disagrees
-                reasons.append(f"H1 {h1_event} bullish but H4 still {h4_bias} — early reversal")
-            else:
-                bias = Bias.BEARISH
-                score = 50
-                reasons.append(f"H1 {h1_event} bearish but H4 still {h4_bias} — early reversal")
-
-        # Only H1 structure
-        elif h1_bias != "ranging":
-            if h1_bias == "bullish":
-                bias = Bias.BULLISH
-                score = 40
-            else:
-                bias = Bias.BEARISH
-                score = 40
-            reasons.append(f"H1 {h1_bias} structure (H4 ranging/insufficient)")
-
-        else:
-            reasons.append(f"H1 ranging (HH={h1_struct['structure_hh']}, "
-                           f"HL={h1_struct['structure_hl']}, "
-                           f"LH={h1_struct['structure_lh']}, "
-                           f"LL={h1_struct['structure_ll']})")
-
-        last_h1_high = h1_highs[-1][1] if h1_highs else 0
-        last_h1_low = h1_lows[-1][1] if h1_lows else 0
-        reasons.append(f"Last H1 swing: high={last_h1_high:.5f}, low={last_h1_low:.5f}")
-
-        # Feature Mining Phase 1 (2026-07-30) — swing bar-ages, needed for a
-        # "how many bars since the last swing high/low" feature. idx is
-        # positional within h1_window (the tail(100) slice already used
-        # above for _swing_points), so age is relative to that slice's last
-        # bar, matching the decision-time snapshot everywhere else in raw.
-        last_high_idx = h1_highs[-1][0] if h1_highs else None
-        last_low_idx = h1_lows[-1][0] if h1_lows else None
-        last_high_bar_age = (len(h1_window) - 1 - last_high_idx) if last_high_idx is not None else None
-        last_low_bar_age = (len(h1_window) - 1 - last_low_idx) if last_low_idx is not None else None
+        features = extract_features(df_cur, df_macro, t)
+        bias, score, reasons = decide(features, t)
 
         return EngineOutput(
             engine_name="MarketStructure",
             bias=bias,
             score=round(score, 1),
             reasons=reasons,
+            features=features,
             raw={
                 "timeframe_h1": "H1",
                 "timeframe_h4": "H4",
-                "h1_trend": h1_bias,
-                "h4_trend": h4_bias,
-                "h1_event": h1_event,
-                "h1_event_direction": h1_event_dir,
-                "h1_strength": h1_struct["strength"],
-                "h4_strength": h4_struct["strength"],
-                "aligned": h1_bias == h4_bias,
+                "h1_trend": features["h1_struct"]["trend"],
+                "h4_trend": features["h4_struct"]["trend"],
+                "h1_event": features["h1_struct"]["last_event"],
+                "h1_event_direction": features["h1_struct"]["last_event_bias"],
+                "h1_strength": features["h1_struct"]["strength"],
+                "h4_strength": features["h4_struct"]["strength"],
+                "aligned": features["h1_struct"]["trend"] == features["h4_struct"]["trend"],
                 # Feature Mining Phase 1 (2026-07-30) — additive only, never
                 # consulted by bias/score/control-flow above.
-                "h1_structure_hh": h1_struct.get("structure_hh"),
-                "h1_structure_hl": h1_struct.get("structure_hl"),
-                "h1_structure_lh": h1_struct.get("structure_lh"),
-                "h1_structure_ll": h1_struct.get("structure_ll"),
-                "last_h1_high": last_h1_high,
-                "last_h1_low": last_h1_low,
-                "last_high_bar_age": last_high_bar_age,
-                "last_low_bar_age": last_low_bar_age,
+                "h1_structure_hh": features["h1_struct"].get("structure_hh"),
+                "h1_structure_hl": features["h1_struct"].get("structure_hl"),
+                "h1_structure_lh": features["h1_struct"].get("structure_lh"),
+                "h1_structure_ll": features["h1_struct"].get("structure_ll"),
+                "last_h1_high": features["last_h1_high"],
+                "last_h1_low": features["last_h1_low"],
+                "last_high_bar_age": features["last_high_bar_age"],
+                "last_low_bar_age": features["last_low_bar_age"],
             },
         )

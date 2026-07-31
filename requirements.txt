@@ -8,6 +8,20 @@
 # ccxt's and ctrader-open-api's own heavily pinned trees.
 pandas>=2.0.0,<3.0.0
 numpy>=1.24.0,<3.0.0
+
+# Confluence Engine Overhaul Phase 3a (2026-08-01) — quant_engine.py's
+# statistical rebuild needs a real ADF (Augmented Dickey-Fuller)
+# stationarity test for regime classification. Hand-rolling ADF's
+# critical-value/lag-selection machinery would risk a subtly-wrong
+# bespoke implementation exactly where correctness matters most. No
+# stats library existed before (scipy/statsmodels both absent).
+# `pip install --dry-run "statsmodels>=0.14.0,<0.15.0"` verified to
+# resolve cleanly (pulls scipy==1.17.1 + patsy==1.0.2 as transitive
+# deps; existing numpy/pandas floors already satisfy statsmodels').
+# quant stays DISABLED (engines.enabled.quant: false) — zero live-
+# trading risk from this addition.
+statsmodels>=0.14.0,<0.15.0
+
 pydantic>=2.0.0,<3.0.0
 PyYAML>=6.0,<7.0
 python-dotenv>=1.0.0,<2.0.0

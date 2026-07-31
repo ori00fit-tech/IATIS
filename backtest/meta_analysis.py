@@ -24,10 +24,12 @@ confirmation by itself.
 """
 from __future__ import annotations
 
+import itertools
 import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from backtest.multiple_testing import binomial_sign_test_p_value, classify_significance
 from backtest.optimizer import MissionSearchSpace, resolve_point
 from backtesting.backtest_engine import ENGINE_KEYS
 
@@ -36,6 +38,23 @@ MIN_TOP_N = 5
 MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS = 20
 DEFAULT_N_BINS = 5
 _PLATEAU_BAND = 0.20  # relative tolerance vs the best bin's mean objective
+
+# Edge Discovery (2026-07-31) — cross-trial consensus + pooled 3-way
+# breakdown + ranked opportunities. "Unknown" (the gate-off fallback
+# by_regime/by_session/by_direction_regime_session use) is excluded from
+# every one of these constants — it is not a real category and is not a
+# legal confluence.context_filters.ContextSpec value, so it must never
+# reach a claim or an opportunity candidate.
+_DIRECTION_PAIR = ("BUY", "SELL")
+_REGIME_PAIR = ("TRENDING", "RANGING")
+_SESSION_VALUES = ("Asia", "London", "NewYork", "Overlap")
+_MIN_TRIALS_PER_CLAIM = 5
+# Fixed family size for Bonferroni correction — 1 direction pair + 1
+# regime pair + C(4,2)=6 session pairs, x2 metrics (win_rate, profit_
+# factor). Fixed so it never drifts with how many claims happened to
+# resolve on a given mission.
+_N_CLAIMS_ATTEMPTED = 16
+MIN_TRADES_FOR_POOLED_ROW = 10
 
 _SAMPLER_CAVEAT: dict[str, str] = {
     "grid": (
@@ -109,6 +128,103 @@ class ConsensusBand:
 
 
 @dataclass(frozen=True)
+class ConsensusClaim:
+    """A real, computed cross-trial claim, e.g. 'BUY win_rate exceeded
+    SELL win_rate in 43 of 50 trials' — an exact binomial sign test over
+    trial-level outcomes (backtest.multiple_testing.
+    binomial_sign_test_p_value), NOT a narrative. Always emitted, even
+    below _MIN_TRIALS_PER_CLAIM (significance="INSUFFICIENT_DATA" then),
+    matching ConsensusBand's own "always emit, mark why unusable"
+    convention."""
+    dimension: str          # "direction" | "regime" | "session"
+    metric: str              # "win_rate" | "profit_factor"
+    dominant_value: str
+    other_value: str
+    n_trials_compared: int   # ties excluded
+    trials_favor_dominant: int
+    fraction_favor_dominant: float
+    p_value: float | None
+    confidence_pct: float | None
+    significance: str        # INSUFFICIENT_DATA | SURVIVES_CORRECTION | NOMINAL_ONLY | NOT_SIGNIFICANT
+    claim_text: str
+
+    def to_dict(self) -> dict:
+        return {
+            "dimension": self.dimension, "metric": self.metric,
+            "dominant_value": self.dominant_value, "other_value": self.other_value,
+            "n_trials_compared": self.n_trials_compared,
+            "trials_favor_dominant": self.trials_favor_dominant,
+            "fraction_favor_dominant": round(self.fraction_favor_dominant, 4),
+            "p_value": round(self.p_value, 6) if self.p_value is not None else None,
+            "confidence_pct": self.confidence_pct,
+            "significance": self.significance, "claim_text": self.claim_text,
+        }
+
+
+@dataclass(frozen=True)
+class PooledBreakdownRow:
+    """One row of the pooled 3-way cross (backtest.metrics.BacktestMetrics.
+    by_direction_regime_session), summed across ALL completed trials in a
+    mission, then optionally re-grouped onto a coarser 1-way/2-way
+    subset. `level` names which dimensions are fixed on this row."""
+    direction: str | None
+    regime: str | None
+    session: str | None
+    level: str  # e.g. "direction" | "direction+regime" | "direction+regime+session"
+    trades: int
+    wins: int
+    win_rate: float
+    pnl: float
+    gross_profit: float
+    gross_loss: float
+    profit_factor: float  # may be float('inf')
+
+    def to_dict(self) -> dict:
+        # Raw floats (including a possible inf profit_factor) returned
+        # as-is — sanitized once, uniformly, by backtest.metrics.json_safe
+        # at the API route layer (see execution/routes/missions.py),
+        # matching this codebase's single-sanitization-point convention.
+        return {
+            "direction": self.direction, "regime": self.regime, "session": self.session,
+            "level": self.level, "trades": self.trades, "wins": self.wins,
+            "win_rate": round(self.win_rate, 2), "pnl": round(self.pnl, 2),
+            "gross_profit": round(self.gross_profit, 2), "gross_loss": round(self.gross_loss, 2),
+            "profit_factor": round(self.profit_factor, 3),
+        }
+
+
+@dataclass(frozen=True)
+class OpportunityCandidate:
+    """A ranked SUGGESTION only — never auto-selected, never auto-run.
+    Ranked by real, honestly-labeled criteria (observed effect size
+    weighted by pooled sample size), not a fabricated 'information gain'
+    statistic (no Bayesian prior model exists in this codebase to justify
+    that term)."""
+    direction: str | None
+    regime: str | None
+    session: str | None
+    level: str
+    trades: int
+    profit_factor: float
+    effect_size: float  # abs(profit_factor - 1.0); may be inf
+    rank_score: float   # effect_size * trades
+    label: str           # e.g. "BUY + RANGING + London"
+
+    def to_dict(self) -> dict:
+        # Raw floats (any of which may be inf) returned as-is — see
+        # PooledBreakdownRow.to_dict()'s comment: sanitized once,
+        # uniformly, by json_safe() at the API route layer.
+        return {
+            "direction": self.direction, "regime": self.regime, "session": self.session,
+            "level": self.level, "trades": self.trades,
+            "profit_factor": round(self.profit_factor, 3),
+            "effect_size": round(self.effect_size, 4),
+            "rank_score": round(self.rank_score, 2),
+            "label": self.label,
+        }
+
+
+@dataclass(frozen=True)
 class MetaAnalysisResult:
     mission_id: str
     symbol: str | None
@@ -121,6 +237,9 @@ class MetaAnalysisResult:
     engine_frequencies: list[DimensionFrequency] = field(default_factory=list)
     timeframe_frequencies: list[DimensionFrequency] = field(default_factory=list)
     consensus_bands: list[ConsensusBand] = field(default_factory=list)
+    cross_trial_consensus: list[ConsensusClaim] = field(default_factory=list)
+    pooled_breakdown: list[PooledBreakdownRow] = field(default_factory=list)
+    opportunity_candidates: list[OpportunityCandidate] = field(default_factory=list)
     note: str = ""
 
     def to_dict(self) -> dict:
@@ -132,6 +251,9 @@ class MetaAnalysisResult:
             "engine_frequencies": [f.to_dict() for f in self.engine_frequencies],
             "timeframe_frequencies": [f.to_dict() for f in self.timeframe_frequencies],
             "consensus_bands": [b.to_dict() for b in self.consensus_bands],
+            "cross_trial_consensus": [c.to_dict() for c in self.cross_trial_consensus],
+            "pooled_breakdown": [r.to_dict() for r in self.pooled_breakdown],
+            "opportunity_candidates": [o.to_dict() for o in self.opportunity_candidates],
             "note": self.note,
         }
 
@@ -205,6 +327,203 @@ def _consensus_band(
     return ConsensusBand(risk_param=param, bins=bins, shape=shape)
 
 
+def _compare_dimension_pair(
+    complete_rows: list[dict], dimension: str, bucket_field: str,
+    value_a: str, value_b: str, metric: str,
+) -> ConsensusClaim:
+    """Counts, across ALL complete trials, how many favor value_a vs.
+    value_b on `metric` within `bucket_field` (e.g. by_direction's
+    'win_rate') — ties and trials missing either bucket excluded. A
+    profit_factor comparison additionally skips any trial recorded
+    before that key existed on the bucket (degrade gracefully, never
+    fabricate a value)."""
+    favor_a = 0
+    favor_b = 0
+    for row in complete_rows:
+        try:
+            metrics = json.loads(row.get("metrics_json") or "{}")
+        except (TypeError, ValueError):
+            continue
+        buckets = metrics.get(bucket_field) or {}
+        bucket_a, bucket_b = buckets.get(value_a), buckets.get(value_b)
+        if not isinstance(bucket_a, dict) or not isinstance(bucket_b, dict):
+            continue
+        if bucket_a.get("trades", 0) <= 0 or bucket_b.get("trades", 0) <= 0:
+            continue
+        if metric not in bucket_a or metric not in bucket_b:
+            continue
+        val_a, val_b = bucket_a[metric], bucket_b[metric]
+        if val_a == val_b:
+            continue
+        if val_a > val_b:
+            favor_a += 1
+        else:
+            favor_b += 1
+
+    n = favor_a + favor_b
+    dominant_value, other_value = (value_a, value_b) if favor_a >= favor_b else (value_b, value_a)
+    trials_favor_dominant = max(favor_a, favor_b)
+    fraction = (trials_favor_dominant / n) if n > 0 else 0.0
+
+    if n < _MIN_TRIALS_PER_CLAIM:
+        return ConsensusClaim(
+            dimension=dimension, metric=metric, dominant_value=dominant_value, other_value=other_value,
+            n_trials_compared=n, trials_favor_dominant=trials_favor_dominant,
+            fraction_favor_dominant=fraction, p_value=None, confidence_pct=None,
+            significance="INSUFFICIENT_DATA",
+            claim_text=(
+                f"{dimension} {metric}: only {n} trial(s) had both '{value_a}' and '{value_b}' "
+                f"comparable — need at least {_MIN_TRIALS_PER_CLAIM} before this claim means anything."
+            ),
+        )
+
+    p = binomial_sign_test_p_value(trials_favor_dominant, n)
+    significance = classify_significance(p, _N_CLAIMS_ATTEMPTED)
+    confidence_pct = round((1 - p) * 100, 1) if p is not None else None
+    claim_text = (
+        f"Observed in {trials_favor_dominant}/{n} trials: {dominant_value} {metric} exceeded "
+        f"{other_value} {metric}. p={p:.4f} ({significance}), ~{confidence_pct}% confidence."
+        if p is not None else
+        f"Observed in {trials_favor_dominant}/{n} trials: {dominant_value} {metric} exceeded {other_value} {metric}."
+    )
+    return ConsensusClaim(
+        dimension=dimension, metric=metric, dominant_value=dominant_value, other_value=other_value,
+        n_trials_compared=n, trials_favor_dominant=trials_favor_dominant,
+        fraction_favor_dominant=fraction, p_value=p, confidence_pct=confidence_pct,
+        significance=significance, claim_text=claim_text,
+    )
+
+
+def _cross_trial_consensus(complete_rows: list[dict]) -> list[ConsensusClaim]:
+    """Real, computed cross-trial consensus claims (e.g. 'BUY win_rate
+    exceeded SELL win_rate in 43 of 50 trials') — an exact binomial sign
+    test over trial-level outcomes, never AI narrative. Fixed family of
+    _N_CLAIMS_ATTEMPTED = 16 comparisons (1 direction pair + 1 regime
+    pair + 6 session pairs, x2 metrics) for a stable Bonferroni
+    denominator that never drifts with which claims happened to resolve."""
+    claims: list[ConsensusClaim] = []
+    for metric in ("win_rate", "profit_factor"):
+        claims.append(_compare_dimension_pair(
+            complete_rows, "direction", "by_direction", _DIRECTION_PAIR[0], _DIRECTION_PAIR[1], metric,
+        ))
+        claims.append(_compare_dimension_pair(
+            complete_rows, "regime", "by_regime", _REGIME_PAIR[0], _REGIME_PAIR[1], metric,
+        ))
+        for value_a, value_b in itertools.combinations(_SESSION_VALUES, 2):
+            claims.append(_compare_dimension_pair(complete_rows, "session", "by_session", value_a, value_b, metric))
+    return claims
+
+
+def _pool_breakdown_buckets(complete_rows: list[dict]) -> dict[str, dict]:
+    """Sums every complete trial's by_direction_regime_session bucket-
+    for-bucket (same compound key) across ALL of them (not just the
+    top-N slice — distinct from engine/timeframe frequency's top-vs-all
+    split). Trials recorded before this field existed contribute
+    nothing to any key — degrade gracefully, never fabricate."""
+    pooled: dict[str, dict] = {}
+    for row in complete_rows:
+        try:
+            metrics = json.loads(row.get("metrics_json") or "{}")
+        except (TypeError, ValueError):
+            continue
+        buckets = metrics.get("by_direction_regime_session") or {}
+        for key, bucket in buckets.items():
+            if not isinstance(bucket, dict):
+                continue
+            acc = pooled.setdefault(
+                key, {"trades": 0, "wins": 0, "pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0}
+            )
+            acc["trades"] += bucket.get("trades", 0)
+            acc["wins"] += bucket.get("wins", 0)
+            acc["pnl"] += bucket.get("pnl", 0.0)
+            acc["gross_profit"] += bucket.get("gross_profit", 0.0)
+            acc["gross_loss"] += bucket.get("gross_loss", 0.0)
+    return pooled
+
+
+# Every non-empty subset of {direction, regime, session} — lets all tree
+# levels (1-way/2-way/3-way) be derived from the ONE pooled 3-way dict by
+# grouping on key parts and summing, rather than needing 7 separate
+# BacktestMetrics fields.
+_LEVEL_SUBSETS: tuple[tuple[str, ...], ...] = (
+    ("direction",), ("regime",), ("session",),
+    ("direction", "regime"), ("direction", "session"), ("regime", "session"),
+    ("direction", "regime", "session"),
+)
+
+
+def _expand_pooled_levels(pooled_3way: dict[str, dict]) -> list[PooledBreakdownRow]:
+    """Re-groups the pooled 3-way dict onto every non-empty dimension
+    subset, re-summing and recomputing win_rate/profit_factor per group
+    with the same convention backtest.metrics.calculate_metrics uses.
+    Bounded, descriptive display data — 'Unknown' stays in here for
+    completeness (excluded later, at the opportunity-ranking stage, since
+    it is not a legal pre-fill value)."""
+    rows: list[PooledBreakdownRow] = []
+    for subset in _LEVEL_SUBSETS:
+        grouped: dict[tuple[str, ...], dict] = {}
+        for key, bucket in pooled_3way.items():
+            parts = key.split("|")
+            if len(parts) != 3:
+                continue
+            values_by_dim = dict(zip(("direction", "regime", "session"), parts))
+            group_key = tuple(values_by_dim[dim] for dim in subset)
+            acc = grouped.setdefault(
+                group_key, {"trades": 0, "wins": 0, "pnl": 0.0, "gross_profit": 0.0, "gross_loss": 0.0}
+            )
+            acc["trades"] += bucket.get("trades", 0)
+            acc["wins"] += bucket.get("wins", 0)
+            acc["pnl"] += bucket.get("pnl", 0.0)
+            acc["gross_profit"] += bucket.get("gross_profit", 0.0)
+            acc["gross_loss"] += bucket.get("gross_loss", 0.0)
+
+        for group_key, acc in grouped.items():
+            if acc["trades"] <= 0:
+                continue
+            values = dict(zip(subset, group_key))
+            win_rate = acc["wins"] / acc["trades"] * 100
+            gp, gl = acc["gross_profit"], acc["gross_loss"]
+            pf = (gp / gl) if gl > 0 else float("inf")
+            rows.append(PooledBreakdownRow(
+                direction=values.get("direction"), regime=values.get("regime"), session=values.get("session"),
+                level="+".join(subset), trades=acc["trades"], wins=acc["wins"], win_rate=win_rate,
+                pnl=acc["pnl"], gross_profit=gp, gross_loss=gl, profit_factor=pf,
+            ))
+    return rows
+
+
+def _rank_opportunities(
+    pooled_rows: list[PooledBreakdownRow],
+    min_trades: int = MIN_TRADES_FOR_POOLED_ROW,
+    top_n: int = 15,
+) -> list[OpportunityCandidate]:
+    """Ranked SUGGESTIONS ONLY — never auto-selected, never auto-run (the
+    caller decides what to do with these; nothing here ever launches a
+    mission). Ranked by real, honestly-labeled effect_size x trades, not
+    a fabricated 'information gain' statistic. Excludes any row tagged
+    'Unknown' in any dimension — not a legal confluence.context_filters.
+    ContextSpec value, so it must never reach a pre-fill action."""
+    eligible = [
+        r for r in pooled_rows
+        if r.trades >= min_trades
+        and (r.direction is None or r.direction in _DIRECTION_PAIR)
+        and (r.regime is None or r.regime in _REGIME_PAIR)
+        and (r.session is None or r.session in _SESSION_VALUES)
+    ]
+    candidates: list[OpportunityCandidate] = []
+    for r in eligible:
+        effect_size = abs(r.profit_factor - 1.0)
+        rank_score = effect_size * r.trades
+        label = " + ".join(v for v in (r.direction, r.regime, r.session) if v)
+        candidates.append(OpportunityCandidate(
+            direction=r.direction, regime=r.regime, session=r.session, level=r.level,
+            trades=r.trades, profit_factor=r.profit_factor, effect_size=effect_size,
+            rank_score=rank_score, label=label,
+        ))
+    candidates.sort(key=lambda c: c.rank_score, reverse=True)
+    return candidates[:top_n]
+
+
 def compute_meta_analysis(
     space: MissionSearchSpace,
     trials: list[dict[str, Any]],
@@ -214,6 +533,7 @@ def compute_meta_analysis(
     top_fraction: float = DEFAULT_TOP_FRACTION,
     min_top_n: int = MIN_TOP_N,
     n_bins: int = DEFAULT_N_BINS,
+    min_trades_for_pooled: int = MIN_TRADES_FOR_POOLED_ROW,
 ) -> MetaAnalysisResult:
     """`trials` = raw storage.research_missions.leaderboard() rows (any
     state). Only COMPLETE trials with a real objective_value contribute —
@@ -272,10 +592,17 @@ def compute_meta_analysis(
         _consensus_band(param, complete_rows, resolved, n_bins) for param in space.risk_param_ranges
     ]
 
+    cross_trial_consensus = _cross_trial_consensus(complete_rows)
+    pooled_3way = _pool_breakdown_buckets(complete_rows)
+    pooled_breakdown = _expand_pooled_levels(pooled_3way)
+    opportunity_candidates = _rank_opportunities(pooled_breakdown, min_trades=min_trades_for_pooled)
+
     return MetaAnalysisResult(
         mission_id=mission_id, symbol=symbol, sampler=sampler,
         n_total_trials=n_total, n_complete_trials=n_complete,
         top_fraction_used=top_fraction, top_n=top_n, insufficient_data=False,
         engine_frequencies=engine_freqs, timeframe_frequencies=timeframe_freqs,
-        consensus_bands=consensus_bands, note=sampler_caveat(sampler),
+        consensus_bands=consensus_bands, cross_trial_consensus=cross_trial_consensus,
+        pooled_breakdown=pooled_breakdown, opportunity_candidates=opportunity_candidates,
+        note=sampler_caveat(sampler),
     )

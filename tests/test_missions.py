@@ -619,6 +619,65 @@ def test_missions_meta_analysis_rejects_bad_query_params(client):
     assert r2.status_code == 400
 
 
+# ── Edge Discovery (2026-07-31) ───────────────────────────────────────────
+
+def test_missions_meta_analysis_response_includes_new_fields(client):
+    _seed_mission_and_trial("val-mission-n", n_complete=25)
+    r = client.get("/research/missions/val-mission-n/meta-analysis", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert "cross_trial_consensus" in body
+    assert "pooled_breakdown" in body
+    assert "opportunity_candidates" in body
+    assert len(body["cross_trial_consensus"]) == 16  # fixed claim family size
+
+
+def test_missions_meta_analysis_response_is_valid_json_even_with_infinite_profit_factor(client):
+    # Regression test for the bug this Edge Discovery change could itself
+    # introduce if the json_safe() fix on the route handler were skipped:
+    # a real bucket with zero losing trades has profit_factor=inf, and a
+    # bare `Infinity` token is not valid strict JSON (browsers reject it,
+    # even though Python's own json module round-trips it silently).
+    from backtest.optimizer import MissionSearchSpace, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _TF_IDX_KEY
+    from backtest import mission_runner
+    from storage import research_missions
+
+    mission_id = "val-mission-inf"
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),), risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    research_missions.upsert_mission(
+        mission_id=mission_id, name="test-mission", sampler="random", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=25, min_trades=1, seed=42,
+        search_space=mission_runner._search_space_dict(space), config={}, status="finished",
+    )
+    for i in range(25):
+        research_missions.record_trial(
+            mission_id=mission_id, trial_number=i, symbol="EURUSD", state="COMPLETE",
+            objective_value=1.2 + i * 0.01,
+            params={_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0},
+            metrics={
+                "by_direction_regime_session": {
+                    "BUY|RANGING|London": {
+                        "trades": 20, "wins": 20, "win_rate": 100.0, "pnl": 500.0,
+                        "gross_profit": 500.0, "gross_loss": 0.0, "profit_factor": float("inf"),
+                    },
+                },
+            },
+            trades=50, error=None, started_at="t", finished_at="t",
+        )
+
+    r = client.get("/research/missions/val-mission-inf/meta-analysis", headers=HDR)
+    assert r.status_code == 200
+    assert '"Infinity"' in r.text  # sanitized to a JSON string sentinel...
+    import re
+    assert not re.search(r':\s*Infinity[,}]', r.text)  # ...never a bare, invalid-JSON token
+    body = r.json()
+    candidate = next(c for c in body["opportunity_candidates"] if c["direction"] == "BUY")
+    assert candidate["profit_factor"] == "Infinity"
+
+
 # ── Feature Mining (2026-07-30) ─────────────────────────────────────────────
 
 def test_missions_feature_mining_requires_auth(client):

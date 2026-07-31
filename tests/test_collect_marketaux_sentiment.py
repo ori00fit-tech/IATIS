@@ -30,7 +30,7 @@ def test_collect_once_skips_symbols_with_no_signal():
         return _result(symbol) if symbol == "BTCUSD" else None
 
     with patch("fundamentals.marketaux_client.get_news_sentiment", side_effect=_fake):
-        records = collect_once(["XAUUSD", "BTCUSD"])  # XAUUSD unmapped -> None
+        records = collect_once(["XAUUSD", "BTCUSD"])  # _fake forces XAUUSD -> None here regardless of the real mapping
     assert len(records) == 1
     assert records[0]["symbol"] == "BTCUSD"
 

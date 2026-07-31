@@ -51,14 +51,40 @@ enabled:
 # behavior by tests/test_engine_config_extraction_no_behavior_change.py.
 # Each engine reads its own sub-key via self.thresholds.get(name,
 # CURRENT_HARDCODED_VALUE) — so an incomplete or missing thresholds block
-# degrades to identical behavior, never a crash. macro/sentiment are
-# deliberately NOT extracted here — their Phase 3 rebuilds replace their
-# thresholds wholesale, so extracting soon-to-be-discarded numbers now
-# would be wasted work. quant (Phase 3a, 2026-08-01) and divergence
-# (Phase 3b, 2026-08-01) were both fully rebuilt — their thresholds
-# blocks below are config-first from day one, not a post-hoc extraction
-# of legacy magic numbers.
+# degrades to identical behavior, never a crash. sentiment is deliberately
+# NOT extracted here — its Phase 3 rebuild replaces its thresholds
+# wholesale, so extracting soon-to-be-discarded numbers now would be
+# wasted work. quant (Phase 3a, 2026-08-01), divergence (Phase 3b,
+# 2026-08-01), and macro (Phase 3c, 2026-08-01) were all fully rebuilt —
+# their thresholds blocks below are config-first from day one, not a
+# post-hoc extraction of legacy magic numbers. price_action_v2/wyckoff_v2
+# (Track C, Phase 4, 2026-08-01) are AD-HOC-ONLY engine variants — see
+# their own block comments below and backtesting/backtest_engine.py's
+# build_engine_config_override docstring — never activated by this file's
+# own enabled: block.
 thresholds:
+  macro:
+    dxy_ema_fast: 10
+    dxy_ema_slow: 20
+    dxy_score_scale: 15.0
+    dxy_score_cap: 40.0
+    dxy_weight: 0.6
+    spy_ma_period: 20
+    vix_low: 15
+    vix_high: 25
+    gold_spy_lookback: 5
+    gold_spy_threshold_pct: 0.01
+    credit_spread_lookback_days: 20
+    credit_spread_widen_threshold: 0.1
+    fed_balance_sheet_lookback_weeks: 8
+    fed_balance_sheet_threshold_pct: 0.01
+    commodity_lookback_periods: 20
+    commodity_flat_threshold_pct: 0.02
+    risk_confirm_score: 30.0
+    risk_conflict_penalty: 10.0
+    score_cap: 70.0
+    score_neutral_floor: 15.0
+
   divergence:
     min_bars: 80
     atr_period: 14
@@ -251,6 +277,86 @@ thresholds:
     score_cap: 75.0
     score_neutral_floor: 20.0
 
+  # Track C (Phase 4, 2026-08-01) — PriceAction v2. AD-HOC-ONLY: reachable
+  # exclusively via backtesting.backtest_engine.build_engine_config_
+  # override's engine_variants param (Mission Center). This block's
+  # presence does NOT activate v2 live — engines.enabled.price_action
+  # stays true and still loads v1 unconditionally; see backtest_engine.py's
+  # variant-resolution loop. Genuinely no RSI/Bollinger Bands — deliberately
+  # dropped, see engines/price_action_engine_v2.py's module docstring.
+  price_action_v2:
+    min_bars: 30
+    atr_period: 14
+    fakey_score: 30.0
+    three_bar_play_score: 20.0
+    micro_trend_score: 15.0
+    failed_breakout_score: 25.0
+    opening_drive_score: 15.0
+    closing_strength_score: 15.0
+    compression_bonus_score: 15.0
+    micro_trend_lookback: 5
+    micro_trend_swing_window: 2
+    compression_short_lookback: 5
+    compression_long_lookback: 20
+    vcp_lookback: 6
+    vcp_bonus_threshold: 0.6
+    failed_breakout_lookback: 20
+    failed_breakout_tolerance: 0.002
+    opening_drive_wick_max_pct: 0.25
+    fakey_break_tolerance: 0.001
+    three_bar_play_pause_max_range_pct: 0.5
+    bull_score_min: 30.0
+    score_cap: 80.0
+
+  # Track C (Phase 4, 2026-08-01) — Wyckoff v2. AD-HOC-ONLY, same
+  # non-activation guarantee as price_action_v2 above. Superset of
+  # `wyckoff:`'s 14 keys — WyckoffEngineV2.decide() calls wyckoff_engine.
+  # decide() internally for its base layer, reading these SAME v1 key
+  # names from this block (never wyckoff:'s own), plus the new
+  # phase-machine/Composite-Operator-footprint keys below.
+  wyckoff_v2:
+    # v1 keys, identical starting values (proven heuristics, reused)
+    min_bars: 60
+    range_lookback: 40
+    spring_tolerance: 0.002
+    range_atr_max: 8.0
+    range_recent_lookback: 10
+    spring_upthrust_score: 45.0
+    range_position_score: 25.0
+    range_position_low_pct: 0.25
+    range_position_high_pct: 0.75
+    stopping_volume_score: 20.0
+    climax_score: 15.0
+    no_demand_score: 15.0
+    no_supply_score: 15.0
+    score_neutral_floor: 20.0
+    # new: climax (Selling/Buying Climax) detection
+    climax_lookback: 60
+    climax_atr_multiple: 2.5
+    climax_vol_ratio: 1.8
+    # new: Automatic Rally/Reaction
+    ar_lookback: 15
+    ar_swing_window: 2
+    # new: Secondary Test
+    st_lookback: 25
+    st_tolerance: 0.003
+    # new: Sign of Strength/LPS (accumulation) + Sign of Weakness/LPSY (distribution mirror)
+    sos_lookback: 20
+    sos_breakout_atr_multiple: 1.2
+    sos_score: 30.0
+    lps_score: 20.0
+    lps_max_pullback_pct: 0.5
+    sow_score: 30.0
+    lpsy_score: 20.0
+    # new: Composite Operator footprint (wires in the previously-dead _effort_vs_result)
+    effort_lookback: 10
+    effort_spread_ratio: 1.2
+    result_body_ratio: 0.5
+    co_footprint_score: 15.0
+    # new: Phase E confirmation
+    phase_e_atr_multiple: 1.5
+    score_cap: 85.0
+
   ict:
     min_bars: 30
     dealing_range_lookback: 20
@@ -287,11 +393,13 @@ thresholds:
 versions:
   divergence: "2.0"
   ict: "1.0"
-  macro: "1.0"
+  macro: "2.0"
   market_structure: "1.0"
   nnfx: "1.0"
   price_action: "1.0"
+  price_action_v2: "2.0"
   quant: "2.0"
   sentiment: "1.0"
   smc: "1.0"
   wyckoff: "1.0"
+  wyckoff_v2: "2.0"

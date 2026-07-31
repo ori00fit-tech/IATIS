@@ -24,6 +24,9 @@ export interface HypothesisBundleSpec {
   engines: string[]
   indicators: Record<string, unknown>[]
   context_filters: Record<string, unknown>[]
+  // Track C (Phase 4, 2026-08-01) — ad-hoc PriceAction v2/Wyckoff v2
+  // selection carried by this one named hypothesis.
+  engine_variants?: Record<string, string>
 }
 
 export interface MissionRequest {
@@ -40,6 +43,11 @@ export interface MissionRequest {
   engine_set_choices: string[][]
   indicator_set_choices: Record<string, unknown>[][]
   context_filter_set_choices: Record<string, unknown>[][]
+  // Track C (Phase 4, 2026-08-01) — ad-hoc PriceAction v2/Wyckoff v2
+  // selection, index-sampled same as the *_set_choices fields above.
+  // Still 100% ephemeral — never activates a variant in config/
+  // engines.yaml's live default.
+  engine_variant_choices: Record<string, string>[]
   hypothesis_bundle_choices?: HypothesisBundleSpec[]
   risk_param_ranges: Record<string, [number, number]>
   risk_param_grid: Record<string, number[]>

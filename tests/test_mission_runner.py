@@ -150,6 +150,37 @@ def test_resume_skips_already_completed_trials(tmp_path, monkeypatch):
     assert mission["status"] == "finished"
 
 
+def test_end_to_end_mission_run_with_engine_variant_choices(tmp_path):
+    """Track C (Phase 4) — a real mission run with a non-trivial
+    engine_variant_choices dimension must complete successfully and
+    record trials whose stored params_json actually varies
+    __engine_variants_idx (not just always index 0)."""
+    _write_dataset(tmp_path)
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),),
+        engine_set_choices=(("nnfx", "price_action", "wyckoff"),),
+        indicator_set_choices=((),),
+        engine_variant_choices=({}, {"price_action": "v2"}, {"wyckoff": "v2"}),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    mc = MissionConfig(
+        mission_id="mission-engine-variant-e2e", name="test-mission", symbols=("EURUSD",),
+        data_dir=tmp_path, start=None, end=None, sampler="random",
+        n_trials_per_symbol=6, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-engine-variant-e2e", "EURUSD")
+    assert len(trials) == 6
+    seen_variant_idx = {json.loads(t["params_json"]).get("__engine_variants_idx") for t in trials}
+    assert len(seen_variant_idx) > 1, "engine_variant_choices was never actually varied across trials"
+
+    mission = research_missions.get_mission("mission-engine-variant-e2e")
+    assert mission["status"] == "finished"
+
+
 # ── Graceful stop / isolation ─────────────────────────────────────────────
 
 def test_max_wall_clock_seconds_stops_gracefully_and_marks_finished(tmp_path):
@@ -274,6 +305,36 @@ def test_cli_wires_all_json_flags_into_mission_search_space(monkeypatch, tmp_pat
         ({"name": "direction", "mode": "entry_filter", "params": {"allowed": ["BULLISH"]}, "weight": 0},),
     )
     assert mc.search_space.hypothesis_bundle_choices is None
+    # Track C (Phase 4) — --engine-variant-choices omitted -> default (all-v1)
+    assert mc.search_space.engine_variant_choices == ({},)
+
+
+def test_cli_wires_engine_variant_choices(monkeypatch, tmp_path):
+    import sys
+
+    captured: dict = {}
+
+    def fake_run_mission(mc: MissionConfig) -> None:
+        captured["mc"] = mc
+
+    monkeypatch.setattr(mission_runner, "run_mission", fake_run_mission)
+    monkeypatch.setattr(sys, "argv", [
+        "mission_runner.py",
+        "--mission-id", "cli-engine-variant-test",
+        "--symbols", "eurusd",
+        "--data-dir", str(tmp_path),
+        "--sampler", "random",
+        "--n-trials-per-symbol", "3",
+        "--timeframes-choices", '[["H1"]]',
+        "--engine-set-choices", '[["nnfx","price_action","wyckoff"]]',
+        "--engine-variant-choices", '[{},{"price_action":"v2"},{"wyckoff":"v2"}]',
+        "--risk-param-ranges", '{"sl_atr_multiplier":[1.0,3.0]}',
+        "--output-dir", str(tmp_path / "reports"),
+    ])
+    mission_runner.main()
+
+    mc = captured["mc"]
+    assert mc.search_space.engine_variant_choices == ({}, {"price_action": "v2"}, {"wyckoff": "v2"})
 
 
 def test_cli_wires_hypothesis_bundle_choices(monkeypatch, tmp_path):

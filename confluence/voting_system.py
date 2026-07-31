@@ -60,6 +60,11 @@ _NAME_TO_KEY = {
     "Wyckoff": "wyckoff", "Macro": "macro",
     "Divergence": "divergence", "MarketStructure": "market_structure",
     "Sentiment": "sentiment",
+    # Track C (Phase 4, 2026-08-01) — ad-hoc engine variants (Mission
+    # Center only). A variant is a substitute implementation of its base
+    # engine's SAME weight slot — v1 and v2 never run simultaneously for
+    # one key, so this can never double-count a slot's weight.
+    "PriceActionV2": "price_action", "WyckoffV2": "wyckoff",
 }
 
 

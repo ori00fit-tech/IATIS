@@ -197,6 +197,33 @@ def test_missions_create_rejects_unknown_context_filter_mode(client):
     assert r.status_code == 400
 
 
+def test_missions_create_rejects_unknown_engine_in_engine_variant_choices(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "engine_variant_choices": [{"not_a_real_engine": "v2"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_create_rejects_unknown_variant_for_engine(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "engine_variant_choices": [{"price_action": "v3"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_create_rejects_engine_with_no_variants(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "engine_variant_choices": [{"nnfx": "v2"}]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
 def test_missions_create_rejects_risk_param_out_of_bounds(client):
     r = client.post(
         "/research/missions",
@@ -272,6 +299,47 @@ def test_missions_create_builds_expected_argv_with_context_filters(client, monke
     import json as _json
 
     assert _json.loads(argv[idx + 1]) == body["context_filter_set_choices"]
+
+
+def test_missions_create_builds_expected_argv_with_engine_variants(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    body = {
+        **_VALID_BODY,
+        "engine_set_choices": [["nnfx", "price_action", "wyckoff"]],
+        "engine_variant_choices": [{}, {"price_action": "v2"}, {"wyckoff": "v2"}],
+    }
+    r = client.post("/research/missions", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    argv = _FakeProc.captured_argv
+    assert "--engine-variant-choices" in argv
+    idx = argv.index("--engine-variant-choices")
+    import json as _json
+
+    assert _json.loads(argv[idx + 1]) == body["engine_variant_choices"]
+
+
+def test_missions_create_builds_expected_argv_omits_nothing_when_engine_variants_default(client, monkeypatch):
+    """Regression pin: --engine-variant-choices is ALWAYS present in argv
+    (unconditional, matching --indicator-set-choices's own status), even
+    when the request never sets engine_variant_choices explicitly —
+    defaults to the all-v1 [{}] entry."""
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post("/research/missions", json=_VALID_BODY, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    argv = _FakeProc.captured_argv
+    assert "--engine-variant-choices" in argv
+    idx = argv.index("--engine-variant-choices")
+    import json as _json
+
+    assert _json.loads(argv[idx + 1]) == [{}]
 
 
 def test_missions_create_builds_expected_argv_with_hypothesis_bundles(client, monkeypatch):

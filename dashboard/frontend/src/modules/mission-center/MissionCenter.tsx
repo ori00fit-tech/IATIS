@@ -119,6 +119,51 @@ const CONTEXT_OPTIONS: Record<ContextKey, { label: string; value: string | numbe
   direction: ['BULLISH', 'BEARISH'].map((v) => ({ label: v, value: v })),
 }
 
+// Track C (Phase 4, 2026-08-01) — mirrors backtesting.backtest_engine.
+// ENGINE_VARIANT_KEYS exactly: the picker only ever offers variants that
+// actually exist, and only for engines that have one. Reachable only
+// through Mission Center's ephemeral engine_variant_choices — never
+// activates a variant in config/engines.yaml's live default.
+const ENGINE_VARIANT_KEYS: Record<string, string[]> = {
+  price_action: ['v1', 'v2'],
+  wyckoff: ['v1', 'v2'],
+}
+
+// Small per-engine v1/v2 <select> row, rendered only for variant-capable
+// engines currently checked in the accompanying engine MultiCheckbox —
+// an engine that's OFF has no meaningful variant to pick.
+function EngineVariantPicker({
+  engines, value, onChange,
+}: {
+  engines: string[]
+  value: Record<string, string>
+  onChange: (v: Record<string, string>) => void
+}) {
+  const variantCapable = engines.filter((e) => e in ENGINE_VARIANT_KEYS)
+  if (variantCapable.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-3">
+      {variantCapable.map((e) => (
+        <label key={e} className="flex items-center gap-1.5 text-[0.75em] text-muted">
+          {e}
+          <select
+            value={value[e] ?? 'v1'}
+            onChange={(ev) => {
+              const next = { ...value }
+              if (ev.target.value === 'v1') delete next[e]
+              else next[e] = ev.target.value
+              onChange(next)
+            }}
+            className="px-1.5 py-1 bg-bg border border-border rounded text-text text-[0.82em]"
+          >
+            {ENGINE_VARIANT_KEYS[e].map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+      ))}
+    </div>
+  )
+}
+
 interface ContextFilterRowState {
   name: ContextKey
   mode: (typeof FILTER_MODES)[number]
@@ -327,10 +372,11 @@ interface HypothesisBundleRowState {
   engines: string[]
   indicatorFilters: IndicatorFilterState[]
   contextFilters: ContextFilterRowState[]
+  engineVariants: Record<string, string>
 }
 
 function blankBundle(name = ''): HypothesisBundleRowState {
-  return { name, timeframes: ['H1'], engines: [], indicatorFilters: [], contextFilters: [] }
+  return { name, timeframes: ['H1'], engines: [], indicatorFilters: [], contextFilters: [], engineVariants: {} }
 }
 
 function HypothesisBundleBuilder({
@@ -380,6 +426,10 @@ function HypothesisBundleBuilder({
           <div className="flex flex-col gap-1">
             <span className="text-[0.68em] text-muted uppercase">Engines</span>
             <MultiCheckbox options={ENGINE_KEYS} value={b.engines} onToggle={(e) => toggleEngineAt(idx, e)} />
+            <EngineVariantPicker
+              engines={b.engines} value={b.engineVariants}
+              onChange={(v) => updateAt(idx, { engineVariants: v })}
+            />
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-[0.68em] text-muted uppercase">Indicator filters</span>
@@ -424,6 +474,7 @@ function MissionBuilder({
   const [maxWallClock, setMaxWallClock] = useState<number | ''>('')
   const [contextFilters, setContextFilters] = useState<ContextFilterRowState[]>([])
   const [indicatorFilters, setIndicatorFilters] = useState<IndicatorFilterState[]>([])
+  const [engineVariants, setEngineVariants] = useState<Record<string, string>>({})
   const [hypothesisMode, setHypothesisMode] = useState(false)
   const [bundles, setBundles] = useState<HypothesisBundleRowState[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -521,6 +572,7 @@ function MissionBuilder({
         engine_set_choices: [hypothesisMode ? bundles[0].engines : engines],
         indicator_set_choices: [hypothesisMode ? toIndicatorSpecs(bundles[0].indicatorFilters) : indicatorSpecs],
         context_filter_set_choices: [hypothesisMode ? toContextSpecs(bundles[0].contextFilters) : contextSpecs],
+        engine_variant_choices: [hypothesisMode ? bundles[0].engineVariants : engineVariants],
         hypothesis_bundle_choices: hypothesisMode
           ? bundles.map((b) => ({
               name: b.name.trim(),
@@ -528,6 +580,7 @@ function MissionBuilder({
               engines: b.engines,
               indicators: toIndicatorSpecs(b.indicatorFilters),
               context_filters: toContextSpecs(b.contextFilters),
+              engine_variants: b.engineVariants,
             }))
           : undefined,
         risk_param_ranges: riskRanges,
@@ -614,6 +667,7 @@ function MissionBuilder({
             <div className="flex flex-col gap-1">
               <span className="text-[0.7em] text-muted uppercase">Engine set (this run only)</span>
               <MultiCheckbox options={ENGINE_KEYS} value={engines} onToggle={toggleEngine} />
+              <EngineVariantPicker engines={engines} value={engineVariants} onChange={setEngineVariants} />
             </div>
             <div className="flex flex-col gap-1">
               <span className="text-[0.7em] text-muted uppercase">Indicator filters (this run only)</span>

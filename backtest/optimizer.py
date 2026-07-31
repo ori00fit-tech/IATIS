@@ -40,6 +40,7 @@ from backtest.metrics import BacktestMetrics, TradeRecord, calculate_metrics
 from backtest.runner import trade_to_record
 from backtesting.backtest_engine import (
     ENGINE_KEYS,
+    ENGINE_VARIANT_KEYS,
     RISK_OVERRIDE_FIELDS,
     BacktestConfig,
     build_engine_config_override,
@@ -59,7 +60,15 @@ _TF_IDX_KEY = "__timeframes_idx"
 _ENGINES_IDX_KEY = "__engines_idx"
 _INDICATORS_IDX_KEY = "__indicators_idx"
 _CONTEXT_IDX_KEY = "__context_idx"
-_INTERNAL_KEYS = (_TF_IDX_KEY, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _CONTEXT_IDX_KEY)
+# Track C (Phase 4, 2026-08-01) — ad-hoc engine variants (PriceAction v2/
+# Wyckoff v2), one shared index over COMPLETE variant-selection dicts —
+# same "index a list of complete choices" convention as
+# indicator_set_choices/context_filter_set_choices, not 9 independent
+# per-engine categoricals (an engine_variants map is small and already
+# atomic — no Cartesian-product concern like the 4-independent-dimension
+# bug hypothesis_bundle_choices was built to fix).
+_ENGINE_VARIANTS_IDX_KEY = "__engine_variants_idx"
+_INTERNAL_KEYS = (_TF_IDX_KEY, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _CONTEXT_IDX_KEY, _ENGINE_VARIANTS_IDX_KEY)
 
 # Hypothesis Bundles (2026-07-30) — an alternate, opt-in indexing mode. The
 # 4 keys above are sampled INDEPENDENTLY (see suggest_point()), so giving
@@ -88,6 +97,16 @@ def _validate_context_spec(spec: dict) -> None:
         raise ValueError(f"unknown context filter mode {spec.get('mode')!r} — choose from {FILTER_MODES}")
 
 
+def _validate_engine_variant_map(variant_map: dict) -> None:
+    unknown_engines = set(variant_map) - set(ENGINE_KEYS)
+    if unknown_engines:
+        raise ValueError(f"unknown engine(s) in engine_variants: {unknown_engines} — choose from {ENGINE_KEYS}")
+    for eng_key, variant in variant_map.items():
+        allowed = ENGINE_VARIANT_KEYS.get(eng_key, ("v1",))
+        if variant not in allowed:
+            raise ValueError(f"engine {eng_key!r} has no variant {variant!r} — choose from {allowed}")
+
+
 def _validate_hypothesis_bundle(bundle: dict) -> None:
     name = bundle.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -102,6 +121,7 @@ def _validate_hypothesis_bundle(bundle: dict) -> None:
         _validate_indicator_spec(spec)
     for spec in bundle.get("context_filters", []):
         _validate_context_spec(spec)
+    _validate_engine_variant_map(bundle.get("engine_variants", {}))
 
 
 @dataclass(frozen=True)
@@ -132,6 +152,14 @@ class MissionSearchSpace:
     # one shared index over complete named bundles — see the module-level
     # comment above _HYPOTHESIS_IDX_KEY for why.
     hypothesis_bundle_choices: tuple[dict, ...] | None = None
+    # Track C (Phase 4, 2026-08-01) — ad-hoc PriceAction v2/Wyckoff v2
+    # selection. Each entry is a COMPLETE {engine_key: variant} map,
+    # index-sampled — same convention as indicator_set_choices/
+    # context_filter_set_choices. Defaults to a single empty-map choice
+    # (every engine stays v1) so every existing caller/stored
+    # search_space_json (missions created before this shipped) constructs
+    # and behaves byte-identically.
+    engine_variant_choices: tuple[dict[str, str], ...] = ({},)
     risk_param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     risk_param_grid: dict[str, tuple[float, ...]] = field(default_factory=dict)
 
@@ -144,6 +172,8 @@ class MissionSearchSpace:
             raise ValueError("indicator_set_choices must have at least one entry")
         if not self.context_filter_set_choices:
             raise ValueError("context_filter_set_choices must have at least one entry")
+        if not self.engine_variant_choices:
+            raise ValueError("engine_variant_choices must have at least one entry")
         if self.risk_param_ranges and self.risk_param_grid:
             raise ValueError("supply risk_param_ranges XOR risk_param_grid, not both")
 
@@ -161,6 +191,8 @@ class MissionSearchSpace:
         for context_set in self.context_filter_set_choices:
             for spec in context_set:
                 _validate_context_spec(spec)
+        for variant_map in self.engine_variant_choices:
+            _validate_engine_variant_map(variant_map)
 
         if self.hypothesis_bundle_choices is not None:
             if not self.hypothesis_bundle_choices:
@@ -187,6 +219,7 @@ class MissionSearchSpace:
             n = (
                 len(self.timeframes_choices) * len(self.engine_set_choices)
                 * len(self.indicator_set_choices) * len(self.context_filter_set_choices)
+                * len(self.engine_variant_choices)
             )
         for choices in self.risk_param_grid.values():
             n *= len(choices)
@@ -205,6 +238,7 @@ class MissionSearchSpace:
                 _ENGINES_IDX_KEY: list(range(len(self.engine_set_choices))),
                 _INDICATORS_IDX_KEY: list(range(len(self.indicator_set_choices))),
                 _CONTEXT_IDX_KEY: list(range(len(self.context_filter_set_choices))),
+                _ENGINE_VARIANTS_IDX_KEY: list(range(len(self.engine_variant_choices))),
             }
         d.update({k: list(v) for k, v in self.risk_param_grid.items()})
         return d
@@ -226,6 +260,9 @@ def search_space_from_dict(raw: dict[str, Any]) -> MissionSearchSpace:
         # before Context Filters shipped has no such key in its stored
         # search_space_json.
         context_filter_set_choices=tuple(tuple(c) for c in raw.get("context_filter_set_choices", [[]])),
+        # Track C — .get() with a backward-compatible default: a mission
+        # created before engine variants shipped has no such key.
+        engine_variant_choices=tuple(dict(c) for c in raw.get("engine_variant_choices", [{}])),
         hypothesis_bundle_choices=(
             tuple(dict(b) for b in raw["hypothesis_bundle_choices"])
             if raw.get("hypothesis_bundle_choices") else None
@@ -250,6 +287,7 @@ def suggest_point(trial: Any, space: MissionSearchSpace, grid_mode: bool) -> dic
         trial.suggest_categorical(_ENGINES_IDX_KEY, list(range(len(space.engine_set_choices))))
         trial.suggest_categorical(_INDICATORS_IDX_KEY, list(range(len(space.indicator_set_choices))))
         trial.suggest_categorical(_CONTEXT_IDX_KEY, list(range(len(space.context_filter_set_choices))))
+        trial.suggest_categorical(_ENGINE_VARIANTS_IDX_KEY, list(range(len(space.engine_variant_choices))))
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
             trial.suggest_categorical(name, list(choices))
@@ -285,18 +323,20 @@ def resolve_point(space: MissionSearchSpace, raw_params: dict[str, Any]) -> dict
         engines = list(bundle.get("engines", []))
         indicators = list(bundle.get("indicators", []))
         context_filters = list(bundle.get("context_filters", []))
+        engine_variants = dict(bundle.get("engine_variants", {}))
         internal_keys: tuple[str, ...] = _HYPOTHESIS_INTERNAL_KEYS
     else:
         timeframes = list(space.timeframes_choices[raw_params[_TF_IDX_KEY]])
         engines = list(space.engine_set_choices[raw_params[_ENGINES_IDX_KEY]])
         indicators = list(space.indicator_set_choices[raw_params[_INDICATORS_IDX_KEY]])
         context_filters = list(space.context_filter_set_choices[raw_params.get(_CONTEXT_IDX_KEY, 0)])
+        engine_variants = dict(space.engine_variant_choices[raw_params.get(_ENGINE_VARIANTS_IDX_KEY, 0)])
         internal_keys = _INTERNAL_KEYS
     risk_overrides = {k: v for k, v in raw_params.items() if k not in internal_keys}
     return {
         "timeframes": timeframes, "engines": engines,
         "indicators": indicators, "context_filters": context_filters,
-        "risk_overrides": risk_overrides,
+        "engine_variants": engine_variants, "risk_overrides": risk_overrides,
     }
 
 
@@ -320,6 +360,7 @@ def distributions_for(space: MissionSearchSpace, grid_mode: bool) -> dict[str, A
             _ENGINES_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.engine_set_choices)))),
             _INDICATORS_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.indicator_set_choices)))),
             _CONTEXT_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.context_filter_set_choices)))),
+            _ENGINE_VARIANTS_IDX_KEY: optuna.distributions.CategoricalDistribution(list(range(len(space.engine_variant_choices)))),
         }
     if grid_mode:
         for name, choices in space.risk_param_grid.items():
@@ -412,6 +453,7 @@ def evaluate_point(
         engines_enabled={e: (e in point["engines"]) for e in ENGINE_KEYS},
         indicators=point["indicators"] or None,
         context_filters=point.get("context_filters") or None,
+        engine_variants=point.get("engine_variants") or None,
     )
     cfg = BacktestConfig.from_profile(symbol, **point["risk_overrides"])
     bt = run_backtest(df, cfg, engine_config=engine_config)

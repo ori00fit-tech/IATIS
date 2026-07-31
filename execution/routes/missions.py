@@ -73,12 +73,21 @@ class _MissionRequest(BaseModel):
     engine_set_choices: list[list[str]]
     indicator_set_choices: list[list[dict]] = [[]]
     context_filter_set_choices: list[list[dict]] = [[]]
+    # Track C (Phase 4, 2026-08-01) — ad-hoc PriceAction v2/Wyckoff v2
+    # selection. Each entry is a COMPLETE {engine_key: variant} map,
+    # index-sampled — same convention as indicator_set_choices/
+    # context_filter_set_choices. Still 100% ephemeral: never activates
+    # a variant in config/engines.yaml's live default, see
+    # backtesting.backtest_engine.build_engine_config_override's
+    # engine_variants docstring.
+    engine_variant_choices: list[dict[str, str]] = [{}]
     # Hypothesis Bundles (2026-07-30) — when set, REPLACES independent
     # sampling of timeframes_choices/engine_set_choices/indicator_set_choices/
-    # context_filter_set_choices with one shared index over complete named
-    # bundles. See backtest/optimizer.py's module-level comment on
-    # _HYPOTHESIS_IDX_KEY for why this is a separate field rather than
-    # giving the 4 existing fields multiple choices each.
+    # context_filter_set_choices/engine_variant_choices with one shared
+    # index over complete named bundles. See backtest/optimizer.py's
+    # module-level comment on _HYPOTHESIS_IDX_KEY for why this is a
+    # separate field rather than giving the existing fields multiple
+    # choices each.
     hypothesis_bundle_choices: list[dict] | None = None
     risk_param_ranges: dict[str, tuple[float, float]] = {}
     risk_param_grid: dict[str, tuple[float, ...]] = {}
@@ -156,6 +165,7 @@ async def missions_create(
             engine_set_choices=tuple(tuple(c) for c in body.engine_set_choices),
             indicator_set_choices=tuple(tuple(c) for c in body.indicator_set_choices),
             context_filter_set_choices=tuple(tuple(c) for c in body.context_filter_set_choices),
+            engine_variant_choices=tuple(dict(v) for v in body.engine_variant_choices),
             hypothesis_bundle_choices=(
                 tuple(dict(b) for b in body.hypothesis_bundle_choices)
                 if body.hypothesis_bundle_choices else None
@@ -182,6 +192,7 @@ async def missions_create(
         "--engine-set-choices", json.dumps(body.engine_set_choices),
         "--indicator-set-choices", json.dumps(body.indicator_set_choices),
         "--context-filter-set-choices", json.dumps(body.context_filter_set_choices),
+        "--engine-variant-choices", json.dumps(body.engine_variant_choices),
     ]
     if body.start:
         argv += ["--start", body.start]

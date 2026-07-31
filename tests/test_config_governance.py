@@ -118,7 +118,16 @@ def test_load_config_engines_match_pre_split_values():
 def test_load_config_engines_carry_version_metadata_without_touching_enabled_shape():
     config = load_config()
     versions = config["engines"]["versions"]
-    assert set(versions.keys()) == set(_EXPECTED_ENGINES_ENABLED.keys())
+    # Every real engine (one with an `enabled` entry) must still carry a
+    # version. Confluence Engine Overhaul Track C (Phase 4, 2026-08-01)
+    # added price_action_v2/wyckoff_v2 version entries for the AD-HOC-ONLY
+    # PriceAction v2/Wyckoff v2 variants — these deliberately have NO
+    # corresponding `enabled` key (they're never activated by this file's
+    # own enabled: block, only reachable via Mission Center's ephemeral
+    # engine_variants override), so `versions` is now a proper SUPERSET of
+    # `enabled`'s keys, not an exact match.
+    assert set(_EXPECTED_ENGINES_ENABLED.keys()) <= set(versions.keys())
+    assert set(versions.keys()) - set(_EXPECTED_ENGINES_ENABLED.keys()) == {"price_action_v2", "wyckoff_v2"}
     for name, is_enabled in config["engines"]["enabled"].items():
         assert isinstance(is_enabled, bool)  # unchanged shape — bool, not a dict
 

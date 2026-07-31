@@ -72,6 +72,26 @@ def test_search_space_rejects_unknown_engine():
         _small_space(engine_set_choices=(("not_a_real_engine",),))
 
 
+def test_search_space_rejects_unknown_engine_in_engine_variant_choices():
+    with pytest.raises(ValueError, match="unknown engine"):
+        _small_space(engine_variant_choices=({"not_a_real_engine": "v2"},))
+
+
+def test_search_space_rejects_engine_with_no_variants():
+    with pytest.raises(ValueError, match="no variant"):
+        _small_space(engine_variant_choices=({"nnfx": "v2"},))
+
+
+def test_search_space_rejects_empty_engine_variant_choices():
+    with pytest.raises(ValueError, match="engine_variant_choices"):
+        _small_space(engine_variant_choices=())
+
+
+def test_search_space_engine_variant_choices_defaults_to_all_v1():
+    space = _small_space()
+    assert space.engine_variant_choices == ({},)
+
+
 def test_search_space_rejects_unknown_risk_param():
     with pytest.raises(ValueError, match="risk param"):
         _small_space(risk_param_ranges={"not_a_real_param": (1.0, 2.0)})
@@ -104,6 +124,23 @@ def test_resolve_point_is_pure_and_deterministic():
     assert a["timeframes"] == ["H4", "D1", "H1"]
     assert a["engines"] == ["nnfx"]
     assert a["risk_overrides"] == {"sl_atr_multiplier": 2.1}
+
+
+def test_resolve_point_picks_correct_engine_variant_by_index():
+    space = _small_space(engine_variant_choices=({}, {"price_action": "v2"}, {"wyckoff": "v2"}))
+    raw = {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "__engine_variants_idx": 1}
+    resolved = resolve_point(space, raw)
+    assert resolved["engine_variants"] == {"price_action": "v2"}
+
+
+def test_resolve_point_defaults_engine_variants_to_index_0_when_key_missing():
+    """Resume/replay backward-compat: a trial recorded before engine
+    variants existed has no __engine_variants_idx key in its stored
+    params_json — must default to index 0 (the all-v1 entry)."""
+    space = _small_space(engine_variant_choices=({}, {"price_action": "v2"}))
+    raw = {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0}
+    resolved = resolve_point(space, raw)
+    assert resolved["engine_variants"] == {}
 
 
 # ── evaluate_point ────────────────────────────────────────────────────────
@@ -199,6 +236,16 @@ def test_grid_sampler_never_exceeds_cartesian_product_size():
     assert len(seen) == grid_size  # every point visited exactly once, no duplicates
 
 
+def test_grid_size_multiplies_by_engine_variant_choices_count():
+    space = _small_space(
+        risk_param_ranges={},
+        risk_param_grid={"sl_atr_multiplier": (1.5, 2.0)},
+        engine_variant_choices=({}, {"price_action": "v2"}, {"wyckoff": "v2"}),
+    )
+    # timeframes(2) x engines(2) x indicators(2) x engine_variants(3) x risk grid(2)
+    assert space.grid_size() == 2 * 2 * 2 * 3 * 2
+
+
 def test_distributions_for_covers_every_suggested_param():
     space = _small_space(
         risk_param_ranges={},
@@ -206,7 +253,8 @@ def test_distributions_for_covers_every_suggested_param():
     )
     dists = distributions_for(space, grid_mode=True)
     assert set(dists.keys()) == {
-        "__timeframes_idx", "__engines_idx", "__indicators_idx", "__context_idx", "sl_atr_multiplier",
+        "__timeframes_idx", "__engines_idx", "__indicators_idx", "__context_idx",
+        "__engine_variants_idx", "sl_atr_multiplier",
     }
 
 
@@ -266,6 +314,25 @@ def test_hypothesis_bundle_rejects_unknown_timeframe():
         _bundle_space(hypothesis_bundle_choices=(bad,))
 
 
+def test_hypothesis_bundle_rejects_unknown_engine_variant():
+    bad = {**_BUNDLE_SMC, "engine_variants": {"price_action": "v3"}}
+    with pytest.raises(ValueError, match="no variant"):
+        _bundle_space(hypothesis_bundle_choices=(bad,))
+
+
+def test_resolve_point_reads_engine_variants_from_bundle():
+    bundle_with_variant = {**_BUNDLE_NNFX, "engine_variants": {"wyckoff": "v2"}}
+    space = _bundle_space(hypothesis_bundle_choices=(_BUNDLE_SMC, bundle_with_variant))
+    resolved = resolve_point(space, {"__hypothesis_idx": 1, "sl_atr_multiplier": 2.0})
+    assert resolved["engine_variants"] == {"wyckoff": "v2"}
+
+
+def test_resolve_point_bundle_engine_variants_defaults_to_empty_when_absent():
+    space = _bundle_space()  # _BUNDLE_SMC/_BUNDLE_NNFX carry no "engine_variants" key
+    resolved = resolve_point(space, {"__hypothesis_idx": 0, "sl_atr_multiplier": 2.0})
+    assert resolved["engine_variants"] == {}
+
+
 def test_hypothesis_bundle_rejects_empty_tuple():
     with pytest.raises(ValueError, match="hypothesis_bundle_choices"):
         _bundle_space(hypothesis_bundle_choices=())
@@ -303,7 +370,7 @@ def test_resolve_point_output_shape_identical_in_both_modes():
     bundle_point = resolve_point(_bundle_space(), {"__hypothesis_idx": 0, "sl_atr_multiplier": 2.0})
     flat_point = resolve_point(_small_space(), {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "sl_atr_multiplier": 2.0})
     assert set(bundle_point.keys()) == set(flat_point.keys()) == {
-        "timeframes", "engines", "indicators", "context_filters", "risk_overrides",
+        "timeframes", "engines", "indicators", "context_filters", "engine_variants", "risk_overrides",
     }
 
 

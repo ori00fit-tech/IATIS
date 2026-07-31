@@ -354,12 +354,24 @@ ENGINE_KEYS: tuple[str, ...] = (
     "divergence", "market_structure", "sentiment",
 )
 
+# Track C (Phase 4, 2026-08-01) — the ad-hoc, Mission-Center-only engine
+# variants that exist today. Every ENGINE_KEYS entry not listed here has
+# ONLY "v1" — no variant exists yet. Deliberately just strings (no class
+# refs) so optimizer.py/missions.py can validate an engine_variants
+# payload without importing engine modules. The variant class itself is
+# resolved lazily inside run_backtest() below.
+ENGINE_VARIANT_KEYS: dict[str, tuple[str, ...]] = {
+    "price_action": ("v1", "v2"),
+    "wyckoff": ("v1", "v2"),
+}
+
 
 def build_engine_config_override(
     timeframes: list[str] | None = None,
     engines_enabled: dict[str, bool] | None = None,
     indicators: list[dict] | None = None,
     context_filters: list[dict] | None = None,
+    engine_variants: dict[str, str] | None = None,
 ) -> dict | None:
     """Backtesting Lab Pro Phase B/C/D (2026-07-27) — ad-hoc per-run
     overrides, merged over a real load_config() snapshot so every other
@@ -389,19 +401,44 @@ def build_engine_config_override(
     direction. Stored verbatim under engine_config["context_filters"]
     ["filters"]; same filter/confirm/weight-only constraint as
     indicators, never a direction/bias source.
+
+    engine_variants (Track C, Phase 4): an explicit {engine_key: variant}
+    map (e.g. {"price_action": "v2"}), stored under
+    engine_config["engines"]["variants"] — a NEW sub-key, separate from
+    "enabled", so engine on/off and variant selection compose
+    independently. Raises ValueError on an unknown engine or an unknown
+    variant for that engine (fail loudly here, at build time, rather than
+    surfacing a confusing error deep inside run_backtest's instantiation
+    loop). This NEVER touches config/engines.yaml's live default — v1
+    keeps loading unconditionally unless a caller explicitly passes this.
     """
-    if timeframes is None and engines_enabled is None and indicators is None and context_filters is None:
+    if (timeframes is None and engines_enabled is None and indicators is None
+            and context_filters is None and engine_variants is None):
         return None
     from utils.helpers import load_config
     base = load_config()
     merged = dict(base)
     if timeframes is not None:
         merged["data"] = {**base["data"], "timeframes": list(timeframes)}
+
+    engines_block = dict(base.get("engines", {}))
+    engines_changed = False
     if engines_enabled is not None:
-        merged["engines"] = {
-            **base.get("engines", {}),
-            "enabled": {**base.get("engines", {}).get("enabled", {}), **engines_enabled},
-        }
+        engines_block["enabled"] = {**base.get("engines", {}).get("enabled", {}), **engines_enabled}
+        engines_changed = True
+    if engine_variants is not None:
+        unknown_engines = set(engine_variants) - set(ENGINE_KEYS)
+        if unknown_engines:
+            raise ValueError(f"unknown engine(s) in engine_variants: {unknown_engines} — choose from {ENGINE_KEYS}")
+        for eng_key, variant in engine_variants.items():
+            allowed = ENGINE_VARIANT_KEYS.get(eng_key, ("v1",))
+            if variant not in allowed:
+                raise ValueError(f"engine {eng_key!r} has no variant {variant!r} — choose from {allowed}")
+        engines_block["variants"] = {**base.get("engines", {}).get("variants", {}), **engine_variants}
+        engines_changed = True
+    if engines_changed:
+        merged["engines"] = engines_block
+
     if indicators is not None:
         merged["indicators"] = {"filters": list(indicators)}
     if context_filters is not None:
@@ -451,23 +488,51 @@ def run_backtest(
     from engines.divergence_engine import DivergenceEngine
     from engines.market_structure_engine import MarketStructureEngine
     from engines.sentiment_engine import SentimentEngine
+    # Track C (Phase 4) — ad-hoc-only variants, lazily imported so a
+    # normal backtest (no engine_variants requested) never pays for
+    # importing these modules.
+    from engines.price_action_engine_v2 import PriceActionEngineV2
+    from engines.wyckoff_engine_v2 import WyckoffEngineV2
 
     _ENGINE_MAP = dict(zip(ENGINE_KEYS, (
         SMCEngine, PriceActionEngine, ICTEngine, NNFXEngine, QuantEngine, WyckoffEngine,
         DivergenceEngine, MarketStructureEngine, SentimentEngine,
     )))
+    # Track C — class resolution for a variant. Kept local to
+    # run_backtest (class refs, unlike ENGINE_VARIANT_KEYS' plain
+    # strings) so this file's module-level import graph never has to
+    # import the variant engine modules until a backtest actually runs.
+    _ENGINE_VARIANT_CLASS_MAP: dict[str, dict[str, type]] = {
+        "price_action": {"v2": PriceActionEngineV2},
+        "wyckoff": {"v2": WyckoffEngineV2},
+    }
     enabled = engine_config.get("engines", {}).get("enabled", {})
     all_thresholds = engine_config.get("engines", {}).get("thresholds", {})
+    variant_selection = engine_config.get("engines", {}).get("variants", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
+            variant = variant_selection.get(key, "v1")
+            if variant != "v1":
+                variant_cls = _ENGINE_VARIANT_CLASS_MAP.get(key, {}).get(variant)
+                if variant_cls is None:
+                    raise ValueError(
+                        f"unknown variant {variant!r} for engine {key!r} — choose from "
+                        f"{list(_ENGINE_VARIANT_CLASS_MAP.get(key, {}).keys()) or ['v1']}"
+                    )
+                cls = variant_cls
             engine = cls()
             # Same decision timeframe the production pipeline uses
             # (main.build_active_engines) — gate/vote parity.
             engine.decision_tf = timeframes[0] if timeframes else "H1"
             # Confluence Engine Overhaul Phase 1 — same
             # config.engines.thresholds source, gate/vote parity with
-            # main.build_active_engines.
-            engine.thresholds = all_thresholds.get(key, {})
+            # main.build_active_engines. Track C: a variant reads ITS OWN
+            # thresholds sub-key (thresholds.price_action_v2, never
+            # thresholds.price_action) — prevents a v2 class silently
+            # running on v1's tuned numbers, which would make any v2
+            # research result meaningless.
+            thresholds_key = f"{key}_{variant}" if variant != "v1" else key
+            engine.thresholds = all_thresholds.get(thresholds_key, {})
             if key == "smc":
                 # H017 flag parity with main.build_active_engines — the A/B
                 # (scripts/smc_fullspec_ab.py) flips this through the config.

@@ -57,6 +57,7 @@ from backtest.optimizer import (
     SAMPLER_KEYS,
     MissionSearchSpace,
     _CONTEXT_IDX_KEY,
+    _ENGINE_VARIANTS_IDX_KEY,
     distributions_for,
     evaluate_point,
     make_sampler,
@@ -110,6 +111,7 @@ def _search_space_dict(space: MissionSearchSpace) -> dict:
         "engine_set_choices": [list(e) for e in space.engine_set_choices],
         "indicator_set_choices": [list(i) for i in space.indicator_set_choices],
         "context_filter_set_choices": [list(c) for c in space.context_filter_set_choices],
+        "engine_variant_choices": [dict(v) for v in space.engine_variant_choices],
         "hypothesis_bundle_choices": (
             [dict(b) for b in space.hypothesis_bundle_choices] if space.hypothesis_bundle_choices else None
         ),
@@ -239,6 +241,11 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         # meaning "no context filter" for that replayed trial, matching
         # what it actually ran with.
         row_params.setdefault(_CONTEXT_IDX_KEY, 0)
+        # Track C (Phase 4) — same backfill, same reasoning: a trial
+        # recorded before engine variants existed has no
+        # __engine_variants_idx key; index 0 is always the all-v1 entry
+        # MissionSearchSpace.engine_variant_choices defaults to.
+        row_params.setdefault(_ENGINE_VARIANTS_IDX_KEY, 0)
         study.add_trial(
             optuna.trial.create_trial(
                 state=optuna.trial.TrialState[row["state"]],
@@ -364,11 +371,17 @@ def main() -> None:
                         help='JSON, e.g. \'[[],[{"name":"rsi","mode":"entry_filter","params":{},"weight":0}]]\'')
     parser.add_argument("--context-filter-set-choices", type=str, default="[[]]",
                         help='JSON, e.g. \'[[],[{"name":"session","mode":"entry_filter","params":{},"weight":0}]]\'')
+    parser.add_argument("--engine-variant-choices", type=str, default="[{}]",
+                        help='JSON list of {engine_key: variant} maps (Track C, Phase 4), e.g. '
+                             '\'[{},{"price_action":"v2"},{"wyckoff":"v2"}]\' — every engine not listed in a '
+                             'given map stays v1. May also be carried per-bundle via --hypothesis-bundle-choices\' '
+                             '"engine_variants" key.')
     parser.add_argument("--hypothesis-bundle-choices", type=str, default=None,
                         help='JSON list of named bundles, e.g. \'[{"name":"SMC only","timeframes":["H1"],'
                              '"engines":["smc"],"indicators":[],"context_filters":[]}]\' — when set, REPLACES '
                              '--timeframes-choices/--engine-set-choices/--indicator-set-choices/'
-                             '--context-filter-set-choices with one shared index over complete bundles.')
+                             '--context-filter-set-choices/--engine-variant-choices with one shared index over '
+                             'complete bundles.')
     parser.add_argument("--risk-param-ranges", type=str, default="{}",
                         help='JSON, e.g. \'{"sl_atr_multiplier":[1.0,4.0]}\' (random/tpe/nsga2)')
     parser.add_argument("--risk-param-grid", type=str, default="{}",
@@ -390,6 +403,7 @@ def main() -> None:
             engine_set_choices=_tuplify_choices(json.loads(args.engine_set_choices)),
             indicator_set_choices=_tuplify_choices(json.loads(args.indicator_set_choices)),
             context_filter_set_choices=_tuplify_choices(json.loads(args.context_filter_set_choices)),
+            engine_variant_choices=tuple(dict(v) for v in json.loads(args.engine_variant_choices)),
             hypothesis_bundle_choices=(
                 tuple(dict(b) for b in json.loads(args.hypothesis_bundle_choices))
                 if args.hypothesis_bundle_choices else None

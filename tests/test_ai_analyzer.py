@@ -102,6 +102,24 @@ def test_gemini_provider_chat_parses_response():
     assert post.call_args.kwargs["headers"]["X-goog-api-key"] == "test-key"
 
 
+def test_gemini_provider_disables_thinking_and_requests_json_mime_type():
+    """Pins the 2026-07-31 fix: thinking models were burning part of
+    maxOutputTokens on invisible "thought" parts (already filtered out
+    below), leaving too little budget for the actual JSON answer and
+    truncating it — thinkingBudget: 0 hands the whole budget to the real
+    response. responseMimeType constrains Gemini to emit JSON directly."""
+    provider = GeminiProvider(api_key="test-key", model="gemini-flash-latest", max_tokens=3072)
+    fake_resp = _mock_response(
+        {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
+    )
+    with patch("ai.providers.gemini.requests.post", return_value=fake_resp) as post:
+        provider._chat("say hello")
+    gen_cfg = post.call_args.kwargs["json"]["generationConfig"]
+    assert gen_cfg["thinkingConfig"] == {"thinkingBudget": 0}
+    assert gen_cfg["responseMimeType"] == "application/json"
+    assert gen_cfg["maxOutputTokens"] == 3072
+
+
 def test_openai_provider_chat_parses_response():
     provider = OpenAIProvider(api_key="test-key", model="gpt-4o-mini")
     fake_resp = _mock_response({"choices": [{"message": {"content": "hi there"}}]})

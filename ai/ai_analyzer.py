@@ -28,7 +28,7 @@ Config (config/ai.yaml, merged into `ai:` by utils/helpers.py::load_config
       fallback_order: [gemini, openai, anthropic]
       model: gemini-flash-latest
       temperature: 0.1
-      max_tokens: 1200
+      max_tokens: 3072
       timeout: 20
       cache:
         news_ttl_min: 20
@@ -125,7 +125,7 @@ def _build_provider(provider_name: str, ai_cfg: dict) -> AIProvider | None:
 
     model = ai_cfg.get("model") or _DEFAULT_MODELS.get(provider_name, "")
     temperature = float(ai_cfg.get("temperature", 0.1))
-    max_tokens = int(ai_cfg.get("max_tokens", 1200))
+    max_tokens = int(ai_cfg.get("max_tokens", 3072))
     timeout = float(ai_cfg.get("timeout", 20))
 
     if provider_name == "gemini":

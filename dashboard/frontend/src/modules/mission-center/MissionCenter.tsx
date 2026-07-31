@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { KpiCard } from '../../components/KpiCard'
@@ -1458,7 +1458,10 @@ function MissionDetail({
     POLL_MS,
     markUnauthenticated,
   )
-  const validations = validationsQuery.data ?? []
+  // Memoized so a `?? []` fallback during a loading tick doesn't itself
+  // manufacture a fresh array reference every render — proposeAsDraft/
+  // columns/bestColumns below all depend on this.
+  const validations = useMemo(() => validationsQuery.data ?? [], [validationsQuery.data])
 
   useEffect(() => {
     let cancelled = false
@@ -1476,18 +1479,13 @@ function MissionDetail({
     return () => { cancelled = true }
   }, [missionId, status?.progress.total])
 
-  if (!status) return <Empty>Loading…</Empty>
-
-  const symbols = Object.keys(status.progress.by_symbol)
-  const isRunning = status.job_status === 'queued' || status.job_status === 'running'
-  const bestPerSymbol = bestTrialPerSymbol(allTrials)
-
-  const cancel = async () => {
-    setCancelling(true)
-    try { await cancelMission(missionId) } finally { setCancelling(false) }
-  }
-
-  const proposeAsDraft = async (t: MissionTrial) => {
+  // proposeAsDraft/columns/bestColumns are hooks (useCallback/useMemo) and
+  // per React's Rules of Hooks must run unconditionally on every render —
+  // they're declared here, ABOVE the `if (!status) return` early return
+  // below, and each guards internally for status still being null (the
+  // brief window before the first successful status poll resolves).
+  const proposeAsDraft = useCallback(async (t: MissionTrial) => {
+    if (!status) return
     try {
       const metrics = t.metrics_json ? JSON.parse(t.metrics_json) : {}
       const validation = latestValidationFor(validations, t)
@@ -1525,50 +1523,80 @@ function MissionDetail({
       console.error(`proposeAsDraft failed for mission ${missionId} trial ${t.trial_number}:`, e)
       setDraftStatus((s) => ({ ...s, [t.trial_number]: `error: ${e instanceof Error ? e.message : String(e)}` }))
     }
-  }
+  }, [missionId, status, validations])
 
-  const columns: Column<MissionTrial>[] = [
-    { header: 'Symbol', render: (t) => t.symbol },
-    { header: 'Hypothesis', render: (t) => hypothesisNameFor(status.mission, t) ?? '—' },
-    { header: 'Trial #', render: (t) => t.trial_number, align: 'right', accessorFn: (t) => t.trial_number },
-    { header: 'State', render: (t) => <StatusBadge status={t.state.toLowerCase()} /> },
-    { header: 'Objective', render: (t) => t.objective_value != null ? t.objective_value.toFixed(3) : '—', align: 'right', accessorFn: (t) => t.objective_value ?? -Infinity, sortingFn: 'basic' },
-    { header: 'Trades', render: (t) => t.trades, align: 'right', accessorFn: (t) => t.trades, sortingFn: 'basic' },
-    {
-      header: 'Breakdown',
-      render: (t) => (
-        t.state === 'COMPLETE'
-          ? <button onClick={() => setBreakdownTrial(t)} className="text-[0.75em] text-accent hover:underline">View</button>
-          : <span className="text-muted text-[0.75em]">—</span>
-      ),
-    },
-    {
-      header: 'Draft', render: (t) => (
-        draftStatus[t.trial_number]
-          ? <span
-              title={draftStatus[t.trial_number]}
-              className={`text-[0.75em] whitespace-normal break-words inline-block max-w-[220px] ${draftStatus[t.trial_number].startsWith('error:') ? 'text-red' : 'text-muted'}`}
-            >
-              {draftStatus[t.trial_number]}
-            </span>
-          : <button onClick={() => proposeAsDraft(t)} className="text-[0.75em] text-accent hover:underline">
-              Propose as draft
-            </button>
-      ),
-    },
-    {
-      header: 'Validate',
-      render: (t) => <ValidateAction missionId={missionId} trial={t} symbolsData={symbolsQuery.data ?? null} />,
-    },
-  ]
+  // Memoized (2026-07-31): columns was a fresh array literal on every
+  // render, and MissionDetail re-renders on every ~POLL_MS tick (status/
+  // validations/leaderboard polling) even when nothing relevant changed.
+  // DataTable.tsx's own tableColumns useMemo keys off columns' REFERENCE
+  // ([columns]), so a fresh array meant a fresh `cell` closure for every
+  // ColumnDef every few seconds — flexRender saw that as a different
+  // component and remounted the cell, wiping out ValidateAction's local
+  // `open`/`validationSymbols` state (reported: the "Validate…" popup
+  // closing itself moments after being opened, before the operator could
+  // finish picking symbols). Real fix is here, not in DataTable.tsx —
+  // every other DataTable consumer already assumes a stable columns
+  // reference (its docstring says so); this was the one call site with
+  // per-cell local UI state that made the churn user-visible.
+  const columns: Column<MissionTrial>[] = useMemo(() => {
+    if (!status) return []
+    return [
+      { header: 'Symbol', render: (t) => t.symbol },
+      { header: 'Hypothesis', render: (t) => hypothesisNameFor(status.mission, t) ?? '—' },
+      { header: 'Trial #', render: (t) => t.trial_number, align: 'right', accessorFn: (t) => t.trial_number },
+      { header: 'State', render: (t) => <StatusBadge status={t.state.toLowerCase()} /> },
+      { header: 'Objective', render: (t) => t.objective_value != null ? t.objective_value.toFixed(3) : '—', align: 'right', accessorFn: (t) => t.objective_value ?? -Infinity, sortingFn: 'basic' },
+      { header: 'Trades', render: (t) => t.trades, align: 'right', accessorFn: (t) => t.trades, sortingFn: 'basic' },
+      {
+        header: 'Breakdown',
+        render: (t) => (
+          t.state === 'COMPLETE'
+            ? <button onClick={() => setBreakdownTrial(t)} className="text-[0.75em] text-accent hover:underline">View</button>
+            : <span className="text-muted text-[0.75em]">—</span>
+        ),
+      },
+      {
+        header: 'Draft', render: (t) => (
+          draftStatus[t.trial_number]
+            ? <span
+                title={draftStatus[t.trial_number]}
+                className={`text-[0.75em] whitespace-normal break-words inline-block max-w-[220px] ${draftStatus[t.trial_number].startsWith('error:') ? 'text-red' : 'text-muted'}`}
+              >
+                {draftStatus[t.trial_number]}
+              </span>
+            : <button onClick={() => proposeAsDraft(t)} className="text-[0.75em] text-accent hover:underline">
+                Propose as draft
+              </button>
+        ),
+      },
+      {
+        header: 'Validate',
+        render: (t) => <ValidateAction missionId={missionId} trial={t} symbolsData={symbolsQuery.data ?? null} />,
+      },
+    ]
+  }, [status, draftStatus, proposeAsDraft, missionId, symbolsQuery.data])
 
-  const bestColumns: Column<MissionTrial>[] = [
+  // Same remount hazard as `columns` above — this table also renders
+  // ValidateAction (via the spread `...columns`), so it needs the same
+  // stable-reference treatment.
+  const bestColumns: Column<MissionTrial>[] = useMemo(() => [
     ...columns,
     {
       header: 'Validation status',
       render: (t) => <ValidationStatusBadge validation={latestValidationFor(validations, t)} />,
     },
-  ]
+  ], [columns, validations])
+
+  if (!status) return <Empty>Loading…</Empty>
+
+  const symbols = Object.keys(status.progress.by_symbol)
+  const isRunning = status.job_status === 'queued' || status.job_status === 'running'
+  const bestPerSymbol = bestTrialPerSymbol(allTrials)
+
+  const cancel = async () => {
+    setCancelling(true)
+    try { await cancelMission(missionId) } finally { setCancelling(false) }
+  }
 
   const sig = significanceFromLeaderboard(leaderboardTrials)
   const bestRows = symbols.map((s) => bestPerSymbol[s]).filter((t): t is MissionTrial => !!t)

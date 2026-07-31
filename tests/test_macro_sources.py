@@ -119,3 +119,58 @@ def test_snapshot_cache_prevents_refetch_within_ttl(monkeypatch):
     adl.load_macro_snapshot(["DXY"])
     adl.load_macro_snapshot(["DXY"])          # served from cache
     assert counter["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Confluence Engine Overhaul Phase 3c (2026-08-01) — 5 new FRED series for
+# the Macro engine rebuild, plus the per-series lookback-months override
+# needed for the two non-daily series (COPPER monthly, FED_BALANCE_SHEET
+# weekly). All purely additive — every existing series above must keep
+# resolving/behaving exactly as already pinned by the tests above.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("symbol,expected_series_id", [
+    ("OIL_WTI", "DCOILWTICO"),
+    ("NATGAS", "DHHNGSP"),
+    ("CREDIT_SPREAD", "BAA10Y"),
+    ("FED_BALANCE_SHEET", "WALCL"),
+    ("COPPER", "PCOPPUSDM"),
+])
+def test_new_series_resolve_to_correct_fred_ids(monkeypatch, symbol, expected_series_id):
+    seen = []
+
+    def fake_fred(series_id, months=6):
+        seen.append((series_id, months))
+        return adl._close_only_frame(["2026-07-09"], [1.0])
+
+    monkeypatch.setattr(adl, "load_from_fred", fake_fred)
+    snap = adl.load_macro_snapshot([symbol])
+    assert seen[0][0] == expected_series_id
+    assert snap[symbol].attrs["provider"] == "fred"
+
+
+def test_lookback_months_override_applies_only_to_non_daily_series(monkeypatch):
+    seen = {}
+
+    def fake_fred(series_id, months=6):
+        seen[series_id] = months
+        return adl._close_only_frame(["2026-07-09"], [1.0])
+
+    monkeypatch.setattr(adl, "load_from_fred", fake_fred)
+    adl.load_macro_snapshot(["DXY", "US10Y", "OIL_WTI", "COPPER", "FED_BALANCE_SHEET"])
+
+    assert seen["DTWEXBGS"] == 6      # DXY — unchanged default
+    assert seen["DGS10"] == 6         # US10Y — unchanged default
+    assert seen["DCOILWTICO"] == 6    # OIL_WTI (daily) — unchanged default
+    assert seen["PCOPPUSDM"] == 24    # COPPER (monthly) — extended override
+    assert seen["WALCL"] == 12        # FED_BALANCE_SHEET (weekly) — extended override
+
+
+def test_load_macro_snapshot_default_symbols_unchanged(monkeypatch):
+    # Existing callers relying on the default symbol list must be unaffected
+    # by this phase's additions — the 5 new series are opt-in only.
+    seen = []
+    monkeypatch.setattr(adl, "load_from_fred", lambda series_id, months=6: (seen.append(series_id), adl._close_only_frame(["2026-07-09"], [1.0]))[1])
+    monkeypatch.setattr(adl, "load_vix_from_cboe", lambda: (_ for _ in ()).throw(ValueError("cboe down")))
+    adl.load_macro_snapshot()  # no explicit symbols -> default list
+    assert set(seen) == {"DTWEXBGS", "DGS10", "DGS2", "VIXCLS", "GOLDAMGBD228NLBM", "SP500"}

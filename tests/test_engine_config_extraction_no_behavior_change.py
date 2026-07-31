@@ -152,18 +152,19 @@ def test_config_engines_yaml_has_thresholds_for_all_six_in_scope_engines(real_th
 
 
 def test_config_engines_yaml_does_not_extract_phase3_rebuild_targets(real_thresholds):
-    """macro/sentiment are deliberately NOT config-extracted in Phase 1 —
-    their Phase 3 rebuilds replace their thresholds wholesale. quant and
-    divergence are the exceptions: Phase 3a/3b (2026-08-01) already fully
-    rebuilt them (regime-aware statistical engine; swing-detection +
-    divergence-type rebuild), config-first from day one (see
-    tests/test_quant_engine_v2.py, tests/test_divergence_engine_v2.py) —
-    their thresholds blocks are real and expected here, not a Phase 1
+    """sentiment is deliberately NOT config-extracted in Phase 1 — its
+    Phase 3 rebuild replaces its thresholds wholesale. quant, divergence,
+    and macro are the exceptions: Phase 3a/3b/3c (2026-08-01) already
+    fully rebuilt them (regime-aware statistical engine; swing-detection
+    + divergence-type rebuild; real FRED series + yield-curve fix),
+    config-first from day one (see tests/test_quant_engine_v2.py, tests/
+    test_divergence_engine_v2.py, tests/test_macro_engine.py) — their
+    thresholds blocks are real and expected here, not a Phase 1
     extraction artifact."""
-    for key in ("macro", "sentiment"):
-        assert key not in real_thresholds
+    assert "sentiment" not in real_thresholds
     assert "quant" in real_thresholds
     assert "divergence" in real_thresholds
+    assert "macro" in real_thresholds
 
 
 def test_base_engine_thresholds_defaults_to_empty_dict():

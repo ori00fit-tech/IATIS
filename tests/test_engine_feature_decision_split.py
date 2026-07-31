@@ -31,6 +31,9 @@ from engines.divergence_engine import extract_features as div_extract
 from engines.ict_engine import ICTEngine
 from engines.ict_engine import decide as ict_decide
 from engines.ict_engine import extract_features as ict_extract
+from engines.macro_engine import MacroEngine
+from engines.macro_engine import decide as macro_decide
+from engines.macro_engine import extract_features as macro_extract
 from engines.market_structure_engine import MarketStructureEngine
 from engines.market_structure_engine import decide as ms_decide
 from engines.market_structure_engine import extract_features as ms_extract
@@ -306,6 +309,74 @@ def test_divergence_decide_is_pure():
 
 def test_divergence_analyze_populates_features_field():
     out = DivergenceEngine().analyze(_mtf(seed=42))
+    assert isinstance(out.features, dict)
+    assert len(out.features) > 0
+    assert out.evidence_level == "HEURISTIC"
+    assert out.probability is None
+
+
+# ---------------------------------------------------------------------------
+# Macro (Confluence Engine Overhaul Phase 3c, 2026-08-01) — same purity
+# properties, following this file's own established per-engine pattern.
+# extract_features(snapshot, t) takes an ALREADY-FETCHED snapshot dict, not
+# mtf_data/tf at all — Macro's facts come from an external daily/weekly/
+# monthly snapshot (DXY/SPY/VIX/etc via core.alt_data_loader.load_macro_
+# snapshot), not OHLCV bars, so this file's shared _mtf() fixture doesn't
+# apply here; a small hand-built snapshot is used instead. Macro's own
+# dedicated test file (tests/test_macro_engine.py) covers engine-level
+# behavior (risk votes, yield-curve inversion, commodity-informational-only
+# proof) in depth — these three tests only pin the same structural property
+# this file already pins for every other engine.
+# ---------------------------------------------------------------------------
+
+def _macro_snapshot(n: int = 30) -> dict[str, pd.DataFrame]:
+    idx = pd.date_range("2026-01-01", periods=n, freq="D", tz="UTC")
+
+    def _df(values) -> pd.DataFrame:
+        import numpy as np
+        arr = np.array(values, dtype=float)
+        return pd.DataFrame({"close": arr}, index=idx)
+
+    rising = [100.0 + i * 0.5 for i in range(n)]
+    falling = [100.0 - i * 0.3 for i in range(n)]
+    flat_high = [20.0] * n
+    flat_low = [3.0] * n
+
+    return {
+        "DXY": _df(rising),
+        "SPY": _df(rising),
+        "VIX": _df(flat_high),
+        "GLD": _df(falling),
+        "US10Y": _df([4.0] * n),
+        "US02Y": _df([3.5] * n),
+        "OIL_WTI": _df(rising),
+        "COPPER": _df(flat_low),
+        "NATGAS": _df(falling),
+        "CREDIT_SPREAD": _df(flat_low),
+        "FED_BALANCE_SHEET": _df(rising),
+    }
+
+
+def test_macro_extract_features_is_pure():
+    snapshot = _macro_snapshot()
+    f1 = macro_extract(snapshot, {})
+    f2 = macro_extract(snapshot, {})
+    assert f1 == f2
+
+
+def test_macro_decide_is_pure():
+    snapshot = _macro_snapshot()
+    features = macro_extract(snapshot, {})
+    r1 = macro_decide(features, {})
+    r2 = macro_decide(features, {})
+    assert r1 == r2
+
+
+def test_macro_analyze_populates_features_field(monkeypatch):
+    import core.alt_data_loader as adl
+
+    monkeypatch.setattr(adl, "load_macro_snapshot", lambda symbols: _macro_snapshot())
+    out = MacroEngine().analyze({})
     assert isinstance(out.features, dict)
     assert len(out.features) > 0
     assert out.evidence_level == "HEURISTIC"

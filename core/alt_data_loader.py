@@ -190,6 +190,19 @@ def today() -> str:
 #   Yields→ FRED DGS10 / DGS2
 # FRED needs FRED_API_KEY in .env; without it the keyless fredgraph.csv
 # endpoint is tried before falling back to Yahoo.
+#
+# Confluence Engine Overhaul Phase 3c (2026-08-01) — 5 more FRED series for
+# the Macro engine's rebuild, at THREE different native frequencies:
+#   OIL_WTI          → FRED DCOILWTICO (WTI crude spot), daily
+#   NATGAS           → FRED DHHNGSP (Henry Hub spot), daily
+#   CREDIT_SPREAD    → FRED BAA10Y (Baa corporate yield minus 10Y Treasury —
+#                       classic credit-stress gauge), daily
+#   FED_BALANCE_SHEET→ FRED WALCL (Fed total assets), WEEKLY
+#   COPPER           → FRED PCOPPUSDM (IMF global copper price index),
+#                       MONTHLY — there is no free daily copper series on
+#                       FRED (copper futures are a paid CME/COMEX feed).
+# See _FRED_LOOKBACK_MONTHS below for why the two non-daily series need a
+# longer window than the daily ones.
 # ---------------------------------------------------------------------------
 
 CBOE_VIX_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"
@@ -203,6 +216,21 @@ _FRED_SERIES = {
     # LBMA Gold Fixing 10:30 AM (London), USD — the free official gold price
     # series, a trusted replacement for the Yahoo GLD ETF proxy (2026-07-17).
     "GLD":   "GOLDAMGBD228NLBM",
+    "OIL_WTI":           "DCOILWTICO",
+    "NATGAS":            "DHHNGSP",
+    "CREDIT_SPREAD":     "BAA10Y",
+    "FED_BALANCE_SHEET": "WALCL",
+    "COPPER":            "PCOPPUSDM",
+}
+
+# Default lookback for load_from_fred() is 6 months — correct for every
+# daily series above. COPPER (monthly) and FED_BALANCE_SHEET (weekly) need
+# a longer window so there are enough data points for a meaningful trend
+# read (6 months of monthly data is only ~6 points — nowhere near enough).
+# Every series NOT listed here keeps the unchanged 6-month default.
+_FRED_LOOKBACK_MONTHS: dict[str, int] = {
+    "COPPER": 24,             # ~24 monthly points
+    "FED_BALANCE_SHEET": 12,  # ~52 weekly points
 }
 
 
@@ -290,6 +318,9 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
         DXY   : FRED DTWEXBGS (broad-dollar proxy)
         US10Y : FRED DGS10          US02Y: FRED DGS2
         SPY   : FRED SP500          GLD  : FRED GOLDAMGBD228NLBM (LBMA gold)
+        OIL_WTI: FRED DCOILWTICO    NATGAS: FRED DHHNGSP
+        CREDIT_SPREAD: FRED BAA10Y  FED_BALANCE_SHEET: FRED WALCL (weekly)
+        COPPER: FRED PCOPPUSDM (monthly)
     """
     import time as _time
 
@@ -303,7 +334,7 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
         return _SNAPSHOT_CACHE["data"]
 
     def _fred(sym: str) -> pd.DataFrame:
-        return load_from_fred(_FRED_SERIES[sym])
+        return load_from_fred(_FRED_SERIES[sym], months=_FRED_LOOKBACK_MONTHS.get(sym, 6))
 
     _SOURCES: dict[str, list] = {
         "VIX":   [("cboe", lambda s: load_vix_from_cboe()), ("fred", _fred)],
@@ -312,6 +343,11 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
         "US02Y": [("fred", _fred)],
         "SPY":   [("fred", _fred)],
         "GLD":   [("fred", _fred)],
+        "OIL_WTI":           [("fred", _fred)],
+        "NATGAS":            [("fred", _fred)],
+        "CREDIT_SPREAD":     [("fred", _fred)],
+        "FED_BALANCE_SHEET": [("fred", _fred)],
+        "COPPER":            [("fred", _fred)],
     }
 
     snapshot = {}

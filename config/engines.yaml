@@ -51,14 +51,36 @@ enabled:
 # behavior by tests/test_engine_config_extraction_no_behavior_change.py.
 # Each engine reads its own sub-key via self.thresholds.get(name,
 # CURRENT_HARDCODED_VALUE) — so an incomplete or missing thresholds block
-# degrades to identical behavior, never a crash. macro/sentiment are
-# deliberately NOT extracted here — their Phase 3 rebuilds replace their
-# thresholds wholesale, so extracting soon-to-be-discarded numbers now
-# would be wasted work. quant (Phase 3a, 2026-08-01) and divergence
-# (Phase 3b, 2026-08-01) were both fully rebuilt — their thresholds
-# blocks below are config-first from day one, not a post-hoc extraction
-# of legacy magic numbers.
+# degrades to identical behavior, never a crash. sentiment is deliberately
+# NOT extracted here — its Phase 3 rebuild replaces its thresholds
+# wholesale, so extracting soon-to-be-discarded numbers now would be
+# wasted work. quant (Phase 3a, 2026-08-01), divergence (Phase 3b,
+# 2026-08-01), and macro (Phase 3c, 2026-08-01) were all fully rebuilt —
+# their thresholds blocks below are config-first from day one, not a
+# post-hoc extraction of legacy magic numbers.
 thresholds:
+  macro:
+    dxy_ema_fast: 10
+    dxy_ema_slow: 20
+    dxy_score_scale: 15.0
+    dxy_score_cap: 40.0
+    dxy_weight: 0.6
+    spy_ma_period: 20
+    vix_low: 15
+    vix_high: 25
+    gold_spy_lookback: 5
+    gold_spy_threshold_pct: 0.01
+    credit_spread_lookback_days: 20
+    credit_spread_widen_threshold: 0.1
+    fed_balance_sheet_lookback_weeks: 8
+    fed_balance_sheet_threshold_pct: 0.01
+    commodity_lookback_periods: 20
+    commodity_flat_threshold_pct: 0.02
+    risk_confirm_score: 30.0
+    risk_conflict_penalty: 10.0
+    score_cap: 70.0
+    score_neutral_floor: 15.0
+
   divergence:
     min_bars: 80
     atr_period: 14
@@ -287,7 +309,7 @@ thresholds:
 versions:
   divergence: "2.0"
   ict: "1.0"
-  macro: "1.0"
+  macro: "2.0"
   market_structure: "1.0"
   nnfx: "1.0"
   price_action: "1.0"

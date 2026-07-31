@@ -629,7 +629,7 @@ interface BreakdownRow {
   bucket: BreakdownBucket
 }
 
-function PerformanceBreakdownTable({ title, buckets }: { title: string; buckets: Record<string, BreakdownBucket> }) {
+export function PerformanceBreakdownTable({ title, buckets }: { title: string; buckets: Record<string, BreakdownBucket> }) {
   const rows: BreakdownRow[] = Object.entries(buckets).map(([name, bucket]) => ({ name, bucket }))
   const columns: Column<BreakdownRow>[] = [
     { header: title, render: (r) => <span className="font-bold text-accent">{r.name}</span> },

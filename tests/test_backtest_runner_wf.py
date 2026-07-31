@@ -119,6 +119,24 @@ def test_adapter_propagates_decision_snapshot_into_engine_votes_cf_score_regime(
     assert rec.engine_votes["nnfx"]["score"] == 91.0
 
 
+def test_adapter_propagates_session_into_top_level_field():
+    # Regression (found live, 2026-07-30): by_session in calculate_metrics()
+    # showed 100% "Unknown" even though decision["session"] carries a real
+    # value (backtest_engine.py sets it from the MQS gate's own session
+    # detection whenever use_mqs_gate is on — the default everywhere).
+    # trade_to_record() copied decision["regime"] into TradeRecord.regime
+    # but never copied decision["session"] into TradeRecord.session — it
+    # only survived into the nested TradeRecord.features["session"] dict
+    # (feature-mining only), never the top-level field calculate_metrics()
+    # actually reads for by_session.
+    decision = {
+        "engines": [], "winning_bias": "BULLISH", "agree_count": 1,
+        "score": 80.0, "adjusted_score": 82.0, "regime": "TRENDING", "session": "London",
+    }
+    rec = trade_to_record(_trade(decision=decision), "EURUSD")
+    assert rec.session == "London"
+
+
 def test_adapter_handles_missing_decision_gracefully():
     # Trade objects built outside run_backtest's loop (older manifests,
     # hand-built test fixtures) carry decision=None — must not crash.
@@ -126,6 +144,7 @@ def test_adapter_handles_missing_decision_gracefully():
     assert rec.engine_votes == {}
     assert rec.cf_score == 0.0
     assert rec.regime == ""
+    assert rec.session == ""
     assert rec.features == {}
 
 

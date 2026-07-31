@@ -9,7 +9,13 @@ import {
   ENGINE_KEYS, SUPPORTED_TIMEFRAMES, FILTER_MODES, INDICATOR_KEYS, DEFAULT_INDICATOR_PARAMS,
   type IndicatorFilterState,
 } from '../backtesting-lab/BacktestingLab'
-import { getResearchSymbols, saveHypothesisDraft, type SymbolsResponse } from '../research-backtests/api'
+import {
+  getResearchSymbols, suggestHypothesis, saveHypothesisDraft,
+  type SymbolsResponse, type SuggestHypothesisResponse,
+} from '../research-backtests/api'
+import { AiStatusFrame } from '../../components/AiStatusFrame'
+import { PerformanceBreakdownTable } from '../backtesting-charts/BacktestingCharts'
+import type { BreakdownBucket } from '../backtesting-charts/api'
 import {
   createMission, listMissions, getMissionStatus, getMissionLeaderboard, cancelMission,
   createValidation, listValidations, getValidation, getMetaAnalysis, getFeatureMining,
@@ -1031,6 +1037,132 @@ function ValidationStatusBadge({ validation }: { validation: ValidationRow | nul
   )
 }
 
+// Trial Breakdown (2026-07-31) — by_regime/by_direction/by_session are
+// already computed into every trial's metrics_json (backtest/metrics.py,
+// unchanged since Phase 6's PerformanceBreakdownTable) but a Mission
+// Center operator had no way to see them without downloading the raw
+// JSON by hand. This panel just surfaces already-computed data — no new
+// backend endpoint, no automated hypothesis generation. The
+// "Suggest hypothesis from this trial" action below reuses the existing,
+// unmodified, human-triggered /ai/suggest-hypothesis + /ai/save-
+// hypothesis-draft flow (Phase 4d) — it only grounds the free-text
+// focus_hint in this trial's own numbers, exactly like a human copying
+// them into the box themselves would. Nothing here is auto-generated or
+// auto-registered; every trial's exploratory status is unchanged.
+function buildTrialFocusHint(trial: MissionTrial, hypothesisName: string | null, metrics: Record<string, unknown>): string {
+  const parts = [
+    `Mission trial #${trial.trial_number}${hypothesisName ? ` ("${hypothesisName}")` : ''}, symbol ${trial.symbol}, ` +
+      `objective=${trial.objective_value ?? '—'}, trades=${trial.trades}.`,
+  ]
+  const summarize = (label: string, buckets: unknown) => {
+    if (!buckets || typeof buckets !== 'object') return
+    const entries = Object.entries(buckets as Record<string, BreakdownBucket>)
+    if (entries.length === 0) return
+    parts.push(
+      `${label}: ` +
+        entries.map(([k, b]) => `${k}=${b.trades}tr/${b.win_rate.toFixed(0)}%wr/${b.pnl >= 0 ? '+' : ''}${b.pnl.toFixed(0)}pnl`).join(', '),
+    )
+  }
+  summarize('By regime', metrics.by_regime)
+  summarize('By direction', metrics.by_direction)
+  summarize('By session', metrics.by_session)
+  return parts.join(' ')
+}
+
+function TrialBreakdownPanel({
+  trial, hypothesisName, onClose,
+}: {
+  trial: MissionTrial
+  hypothesisName: string | null
+  onClose: () => void
+}) {
+  const metrics: Record<string, unknown> = trial.metrics_json ? JSON.parse(trial.metrics_json) : {}
+  const byRegime = (metrics.by_regime ?? {}) as Record<string, BreakdownBucket>
+  const byDirection = (metrics.by_direction ?? {}) as Record<string, BreakdownBucket>
+  const bySession = (metrics.by_session ?? {}) as Record<string, BreakdownBucket>
+  const hasBreakdown = Object.keys(byRegime).length > 0 || Object.keys(byDirection).length > 0 || Object.keys(bySession).length > 0
+
+  const [ai, setAi] = useState<{ triggered: boolean; loading: boolean; error: string | null; data: SuggestHypothesisResponse | null }>({
+    triggered: false, loading: false, error: null, data: null,
+  })
+  const [draftFile, setDraftFile] = useState<string | null>(null)
+
+  const suggest = async () => {
+    setAi({ triggered: true, loading: true, error: null, data: null })
+    setDraftFile(null)
+    try {
+      const data = await suggestHypothesis(buildTrialFocusHint(trial, hypothesisName, metrics))
+      setAi({ triggered: true, loading: false, error: null, data })
+    } catch (e) {
+      setAi({ triggered: true, loading: false, error: e instanceof Error ? e.message : String(e), data: null })
+    }
+  }
+
+  const saveDraft = async () => {
+    if (!ai.data || ai.data.status !== 'ok') return
+    try {
+      const result = await saveHypothesisDraft({
+        title: ai.data.title ?? '', statement: ai.data.statement ?? '',
+        why_this_might_be_true: ai.data.why_this_might_be_true ?? '',
+        data_required: ai.data.data_required ?? {}, falsification_criteria: ai.data.falsification_criteria ?? '',
+        distinct_from_prior_kill: ai.data.distinct_from_prior_kill ?? '', notes: ai.data.notes ?? '',
+      })
+      setDraftFile(result.file)
+    } catch (e) {
+      setDraftFile(`error: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  return (
+    <Panel
+      title={`Trial ${trial.trial_number} breakdown — ${trial.symbol}${hypothesisName ? ` — "${hypothesisName}"` : ''}`}
+      right={<button onClick={onClose} className="text-[0.75em] text-muted hover:text-accent">Close</button>}
+    >
+      <div className="p-4 flex flex-col gap-4">
+        {!hasBreakdown ? (
+          <Empty>No regime/direction/session breakdown available for this trial (0 closed trades, or an older mission run).</Empty>
+        ) : (
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))]">
+            {Object.keys(byDirection).length > 0 && <PerformanceBreakdownTable title="Direction" buckets={byDirection} />}
+            {Object.keys(bySession).length > 0 && <PerformanceBreakdownTable title="Session" buckets={bySession} />}
+            {Object.keys(byRegime).length > 0 && <PerformanceBreakdownTable title="Regime" buckets={byRegime} />}
+          </div>
+        )}
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={suggest}
+              disabled={ai.loading}
+              className="text-[0.78em] px-2.5 py-1 rounded border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50"
+            >
+              {ai.loading ? 'Asking AI…' : 'Suggest hypothesis from this trial'}
+            </button>
+            <span className="text-muted text-[0.72em]">
+              Grounded in this trial's own numbers above — still a LEAD, human-triggered, never auto-registered.
+            </span>
+          </div>
+          {ai.triggered && (
+            <AiStatusFrame loading={ai.loading} fetchError={ai.error} status={ai.data?.status} providerError={ai.data?.error}>
+              {ai.data?.status === 'ok' && (
+                <div className="flex flex-col gap-2 text-[0.82em]">
+                  <div className="font-bold text-accent">{ai.data.title}</div>
+                  <div>{ai.data.statement}</div>
+                  <div className="text-muted"><span className="font-bold text-text">Why:</span> {ai.data.why_this_might_be_true}</div>
+                  <div className="text-muted"><span className="font-bold text-text">Falsification:</span> {ai.data.falsification_criteria}</div>
+                  <div className="text-muted"><span className="font-bold text-text">Distinct from prior kill:</span> {ai.data.distinct_from_prior_kill}</div>
+                  {draftFile
+                    ? <span className="text-[0.75em] text-muted">{draftFile}</span>
+                    : <button onClick={saveDraft} className="self-start text-[0.75em] text-accent hover:underline">Save as draft</button>}
+                </div>
+              )}
+            </AiStatusFrame>
+          )}
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
 function MissionDetail({ missionId }: { missionId: string }) {
   const { markUnauthenticated } = useAuth()
   const statusQuery = useApiQuery(['mission-status', missionId], () => getMissionStatus(missionId), POLL_MS, markUnauthenticated)
@@ -1040,6 +1172,7 @@ function MissionDetail({ missionId }: { missionId: string }) {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [draftStatus, setDraftStatus] = useState<Record<number, string>>({})
+  const [breakdownTrial, setBreakdownTrial] = useState<MissionTrial | null>(null)
 
   const status: MissionStatusResponse | null = statusQuery.data
   const validationsQuery = useApiQuery(
@@ -1119,6 +1252,14 @@ function MissionDetail({ missionId }: { missionId: string }) {
     { header: 'State', render: (t) => <StatusBadge status={t.state.toLowerCase()} /> },
     { header: 'Objective', render: (t) => t.objective_value != null ? t.objective_value.toFixed(3) : '—', align: 'right', accessorFn: (t) => t.objective_value ?? -Infinity, sortingFn: 'basic' },
     { header: 'Trades', render: (t) => t.trades, align: 'right', accessorFn: (t) => t.trades, sortingFn: 'basic' },
+    {
+      header: 'Breakdown',
+      render: (t) => (
+        t.state === 'COMPLETE'
+          ? <button onClick={() => setBreakdownTrial(t)} className="text-[0.75em] text-accent hover:underline">View</button>
+          : <span className="text-muted text-[0.75em]">—</span>
+      ),
+    },
     {
       header: 'Draft', render: (t) => (
         draftStatus[t.trial_number]
@@ -1205,6 +1346,14 @@ function MissionDetail({ missionId }: { missionId: string }) {
           )}
         </div>
       </Panel>
+
+      {breakdownTrial && (
+        <TrialBreakdownPanel
+          trial={breakdownTrial}
+          hypothesisName={hypothesisNameFor(status.mission, breakdownTrial)}
+          onClose={() => setBreakdownTrial(null)}
+        />
+      )}
 
       {symbols.length > 1 && (
         <Panel

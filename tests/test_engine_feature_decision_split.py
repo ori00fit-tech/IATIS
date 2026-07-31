@@ -34,6 +34,9 @@ from engines.market_structure_engine import extract_features as ms_extract
 from engines.nnfx_engine import NNFXEngine
 from engines.nnfx_engine import decide as nnfx_decide
 from engines.nnfx_engine import extract_features as nnfx_extract
+from engines.quant_engine import QuantEngine
+from engines.quant_engine import decide as quant_decide
+from engines.quant_engine import extract_features as quant_extract
 from engines.price_action_engine import PriceActionEngine
 from engines.price_action_engine import decide as pa_decide
 from engines.price_action_engine import extract_features as pa_extract
@@ -230,3 +233,40 @@ def test_smc_decide_structural_bias_never_touches_a_dataframe():
     bias, score, reasons = decide_structural_bias(features)
     assert bias == Bias.BULLISH
     assert score == pytest.approx(0.75 * 65.0, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Quant (Confluence Engine Overhaul Phase 3a, 2026-08-01) — same
+# extract_features()/decide() purity properties, following this file's
+# own established per-engine pattern. Quant's own dedicated test file
+# (tests/test_quant_engine_v2.py) covers its engine-level behavior
+# (regime classification, degeneracy cases, EngineOutput defaults) in
+# depth — these two tests only pin the same structural property this
+# file already pins for every other engine: extract_features(df, t, tf)
+# takes 3 args (not Wyckoff's 2), since realized-vol annualization is
+# genuinely timeframe-dependent — matching ict_engine's own precedent
+# that "whatever inputs the facts need" is the real pattern.
+# ---------------------------------------------------------------------------
+
+def test_quant_extract_features_is_pure():
+    mtf = _mtf(seed=1)
+    df = mtf["H1"]
+    f1 = quant_extract(df, {}, "H1")
+    f2 = quant_extract(df, {}, "H1")
+    assert f1 == f2
+
+
+def test_quant_decide_is_pure():
+    mtf = _mtf(seed=1)
+    features = quant_extract(mtf["H1"], {}, "H1")
+    r1 = quant_decide(features, {})
+    r2 = quant_decide(features, {})
+    assert r1 == r2
+
+
+def test_quant_analyze_populates_features_field():
+    out = QuantEngine().analyze(_mtf(seed=42))
+    assert isinstance(out.features, dict)
+    assert len(out.features) > 0
+    assert out.evidence_level == "HEURISTIC"
+    assert out.probability is None

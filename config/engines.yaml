@@ -51,11 +51,100 @@ enabled:
 # behavior by tests/test_engine_config_extraction_no_behavior_change.py.
 # Each engine reads its own sub-key via self.thresholds.get(name,
 # CURRENT_HARDCODED_VALUE) — so an incomplete or missing thresholds block
-# degrades to identical behavior, never a crash. quant/macro/divergence/
-# sentiment are deliberately NOT extracted here — Phase 3 replaces their
-# thresholds wholesale, so extracting soon-to-be-discarded numbers now
-# would be wasted work.
+# degrades to identical behavior, never a crash. macro/divergence/
+# sentiment are deliberately NOT extracted here — their Phase 3 rebuilds
+# replace their thresholds wholesale, so extracting soon-to-be-discarded
+# numbers now would be wasted work. quant WAS fully rebuilt in Phase 3a
+# (2026-08-01) — its thresholds block below is config-first from day
+# one, not a post-hoc extraction of legacy magic numbers.
 thresholds:
+  quant:
+    min_bars: 100
+
+    # Rolling z-score
+    zscore_window: 20
+
+    # Hurst exponent (R/S analysis)
+    hurst_lookback: 500
+    hurst_lags: [10, 20, 40, 80, 160]
+    hurst_min_lags: 4
+    hurst_trend_threshold: 0.55
+    hurst_mr_threshold: 0.45
+
+    # Autocorrelation (returns, lag-1)
+    autocorr_lookback: 100
+    autocorr_threshold: 0.10
+
+    # Volatility regime (ATR percentile)
+    atr_period: 14
+    atr_lookback: 100
+    vol_regime_low_pct: 0.25
+    vol_regime_high_pct: 0.80
+
+    # Shannon entropy of returns
+    entropy_lookback: 100
+    entropy_bins: 10
+    entropy_random_threshold: 0.90
+
+    # Efficiency ratio (Kaufman's)
+    er_period: 10
+    er_trend_threshold: 0.30
+    er_mr_threshold: 0.15
+
+    # Variance ratio (Lo-MacKinlay, simple overlapping estimator)
+    variance_ratio_q: 10
+    variance_ratio_lookback: 200
+    vr_trend_threshold: 1.10
+    vr_mr_threshold: 0.90
+
+    # ADF stationarity test
+    adf_lookback: 100
+    adf_min_bars: 30
+    adf_p_threshold: 0.05
+
+    # Half-life of mean reversion (OU regression)
+    halflife_lookback: 100
+    halflife_min_bars: 30
+    halflife_fast_bars: 10
+    halflife_max_bars_for_mr_vote: 20
+
+    # Realized volatility (annualized)
+    realized_vol_window: 20
+    bars_per_year_default: 8760.0
+
+    # Volatility clustering (ARCH-effect proxy) — informational only
+    vol_clustering_lookback: 100
+
+    # RSI (SMA-smoothed, utils.indicators.rsi) — reused for confirmation
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    rsi_bull_confirm: 55
+    rsi_bear_confirm: 45
+    rsi_confirm_score: 15.0
+    rsi_conflict_penalty: 10.0
+
+    # Regime vote resolution
+    regime_min_votes: 2
+    regime_margin: 1
+
+    # MEAN_REVERTING branch
+    mr_zscore_entry: 2.0
+    mr_base_score: 40.0
+    mr_zscore_scale: 10.0
+    mr_zscore_bonus_cap: 20.0
+    mr_halflife_confirm_score: 5.0
+
+    # TRENDING branch
+    trend_direction_lookback: 20
+    trend_base_score: 35.0
+    trend_er_scale: 40.0
+    trend_er_bonus_cap: 25.0
+
+    # Global
+    score_cap: 70.0
+    score_neutral_floor: 15.0
+
   price_action:
     min_bars: 30
     rsi_period: 14
@@ -178,7 +267,7 @@ versions:
   market_structure: "1.0"
   nnfx: "1.0"
   price_action: "1.0"
-  quant: "1.0"
+  quant: "2.0"
   sentiment: "1.0"
   smc: "1.0"
   wyckoff: "1.0"

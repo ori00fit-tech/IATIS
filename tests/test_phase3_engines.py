@@ -1,8 +1,15 @@
 """
 tests/test_phase3_engines.py
 -------------------------------
-Behavior tests for Phase 3 engines: ICT, NNFX, Quant,
+Behavior tests for Phase 3 engines: ICT, NNFX,
 and the Session Context layer they depend on.
+
+Quant's own tests moved to tests/test_quant_engine_v2.py (+
+tests/test_indicators_quant_stats.py) when it was fully rebuilt in
+Confluence Engine Overhaul Phase 3a (2026-08-01) — its old
+score<=60/`"roc_10" in raw` assumptions no longer hold under the new
+regime-aware contract (ROC was dropped entirely), by design, not a
+regression.
 
 All tests use synthetic/hand-crafted data — no real API calls.
 """
@@ -17,7 +24,6 @@ from core.timeframe_sync import build_multi_timeframe_view
 from engines.base_engine import Bias
 from engines.ict_engine import ICTEngine, _dealing_range, _premium_discount_zone
 from engines.nnfx_engine import NNFXEngine
-from engines.quant_engine import QuantEngine
 from regimes.session_context import SessionContext, detect_session
 
 
@@ -172,54 +178,6 @@ def test_nnfx_engine_bullish_when_price_above_ema200():
     df.index.name = "datetime"
     output = NNFXEngine().safe_analyze({"H1": df})
     assert output.bias == Bias.BULLISH
-
-
-# ---------------------------------------------------------------------------
-# Quant Engine
-# ---------------------------------------------------------------------------
-
-def test_quant_engine_returns_valid_output():
-    df = load_synthetic(200, seed=42)
-    mtf = {"H1": df}
-    output = QuantEngine().safe_analyze(mtf)
-    assert output.bias in (Bias.BULLISH, Bias.BEARISH, Bias.NEUTRAL)
-    assert 0 <= output.score <= 60
-
-
-def test_quant_engine_abstains_on_insufficient_data():
-    df = load_synthetic(20, seed=1)
-    mtf = {"H1": df}
-    output = QuantEngine().safe_analyze(mtf)
-    assert output.bias == Bias.NEUTRAL
-    assert output.score == 0.0
-
-
-def test_quant_engine_reports_indicators_in_raw():
-    df = load_synthetic(200, seed=42)
-    output = QuantEngine().safe_analyze({"H1": df})
-    assert "rsi" in output.raw
-    assert "roc_10" in output.raw
-    assert "atr_percentile" in output.raw
-
-
-def test_quant_engine_bearish_on_overbought():
-    """Construct strongly rising data to trigger RSI overbought."""
-    import numpy as np
-    n = 200
-    rng = np.random.default_rng(0)
-    prices = 1.10 + np.cumsum(rng.normal(0.002, 0.0005, n))  # strong uptrend
-    idx = pd.date_range("2026-01-01", periods=n, freq="1h", tz="UTC")
-    df = pd.DataFrame({
-        "open": prices,
-        "high": prices * 1.001,
-        "low": prices * 0.999,
-        "close": prices,
-        "volume": 1000,
-    }, index=idx)
-    df.index.name = "datetime"
-    output = QuantEngine().safe_analyze({"H1": df})
-    # strong uptrend should lead to RSI ≥ 50
-    assert output.raw["rsi"] >= 50
 
 
 # ---------------------------------------------------------------------------

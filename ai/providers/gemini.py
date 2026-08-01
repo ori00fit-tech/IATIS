@@ -34,26 +34,6 @@ class GeminiProvider(AIProvider):
                     "generationConfig": {
                         "temperature": self.temperature,
                         "maxOutputTokens": self.max_tokens,
-                        # 2026-07-31: the real root cause of persistent MAX_TOKENS
-                        # truncation on suggest_hypothesis, found after raising
-                        # ai.max_tokens 1200->3072 didn't fix it either. Gemini's
-                        # 2.5-family "thinking" models (gemini-flash-latest
-                        # resolves to one) spend part of maxOutputTokens on
-                        # internal reasoning BEFORE the visible answer — this
-                        # _chat() already has to filter out "thought" parts
-                        # below, so that budget was always wasted, never part of
-                        # the returned text. thinkingBudget: 0 disables it,
-                        # handing the entire token budget to the actual JSON
-                        # answer. responseMimeType constrains Gemini to emit
-                        # syntactically valid JSON directly (no markdown fences/
-                        # prose wrapper), which extract_json() otherwise has to
-                        # recover from. Neither could be verified against the
-                        # live API in this sandbox (no network egress to
-                        # generativelanguage.googleapis.com / no API key here)
-                        # — both are documented Gemini API fields, not a guess,
-                        # but confirm live on first real use post-deploy.
-                        "thinkingConfig": {"thinkingBudget": 0},
-                        "responseMimeType": "application/json",
                     },
                 },
                 timeout=self.timeout,

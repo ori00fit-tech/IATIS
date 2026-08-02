@@ -24,6 +24,8 @@ from backtest.mission_validator import (
     STRONG_LEAD,
     WEAK_LEAD,
     ValidationConfig,
+    _compute_candidate_lock,
+    _compute_date_overlap,
     run_validation,
 )
 from backtest.optimizer import MissionSearchSpace, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _TF_IDX_KEY
@@ -205,6 +207,122 @@ def test_run_validation_reconstructs_hypothesis_bundle_mode_trial_correctly(tmp_
     # got a real evaluated result (not silently skipped/errored).
     for r in results:
         assert r["error"] is None
+
+
+# ── Reproducibility fingerprint / candidate lock + date overlap ────────────
+# (Diagnostic Infrastructure Phase 1, 2026-08-02) — both informational
+# only, never a VALIDATION_CRITERIA entry, never blocking.
+
+def test_compute_candidate_lock_missing_fingerprint_is_unavailable():
+    trial = {"fingerprint_json": None}
+    result = _compute_candidate_lock(trial, "EURUSD", Path("data"))
+    assert result == {"available": False, "note": "Trial predates fingerprint tracking."}
+
+
+def test_compute_candidate_lock_matches_when_dataset_unchanged(tmp_path, monkeypatch):
+    # Pinned, clean git state — this repo's own working tree may genuinely
+    # be dirty during development, which would make "current working tree
+    # is dirty" a real, correct diff even with an unchanged dataset. That
+    # git-dirty behavior is covered separately; this test isolates the
+    # dataset-comparison logic on its own.
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+    _write_dataset(tmp_path, "EURUSD")
+    from research.manifest import dataset_fingerprint
+    from backtest.runner import find_symbol_csv
+
+    fingerprint = {"git": {"commit": "abc123", "dirty": False},
+                   "dataset": dataset_fingerprint(find_symbol_csv("EURUSD", tmp_path))}
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+    result = _compute_candidate_lock(trial, "EURUSD", tmp_path)
+    assert result["available"] is True
+    assert result["matches"] is True
+    assert result["diffs"] == []
+
+
+def test_compute_candidate_lock_detects_dataset_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+    _write_dataset(tmp_path, "EURUSD")
+    from research.manifest import dataset_fingerprint
+    from backtest.runner import find_symbol_csv
+
+    csv_path = find_symbol_csv("EURUSD", tmp_path)
+    fingerprint = {"git": {"commit": "abc123", "dirty": False}, "dataset": dataset_fingerprint(csv_path)}
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+
+    # Simulate a legitimately-grown dataset since the trial ran.
+    csv_path.write_text(csv_path.read_text() + "\n")
+    result = _compute_candidate_lock(trial, "EURUSD", tmp_path)
+    assert result["available"] is True
+    assert result["matches"] is False
+    assert "dataset file content changed (different SHA256)" in result["diffs"]
+
+
+def test_compute_candidate_lock_flags_dirty_working_tree_even_with_matching_dataset(tmp_path, monkeypatch):
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": True})
+    _write_dataset(tmp_path, "EURUSD")
+    from research.manifest import dataset_fingerprint
+    from backtest.runner import find_symbol_csv
+
+    fingerprint = {"git": {"commit": "abc123", "dirty": False},
+                   "dataset": dataset_fingerprint(find_symbol_csv("EURUSD", tmp_path))}
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+    result = _compute_candidate_lock(trial, "EURUSD", tmp_path)
+    assert result["matches"] is False
+    assert "current working tree is dirty (uncommitted changes)" in result["diffs"]
+
+
+def test_compute_candidate_lock_survives_unparseable_json():
+    trial = {"fingerprint_json": "not json"}
+    result = _compute_candidate_lock(trial, "EURUSD", Path("data"))
+    assert result["available"] is False
+
+
+def test_compute_date_overlap_detects_overlap():
+    mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2022-01-01"})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",))
+    vc = ValidationConfig(**{**vc.__dict__, "start": "2021-06-01", "end": "2023-01-01"})
+    result = _compute_date_overlap(mission, vc)
+    assert result["overlaps"] is True
+    assert result["original_start"] == "2020-01-01"
+
+
+def test_compute_date_overlap_detects_disjoint_ranges():
+    mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2020-06-01"})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",))
+    vc = ValidationConfig(**{**vc.__dict__, "start": "2021-01-01", "end": "2022-01-01"})
+    result = _compute_date_overlap(mission, vc)
+    assert result["overlaps"] is False
+
+
+def test_compute_date_overlap_full_history_both_sides_overlaps():
+    mission = {"config_json": json.dumps({})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",))
+    result = _compute_date_overlap(mission, vc)
+    assert result["overlaps"] is True
+
+
+def test_run_validation_persists_candidate_lock_and_date_overlap(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-integrity-check")
+
+    vc = _small_vc(tmp_path, "v-integrity-check", "val-integrity-check")
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-integrity-check")
+    assert validation is not None
+    candidate_lock = json.loads(validation["candidate_lock_json"])
+    date_overlap = json.loads(validation["date_overlap_json"])
+    # The trial seeded by _seed_mission_and_trial() has no fingerprint_json
+    # (record_trial() called without fingerprint=), so this must degrade
+    # gracefully rather than crash.
+    assert candidate_lock == {"available": False, "note": "Trial predates fingerprint tracking."}
+    assert "overlaps" in date_overlap
+
+    reports = list((tmp_path / "reports").glob("mission_validation_v-integrity-check_*.json"))
+    report = json.loads(reports[0].read_text())
+    assert report["candidate_lock"] == candidate_lock
+    assert report["date_overlap"] == date_overlap
 
 
 def test_rejects_non_complete_trial(tmp_path):

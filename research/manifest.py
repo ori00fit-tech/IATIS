@@ -93,6 +93,14 @@ def _git_state() -> dict[str, Any]:
         return {"commit": "unknown", "dirty": True}
 
 
+def git_state() -> dict[str, Any]:
+    """Public wrapper around _git_state() for callers outside this
+    module's own build_manifest() flow — Diagnostic Infrastructure Phase 1
+    (2026-08-02) uses this to fingerprint Mission Center trials/
+    validations without duplicating git-state logic."""
+    return _git_state()
+
+
 def dataset_fingerprint(csv_path: Path, df=None) -> dict[str, Any]:
     """SHA256 + shape of one input dataset. Pass the loaded DataFrame to
     also record bar count and date range."""

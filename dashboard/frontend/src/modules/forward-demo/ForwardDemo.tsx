@@ -5,7 +5,10 @@ import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
 import { DataTable, type Column } from '../../components/DataTable'
 import { getOutcomes } from '../live-signals/api'
-import { getForwardReview, getShadowBook, formatMetric, type ForwardRule, type ShadowGate } from './api'
+import {
+  getForwardReview, getShadowBook, formatMetric,
+  type ForwardRule, type ShadowGate, type ShadowBySymbol, type ShadowByRegime,
+} from './api'
 
 const POLL_MS = 20_000
 
@@ -56,6 +59,34 @@ const gateColumns: Column<ShadowGate>[] = [
   },
 ]
 
+const bySymbolColumns: Column<ShadowBySymbol>[] = [
+  { header: 'Symbol', render: (g) => <span className="text-accent">{g.symbol}</span> },
+  { header: 'Closed', render: (g) => g.n_closed, align: 'right' },
+  { header: 'Wins', render: (g) => g.wins, align: 'right' },
+  { header: 'Avg R', render: (g) => (g.avg_r != null ? g.avg_r.toFixed(3) : '—'), align: 'right' },
+  { header: 'Total R', render: (g) => (g.total_r != null ? g.total_r.toFixed(2) : '—'), align: 'right' },
+  {
+    header: 'Verdict',
+    render: (g) => (
+      <Badge tone={g.verdict === 'saving losses' ? 'good' : g.verdict === 'rejecting profit' ? 'poor' : 'neutral'}>{g.verdict}</Badge>
+    ),
+  },
+]
+
+const byRegimeColumns: Column<ShadowByRegime>[] = [
+  { header: 'Regime', render: (g) => <span className="text-accent">{g.regime}</span> },
+  { header: 'Closed', render: (g) => g.n_closed, align: 'right' },
+  { header: 'Wins', render: (g) => g.wins, align: 'right' },
+  { header: 'Avg R', render: (g) => (g.avg_r != null ? g.avg_r.toFixed(3) : '—'), align: 'right' },
+  { header: 'Total R', render: (g) => (g.total_r != null ? g.total_r.toFixed(2) : '—'), align: 'right' },
+  {
+    header: 'Verdict',
+    render: (g) => (
+      <Badge tone={g.verdict === 'saving losses' ? 'good' : g.verdict === 'rejecting profit' ? 'poor' : 'neutral'}>{g.verdict}</Badge>
+    ),
+  },
+]
+
 export function ForwardDemo() {
   const { markUnauthenticated } = useAuth()
   const outcomes = usePolling(() => getOutcomes(5), POLL_MS, markUnauthenticated)
@@ -91,6 +122,18 @@ export function ForwardDemo() {
           <DataTable columns={gateColumns} rows={shadow.data.gates} rowKey={(g) => g.primary_gate ?? 'unknown'} />
         ) : (
           <Empty>{shadow.loading ? 'Loading...' : 'No closed shadow signals yet'}</Empty>
+        )}
+        {shadow.data && shadow.data.by_symbol.length > 0 && (
+          <>
+            <p className="px-4 pt-3 pb-1 text-[0.72em] text-muted uppercase tracking-[1px] border-t border-border">By Symbol</p>
+            <DataTable columns={bySymbolColumns} rows={shadow.data.by_symbol} rowKey={(g) => g.symbol} />
+          </>
+        )}
+        {shadow.data && shadow.data.by_regime.length > 0 && (
+          <>
+            <p className="px-4 pt-3 pb-1 text-[0.72em] text-muted uppercase tracking-[1px] border-t border-border">By Regime</p>
+            <DataTable columns={byRegimeColumns} rows={shadow.data.by_regime} rowKey={(g) => g.regime} />
+          </>
         )}
       </Panel>
     </div>

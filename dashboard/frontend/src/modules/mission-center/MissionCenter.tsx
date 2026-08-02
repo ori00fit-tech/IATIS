@@ -23,7 +23,7 @@ import {
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial, type MissionRow,
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
   type ValidationRow, type ConsensusClaim, type PooledBreakdownRow, type OpportunityCandidate,
-  type PrefillRequest, type PossiblyInfinite,
+  type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
 } from './api'
 
 const POLL_MS = 4000
@@ -1116,6 +1116,31 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
         )}
         {v?.error && <span className="text-red text-[0.78em]">{v.error}</span>}
       </div>
+      {v && (() => {
+        let candidateLock: CandidateLock | null = null
+        let dateOverlap: DateOverlap | null = null
+        try { candidateLock = v.candidate_lock_json ? JSON.parse(v.candidate_lock_json) : null } catch { /* malformed row */ }
+        try { dateOverlap = v.date_overlap_json ? JSON.parse(v.date_overlap_json) : null } catch { /* malformed row */ }
+        return (
+          <div className="flex flex-col gap-2">
+            {candidateLock && candidateLock.available && !candidateLock.matches && (
+              <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+                Candidate lock drift since this trial ran: {(candidateLock.diffs ?? []).join('; ')}. Informational only — a growing dataset is not necessarily a bug.
+              </div>
+            )}
+            {candidateLock && !candidateLock.available && (
+              <div className="text-[0.78em] text-muted bg-surface/40 border border-border rounded px-3 py-2">
+                Candidate lock: {candidateLock.note}
+              </div>
+            )}
+            {dateOverlap && dateOverlap.overlaps && (
+              <div className="text-[0.78em] text-red bg-red/10 border border-red/30 rounded px-3 py-2 font-bold">
+                {dateOverlap.note} (trial: {dateOverlap.original_start ?? '—'} → {dateOverlap.original_end ?? '—'}, validation: {dateOverlap.validation_start ?? '—'} → {dateOverlap.validation_end ?? '—'})
+              </div>
+            )}
+          </div>
+        )
+      })()}
       {data.results.length === 0 ? (
         <Empty>No per-symbol results yet.</Empty>
       ) : (
@@ -1251,6 +1276,98 @@ function hypothesisNameFor(mission: MissionRow | null | undefined, trial: Missio
   }
 }
 
+// Trial identity (2026-08-02) — an operator correctly pointed out that
+// outside hypothesis-bundle mode, "Hypothesis" always shows "—" and
+// nothing in the leaderboard reveals which engines/timeframes/indicators/
+// context/risk values a given trial actually ran with — the data is
+// real and stored (trial.params_json + mission.search_space_json), it
+// was just never resolved and displayed. Mirrors backtest/optimizer.py's
+// resolve_point() exactly (both branches: hypothesis-bundle mode picks
+// one atomic bundle; flat mode reads the 5 independent __*_idx choices),
+// purely client-side from data already fetched — no new backend call.
+const _INTERNAL_IDX_KEYS = [
+  '__timeframes_idx', '__engines_idx', '__indicators_idx', '__context_idx', '__engine_variants_idx',
+]
+const _HYPOTHESIS_INTERNAL_KEYS = ['__hypothesis_idx']
+
+interface ResolvedTrialConfig {
+  timeframes: string[]
+  engines: string[]
+  indicators: Record<string, unknown>[]
+  context_filters: Record<string, unknown>[]
+  engine_variants: Record<string, string>
+  risk_overrides: Record<string, number>
+}
+
+function resolveTrialConfig(mission: MissionRow | null | undefined, trial: MissionTrial): ResolvedTrialConfig | null {
+  if (!mission?.search_space_json) return null
+  try {
+    const space = JSON.parse(mission.search_space_json)
+    const rawParams = JSON.parse(trial.params_json) as Record<string, unknown>
+    let timeframes: string[]
+    let engines: string[]
+    let indicators: Record<string, unknown>[]
+    let contextFilters: Record<string, unknown>[]
+    let engineVariants: Record<string, string>
+    let internalKeys: string[]
+    if (space.hypothesis_bundle_choices) {
+      const bundle = space.hypothesis_bundle_choices[rawParams.__hypothesis_idx as number]
+      if (!bundle) return null
+      timeframes = bundle.timeframes ?? []
+      engines = bundle.engines ?? []
+      indicators = bundle.indicators ?? []
+      contextFilters = bundle.context_filters ?? []
+      engineVariants = bundle.engine_variants ?? {}
+      internalKeys = _HYPOTHESIS_INTERNAL_KEYS
+    } else {
+      timeframes = space.timeframes_choices?.[rawParams.__timeframes_idx as number] ?? []
+      engines = space.engine_set_choices?.[rawParams.__engines_idx as number] ?? []
+      indicators = space.indicator_set_choices?.[rawParams.__indicators_idx as number] ?? []
+      contextFilters = space.context_filter_set_choices?.[(rawParams.__context_idx as number) ?? 0] ?? []
+      engineVariants = space.engine_variant_choices?.[(rawParams.__engine_variants_idx as number) ?? 0] ?? {}
+      internalKeys = _INTERNAL_IDX_KEYS
+    }
+    const riskOverrides: Record<string, number> = {}
+    for (const [k, v] of Object.entries(rawParams)) {
+      if (!internalKeys.includes(k)) riskOverrides[k] = v as number
+    }
+    return {
+      timeframes, engines, indicators, context_filters: contextFilters,
+      engine_variants: engineVariants, risk_overrides: riskOverrides,
+    }
+  } catch {
+    return null
+  }
+}
+
+function TrialConfigSummary({ config }: { config: ResolvedTrialConfig | null }) {
+  if (!config) return null
+  const rows: [string, string][] = [
+    ['Timeframes', config.timeframes.join(', ') || '—'],
+    ['Engines', config.engines.join(', ') || '—'],
+    ['Indicators', config.indicators.length > 0
+      ? config.indicators.map((i) => `${i.name}:${i.mode}`).join(', ') : 'none'],
+    ['Context filters', config.context_filters.length > 0
+      ? config.context_filters.map((c) => `${c.name}:${c.mode}`).join(', ') : 'none'],
+    ['Engine variants', Object.keys(config.engine_variants).length > 0
+      ? Object.entries(config.engine_variants).map(([k, v]) => `${k}=${v}`).join(', ') : 'all v1 (default)'],
+    ['Risk overrides', Object.keys(config.risk_overrides).length > 0
+      ? Object.entries(config.risk_overrides).map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(3) : v}`).join(', ')
+      : 'none'],
+  ]
+  return (
+    <div className="flex flex-col gap-1 text-[0.78em]">
+      <span className="text-[0.72em] text-muted uppercase tracking-[1px]">Trial configuration (what was actually run)</span>
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex gap-2">
+          <span className="text-muted w-32 shrink-0">{label}</span>
+          <span className="font-mono">{value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function latestValidationFor(validations: ValidationRow[], trial: MissionTrial): ValidationRow | null {
   // Defensive: validationsQuery.data should always be an array (backend
   // always returns validations: []), but a caught, silently-swallowed
@@ -1321,14 +1438,16 @@ function buildTrialFocusHint(
 }
 
 function TrialBreakdownPanel({
-  trial, hypothesisName, missionId, onClose,
+  trial, hypothesisName, mission, missionId, onClose,
 }: {
   trial: MissionTrial
   hypothesisName: string | null
+  mission: MissionRow | null | undefined
   missionId: string
   onClose: () => void
 }) {
   const { markUnauthenticated } = useAuth()
+  const resolvedConfig = resolveTrialConfig(mission, trial)
   const metrics: Record<string, unknown> = trial.metrics_json ? JSON.parse(trial.metrics_json) : {}
   const byRegime = (metrics.by_regime ?? {}) as Record<string, BreakdownBucket>
   const byDirection = (metrics.by_direction ?? {}) as Record<string, BreakdownBucket>
@@ -1380,6 +1499,7 @@ function TrialBreakdownPanel({
       right={<button onClick={onClose} className="text-[0.75em] text-muted hover:text-accent">Close</button>}
     >
       <div className="p-4 flex flex-col gap-4">
+        <TrialConfigSummary config={resolvedConfig} />
         {!hasBreakdown ? (
           <Empty>No regime/direction/session breakdown available for this trial (0 closed trades, or an older mission run).</Empty>
         ) : (
@@ -1680,6 +1800,7 @@ function MissionDetail({
         <TrialBreakdownPanel
           trial={breakdownTrial}
           hypothesisName={hypothesisNameFor(status.mission, breakdownTrial)}
+          mission={status.mission}
           missionId={missionId}
           onClose={() => setBreakdownTrial(null)}
         />

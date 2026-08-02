@@ -68,8 +68,9 @@ from backtest.metrics import json_safe
 from backtest.monte_carlo import run_monte_carlo
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
 from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS, RobustnessConfig, run_robustness
-from backtest.runner import load_symbol_data
+from backtest.runner import find_symbol_csv, load_symbol_data
 from backtest.walk_forward import SymbolVerdict, WalkForwardConfig, run_walk_forward
+from research.manifest import dataset_fingerprint, git_state
 from storage import research_mission_validations, research_missions
 from utils.logger import get_logger
 
@@ -133,6 +134,71 @@ class ValidationConfig:
 
 def _criterion(actual: Any, threshold: Any, passed: bool) -> dict:
     return {"actual": actual, "threshold": threshold, "passed": bool(passed)}
+
+
+def _compute_candidate_lock(trial: dict, symbol: str, data_dir: Path) -> dict:
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — compares the
+    trial's stored fingerprint (recorded once at trial time by
+    mission_runner.py) against a freshly computed one for the SAME
+    symbol, right now. Informational only — never blocks a validation
+    run; a legitimately growing dataset (new bars appended since the
+    trial ran) shows as dataset drift without invalidating anything."""
+    original_raw = trial.get("fingerprint_json")
+    if not original_raw:
+        return {"available": False, "note": "Trial predates fingerprint tracking."}
+    try:
+        original = json.loads(original_raw)
+    except (TypeError, ValueError):
+        return {"available": False, "note": "Trial fingerprint could not be parsed."}
+
+    try:
+        csv_path = find_symbol_csv(symbol, data_dir)
+        current_dataset = dataset_fingerprint(csv_path)
+    except (FileNotFoundError, OSError):
+        current_dataset = None
+    current = {"git": git_state(), "dataset": current_dataset}
+
+    diffs: list[str] = []
+    if (original.get("git") or {}).get("commit") != current["git"]["commit"]:
+        diffs.append("code changed (different git commit)")
+    if current["git"]["dirty"]:
+        diffs.append("current working tree is dirty (uncommitted changes)")
+    orig_ds = original.get("dataset") or {}
+    cur_ds = current["dataset"] or {}
+    if orig_ds.get("sha256") != cur_ds.get("sha256"):
+        diffs.append("dataset file content changed (different SHA256)")
+
+    return {
+        "available": True, "original": original, "current": current,
+        "matches": len(diffs) == 0, "diffs": diffs,
+    }
+
+
+def _compute_date_overlap(mission: dict, vc: "ValidationConfig") -> dict:
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — does the
+    validation's requested date range overlap the ORIGINAL mission's
+    training window (mission.config_json)? Informational only: an
+    overlap means this run is NOT genuinely out-of-sample evidence, but
+    an operator may deliberately want an in-sample sanity check."""
+    try:
+        mission_config = json.loads(mission.get("config_json") or "{}")
+    except (TypeError, ValueError):
+        mission_config = {}
+    original_start = mission_config.get("start")
+    original_end = mission_config.get("end")
+    lo = max(original_start or "0000-01-01", vc.start or "0000-01-01")
+    hi = min(original_end or "9999-12-31", vc.end or "9999-12-31")
+    overlaps = lo <= hi
+    return {
+        "original_start": original_start, "original_end": original_end,
+        "validation_start": vc.start, "validation_end": vc.end, "overlaps": overlaps,
+        "note": (
+            "Validation date range overlaps the original trial's training window — "
+            "NOT genuinely out-of-sample evidence." if overlaps else
+            "Validation date range does not overlap the trial's training window — "
+            "genuinely out-of-sample."
+        ),
+    }
 
 
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
@@ -243,6 +309,12 @@ def run_validation(vc: ValidationConfig) -> None:
             finished=True)
         return
 
+    candidate_lock = _compute_candidate_lock(trial, vc.trial_symbol, vc.data_dir)
+    date_overlap = _compute_date_overlap(mission, vc)
+    research_mission_validations.set_validation_integrity_checks(
+        vc.validation_id, candidate_lock=candidate_lock, date_overlap=date_overlap,
+    )
+
     space = search_space_from_dict(json.loads(mission["search_space_json"]))
     point = resolve_point(space, json.loads(trial["params_json"]))
 
@@ -286,10 +358,13 @@ def run_validation(vc: ValidationConfig) -> None:
         vc.validation_id, "finished", finished=True,
         overall_verdict=overall, passing_symbols=passing, total_symbols=total,
     )
-    _write_report(vc, overall, passing, total)
+    _write_report(vc, overall, passing, total, candidate_lock, date_overlap)
 
 
-def _write_report(vc: ValidationConfig, overall: str, passing: int, total: int) -> None:
+def _write_report(
+    vc: ValidationConfig, overall: str, passing: int, total: int,
+    candidate_lock: dict, date_overlap: dict,
+) -> None:
     vc.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     path = vc.output_dir / f"mission_validation_{vc.validation_id}_{stamp}.json"
@@ -310,6 +385,8 @@ def _write_report(vc: ValidationConfig, overall: str, passing: int, total: int) 
         "validation_symbols": list(vc.validation_symbols),
         "overall_verdict": overall, "passing_symbols": passing, "total_symbols": total,
         "criteria": VALIDATION_CRITERIA,
+        "candidate_lock": candidate_lock,
+        "date_overlap": date_overlap,
         "results": results,
         "note": (
             f"{overall} — a LEAD, NOT evidence. Passing every criterion here "

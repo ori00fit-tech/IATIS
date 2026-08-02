@@ -199,6 +199,26 @@ export interface ValidationRow {
   started_at: string | null
   finished_at: string | null
   error: string | null
+  candidate_lock_json: string | null
+  date_overlap_json: string | null
+}
+
+export interface CandidateLock {
+  available: boolean
+  note?: string
+  original?: { git: { commit: string; dirty: boolean }; dataset: Record<string, unknown> | null }
+  current?: { git: { commit: string; dirty: boolean }; dataset: Record<string, unknown> | null }
+  matches?: boolean
+  diffs?: string[]
+}
+
+export interface DateOverlap {
+  original_start: string | null
+  original_end: string | null
+  validation_start: string | null
+  validation_end: string | null
+  overlaps: boolean
+  note: string
 }
 
 export interface CriteriaEntry {

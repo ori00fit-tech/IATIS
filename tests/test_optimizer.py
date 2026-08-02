@@ -22,6 +22,7 @@ from backtest.optimizer import (
     evaluate_point,
     make_sampler,
     resolve_point,
+    search_space_has_signal_variation,
     suggest_point,
 )
 
@@ -436,3 +437,76 @@ def test_hypothesis_bundles_are_actually_sampled_not_stuck_on_index_zero():
         seen_indices.add(raw["__hypothesis_idx"])
         study.tell(trial, 1.0)
     assert seen_indices == {0, 1}
+
+
+# ── search_space_has_signal_variation (2026-08-02, dependence detection) ──
+# Real, operator-found bug this guards: a mission whose search space only
+# varies risk/cost params (every entry-signal dimension pinned to exactly
+# one choice) makes every trial run the identical entry-signal stream —
+# backtest/meta_analysis.py uses this to detect that case and stop
+# reporting cross-trial-consensus p-values as if trials were independent.
+
+def _risk_only_space(**kwargs) -> MissionSearchSpace:
+    defaults = dict(
+        timeframes_choices=(("H4",),),
+        engine_set_choices=(("nnfx", "price_action"),),
+        indicator_set_choices=((),),
+        risk_param_ranges={"sl_atr_multiplier": (1.0, 3.0)},
+    )
+    defaults.update(kwargs)
+    return MissionSearchSpace(**defaults)
+
+
+def test_no_signal_variation_when_every_dimension_pinned_to_one_choice():
+    assert search_space_has_signal_variation(_risk_only_space()) is False
+
+
+def test_signal_variation_true_when_timeframes_vary():
+    space = _risk_only_space(timeframes_choices=(("H1",), ("H4",)))
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_true_when_engine_set_varies():
+    space = _small_space()  # 2 engine_set_choices by default
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_true_when_indicator_set_varies():
+    space = _risk_only_space(indicator_set_choices=((), ({"name": "rsi", "mode": "entry_filter", "params": {}, "weight": 0.0},)))
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_true_when_context_filter_set_varies():
+    space = _risk_only_space(context_filter_set_choices=((), ({"name": "session", "mode": "entry_filter", "params": {}, "weight": 0.0},)))
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_true_when_engine_variants_vary():
+    space = _risk_only_space(engine_variant_choices=({}, {"price_action": "v2"}))
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_hypothesis_bundle_mode_single_bundle_is_dependent():
+    bundle = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    space = _risk_only_space(hypothesis_bundle_choices=(bundle,))
+    assert search_space_has_signal_variation(space) is False
+
+
+def test_signal_variation_hypothesis_bundle_mode_multiple_bundles_is_independent():
+    bundle_a = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    bundle_b = {"name": "NNFX", "timeframes": ["H4"], "engines": ["nnfx"], "indicators": [], "context_filters": []}
+    space = _risk_only_space(hypothesis_bundle_choices=(bundle_a, bundle_b))
+    assert search_space_has_signal_variation(space) is True
+
+
+def test_signal_variation_hypothesis_bundle_mode_ignores_vestigial_flat_dimensions():
+    # In bundle mode the 4 flat *_choices fields are vestigial (never
+    # consulted by resolve_point) — even if they vary, a single-bundle
+    # mission is still dependent.
+    bundle = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    space = _risk_only_space(
+        timeframes_choices=(("H1",), ("H4",)),
+        engine_set_choices=(("nnfx",), ("smc",)),
+        hypothesis_bundle_choices=(bundle,),
+    )
+    assert search_space_has_signal_variation(space) is False

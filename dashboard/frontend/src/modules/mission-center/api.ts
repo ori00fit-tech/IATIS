@@ -279,7 +279,12 @@ export interface ConsensusClaim {
   fraction_favor_dominant: number
   p_value: number | null
   confidence_pct: number | null
-  significance: 'INSUFFICIENT_DATA' | 'SURVIVES_CORRECTION' | 'NOMINAL_ONLY' | 'NOT_SIGNIFICANT'
+  // DEPENDENT_TRIALS_LEAD_ONLY (2026-08-02): the mission never varied any
+  // entry-signal dimension (only risk/cost params) — every trial ran the
+  // same signal stream, so this claim's p_value/confidence_pct are nulled
+  // out rather than computed under a known-violated independence
+  // assumption. See MetaAnalysisResponse.dependence_warning.
+  significance: 'INSUFFICIENT_DATA' | 'SURVIVES_CORRECTION' | 'NOMINAL_ONLY' | 'NOT_SIGNIFICANT' | 'DEPENDENT_TRIALS_LEAD_ONLY'
   claim_text: string
 }
 
@@ -338,6 +343,14 @@ export interface MetaAnalysisResponse {
   pooled_breakdown: PooledBreakdownRow[]
   opportunity_candidates: OpportunityCandidate[]
   note: string
+  // Dependence detection (2026-08-02) — true when this mission's search
+  // space never varied any entry-signal dimension (timeframes/engines/
+  // indicators/context filters/engine variants — only risk/cost params
+  // differed across trials). cross_trial_consensus and pooled_breakdown
+  // are NOT independent-trial statistics in that case; dependence_warning
+  // is the human-readable explanation to render prominently.
+  dependence_detected: boolean
+  dependence_warning: string | null
 }
 
 export const getMetaAnalysis = (missionId: string, opts?: { symbol?: string; top_fraction?: number; n_bins?: number }) =>

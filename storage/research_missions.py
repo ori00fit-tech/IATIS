@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS research_mission_trials_v2 (
     error           TEXT,
     started_at      TEXT NOT NULL,
     finished_at     TEXT NOT NULL,
+    fingerprint_json TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): git+dataset reproducibility fingerprint, see research/manifest.py
     PRIMARY KEY (mission_id, symbol, trial_number)
 )
 """
@@ -204,21 +205,30 @@ def record_trial(
     error: str | None,
     started_at: str,
     finished_at: str,
+    fingerprint: dict | None = None,
 ) -> None:
     """Always INSERT, never UPDATE — trial_number is assigned once by
     mission_runner.py (via Optuna's own trial.number, monotonic per
     Study) and never reused, so a resumed mission's replay + continue
-    logic never produces a duplicate-key write."""
+    logic never produces a duplicate-key write.
+
+    fingerprint (Diagnostic Infrastructure Phase 1, 2026-08-02): the
+    research.manifest git+dataset reproducibility snapshot computed once
+    per symbol by mission_runner.py, reused verbatim across every trial
+    of that symbol. Informational only — never a criterion, never
+    blocking. Absent (None) for a trial recorded before this shipped."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
             """INSERT INTO research_mission_trials_v2
                (mission_id, trial_number, symbol, state, objective_value,
-                params_json, metrics_json, trades, error, started_at, finished_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                params_json, metrics_json, trades, error, started_at, finished_at,
+                fingerprint_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (mission_id, trial_number, symbol, state, objective_value,
              json.dumps(params), json.dumps(metrics) if metrics is not None else None,
-             trades, error, started_at, finished_at),
+             trades, error, started_at, finished_at,
+             json.dumps(fingerprint) if fingerprint is not None else None),
         )
 
 

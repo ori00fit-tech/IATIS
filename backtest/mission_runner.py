@@ -64,7 +64,8 @@ from backtest.optimizer import (
     resolve_point,
     suggest_point,
 )
-from backtest.runner import load_symbol_data
+from backtest.runner import find_symbol_csv, load_symbol_data
+from research.manifest import dataset_fingerprint, git_state
 from storage import research_missions
 from utils.logger import get_logger
 
@@ -152,6 +153,23 @@ def _split_train_holdout(df, holdout_fraction: float):
     return df.iloc[:split_idx], df.iloc[split_idx:]
 
 
+def _compute_fingerprint(symbol: str, data_dir: Path, df) -> dict:
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — a reproducibility
+    snapshot (git commit/dirty + dataset SHA256/bar-count/date-range),
+    computed ONCE per symbol (not per trial — identical across every
+    trial of one symbol within a single mission run) and attached to
+    every research_missions.record_trial() call for that symbol. Never
+    raises — a missing/unreadable dataset file degrades to a partial
+    fingerprint rather than aborting the whole symbol's trials."""
+    try:
+        csv_path = find_symbol_csv(symbol, data_dir)
+        dataset = dataset_fingerprint(csv_path, df)
+    except (FileNotFoundError, OSError) as exc:
+        logger.debug(f"{symbol}: fingerprint dataset lookup failed (non-fatal): {exc}")
+        dataset = None
+    return {"git": git_state(), "dataset": dataset}
+
+
 def run_mission(mc: MissionConfig) -> None:
     research_missions.upsert_mission(
         mission_id=mc.mission_id, name=mc.name, sampler=mc.sampler,
@@ -220,6 +238,8 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         logger.error(f"{symbol}: mission sweep failed to load data — {exc}")
         return
 
+    fingerprint = _compute_fingerprint(symbol, mc.data_dir, df)
+
     if mc.oos_holdout_fraction:
         train_df, holdout_df = _split_train_holdout(df, mc.oos_holdout_fraction)
     else:
@@ -277,6 +297,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                 mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
                 state="FAIL", objective_value=None, params=raw_params, metrics=None,
                 trades=0, error=str(exc), started_at=started_at, finished_at=_now_iso(),
+                fingerprint=fingerprint,
             )
             logger.warning(f"{symbol} trial {trial.number}: evaluation failed — {exc}")
             continue
@@ -296,6 +317,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                 state="PRUNED", objective_value=None, params=raw_params,
                 metrics=metrics_payload, trades=result.trades, error=None,
                 started_at=started_at, finished_at=_now_iso(),
+                fingerprint=fingerprint,
             )
         else:
             _tell_safely(study, trial, values=result.objective_value)
@@ -304,6 +326,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                 state="COMPLETE", objective_value=result.objective_value, params=raw_params,
                 metrics=metrics_payload, trades=result.trades, error=None,
                 started_at=started_at, finished_at=_now_iso(),
+                fingerprint=fingerprint,
             )
 
 

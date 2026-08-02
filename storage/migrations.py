@@ -108,6 +108,29 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN feature_mining_json TEXT",
         ],
     ),
+    (
+        5,
+        "mission_reproducibility_fingerprint",
+        # Diagnostic Infrastructure Phase 1 (2026-08-02): reuses the existing
+        # research/manifest.py reproducibility module (previously only wired
+        # into standalone research scripts) for Mission Center trials/
+        # validations. All three columns are informational — never block a
+        # trial or validation, never write to registry.json/config.yaml.
+        [
+            "ALTER TABLE research_mission_trials_v2 ADD COLUMN fingerprint_json TEXT",
+            "ALTER TABLE research_mission_validations ADD COLUMN candidate_lock_json TEXT",
+            "ALTER TABLE research_mission_validations ADD COLUMN date_overlap_json TEXT",
+        ],
+    ),
+    (
+        6,
+        "shadow_book_regime_column",
+        # Diagnostic Infrastructure Phase 1 (2026-08-02): gate_ledger() can
+        # now break down rejections by regime, not just primary_gate.
+        [
+            "ALTER TABLE shadow_signals ADD COLUMN regime TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -161,6 +184,16 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE research_mission_validation_results" in s for s in statements):
                 from storage import research_mission_validations
                 research_mission_validations._init(con)
+            if any("ALTER TABLE research_mission_trials_v2" in s for s in statements):
+                from storage import research_missions
+                research_missions._init(con)  # creates both research_missions + _trials_v2
+            if any("ALTER TABLE research_mission_validations " in s for s in statements):
+                # trailing space excludes "research_mission_validation_results"
+                from storage import research_mission_validations
+                research_mission_validations._init(con)
+            if any("ALTER TABLE shadow_signals" in s for s in statements):
+                from storage import shadow_book
+                shadow_book._init_db()
             for sql in statements:
                 try:
                     con.execute(sql)

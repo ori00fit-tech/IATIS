@@ -143,6 +143,60 @@ def test_shadow_sl_before_tp_parity_and_saving_losses_verdict():
     assert g["verdict"] == "saving losses"
 
 
+# ── Regime persistence + by_symbol/by_regime breakdown (Diagnostic
+#    Infrastructure Phase 1, 2026-08-02) ────────────────────────────────
+
+def test_log_shadow_signal_persists_regime_from_report():
+    sb.log_shadow_signal(_report(regime={"state": "TRENDING"}), CONFIG)
+    s = sb.get_open_shadows()[0]
+    assert s["regime"] == "TRENDING"
+
+
+def test_log_shadow_signal_regime_absent_is_null():
+    sb.log_shadow_signal(_report(), CONFIG)
+    s = sb.get_open_shadows()[0]
+    assert s["regime"] is None
+
+
+def test_gate_ledger_by_symbol_and_by_regime_partition_same_closed_set():
+    sb.log_shadow_signal(_report(symbol="EURUSD", regime={"state": "TRENDING"}), CONFIG)
+    sb.log_shadow_signal(_report(symbol="XAUUSD", regime={"state": "RANGING"}), CONFIG)
+    for sym in ("EURUSD", "XAUUSD"):
+        s = next(x for x in sb.get_open_shadows() if x["symbol"] == sym)
+        tp = s["take_profit"]
+        sb.auto_close_shadows(
+            {sym: tp - 0.0001},
+            bar_ranges={sym: (tp + 0.0005, s["entry_price"])},
+        )
+
+    ledger = sb.gate_ledger()
+    total_from_gates = sum(g["n_closed"] for g in ledger["gates"])
+    total_from_symbol = sum(g["n_closed"] for g in ledger["by_symbol"])
+    total_from_regime = sum(g["n_closed"] for g in ledger["by_regime"])
+    assert total_from_gates == total_from_symbol == total_from_regime == 2
+
+    by_symbol = {g["symbol"]: g for g in ledger["by_symbol"]}
+    assert by_symbol["EURUSD"]["n_closed"] == 1
+    assert by_symbol["XAUUSD"]["n_closed"] == 1
+    by_regime = {g["regime"]: g for g in ledger["by_regime"]}
+    assert by_regime["TRENDING"]["n_closed"] == 1
+    assert by_regime["RANGING"]["n_closed"] == 1
+
+
+def test_gate_ledger_by_regime_buckets_missing_regime_as_unknown():
+    sb.log_shadow_signal(_report(), CONFIG)  # no regime kwarg -> NULL
+    s = sb.get_open_shadows()[0]
+    tp = s["take_profit"]
+    sb.auto_close_shadows(
+        {"EURUSD": tp - 0.0001},
+        bar_ranges={"EURUSD": (tp + 0.0005, s["entry_price"])},
+    )
+    ledger = sb.gate_ledger()
+    by_regime = {g["regime"]: g for g in ledger["by_regime"]}
+    assert "Unknown" in by_regime
+    assert by_regime["Unknown"]["n_closed"] == 1
+
+
 def test_shadow_time_stop():
     sb.log_shadow_signal(_report(), CONFIG)
     from storage import d1_client

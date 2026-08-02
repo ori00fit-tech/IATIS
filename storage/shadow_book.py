@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS shadow_signals (
     outcome      TEXT DEFAULT 'open',
     exit_time    TEXT,
     exit_price   REAL,
-    r_multiple   REAL
+    r_multiple   REAL,
+    regime       TEXT   -- Diagnostic Infrastructure Phase 1 (2026-08-02): report["regime"]["state"] at decision time, for gate_ledger()'s by_regime breakdown
 )
 """
 _INDEXES = [
@@ -171,14 +172,15 @@ def log_shadow_signal(report: dict, config: dict) -> str | None:
             con.execute(
                 """INSERT OR IGNORE INTO shadow_signals
                    (shadow_id, ts, symbol, direction, entry_price, stop_loss,
-                    take_profit, cf_score, primary_gate, fail_reasons)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    take_profit, cf_score, primary_gate, fail_reasons, regime)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (shadow_id, now.isoformat(), symbol, bias, entry, stop, target,
                  report.get("confluence", {}).get("score"),
                  classify_gate(report),
                  json.dumps(report.get("confluence", {}).get("fail_reasons", [])
                             or [report.get("downgrade_reason") or
-                                (report.get("risk", {}) or {}).get("reasons")])),
+                                (report.get("risk", {}) or {}).get("reasons")]),
+                 (report.get("regime") or {}).get("state")),
             )
         return shadow_id
     except D1Error as exc:
@@ -277,10 +279,44 @@ def auto_close_shadows(
     return closed
 
 
+def _verdict_for(avg_r: float | None) -> str:
+    return ("saving losses" if (avg_r or 0) < -0.05 else
+            "rejecting profit" if (avg_r or 0) > 0.05 else
+            "neutral")
+
+
+def _grouped_breakdown(con, group_col: str) -> list[dict]:
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — same aggregation
+    formula as the per-gate query, grouped by an arbitrary column
+    (symbol/regime). Rows with a NULL group value (regime unset on old
+    rows, or a report shape without regime) are included as their own
+    'Unknown' bucket rather than silently dropped."""
+    rows = con.execute(
+        f"""SELECT COALESCE({group_col}, 'Unknown') AS grp,
+                   COUNT(*) AS n_closed,
+                   SUM(CASE WHEN outcome='win' THEN 1 ELSE 0 END) AS wins,
+                   ROUND(AVG(r_multiple), 3) AS avg_r,
+                   ROUND(SUM(r_multiple), 2) AS total_r
+           FROM shadow_signals WHERE outcome != 'open'
+           GROUP BY grp ORDER BY n_closed DESC"""
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = {"n_closed": r["n_closed"], "wins": r["wins"], "avg_r": r["avg_r"], "total_r": r["total_r"]}
+        d["verdict"] = _verdict_for(d["avg_r"])
+        out.append({"key": r["grp"], **d})
+    return out
+
+
 def gate_ledger() -> dict[str, Any]:
     """Per-gate counterfactual ledger — the number the whole module exists
     to produce. avg_r < 0: the gate saves losses (working). avg_r > 0:
     the gate rejects profit (recalibration candidate once n is adequate).
+
+    by_symbol/by_regime (Diagnostic Infrastructure Phase 1, 2026-08-02):
+    the same aggregation, broken down by symbol/regime instead of gate —
+    additive, backward-compatible top-level keys; existing consumers that
+    only read note/open/gates are unaffected.
     """
     _init_db()
     with d1_client.d1_connection() as con:
@@ -293,15 +329,15 @@ def gate_ledger() -> dict[str, Any]:
                FROM shadow_signals WHERE outcome != 'open'
                GROUP BY primary_gate ORDER BY n_closed DESC"""
         ).fetchall()
+        by_symbol_rows = _grouped_breakdown(con, "symbol")
+        by_regime_rows = _grouped_breakdown(con, "regime")
         open_count = con.execute(
             "SELECT COUNT(*) AS n FROM shadow_signals WHERE outcome='open'"
         ).fetchone()
     gates = []
     for r in rows:
         d = {k: r[k] for k in ("primary_gate", "n_closed", "wins", "avg_r", "total_r")}
-        d["verdict"] = ("saving losses" if (d["avg_r"] or 0) < -0.05 else
-                        "rejecting profit" if (d["avg_r"] or 0) > 0.05 else
-                        "neutral")
+        d["verdict"] = _verdict_for(d["avg_r"])
         gates.append(d)
     return {
         "note": ("Counterfactuals of REJECTED signals, same exit mechanics as real "
@@ -309,4 +345,6 @@ def gate_ledger() -> dict[str, Any]:
                  "per gate, not total_r as P&L. Do not recalibrate below n≈50/gate."),
         "open": open_count["n"] if open_count else 0,
         "gates": gates,
+        "by_symbol": [{"symbol": r["key"], **{k: r[k] for k in r if k != "key"}} for r in by_symbol_rows],
+        "by_regime": [{"regime": r["key"], **{k: r[k] for k in r if k != "key"}} for r in by_regime_rows],
     }

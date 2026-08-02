@@ -110,6 +110,38 @@ def test_never_touches_config_yaml_or_engines_yaml(tmp_path):
     assert ENGINES_YAML_PATH.read_bytes() == before_engines
 
 
+# ── Reproducibility fingerprint (Diagnostic Infrastructure Phase 1) ────────
+
+def test_trials_carry_a_real_fingerprint_computed_once_per_symbol(tmp_path, monkeypatch):
+    _write_dataset(tmp_path)
+    from research import manifest as research_manifest
+
+    call_count = {"n": 0}
+    real_dataset_fingerprint = research_manifest.dataset_fingerprint
+
+    def _counting_fingerprint(*args, **kwargs):
+        call_count["n"] += 1
+        return real_dataset_fingerprint(*args, **kwargs)
+
+    monkeypatch.setattr(mission_runner, "dataset_fingerprint", _counting_fingerprint)
+
+    mc = _small_config(tmp_path, "mission-fingerprint-check", n_trials=3)
+    run_mission(mc)
+
+    recorded = research_missions.existing_trials("mission-fingerprint-check", "EURUSD")
+    assert len(recorded) == 3
+    # dataset_fingerprint() (the SHA256 read) is only called ONCE per
+    # symbol — not once per trial — even though every trial's row carries
+    # a non-null, real fingerprint.
+    assert call_count["n"] == 1
+    fingerprints = [json.loads(r["fingerprint_json"]) for r in recorded]
+    for fp in fingerprints:
+        assert fp["git"]["commit"]
+        assert fp["dataset"]["sha256"]
+    # Identical dict content reused across every trial of the same symbol.
+    assert fingerprints[0] == fingerprints[1] == fingerprints[2]
+
+
 # ── Resume ────────────────────────────────────────────────────────────────
 
 def test_resume_skips_already_completed_trials(tmp_path, monkeypatch):

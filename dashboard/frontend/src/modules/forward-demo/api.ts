@@ -30,10 +30,30 @@ export interface ShadowGate {
   verdict: string
 }
 
+export interface ShadowBySymbol {
+  symbol: string
+  n_closed: number
+  wins: number
+  avg_r: number | null
+  total_r: number | null
+  verdict: string
+}
+
+export interface ShadowByRegime {
+  regime: string
+  n_closed: number
+  wins: number
+  avg_r: number | null
+  total_r: number | null
+  verdict: string
+}
+
 export interface ShadowBookResponse {
   note: string
   open: number
   gates: ShadowGate[]
+  by_symbol: ShadowBySymbol[]
+  by_regime: ShadowByRegime[]
 }
 
 export const getForwardReview = () => apiGet<ForwardReviewResponse>('/forward-review')

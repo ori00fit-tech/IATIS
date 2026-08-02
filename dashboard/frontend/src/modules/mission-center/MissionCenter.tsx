@@ -23,7 +23,7 @@ import {
   type MissionRequest, type MissionSummary, type MissionStatusResponse, type MissionTrial, type MissionRow,
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
   type ValidationRow, type ConsensusClaim, type PooledBreakdownRow, type OpportunityCandidate,
-  type PrefillRequest, type PossiblyInfinite,
+  type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
 } from './api'
 
 const POLL_MS = 4000
@@ -1116,6 +1116,31 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
         )}
         {v?.error && <span className="text-red text-[0.78em]">{v.error}</span>}
       </div>
+      {v && (() => {
+        let candidateLock: CandidateLock | null = null
+        let dateOverlap: DateOverlap | null = null
+        try { candidateLock = v.candidate_lock_json ? JSON.parse(v.candidate_lock_json) : null } catch { /* malformed row */ }
+        try { dateOverlap = v.date_overlap_json ? JSON.parse(v.date_overlap_json) : null } catch { /* malformed row */ }
+        return (
+          <div className="flex flex-col gap-2">
+            {candidateLock && candidateLock.available && !candidateLock.matches && (
+              <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+                Candidate lock drift since this trial ran: {(candidateLock.diffs ?? []).join('; ')}. Informational only — a growing dataset is not necessarily a bug.
+              </div>
+            )}
+            {candidateLock && !candidateLock.available && (
+              <div className="text-[0.78em] text-muted bg-surface/40 border border-border rounded px-3 py-2">
+                Candidate lock: {candidateLock.note}
+              </div>
+            )}
+            {dateOverlap && dateOverlap.overlaps && (
+              <div className="text-[0.78em] text-red bg-red/10 border border-red/30 rounded px-3 py-2 font-bold">
+                {dateOverlap.note} (trial: {dateOverlap.original_start ?? '—'} → {dateOverlap.original_end ?? '—'}, validation: {dateOverlap.validation_start ?? '—'} → {dateOverlap.validation_end ?? '—'})
+              </div>
+            )}
+          </div>
+        )
+      })()}
       {data.results.length === 0 ? (
         <Empty>No per-symbol results yet.</Empty>
       ) : (

@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS research_mission_validations (
     created_at               TEXT NOT NULL,
     started_at               TEXT,
     finished_at              TEXT,
-    error                    TEXT
+    error                    TEXT,
+    candidate_lock_json      TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): git+dataset fingerprint drift vs. the trial's own recorded fingerprint. Informational only, never blocks.
+    date_overlap_json        TEXT    -- Diagnostic Infrastructure Phase 1 (2026-08-02): does this validation's date range overlap the original mission's training window. Informational only.
 )
 """
 
@@ -143,6 +145,24 @@ def set_validation_status(
                 "UPDATE research_mission_validations SET status=?, error=? WHERE id=?",
                 (status, error, validation_id),
             )
+
+
+def set_validation_integrity_checks(
+    validation_id: str,
+    candidate_lock: dict,
+    date_overlap: dict,
+) -> None:
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — records the
+    candidate-lock (reproducibility drift) and date-overlap (in-sample
+    vs. out-of-sample) checks computed once per validation run by
+    backtest/mission_validator.py. Both informational only — never a
+    VALIDATION_CRITERIA entry, never blocks a validation from running."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        con.execute(
+            "UPDATE research_mission_validations SET candidate_lock_json=?, date_overlap_json=? WHERE id=?",
+            (json.dumps(candidate_lock), json.dumps(date_overlap), validation_id),
+        )
 
 
 def get_validation(validation_id: str) -> dict[str, Any] | None:

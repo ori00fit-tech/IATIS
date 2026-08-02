@@ -94,6 +94,15 @@ def test_write_manifest_lands_in_tracked_results_dir(tmp_path, monkeypatch):
     assert json.loads(out.read_text())["x"] == 1
 
 
+def test_git_state_public_wrapper_matches_private_impl():
+    """Diagnostic Infrastructure Phase 1 (2026-08-02) — git_state() is a
+    thin public wrapper around _git_state() used by Mission Center's
+    per-trial/validation fingerprinting; must return the identical shape."""
+    assert m.git_state() == m._git_state()
+    state = m.git_state()
+    assert set(state.keys()) == {"commit", "dirty"}
+
+
 def test_manifest_filename_is_not_gitignored():
     """*_result.json is gitignored; *_manifest.json must NOT be, otherwise
     the whole point (committing the evidence) silently fails."""

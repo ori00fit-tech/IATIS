@@ -42,8 +42,20 @@ ProtectSystem=full
 # `scripts/setup_service_user.sh` re-run (new VPS, disaster recovery)
 # regenerates a unit that already has it, instead of reintroducing the
 # same bug.
+# data/, reports/, research/hypotheses/drafts (2026-08-02): the identical
+# failure mode as config/ai.yaml above, proactively fixed rather than
+# waiting for each to be separately reported — confirmed by code (not yet
+# independently reproduced live): POST /research/datasets/upload writes
+# data/{SYMBOL}_{TF}_uploaded.{csv|parquet} directly from the API
+# process; POST /ai/save-hypothesis-draft writes research/hypotheses/
+# drafts/*.md directly; and every backtest/mission/robustness/walk-forward
+# job started via POST /experiments/run is a subprocess.Popen() CHILD of
+# this same service, which inherits its mount namespace (ProtectSystem/
+# ReadWritePaths apply to the whole process tree, not just the parent),
+# so those jobs writing reports/*.json would hit the same PermissionError.
+# systemd creates any of these directories that don't already exist.
 ProtectHome=read-only
-ReadWritePaths=/root/IATIS/storage /root/IATIS/config
+ReadWritePaths=/root/IATIS/storage /root/IATIS/config /root/IATIS/data /root/IATIS/reports /root/IATIS/research/hypotheses/drafts
 MemoryMax=1G
 TasksMax=256
 

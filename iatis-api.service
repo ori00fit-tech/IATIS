@@ -33,9 +33,17 @@ ProtectSystem=full
 # ExecStart binary itself becomes unreachable and systemd dies with
 # status=203/EXEC before Python starts (observed on the VPS, 2026-07-05).
 # read-only still blocks writes anywhere in /root except the
-# ReadWritePaths=/root/IATIS/storage carve-out below.
+# ReadWritePaths carve-outs below.
+# config/ (2026-07-31, observed on the VPS): POST /ai/settings writes
+# config/ai.yaml directly — without this carve-out it fails with
+# PermissionError: [Errno 13] under ProtectSystem=full, surfaced to the
+# operator as `500 Could not write config/ai.yaml`. This was live-patched
+# directly on the deployed unit at the time; added here too so a future
+# `scripts/setup_service_user.sh` re-run (new VPS, disaster recovery)
+# regenerates a unit that already has it, instead of reintroducing the
+# same bug.
 ProtectHome=read-only
-ReadWritePaths=/root/IATIS/storage
+ReadWritePaths=/root/IATIS/storage /root/IATIS/config
 MemoryMax=1G
 TasksMax=256
 

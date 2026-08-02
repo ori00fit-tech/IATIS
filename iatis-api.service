@@ -33,9 +33,29 @@ ProtectSystem=full
 # ExecStart binary itself becomes unreachable and systemd dies with
 # status=203/EXEC before Python starts (observed on the VPS, 2026-07-05).
 # read-only still blocks writes anywhere in /root except the
-# ReadWritePaths=/root/IATIS/storage carve-out below.
+# ReadWritePaths carve-outs below.
+# config/ (2026-07-31, observed on the VPS): POST /ai/settings writes
+# config/ai.yaml directly — without this carve-out it fails with
+# PermissionError: [Errno 13] under ProtectSystem=full, surfaced to the
+# operator as `500 Could not write config/ai.yaml`. This was live-patched
+# directly on the deployed unit at the time; added here too so a future
+# `scripts/setup_service_user.sh` re-run (new VPS, disaster recovery)
+# regenerates a unit that already has it, instead of reintroducing the
+# same bug.
+# data/, reports/, research/hypotheses/drafts (2026-08-02): the identical
+# failure mode as config/ai.yaml above, proactively fixed rather than
+# waiting for each to be separately reported — confirmed by code (not yet
+# independently reproduced live): POST /research/datasets/upload writes
+# data/{SYMBOL}_{TF}_uploaded.{csv|parquet} directly from the API
+# process; POST /ai/save-hypothesis-draft writes research/hypotheses/
+# drafts/*.md directly; and every backtest/mission/robustness/walk-forward
+# job started via POST /experiments/run is a subprocess.Popen() CHILD of
+# this same service, which inherits its mount namespace (ProtectSystem/
+# ReadWritePaths apply to the whole process tree, not just the parent),
+# so those jobs writing reports/*.json would hit the same PermissionError.
+# systemd creates any of these directories that don't already exist.
 ProtectHome=read-only
-ReadWritePaths=/root/IATIS/storage
+ReadWritePaths=/root/IATIS/storage /root/IATIS/config /root/IATIS/data /root/IATIS/reports /root/IATIS/research/hypotheses/drafts
 MemoryMax=1G
 TasksMax=256
 

@@ -463,3 +463,110 @@ def test_compute_meta_analysis_backward_compatible_default_kwarg():
     # Old 8-positional/keyword-arg call signature (no min_trades_for_pooled) still works.
     result = compute_meta_analysis(space, trials, "tpe", "m1", None, 0.20, 5, 5)
     assert result.insufficient_data is False
+
+
+# ── Dependence detection (2026-08-02) — an operator-identified real flaw:
+# when a mission only varies risk/cost params, every trial ran the SAME
+# entry-signal stream, so cross-trial-consensus/pooled-breakdown statistics
+# are not independent-trial evidence. See backtest.optimizer.
+# search_space_has_signal_variation and the module-level comment above
+# DEPENDENT_TRIALS_SIGNIFICANCE in backtest/meta_analysis.py. ──────────────
+
+def _risk_only_space(**kwargs) -> MissionSearchSpace:
+    # Exactly one choice in every entry-signal-affecting dimension — the
+    # real, live bug case (an operator's mission that only swept
+    # sl_atr_multiplier while engines/timeframes/indicators/context were
+    # each pinned to a single fixed set).
+    defaults = dict(
+        timeframes_choices=(("H4",),),
+        engine_set_choices=(("nnfx", "price_action"),),
+        indicator_set_choices=((),),
+        risk_param_ranges={"sl_atr_multiplier": (1.0, 3.0)},
+    )
+    defaults.update(kwargs)
+    return MissionSearchSpace(**defaults)
+
+
+def test_dependence_detected_when_only_risk_params_vary():
+    space = _risk_only_space()
+    trials = [_row(i, objective_value=1.0 + i * 0.01) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is True
+    assert result.dependence_warning is not None
+    assert "DEPENDENCE" in result.dependence_warning
+
+
+def test_dependence_not_detected_when_engine_set_varies():
+    # _space()'s default already has 2 engine_set_choices — the real
+    # multi-dimensional-search case.
+    space = _space()
+    trials = [_row(i, objective_value=1.0 + i * 0.01) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is False
+    assert result.dependence_warning is None
+
+
+def test_dependence_not_detected_when_insufficient_data():
+    # The insufficient_data early return short-circuits before dependence
+    # is ever computed — must default to False/None, not crash.
+    space = _risk_only_space()
+    trials = [_row(i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 1)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.insufficient_data is True
+    assert result.dependence_detected is False
+    assert result.dependence_warning is None
+
+
+def test_dependence_override_relabels_significance_and_nulls_pvalue():
+    space = _risk_only_space()
+    # Same 8-vs-2 BUY/SELL split as test_cross_trial_consensus_direction_claim_correct_k_and_n,
+    # which (under a real, multi-dimensional space) reaches a real
+    # significance verdict with a real p_value — here it must not.
+    trials = [_consensus_trial(i, 70.0, 40.0) for i in range(8)]
+    trials += [_consensus_trial(8 + i, 30.0, 60.0) for i in range(2)]
+    trials += [_row(100 + i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 10)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is True
+    claim = next(
+        c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "win_rate"
+    )
+    # The real k/n counts stay intact — only the significance verdict and
+    # the p-value/confidence-under-independence are withheld.
+    assert claim.n_trials_compared == 10
+    assert claim.trials_favor_dominant == 8
+    assert claim.fraction_favor_dominant == pytest.approx(0.8)
+    assert claim.significance == "DEPENDENT_TRIALS_LEAD_ONLY"
+    assert claim.p_value is None
+    assert claim.confidence_pct is None
+    assert "8/10" in claim.claim_text
+    assert "DEPENDENCE" in claim.claim_text
+
+
+def test_dependence_override_leaves_insufficient_data_claims_alone():
+    space = _risk_only_space()
+    # Only 3 trials carry a real by_direction split — below
+    # _MIN_TRIALS_PER_CLAIM=5, already INSUFFICIENT_DATA regardless of
+    # dependence; the override must not relabel an already-honest claim.
+    trials = [_consensus_trial(i, 70.0, 40.0) for i in range(3)]
+    trials += [_row(100 + i, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS - 3)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is True
+    claim = next(
+        c for c in result.cross_trial_consensus if c.dimension == "direction" and c.metric == "win_rate"
+    )
+    assert claim.significance == "INSUFFICIENT_DATA"
+    assert claim.p_value is None
+
+
+def test_dependence_detected_hypothesis_bundle_mode_single_bundle():
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(i, hypothesis_idx=0, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is True
+
+
+def test_dependence_not_detected_hypothesis_bundle_mode_multiple_bundles():
+    space = _hypothesis_space()  # 2 bundles by default
+    trials = [_hypothesis_row(i, hypothesis_idx=i % 2, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
+    result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
+    assert result.dependence_detected is False

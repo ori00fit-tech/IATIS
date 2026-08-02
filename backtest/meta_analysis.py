@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import itertools
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from backtest.multiple_testing import binomial_sign_test_p_value, classify_significance
-from backtest.optimizer import MissionSearchSpace, resolve_point
+from backtest.optimizer import MissionSearchSpace, resolve_point, search_space_has_signal_variation
 from backtesting.backtest_engine import ENGINE_KEYS
 
 DEFAULT_TOP_FRACTION = 0.20
@@ -55,6 +55,35 @@ _MIN_TRIALS_PER_CLAIM = 5
 # resolve on a given mission.
 _N_CLAIMS_ATTEMPTED = 16
 MIN_TRADES_FOR_POOLED_ROW = 10
+
+# Dependence detection (2026-08-02) — an operator-identified, real
+# statistical flaw: when a mission's search space only varies risk/cost
+# parameters (backtest.optimizer.search_space_has_signal_variation()
+# returns False), every trial ran the SAME entry-signal stream, so
+# treating each trial as an independent observation for a binomial sign
+# test is wrong — Bonferroni correction (a multiple-COMPARISONS fix)
+# does not and cannot repair a violated independence assumption; these
+# are two separate statistical problems. When detected, every
+# ConsensusClaim that would otherwise report a real significance verdict
+# is overridden to this label instead, and its p_value/confidence_pct are
+# nulled out (computing them under a known-violated assumption would be
+# actively misleading, not just optimistic). The Pooled 3-way Breakdown
+# has the identical flaw (it sums the same overlapping, non-independent
+# trial data) — MetaAnalysisResult.dependence_warning covers both.
+DEPENDENT_TRIALS_SIGNIFICANCE = "DEPENDENT_TRIALS_LEAD_ONLY"
+
+_DEPENDENCE_WARNING = (
+    "⚠ DEPENDENCE DETECTED — LEAD ONLY: this mission's search space only varied "
+    "risk/cost parameters (SL/ATR multiplier, min_rr, sizing, warmup/step bars) across "
+    "trials — timeframes, engine set, indicators, and context filters were held fixed. "
+    "Every trial therefore evaluated the SAME entry-signal stream (risk params only affect "
+    "stop distance and the min_rr admission gate, never which bars generate a candidate "
+    "signal), so trials are NOT independent observations. Cross-Trial Consensus p-values "
+    "below are nulled out, and the Pooled 3-way Breakdown sums heavily-overlapping, "
+    "non-independent trials — read every number here as a single lead about this one "
+    "configuration, not confirmed evidence from N separate tests. Insufficient independent "
+    "evidence. Bonferroni correction fixes multiple-comparisons risk, not this."
+)
 
 _SAMPLER_CAVEAT: dict[str, str] = {
     "grid": (
@@ -145,7 +174,9 @@ class ConsensusClaim:
     fraction_favor_dominant: float
     p_value: float | None
     confidence_pct: float | None
-    significance: str        # INSUFFICIENT_DATA | SURVIVES_CORRECTION | NOMINAL_ONLY | NOT_SIGNIFICANT
+    # INSUFFICIENT_DATA | SURVIVES_CORRECTION | NOMINAL_ONLY | NOT_SIGNIFICANT |
+    # DEPENDENT_TRIALS_LEAD_ONLY (dependence detection, see module-level comment above)
+    significance: str
     claim_text: str
 
     def to_dict(self) -> dict:
@@ -241,6 +272,16 @@ class MetaAnalysisResult:
     pooled_breakdown: list[PooledBreakdownRow] = field(default_factory=list)
     opportunity_candidates: list[OpportunityCandidate] = field(default_factory=list)
     note: str = ""
+    # Dependence detection (2026-08-02) — True when this mission's search
+    # space never varied any entry-signal-affecting dimension (see
+    # backtest.optimizer.search_space_has_signal_variation), meaning every
+    # trial ran the same entry-signal stream and cross_trial_consensus/
+    # pooled_breakdown are NOT independent-trial statistics. dependence_
+    # warning carries the human-readable explanation; None when not
+    # detected (or when insufficient_data already short-circuited before
+    # any of these fields were computed).
+    dependence_detected: bool = False
+    dependence_warning: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -255,6 +296,8 @@ class MetaAnalysisResult:
             "pooled_breakdown": [r.to_dict() for r in self.pooled_breakdown],
             "opportunity_candidates": [o.to_dict() for o in self.opportunity_candidates],
             "note": self.note,
+            "dependence_detected": self.dependence_detected,
+            "dependence_warning": self.dependence_warning,
         }
 
 
@@ -412,6 +455,39 @@ def _cross_trial_consensus(complete_rows: list[dict]) -> list[ConsensusClaim]:
         for value_a, value_b in itertools.combinations(_SESSION_VALUES, 2):
             claims.append(_compare_dimension_pair(complete_rows, "session", "by_session", value_a, value_b, metric))
     return claims
+
+
+def _apply_dependence_override(claims: list[ConsensusClaim]) -> list[ConsensusClaim]:
+    """Overrides every claim that would otherwise report a real
+    significance verdict (SURVIVES_CORRECTION/NOMINAL_ONLY/NOT_SIGNIFICANT)
+    to DEPENDENT_TRIALS_SIGNIFICANCE and nulls p_value/confidence_pct —
+    called only when search_space_has_signal_variation(space) is False
+    (see module-level comment). INSUFFICIENT_DATA claims pass through
+    unchanged: they already say nothing, and dependence is irrelevant when
+    there isn't enough data to begin with. The raw k/n counts
+    (trials_favor_dominant/n_trials_compared/fraction_favor_dominant) are
+    real, valid data either way — only the independence-assuming p-value/
+    confidence and the significance verdict are unsound and thus
+    withheld."""
+    overridden: list[ConsensusClaim] = []
+    for c in claims:
+        if c.significance == "INSUFFICIENT_DATA":
+            overridden.append(c)
+            continue
+        overridden.append(replace(
+            c,
+            p_value=None,
+            confidence_pct=None,
+            significance=DEPENDENT_TRIALS_SIGNIFICANCE,
+            claim_text=(
+                f"Observed in {c.trials_favor_dominant}/{c.n_trials_compared} trials: "
+                f"{c.dominant_value} {c.metric} exceeded {c.other_value} {c.metric}. "
+                f"DEPENDENCE DETECTED — this mission never varied any entry-signal "
+                f"dimension (only risk/cost params), so trials are not independent "
+                f"observations; no p-value/confidence claim is valid here."
+            ),
+        ))
+    return overridden
 
 
 def _pool_breakdown_buckets(complete_rows: list[dict]) -> dict[str, dict]:
@@ -597,6 +673,14 @@ def compute_meta_analysis(
     pooled_breakdown = _expand_pooled_levels(pooled_3way)
     opportunity_candidates = _rank_opportunities(pooled_breakdown, min_trades=min_trades_for_pooled)
 
+    # Dependence detection (2026-08-02, see module-level comment): a
+    # mission that never varied any entry-signal-affecting dimension ran
+    # the identical entry-signal stream on every trial, so the two
+    # statistics above cannot be read as independent-trial evidence.
+    dependence_detected = not search_space_has_signal_variation(space)
+    if dependence_detected:
+        cross_trial_consensus = _apply_dependence_override(cross_trial_consensus)
+
     return MetaAnalysisResult(
         mission_id=mission_id, symbol=symbol, sampler=sampler,
         n_total_trials=n_total, n_complete_trials=n_complete,
@@ -605,4 +689,6 @@ def compute_meta_analysis(
         consensus_bands=consensus_bands, cross_trial_consensus=cross_trial_consensus,
         pooled_breakdown=pooled_breakdown, opportunity_candidates=opportunity_candidates,
         note=sampler_caveat(sampler),
+        dependence_detected=dependence_detected,
+        dependence_warning=_DEPENDENCE_WARNING if dependence_detected else None,
     )

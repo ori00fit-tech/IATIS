@@ -839,7 +839,10 @@ function ConsensusClaimsPanel({ claims }: { claims: ConsensusClaim[] }) {
     return <Empty>Not enough trials yet to compare direction/regime/session pairs.</Empty>
   }
   const tone = (s: ConsensusClaim['significance']) =>
-    s === 'SURVIVES_CORRECTION' ? 'good' : s === 'NOMINAL_ONLY' ? 'marginal' : 'neutral'
+    s === 'SURVIVES_CORRECTION' ? 'good'
+      : s === 'NOMINAL_ONLY' ? 'marginal'
+      : s === 'DEPENDENT_TRIALS_LEAD_ONLY' ? 'poor'
+      : 'neutral'
   return (
     <div className="flex flex-col gap-1.5">
       {usable.map((c, i) => (
@@ -902,6 +905,11 @@ function MetaAnalysisPanel({ missionId }: { missionId: string }) {
         <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
           {data.note}
         </div>
+        {data.dependence_warning && (
+          <div className="text-[0.78em] text-red bg-red/10 border border-red/30 rounded px-3 py-2 font-bold">
+            {data.dependence_warning}
+          </div>
+        )}
         <div className="text-[0.78em] text-muted">
           Top {data.top_n} of {data.n_complete_trials} completed trials (top {(data.top_fraction_used * 100).toFixed(0)}%) — sampler: {data.sampler}
         </div>
@@ -942,6 +950,7 @@ function MetaAnalysisPanel({ missionId }: { missionId: string }) {
           <div className="flex flex-col gap-2">
             <span className="text-[0.72em] text-muted uppercase tracking-[1px]">
               Pooled direction × regime × session breakdown — sorted by PF, sortable by any column
+              {data.dependence_detected && ' — ⚠ DEPENDENT TRIALS, see warning above'}
             </span>
             <PooledBreakdownTable rows={data.pooled_breakdown} />
           </div>
@@ -991,7 +1000,12 @@ function TopOpportunitiesPanel({
       title="Top Unexplored Opportunities"
       right="ranked SUGGESTIONS ONLY — never auto-run. Pre-fill a new hypothesis below, you launch it yourself."
     >
-      <div className="p-4">
+      <div className="p-4 flex flex-col gap-3">
+        {data.dependence_detected && (
+          <div className="text-[0.78em] text-red bg-red/10 border border-red/30 rounded px-3 py-2 font-bold">
+            {data.dependence_warning}
+          </div>
+        )}
         <DataTable
           columns={columns}
           rows={candidates}

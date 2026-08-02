@@ -340,6 +340,37 @@ def resolve_point(space: MissionSearchSpace, raw_params: dict[str, Any]) -> dict
     }
 
 
+def search_space_has_signal_variation(space: MissionSearchSpace) -> bool:
+    """True iff at least one ENTRY-signal-affecting dimension (timeframes,
+    engine set, indicators, context filters, engine variants — or, in
+    hypothesis-bundle mode, the bundle choice itself) actually varies
+    across this mission's trials.
+
+    False means every trial in the mission ran the IDENTICAL entry-signal
+    stream and only risk/cost parameters (SL/ATR multiplier, min_rr
+    admission gate, position sizing, warmup/step bars, ...) differed
+    between trials. Risk params only affect stop distance and a trade's
+    admission/sizing — never WHICH bars the confluence engines vote
+    EXECUTE on — so in that case every trial's trade stream overlaps
+    almost entirely with every other trial's.
+
+    Used by backtest/meta_analysis.py to detect when "N of M trials
+    agree" cross-trial-consensus statistics (backtest.multiple_testing.
+    binomial_sign_test_p_value) would violate that test's independence
+    assumption — a real, distinct problem from multiple-comparisons risk
+    (which Bonferroni correction addresses); Bonferroni cannot fix a
+    violated independence assumption (2026-08-02)."""
+    if space.hypothesis_bundle_choices:
+        return len(space.hypothesis_bundle_choices) > 1
+    return (
+        len(space.timeframes_choices) > 1
+        or len(space.engine_set_choices) > 1
+        or len(space.indicator_set_choices) > 1
+        or len(space.context_filter_set_choices) > 1
+        or len(space.engine_variant_choices) > 1
+    )
+
+
 def distributions_for(space: MissionSearchSpace, grid_mode: bool) -> dict[str, Any]:
     """optuna Distribution objects per param name, used by
     mission_runner.py's replay path to reconstruct

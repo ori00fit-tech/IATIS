@@ -258,11 +258,25 @@ async def missions_status(
         raise HTTPException(status_code=404, detail="Mission not found.")
 
     progress = research_missions.mission_progress(mission_id) if mission else {"by_symbol": {}, "total": 0}
+
+    search_space_kind = None
+    if mission and mission.get("search_space_json"):
+        # Forensic Audit Phase 1, item C (2026-08-02) — surfaces which axis
+        # this mission's trials actually vary across (SIGNAL_VARIATION /
+        # RISK_ONLY_VARIATION / MIXED / NONE), proactively, instead of an
+        # operator only discovering "risk-only" after the fact in
+        # Meta-Analysis.
+        from backtest.optimizer import classify_search_space_variation, search_space_from_dict
+
+        space = search_space_from_dict(json.loads(mission["search_space_json"]))
+        search_space_kind = classify_search_space_variation(space)
+
     return {
         "mission_id": mission_id,
         "mission": mission,
         "progress": progress,
         "job_status": job.status if job else None,
+        "search_space_kind": search_space_kind,
     }
 
 
@@ -350,6 +364,11 @@ class _ValidationRequest(BaseModel):
     trial_number: int
     trial_symbol: str
     validation_symbols: list[str]
+    # Forensic Audit Phase 1, item D (2026-08-02) — SAME_SYMBOL is the new
+    # default: confirms ONLY the trial's own symbol. CROSS_SYMBOL keeps
+    # today's exact, unchanged semantics (an independent operator-chosen
+    # symbol list, no membership requirement against trial_symbol).
+    validation_mode: str = "SAME_SYMBOL"
     start: str | None = None
     end: str | None = None
     wf_windows: int = 3
@@ -390,15 +409,37 @@ async def missions_validate(
             detail=f"Trial state is {trial['state']!r} — only COMPLETE trials can be validated.",
         )
 
+    from backtest.mission_validator import SAME_SYMBOL, VALIDATION_MODES
+
+    validation_mode = str(body.validation_mode).strip().upper()
+    if validation_mode not in VALIDATION_MODES:
+        raise HTTPException(status_code=400, detail=f"Unknown validation_mode {validation_mode!r} — choose from {VALIDATION_MODES}.")
+
     validation_symbols = [str(s).upper().strip() for s in body.validation_symbols if str(s).strip()]
-    if len(validation_symbols) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="validation_symbols must include at least 2 symbols — a single-symbol "
-                   "validation cannot distinguish an edge from curve-fitting.",
-        )
-    if len(validation_symbols) > _MAX_VALIDATION_SYMBOLS:
-        raise HTTPException(status_code=400, detail=f"at most {_MAX_VALIDATION_SYMBOLS} validation symbols per run.")
+
+    if validation_mode == SAME_SYMBOL:
+        # FAIL HARD — never silently substitute or widen the symbol list.
+        # An empty list defaults to [trial_symbol]; anything else that
+        # isn't exactly [trial_symbol] is a 400, per the operator's
+        # explicit "this must become an invariant in the code" requirement.
+        if not validation_symbols:
+            validation_symbols = [trial_symbol]
+        elif validation_symbols != [trial_symbol]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"validation_mode=SAME_SYMBOL requires validation_symbols to be omitted/empty or "
+                       f"exactly [{trial_symbol!r}] (the trial's own symbol) — got {validation_symbols}. "
+                       f"Use validation_mode=CROSS_SYMBOL to validate against other symbols.",
+            )
+    else:  # CROSS_SYMBOL — today's exact, unchanged rules
+        if len(validation_symbols) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="validation_symbols must include at least 2 symbols — a single-symbol "
+                       "validation cannot distinguish an edge from curve-fitting.",
+            )
+        if len(validation_symbols) > _MAX_VALIDATION_SYMBOLS:
+            raise HTTPException(status_code=400, detail=f"at most {_MAX_VALIDATION_SYMBOLS} validation symbols per run.")
     universe = _configured_symbol_universe()
     unknown = sorted(set(validation_symbols) - universe)
     if unknown:
@@ -438,6 +479,7 @@ async def missions_validate(
         "--trial-number", str(body.trial_number),
         "--trial-symbol", trial_symbol,
         "--validation-symbols", *validation_symbols,
+        "--validation-mode", validation_mode,
         "--wf-windows", str(body.wf_windows),
         "--wf-min-trades-per-window", str(body.wf_min_trades_per_window),
         "--wf-warmup-bars", str(body.wf_warmup_bars),
@@ -460,7 +502,7 @@ async def missions_validate(
     log_action(
         "mission_validate_create", x_api_key=x_api_key, session_id=iatis_session,
         detail=f"mission_validate ({validation_id}) mission={mission_id} trial={body.trial_number} "
-               f"({trial_symbol}) validation_symbols={validation_symbols}",
+               f"({trial_symbol}) mode={validation_mode} validation_symbols={validation_symbols}",
     )
 
     job.future = _job_executor.submit(_run_job, job)

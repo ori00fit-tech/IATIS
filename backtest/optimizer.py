@@ -371,6 +371,25 @@ def search_space_has_signal_variation(space: MissionSearchSpace) -> bool:
     )
 
 
+def classify_search_space_variation(space: MissionSearchSpace) -> str:
+    """SIGNAL_VARIATION | RISK_ONLY_VARIATION | MIXED | NONE — Forensic
+    Audit Phase 1, item C (2026-08-02): an explicit, UI-facing label built
+    on search_space_has_signal_variation()'s existing detection, so an
+    operator can see at a glance which axis a mission's trials actually
+    vary across, instead of discovering "22 trials, all risk-only" after
+    the fact in Meta-Analysis (the exact operator-reported case this
+    labels proactively)."""
+    has_signal = search_space_has_signal_variation(space)
+    has_risk = bool(space.risk_param_ranges) or bool(space.risk_param_grid)
+    if has_signal and has_risk:
+        return "MIXED"
+    if has_signal:
+        return "SIGNAL_VARIATION"
+    if has_risk:
+        return "RISK_ONLY_VARIATION"
+    return "NONE"
+
+
 def distributions_for(space: MissionSearchSpace, grid_mode: bool) -> dict[str, Any]:
     """optuna Distribution objects per param name, used by
     mission_runner.py's replay path to reconstruct

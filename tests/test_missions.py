@@ -464,6 +464,11 @@ _VALID_VALIDATION_BODY = {
     "trial_number": 0,
     "trial_symbol": "EURUSD",
     "validation_symbols": ["GBPUSD", "XAUUSD"],
+    # A genuine cross-symbol scenario (trial_symbol excluded from
+    # validation_symbols) — explicit since SAME_SYMBOL is now the API
+    # default and would reject this exact body (Forensic Audit Phase 1,
+    # item D, 2026-08-02).
+    "validation_mode": "CROSS_SYMBOL",
 }
 
 
@@ -574,6 +579,67 @@ def test_missions_validate_rejects_unknown_rb_param(client):
         json={**_VALID_VALIDATION_BODY, "rb_params": ["not_a_real_param"]}, headers=HDR,
     )
     assert r.status_code == 400
+
+
+# ── Validation Mode Explicitness (Forensic Audit Phase 1, item D, 2026-08-02) ──
+
+def test_missions_validate_same_symbol_omitted_symbols_defaults_to_trial_symbol(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-same-1")
+    body = {"trial_number": 0, "trial_symbol": "EURUSD", "validation_symbols": [], "validation_mode": "SAME_SYMBOL"}
+    r = client.post("/research/missions/val-mission-same-1/validate", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    # _FakeProc.captured_argv is a shared class attribute set by whichever
+    # job's background thread calls subprocess.Popen — must wait for THIS
+    # job to actually reach that point before reading it (matches
+    # test_missions_validate_builds_expected_argv_and_returns_validation_id's
+    # own established pattern below).
+    _wait_for_validation_terminal(client, "val-mission-same-1", r.json()["validation_id"])
+    assert "--validation-symbols" in _FakeProc.captured_argv
+    idx = _FakeProc.captured_argv.index("--validation-symbols")
+    assert _FakeProc.captured_argv[idx + 1] == "EURUSD"
+
+
+def test_missions_validate_same_symbol_exact_match_is_accepted(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-same-2")
+    body = {"trial_number": 0, "trial_symbol": "EURUSD", "validation_symbols": ["EURUSD"], "validation_mode": "SAME_SYMBOL"}
+    r = client.post("/research/missions/val-mission-same-2/validate", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+
+
+def test_missions_validate_same_symbol_fails_hard_on_mismatched_symbols(client, monkeypatch):
+    # The literal invariant test — SAME_SYMBOL must never silently
+    # substitute or widen the symbol list.
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-same-3")
+    body = {
+        "trial_number": 0, "trial_symbol": "EURUSD",
+        "validation_symbols": ["GBPUSD", "XAUUSD"], "validation_mode": "SAME_SYMBOL",
+    }
+    r = client.post("/research/missions/val-mission-same-3/validate", json=body, headers=HDR)
+    assert r.status_code == 400
+    assert "SAME_SYMBOL" in r.json()["detail"]
+
+
+def test_missions_validate_rejects_unknown_validation_mode(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-mode-unknown")
+    body = {**_VALID_VALIDATION_BODY, "validation_mode": "NOT_A_REAL_MODE"}
+    r = client.post("/research/missions/val-mission-mode-unknown/validate", json=body, headers=HDR)
+    assert r.status_code == 400
+    assert "validation_mode" in r.json()["detail"]
+
+
+def test_missions_validate_argv_includes_validation_mode_flag(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    _seed_mission_and_trial("val-mission-mode-argv")
+    r = client.post("/research/missions/val-mission-mode-argv/validate", json=_VALID_VALIDATION_BODY, headers=HDR)
+    assert r.status_code == 200, r.text
+    _wait_for_validation_terminal(client, "val-mission-mode-argv", r.json()["validation_id"])
+    assert "--validation-mode" in _FakeProc.captured_argv
+    idx = _FakeProc.captured_argv.index("--validation-mode")
+    assert _FakeProc.captured_argv[idx + 1] == "CROSS_SYMBOL"
 
 
 def _wait_for_validation_terminal(client, mission_id: str, validation_id: str, timeout: float = 5.0) -> dict:

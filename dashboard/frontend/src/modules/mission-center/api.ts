@@ -106,6 +106,10 @@ export interface MissionStatusResponse {
   mission: MissionRow | null
   progress: MissionProgress
   job_status: string | null
+  // Forensic Audit Phase 1, item C (2026-08-02): SIGNAL_VARIATION |
+  // RISK_ONLY_VARIATION | MIXED | NONE | null (null when the mission
+  // record isn't loaded yet).
+  search_space_kind: string | null
 }
 
 export interface MissionTrial {
@@ -148,8 +152,19 @@ export const cancelMission = (missionId: string) =>
 // (NO_EDGE/WEAK_LEAD/STRONG_LEAD) is a LEAD, never registry.json evidence
 // — see backtest/mission_validator.py's module docstring.
 
-export const VERDICTS = ['NO_EDGE', 'WEAK_LEAD', 'STRONG_LEAD'] as const
+// Forensic Audit Phase 1, item D (2026-08-02) — SAME_SYMBOL_CONFIRMED/
+// SAME_SYMBOL_NOT_CONFIRMED are a deliberately DISTINCT vocabulary from
+// NO_EDGE/WEAK_LEAD/STRONG_LEAD (those three are inherently about
+// CROSS-SYMBOL generalization). Both families share the same
+// overall_verdict column/field.
+export const VERDICTS = [
+  'NO_EDGE', 'WEAK_LEAD', 'STRONG_LEAD',
+  'SAME_SYMBOL_CONFIRMED', 'SAME_SYMBOL_NOT_CONFIRMED',
+] as const
 export type Verdict = (typeof VERDICTS)[number]
+
+export const VALIDATION_MODES = ['SAME_SYMBOL', 'CROSS_SYMBOL'] as const
+export type ValidationMode = (typeof VALIDATION_MODES)[number]
 
 // Mirrors backtest.robustness.DEFAULT_MULTIPLIERS/SWEEP_PARAMS.
 export const RB_DEFAULT_MULTIPLIERS = [0.5, 0.8, 1.0, 1.2, 1.5]
@@ -159,6 +174,7 @@ export interface ValidationRequest {
   trial_number: number
   trial_symbol: string
   validation_symbols: string[]
+  validation_mode?: ValidationMode
   start?: string
   end?: string
   wf_windows?: number
@@ -201,6 +217,7 @@ export interface ValidationRow {
   error: string | null
   candidate_lock_json: string | null
   date_overlap_json: string | null
+  validation_mode: ValidationMode
 }
 
 export interface CandidateLock {
@@ -423,3 +440,23 @@ export const getFeatureMining = (missionId: string, validationId: string) =>
     `/research/missions/${encodeURIComponent(missionId)}/feature-mining`,
     { validation_id: validationId },
   )
+
+// Forensic Audit Phase 1, item B (2026-08-02) — direction symmetry scan.
+export interface SymmetryFinding {
+  file: string
+  line: number
+  function: string
+  kind: 'MISSING_MIRROR' | 'ASYMMETRIC_CONSTANT'
+  token: string
+  detail: string
+  severity: 'MEDIUM' | 'INFO'
+}
+export interface DirectionSymmetryResponse {
+  generated_at: string
+  files_scanned: string[]
+  findings: SymmetryFinding[]
+  caveat: string
+}
+
+export const getDirectionSymmetryAudit = () =>
+  apiGet<DirectionSymmetryResponse>('/research/diagnostics/direction-symmetry')

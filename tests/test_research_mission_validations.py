@@ -37,6 +37,29 @@ def test_get_validation_missing_returns_none():
     assert rmv.get_validation("does-not-exist") is None
 
 
+# ── Validation Mode Explicitness (Forensic Audit Phase 1, item D, 2026-08-02) ──
+
+def test_upsert_validation_defaults_validation_mode_to_cross_symbol_when_omitted():
+    # The kwarg's own default matches the DDL's default — describes what
+    # every historical row structurally was.
+    rmv.upsert_validation(
+        validation_id="v-mode-default", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["GBPUSD", "XAUUSD"], objective_metric="profit_factor", criteria={}, status="queued",
+    )
+    row = rmv.get_validation("v-mode-default")
+    assert row["validation_mode"] == "CROSS_SYMBOL"
+
+
+def test_upsert_validation_persists_explicit_validation_mode():
+    rmv.upsert_validation(
+        validation_id="v-mode-same", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={}, status="queued",
+        validation_mode="SAME_SYMBOL",
+    )
+    row = rmv.get_validation("v-mode-same")
+    assert row["validation_mode"] == "SAME_SYMBOL"
+
+
 def test_set_validation_status_started_then_finished():
     rmv.upsert_validation(
         validation_id="v2", mission_id="m1", trial_number=0, trial_symbol="EURUSD",

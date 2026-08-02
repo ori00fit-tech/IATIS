@@ -84,6 +84,31 @@ NO_EDGE = "NO_EDGE"
 WEAK_LEAD = "WEAK_LEAD"
 STRONG_LEAD = "STRONG_LEAD"
 
+# Forensic Audit Phase 1, item D (2026-08-02) — Validation Mode
+# Explicitness. Confirmed real gap: nothing anywhere tied trial_symbol to
+# validation_symbols; the only enforced rule was a symbol COUNT (>=2),
+# never identity, so a trial could be "validated" against symbols that
+# structurally excluded its own. SAME_SYMBOL is the new default (confirms
+# ONLY the trial's own symbol, using its own COMPLETE trial data on the
+# SAME instrument — not cross-symbol generalization evidence).
+# CROSS_SYMBOL is today's exact, unchanged behavior (validation_symbols
+# is an independent operator-chosen list, no membership requirement
+# against trial_symbol — deliberately, since testing generalization to
+# OTHER instruments is the whole point of that mode).
+SAME_SYMBOL = "SAME_SYMBOL"
+CROSS_SYMBOL = "CROSS_SYMBOL"
+VALIDATION_MODES: tuple[str, ...] = (SAME_SYMBOL, CROSS_SYMBOL)
+
+# Deliberately distinct vocabulary from NO_EDGE/WEAK_LEAD/STRONG_LEAD,
+# which are inherently about CROSS-SYMBOL generalization
+# (MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD structurally requires >=3 OTHER
+# symbols). Conflating "confirmed on its own training data" with a
+# cross-symbol LEAD would be exactly the false-confidence failure mode
+# this whole audit phase exists to catch. Checked against every existing
+# status token in this repo for zero collision risk.
+SAME_SYMBOL_CONFIRMED = "SAME_SYMBOL_CONFIRMED"
+SAME_SYMBOL_NOT_CONFIRMED = "SAME_SYMBOL_NOT_CONFIRMED"
+
 # The operator's own explicit numbers (Profit Factor >= 1.25, Trades >=
 # 300, Max Drawdown <= 10%, Expectancy > 0, Sharpe > 0.5), plus three
 # open-question defaults NOT independently specified — max_risk_of_ruin_pct,
@@ -121,6 +146,7 @@ class ValidationConfig:
     data_dir: Path
     start: str | None
     end: str | None
+    validation_mode: str = SAME_SYMBOL
     wf_windows: int = 3
     wf_min_trades_per_window: int = 10
     wf_warmup_bars: int = 210
@@ -288,7 +314,7 @@ def run_validation(vc: ValidationConfig) -> None:
         validation_id=vc.validation_id, mission_id=vc.mission_id, trial_number=vc.trial_number,
         trial_symbol=vc.trial_symbol, validation_symbols=list(vc.validation_symbols),
         objective_metric=mission["objective_metric"] if mission else "unknown",
-        criteria=VALIDATION_CRITERIA, status="running",
+        criteria=VALIDATION_CRITERIA, status="running", validation_mode=vc.validation_mode,
     )
     research_mission_validations.set_validation_status(vc.validation_id, "running", started=True)
 
@@ -347,7 +373,13 @@ def run_validation(vc: ValidationConfig) -> None:
             )
 
     total = len(vc.validation_symbols)
-    if passing <= 1:
+    if vc.validation_mode == SAME_SYMBOL:
+        # Deliberately NOT the NO_EDGE/WEAK_LEAD/STRONG_LEAD scale — that
+        # vocabulary is inherently about CROSS-SYMBOL generalization.
+        # Confirming on the trial's own training symbol is a narrower,
+        # weaker claim and must never be presented with the same tokens.
+        overall = SAME_SYMBOL_CONFIRMED if (passing == total and total > 0) else SAME_SYMBOL_NOT_CONFIRMED
+    elif passing <= 1:
         overall = NO_EDGE
     elif passing == total and total >= MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD:
         overall = STRONG_LEAD
@@ -387,6 +419,7 @@ def _write_report(
         "criteria": VALIDATION_CRITERIA,
         "candidate_lock": candidate_lock,
         "date_overlap": date_overlap,
+        "validation_mode": vc.validation_mode,
         "results": results,
         "note": (
             f"{overall} — a LEAD, NOT evidence. Passing every criterion here "
@@ -395,6 +428,14 @@ def _write_report(
             "criteria written before re-testing) and re-run it through "
             "backtest/walk_forward.py's existing chronological-OOS pipeline "
             "before CLAUDE.md rule 1 considers this evidence."
+            + (
+                " This was a SAME_SYMBOL validation — it only confirms the "
+                "trial's own symbol and is NOT cross-symbol evidence. It "
+                "does NOT rule out curve-fitting. Run a CROSS_SYMBOL "
+                "validation against >=3 other symbols before treating this "
+                "as a lead."
+                if vc.validation_mode == SAME_SYMBOL else ""
+            )
         ),
     }
     path.write_text(json.dumps(json_safe(payload), indent=2))
@@ -408,6 +449,7 @@ def main() -> None:
     parser.add_argument("--trial-number", type=int, required=True)
     parser.add_argument("--trial-symbol", required=True)
     parser.add_argument("--validation-symbols", nargs="+", required=True)
+    parser.add_argument("--validation-mode", default=SAME_SYMBOL, choices=VALIDATION_MODES)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--start", default=None, help="ISO date, inclusive")
     parser.add_argument("--end", default=None, help="ISO date, inclusive")
@@ -427,6 +469,7 @@ def main() -> None:
         trial_number=args.trial_number, trial_symbol=args.trial_symbol.upper(),
         validation_symbols=tuple(s.upper() for s in args.validation_symbols),
         data_dir=args.data_dir, start=args.start, end=args.end,
+        validation_mode=args.validation_mode,
         wf_windows=args.wf_windows, wf_min_trades_per_window=args.wf_min_trades_per_window,
         wf_warmup_bars=args.wf_warmup_bars,
         rb_multipliers=tuple(args.rb_multipliers), rb_params=tuple(args.rb_params),

@@ -96,6 +96,7 @@ from execution.routes import (
     auth,
     data_providers,
     dashboard_legacy,
+    diagnostics,
     experience,
     experiments,
     files,
@@ -127,6 +128,7 @@ app.include_router(auth.router)
 app.include_router(dashboard_legacy.router)
 app.include_router(experience.router)
 app.include_router(missions.router)
+app.include_router(diagnostics.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

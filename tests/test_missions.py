@@ -513,6 +513,47 @@ def test_missions_status_reports_signal_variation_search_space_kind(client):
     assert r.json()["search_space_kind"] == "SIGNAL_VARIATION"
 
 
+# ── effective_config_summary (Forensic Audit follow-up, 2026-08-03) ────────
+# Invariant 4 from the fff9806b90c2 investigation, real end-to-end proof:
+# GET /research/missions/{id} must report how many of a mission's real,
+# recorded trials are genuinely distinct executable configurations.
+
+def test_missions_status_reports_effective_config_summary_for_single_hypothesis(client):
+    from storage import research_missions
+
+    research_missions.upsert_mission(
+        mission_id="mission-single-hypothesis-test",
+        name="single hypothesis test", sampler="tpe", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=5, min_trades=10, seed=1,
+        search_space={
+            "timeframes_choices": [["H1"]],
+            "engine_set_choices": [["nnfx"]],
+            "indicator_set_choices": [[]],
+            "context_filter_set_choices": [[]],
+            "engine_variant_choices": [{}],
+            "hypothesis_bundle_choices": [
+                {"name": "H02", "timeframes": ["H1"], "engines": ["smc", "ict", "nnfx"], "indicators": [], "context_filters": []},
+            ],
+            "risk_param_ranges": {},
+            "risk_param_grid": {},
+        },
+        config={}, status="finished",
+    )
+    for i in range(5):
+        research_missions.record_trial(
+            mission_id="mission-single-hypothesis-test", trial_number=i, symbol="EURUSD",
+            state="COMPLETE", objective_value=0.81, params={"__hypothesis_idx": 0},
+            metrics=None, trades=402, error=None, started_at="t", finished_at="t",
+        )
+
+    r = client.get("/research/missions/mission-single-hypothesis-test", headers=HDR)
+    assert r.status_code == 200
+    summary = r.json()["effective_config_summary"]
+    assert summary["total_complete_trials"] == 5
+    assert summary["unique_effective_configurations"] == 1
+    assert summary["duplicate_trials"] == 4
+
+
 def test_missions_leaderboard_returns_empty_for_unknown_mission(client):
     r = client.get("/research/missions/does-not-exist-at-all/leaderboard", headers=HDR)
     assert r.status_code == 200

@@ -101,6 +101,12 @@ export interface MissionProgress {
   total: number
 }
 
+export interface EffectiveConfigSummary {
+  total_complete_trials: number
+  unique_effective_configurations: number
+  duplicate_trials: number
+}
+
 export interface MissionStatusResponse {
   mission_id: string
   mission: MissionRow | null
@@ -110,6 +116,12 @@ export interface MissionStatusResponse {
   // RISK_ONLY_VARIATION | MIXED | NONE | null (null when the mission
   // record isn't loaded yet).
   search_space_kind: string | null
+  // Forensic Audit follow-up (2026-08-03) — Invariant 4 from the
+  // fff9806b90c2 investigation: how many of this mission's COMPLETE
+  // trials are genuinely distinct executable configurations, not just
+  // how many trial rows exist. null when the mission record isn't
+  // loaded yet (same guard as search_space_kind).
+  effective_config_summary: EffectiveConfigSummary | null
 }
 
 export interface MissionTrial {

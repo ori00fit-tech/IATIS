@@ -72,6 +72,27 @@ PROMOTION_CRITERIA = {
 }
 
 
+def _promotion_criteria_unmet(h: dict) -> list[str]:
+    """Human-readable problems if h's evidence block fails
+    PROMOTION_CRITERIA; empty list if it clears every bar. Shared by
+    audit_passed_hypotheses() (non-fatal warning) and check_edge_gate()'s
+    live-capital hard gate (2026-08-04, fatal when allow_live_trading is
+    True) — one source of truth for what "genuinely PASSED" means."""
+    ev = h.get("evidence") or {}
+    problems = []
+    if (ev.get("oos_trades") or 0) < PROMOTION_CRITERIA["min_trades"]:
+        problems.append(
+            f"oos_trades={ev.get('oos_trades', 'missing')} < {PROMOTION_CRITERIA['min_trades']}")
+    if (ev.get("oos_pf") or 0) < PROMOTION_CRITERIA["min_oos_pf"]:
+        problems.append(
+            f"oos_pf={ev.get('oos_pf', 'missing')} < {PROMOTION_CRITERIA['min_oos_pf']}")
+    if PROMOTION_CRITERIA["require_walk_forward"] and not ev.get("walk_forward"):
+        problems.append("walk_forward evidence missing")
+    if PROMOTION_CRITERIA["require_monte_carlo"] and not ev.get("monte_carlo"):
+        problems.append("monte_carlo evidence missing")
+    return problems
+
+
 def audit_passed_hypotheses(hypotheses: dict) -> list[str]:
     """One warning per PASSED hypothesis whose `evidence` block fails the
     codified promotion criteria. Non-fatal by design: it flags stale or
@@ -81,18 +102,7 @@ def audit_passed_hypotheses(hypotheses: dict) -> list[str]:
     for hid, h in hypotheses.items():
         if h.get("status") != "PASSED":
             continue
-        ev = h.get("evidence") or {}
-        problems = []
-        if (ev.get("oos_trades") or 0) < PROMOTION_CRITERIA["min_trades"]:
-            problems.append(
-                f"oos_trades={ev.get('oos_trades', 'missing')} < {PROMOTION_CRITERIA['min_trades']}")
-        if (ev.get("oos_pf") or 0) < PROMOTION_CRITERIA["min_oos_pf"]:
-            problems.append(
-                f"oos_pf={ev.get('oos_pf', 'missing')} < {PROMOTION_CRITERIA['min_oos_pf']}")
-        if PROMOTION_CRITERIA["require_walk_forward"] and not ev.get("walk_forward"):
-            problems.append("walk_forward evidence missing")
-        if PROMOTION_CRITERIA["require_monte_carlo"] and not ev.get("monte_carlo"):
-            problems.append("monte_carlo evidence missing")
+        problems = _promotion_criteria_unmet(h)
         if problems:
             warnings.append(
                 f"{hid} is PASSED but fails the codified promotion criteria "
@@ -112,9 +122,29 @@ def _load_registry() -> dict:
         return json.load(f)
 
 
-def check_edge_gate(enabled_engines: dict[str, bool]) -> None:
+def check_edge_gate(enabled_engines: dict[str, bool], allow_live_trading: bool = False) -> None:
     """Raise EdgeNotProvenError if config tries to enable a non-exempt
     engine that doesn't have a PASSED (or RESEARCH) hypothesis backing it.
+
+    allow_live_trading (governance hardening, 2026-08-04): this module's
+    own docstring/ALLOWED_STATUSES comment has always said RESEARCH means
+    "approved for paper trading / data collection only (not live)" — but
+    until now that was enforced only by convention: check_edge_gate()
+    treated PASSED and RESEARCH identically, and the actual live-vs-demo
+    decision lived entirely in execution/trade_executor.py's
+    allow_live_trading flag, with zero cross-check against hypothesis
+    status. Today every currently-enabled prod4 engine (smc/price_action/
+    nnfx/wyckoff -> H101/H102/H004/H006) is RESEARCH, not PASSED — meaning
+    the ONLY thing standing between those engines and real capital was
+    this one global flag, not a per-engine promotion check. When
+    allow_live_trading is True, every enabled engine's hypothesis must
+    genuinely be PASSED *with* qualifying evidence (the same bar
+    audit_passed_hypotheses() already checks, via
+    _promotion_criteria_unmet()) — RESEARCH, or a PASSED without
+    qualifying evidence, now raises loudly at boot instead of silently
+    trading real money on an unproven engine. Inert today
+    (allow_live_trading is False in config.yaml) — this only changes
+    behavior for a future config that flips it on.
     """
     registry = _load_registry()
     hypotheses = registry.get("hypotheses", {})
@@ -131,12 +161,31 @@ def check_edge_gate(enabled_engines: dict[str, bool]) -> None:
                 f"a documented, tested edge. See research/README.md."
             )
 
-        status = hypotheses.get(hyp_id, {}).get("status")
+        hyp = hypotheses.get(hyp_id, {})
+        status = hyp.get("status")
         if status not in ALLOWED_STATUSES:
             raise EdgeNotProvenError(
                 f"config.yaml enables engine '{engine_key}' but its backing hypothesis "
                 f"{hyp_id} has status '{status}', not in {ALLOWED_STATUSES}. Blocking."
             )
+
+        if allow_live_trading:
+            if status != "PASSED":
+                raise EdgeNotProvenError(
+                    f"allow_live_trading is True but engine '{engine_key}' is backed by "
+                    f"hypothesis {hyp_id} with status '{status}' — RESEARCH is "
+                    f"paper/demo-only. Disable this engine or set "
+                    f"execution.allow_live_trading back to False."
+                )
+            unmet = _promotion_criteria_unmet(hyp)
+            if unmet:
+                raise EdgeNotProvenError(
+                    f"allow_live_trading is True but engine '{engine_key}''s hypothesis "
+                    f"{hyp_id} is PASSED without qualifying evidence "
+                    f"({'; '.join(unmet)}) — must be treated as RESEARCH (paper/demo-only) "
+                    f"until re-validated. Disable this engine or set "
+                    f"execution.allow_live_trading back to False."
+                )
 
     # Trust audit: loud, non-fatal. A PASSED status without qualifying
     # evidence must never silently launder itself into "proven".

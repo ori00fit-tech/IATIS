@@ -14,6 +14,7 @@ strategy engines there's no reason to defer them to a later phase.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from utils.logger import get_logger
@@ -71,6 +72,45 @@ def evaluate_risk(inputs: RiskInputs, config: dict) -> RiskCheckResult:
 
     reasons: list[str] = []
 
+    # --- Fail CLOSED on invalid numeric input (Forensic Audit, 2026-08-04
+    # — BUG-006). Every hard-gate check below is a >=/</> comparison, and
+    # in Python a comparison against NaN is ALWAYS False — which means a
+    # single NaN input would silently BYPASS every check in this
+    # "sovereign" layer (drawdown stop, RR floor, correlation cap,
+    # exposure cap) instead of blocking the trade. Confirmed via direct
+    # reproduction: NaN drawdown / NaN entry_price / NaN correlated
+    # exposure each returned passed=True before this check existed. A
+    # negative or zero account_balance (a real, reachable state — see
+    # risk/live_portfolio_state.py's equity accumulation from real
+    # closed-trade PnL) also silently produced a NEGATIVE position size.
+    # A risk gate must refuse to trade on corrupted/nonsensical input,
+    # never silently compute a "passed" result from it. See
+    # reports/forensic/13_CONFIRMED_BUGS.md BUG-006.
+    numeric_inputs = {
+        "account_balance": inputs.account_balance,
+        "entry_price": inputs.entry_price,
+        "stop_loss_price": inputs.stop_loss_price,
+        "take_profit_price": inputs.take_profit_price,
+        "current_open_risk_pct": inputs.current_open_risk_pct,
+        "current_drawdown_pct": inputs.current_drawdown_pct,
+        "correlated_exposure_pct": inputs.correlated_exposure_pct,
+        "correlation_limit_pct": inputs.correlation_limit_pct,
+    }
+    invalid = [name for name, v in numeric_inputs.items() if not math.isfinite(v)]
+    if invalid:
+        reasons.append(
+            f"Invalid (NaN/inf) risk input(s): {', '.join(invalid)} — "
+            "refusing to trade on corrupted data"
+        )
+        return RiskCheckResult(passed=False, reasons=reasons)
+
+    if inputs.account_balance <= 0:
+        reasons.append(
+            f"Account balance {inputs.account_balance:.2f} is not positive "
+            "— refusing to size a trade"
+        )
+        return RiskCheckResult(passed=False, reasons=reasons)
+
     # --- Hard stop: system-level drawdown breach ---
     if inputs.current_drawdown_pct >= dd_stop:
         reasons.append(
@@ -90,6 +130,31 @@ def evaluate_risk(inputs: RiskInputs, config: dict) -> RiskCheckResult:
     rr = _risk_reward_ratio(inputs.entry_price, inputs.stop_loss_price, inputs.take_profit_price)
     if rr < min_rr * (1.0 - 1e-9):
         reasons.append(f"Risk/reward {rr:.2f} below minimum required {min_rr:.2f}")
+
+    # --- Directional sanity: stop must be on the OPPOSITE side of entry
+    # from the target (Forensic Audit, 2026-08-04 — BUG-006). RiskInputs
+    # carries no explicit direction field; direction is inferred from
+    # which side of entry the target sits on. The RR floor above only
+    # ever compares magnitudes via abs(), so a backwards stop (on the
+    # SAME side as the target) can still compute a technically-passing
+    # RR ratio — reproduced: entry=1.10, target=1.30 (implies long,
+    # stop should be < entry), stop=1.20 (wrong side, ABOVE entry)
+    # computed RR=2.0 and passed before this check existed. Not
+    # currently reachable from main.py's own construction (which always
+    # builds SL/TP correctly relative to direction), but the sovereign
+    # gate must not rely on a caller getting geometry right.
+    if inputs.take_profit_price > inputs.entry_price:      # implies long
+        if inputs.stop_loss_price >= inputs.entry_price:
+            reasons.append(
+                "Stop-loss is not below entry for a long setup (target above "
+                "entry) — refusing a backwards stop"
+            )
+    elif inputs.take_profit_price < inputs.entry_price:    # implies short
+        if inputs.stop_loss_price <= inputs.entry_price:
+            reasons.append(
+                "Stop-loss is not above entry for a short setup (target below "
+                "entry) — refusing a backwards stop"
+            )
 
     # --- Same-symbol duplicate-position guard ---
     # A new signal on a symbol that already has an open position is not an

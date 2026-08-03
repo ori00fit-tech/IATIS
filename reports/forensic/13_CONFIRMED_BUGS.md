@@ -463,3 +463,340 @@ XAUUSD/BTCUSD/ETHUSD evidence hypotheses against the fixed engine (and
 comparing pre/post-fix PF) is a natural, high-value next step — out of
 scope for this pass (which fixes the tool, not the historical record),
 same boundary already established for BUG-002/BUG-003.
+
+## BUG-005
+
+**Severity:** P1
+
+**Category:** Engine Forensics — Sentiment engine lookahead (external
+data source, not OHLC). Found during the ICT→Quant→Wyckoff→Divergence→
+Sentiment→Macro REAL/PARTIAL/STUB audit, item #2 of the forensic
+roadmap. Disabled by default (`config/engines.yaml` `enabled.sentiment:
+false`, not part of prod4) — does not affect the live pipeline or the
+carrier-asset (XAUUSD/BTCUSD/ETHUSD) PF claims, but is reachable via
+Mission Center's already-shipped ad-hoc engine-toggle for research runs.
+
+**Claim:** `engines/sentiment_engine.py`'s COT (`_load_cot_data`) and
+MarketAux (`_marketaux_sentiment_signal`) data sources have no per-date
+history at all — both always answer with data as of TODAY (wall-clock
+"now"), regardless of which historical bar a backtest is simulating.
+Neither function receives or consults the bar's own timestamp.
+
+**Observed:** A hand-constructed `SentimentEngine` (with `_symbol` set,
+matching how the LIVE pipeline — but not the backtest pipeline —
+constructs it) called with `mtf_data` whose last bar is dated
+2021-01-10 returned `BULLISH, score=48` sourced from a COT snapshot
+whose own `timestamp` field was captured 2026-08-03 — over 5 years of
+"future" information relative to the simulated bar, used as if it were
+contemporaneous.
+
+**Important nuance, verified before fixing (not assumed)**: this exact
+scenario is NOT currently reachable through the real, wired
+`run_backtest()` engine-construction loop
+(`backtesting/backtest_engine.py:512-542`), which never sets
+`engine._symbol` on any engine it constructs (confirmed: `grep -rn
+"_symbol" engines/*.py` shows only `sentiment_engine.py` reads it;
+`grep -n "_symbol" backtesting/backtest_engine.py` returns nothing).
+Sentiment's `symbol` variable therefore always resolves to `"UNKNOWN"`
+in any real backtest today, so `_load_cot_data("UNKNOWN")` reads a
+nonexistent file (returns `None`) and `_marketaux_sentiment_signal
+("UNKNOWN")` short-circuits immediately (`"UNKNOWN"` is not in
+`MARKETAUX_SYMBOL_MAP`) — both silently no-op, and Sentiment falls back
+to the causally-safe retail price-position proxy only. **This is a
+latent landmine, not a currently-firing bug**: the lookahead
+vulnerability is real and reproducible in the underlying functions, but
+is currently blocked by an unrelated gap (missing `_symbol`
+propagation) rather than by design. If that separate gap is ever fixed
+— a plausible, innocent-looking future change (e.g. to make Sentiment
+functional in backtests at all) — the lookahead trap would fire
+immediately and silently, corrupting any research run that enables
+Sentiment. Fixing the vulnerability at its source (regardless of the
+`_symbol` gap's own status) is the correct, forward-safe fix.
+
+**Expected:** Sentiment's external, current-snapshot-only data sources
+(COT, MarketAux) should only ever be consulted when the decision bar's
+own timestamp is genuinely close to "now" (live trading) — never for a
+historical/backtest bar, where "now"'s positioning/news would not have
+existed at that point in the simulated timeline.
+
+**Evidence:** Reproduced directly: (1) a manually-`_symbol`-set engine
+with a real COT cache file returned BULLISH/48 for a 2021-dated bar
+before the fix; (2) confirmed via direct inspection that
+`run_backtest()`'s real engine-construction loop never sets `_symbol`,
+so this exact path is not reachable through the wired system today;
+(3) confirmed the fix preserves live behavior exactly — a bar dated at
+real `pd.Timestamp.now()` still returns BULLISH/48 from the same COT
+data post-fix, while the 2021-dated bar now correctly returns NEUTRAL
+with COT/MarketAux both skipped.
+
+**File / Line (pre-fix):** `engines/sentiment_engine.py`,
+`SentimentEngine.analyze()` (originally lines 198-312) —
+`cot = _load_cot_data(symbol)` and
+`marketaux = _marketaux_sentiment_signal(symbol)` were called
+unconditionally, with no check against the bar's own timestamp anywhere
+in the function.
+
+**Execution path:** `SentimentEngine.analyze(mtf_data)` →
+`_load_cot_data(symbol)` (reads `data/cot/{SYMBOL}.json`, a single
+most-recently-downloaded weekly snapshot, no date parameter) and/or
+`_marketaux_sentiment_signal(symbol)` → `fundamentals.marketaux_client.
+get_news_sentiment(symbol, hours_back=48)` (a live HTTP call with its
+cutoff measured from real `time.time()`) — reachable whenever Sentiment
+is enabled for a run, live or backtest, with no bar-time awareness.
+
+**Reproduction:** `SentimentEngine()` constructed with `_symbol` set
+manually (bypassing the currently-blocking, unrelated `_symbol`-
+propagation gap in `run_backtest()`), `IATIS_COT_DIR` pointed at a temp
+dir containing a real COT snapshot payload, called with `mtf_data` whose
+last bar was dated 2021-01-10 — returned BULLISH/48 pre-fix, NEUTRAL
+(COT/MarketAux both skipped, `raw["is_live"] is False`) post-fix. A
+second call with `mtf_data` ending at real `pd.Timestamp.now()`
+confirmed identical BULLISH/48 output before and after the fix — proving
+live behavior is completely unchanged.
+
+**Root cause:** COT and MarketAux are fundamentally "current snapshot
+only" data sources (a weekly cache file with no history; a live news API
+with no historical archive) — the engine was written assuming it would
+only ever be called in live trading (where the current bar genuinely IS
+"now"), with no defensive check for the case where it's called on a
+historical bar instead (backtesting, Mission Center research).
+
+**Impact:** Zero impact on the live pipeline or CLAUDE.md's
+carrier-asset PF claims (Sentiment stays `enabled: false`, not part of
+prod4). Real impact on the integrity of ANY future evaluation of H012
+(Sentiment/COT) or H021 (MarketAux) via backtesting or Mission Center —
+without this fix, enabling Sentiment for research would silently
+contaminate every historical trial with today's positioning/news,
+making any measured PF for a "Sentiment-enabled" run meaningless. Also
+flags a second, separate, currently-real gap worth a future look:
+`run_backtest()` never propagates `_symbol` to constructed engines at
+all, which today accidentally protects against this exact lookahead (by
+making COT/MarketAux silently inert) but ALSO means Sentiment's
+COT/MarketAux contribution can never be genuinely evaluated via
+backtesting until that gap is deliberately addressed — not fixed as
+part of this bug (would need a design decision about historical
+COT/MarketAux archives, out of scope here).
+
+**Fix (CONFIRMED, applied same phase):** New `_bar_time_is_live(bar_time,
+tolerance_hours=72.0)` helper — `True` only when the bar's own timestamp
+is within `tolerance_hours` of real wall-clock now. `analyze()` now
+computes `bar_time = df.index[-1]` and gates both `_load_cot_data(...)`
+and `_marketaux_sentiment_signal(...)` behind `is_live`, skipping both
+(falling back to the retail proxy only) whenever `is_live` is False.
+`raw["is_live"]` added for transparency. Threshold configurable via
+`self.thresholds.get("live_data_tolerance_hours", 72.0)`, matching every
+other engine's `.get(key, DEFAULT)` convention. In live trading the most
+recent completed candle is always within a few hours of now, so this is
+a no-op there — confirmed by reproduction (3).
+
+**Regression test:**
+`tests/test_sentiment_engine.py::test_cot_and_marketaux_are_skipped_for_a_historical_bar`
+(the authoritative proof — real COT/MarketAux data available, historical
+bar, both must be `assert_not_called()`),
+`tests/test_sentiment_engine.py::test_cot_and_marketaux_are_used_for_a_live_bar`
+(regression pin — live bar behaves exactly as before),
+`tests/test_sentiment_engine.py::test_bar_time_is_live_helper_boundary`
+(direct unit test of the gate's boundary behavior). Two pre-existing
+tests needed updating (not silently left broken): `tests/
+test_sentiment_engine.py`'s `_flat_df()` helper and `tests/
+test_cot_download.py::test_sentiment_engine_consumes_real_cot` both used
+a fixed historical date that this fix correctly began gating off — both
+now anchor to real `pd.Timestamp.now()` so they keep exercising the
+COT/MarketAux logic they were actually written to test, per the
+established "test asserted a reality this fix legitimately changed"
+pattern already seen for BUG-002/003/004's own regression suites this
+session. Full suite re-run after the fix:
+`tests/test_sentiment_engine.py` (11/11) and `tests/test_cot_download.py`
+(11/11).
+
+**Status:** FIXED, tested, regression-pinned. The separate `run_backtest()`
+`_symbol`-propagation gap noted above is explicitly NOT fixed as part of
+this bug — flagged as a distinct, future design decision (would need a
+plan for historical COT/MarketAux archives before Sentiment could be
+genuinely backtestable), not silently bundled in here.
+
+---
+
+## GOVERNANCE-001 (hardening, not a bug)
+
+**Severity:** P1 (governance hardening — nothing is currently broken;
+this closes a gap that would only matter if a future config change
+opened it).
+
+**Category:** Live-capital governance. `research/edge_gate.py`.
+
+**Claim:** `check_edge_gate()`'s own module docstring states RESEARCH
+status means "approved for paper trading / data collection only (not
+live)" — but until this fix, that distinction was enforced only by
+convention, never in code. `check_edge_gate()` treated `PASSED` and
+`RESEARCH` identically (both simply had to be `in ALLOWED_STATUSES`),
+and the actual live-vs-demo decision lived entirely in
+`execution/trade_executor.py`'s `allow_live_trading` flag — a
+completely separate mechanism with zero cross-check against which
+hypothesis status backs the engines actually voting on that decision.
+
+**Observed:** Confirmed via `research/edge_gate.py`'s
+`ENGINE_HYPOTHESIS_MAP`: every currently-enabled prod4 engine
+(smc→H101, price_action→H102, nnfx→H004, wyckoff→H006) is `RESEARCH`
+status, not `PASSED`. Confirmed via `grep -rn "allow_live_trading"` that
+this flag is checked in exactly one place
+(`execution/trade_executor.py:211`, `if env != "demo" and not
+self.allow_live_trading:`) — a broker-account-environment check with no
+awareness of engine/hypothesis state at all. So the only thing
+currently standing between these RESEARCH-status engines and real
+capital is one global boolean, not a per-engine promotion check.
+
+**Expected:** If `allow_live_trading` is ever set `True`, an engine
+whose backing hypothesis is `RESEARCH` (or `PASSED` without qualifying
+evidence per `PROMOTION_CRITERIA`) should never be allowed to
+contribute to a live-capital decision — the code should enforce this,
+not just the docstring.
+
+**Fix (CONFIRMED, applied same phase):** `check_edge_gate()` gains an
+`allow_live_trading: bool = False` parameter. When `True`, every
+enabled engine's hypothesis must be genuinely `PASSED` AND clear
+`PROMOTION_CRITERIA` (via the newly-factored-out
+`_promotion_criteria_unmet()`, the same check `audit_passed_hypotheses()`
+already used) — otherwise `EdgeNotProvenError` is raised loudly at boot.
+`main.py`'s `build_active_engines()` now threads
+`config["execution"]["allow_live_trading"]` into this call.
+**Completely inert today**: `allow_live_trading` is `False` in the real
+`config.yaml`, so this new branch never executes under current
+configuration — verified by the full existing test suite passing
+unchanged. This is a forward-looking hardening, not a fix to any
+currently-firing bug.
+
+**Regression tests:**
+`tests/test_promotion_criteria.py::test_allow_live_trading_false_is_unaffected_by_research_status`
+(regression pin — current production config unaffected),
+`test_allow_live_trading_true_blocks_research_status_engine` (the
+authoritative proof — a RESEARCH-status engine is refused once the flag
+flips),
+`test_allow_live_trading_true_blocks_passed_without_qualifying_evidence`
+(a PASSED status alone still isn't enough — must clear
+`PROMOTION_CRITERIA` too),
+`test_allow_live_trading_true_permits_genuinely_qualifying_passed_engine`
+(the positive case — not a blanket ban on live trading, only on
+unproven engines). Full suite re-run after the fix: 2155 passed, 2
+skipped, zero failures.
+
+**Status:** APPLIED. Identified independently and confirmed by direct
+code reading (`ENGINE_HYPOTHESIS_MAP`, `allow_live_trading`'s one call
+site) before implementing — not taken on faith from any external
+report.
+
+---
+
+## BUG-006
+
+**Severity:** P0
+
+**Category:** Risk Engine Forensics — live sovereign risk gate
+(`risk/risk_engine.py`). This module's own docstring: *"it has the
+authority to make a trade not exist at all... any single failure blocks
+the trade. No partial credit."* Confirmed used by the live pipeline
+(`main.py:455`, `_risk_gate()`) — not a backtest-only concern.
+
+**Claim:** Every hard-gate check in `evaluate_risk()` is a `>=`/`<`/`>`
+comparison. In Python, a comparison against `NaN` is ALWAYS `False` —
+so a NaN input to ANY of `current_drawdown_pct`, `entry_price`/
+`stop_loss_price`/`take_profit_price` (feeding the RR calc),
+`correlated_exposure_pct`, or `current_open_risk_pct` would silently
+BYPASS that specific hard gate instead of blocking the trade. Separately,
+a negative or zero `account_balance` (a real, reachable state — see
+`risk/live_portfolio_state.py`'s `equity = starting_balance + Σpnl`,
+which can genuinely go negative after enough real losses) produced a
+NEGATIVE position size rather than being refused outright. A third,
+independent gap: the RR floor only ever compares magnitudes via `abs()`,
+never which SIDE of entry the stop/target actually sit on — a backwards
+stop (on the same side as the target) could compute a technically-passing
+RR ratio.
+
+**Observed:** Direct reproduction, pre-fix:
+- `current_drawdown_pct=NaN` → `passed=True` (the drawdown-stop hard
+  halt never fired).
+- `entry_price=NaN` → `passed=True`, `position_size_units=0.0` (the RR
+  floor never fired; `passed=True` is still the wrong signal even
+  though the size happened to compute to zero).
+- `correlated_exposure_pct=NaN` → `passed=True` (the correlation cap
+  never fired).
+- `account_balance=-500.0` → `passed=True`, `position_size_units=-1000.0`
+  (a negative position size).
+- `entry_price=1.10, stop_loss_price=1.20, take_profit_price=1.30`
+  (target above entry implies a long, so the stop should be below
+  entry — instead it's above, on the same side as the target) →
+  `passed=True` (RR computed as 2.0 from magnitudes alone, clearing the
+  2.0 floor despite the backwards geometry).
+
+**Expected:** A sovereign risk gate must fail CLOSED on invalid,
+degenerate, or nonsensical input — refuse the trade, never silently
+compute a "passed" result from corrupted or garbage numbers.
+
+**File / Line (pre-fix):** `risk/risk_engine.py`, `evaluate_risk()`
+(originally lines 62-144) — no input validation existed at all before
+the hard-gate comparisons began.
+
+**Execution path:** `main.py:_risk_gate()` → `compute_portfolio_state()`
+(supplies `account_balance`/`current_drawdown_pct`/
+`correlated_exposure_pct`, all real, D1-backed, arithmetic on real
+closed-trade data — not synthetic) + `range_atr()`-derived entry/stop/
+target → `RiskInputs(...)` → `evaluate_risk(risk_inputs, config)` — the
+final sovereign check before a live trade is sized and (via
+`execution/trade_executor.py`) potentially executed.
+
+**Reproduction:** `tests/test_risk_engine_fuzzing.py` — direct calls to
+the real `evaluate_risk()` with NaN/inf in every numeric `RiskInputs`
+field individually and in combination, negative/zero account balance,
+degenerate SL/TP geometry (SL==entry, TP==entry, backwards stop for
+both long and short), and a boundary/adversarial value sweep (`0.0,
+-1.0, 1.0, NaN, inf, -inf, 1e300, -1e300`) across every combination of
+`account_balance`/`entry_price`/`stop_loss_price`/`take_profit_price`
+confirming the function never raises and never returns `passed=True`
+on any invalid combination. 32/32 pass post-fix.
+
+**Root cause:** `evaluate_risk()` trusted every numeric input
+unconditionally and relied entirely on Python's native comparison
+operators to reject bad values — but IEEE-754 NaN semantics make every
+such comparison silently `False`, the exact opposite of "fail closed."
+The directional-sanity gap is a separate root cause: `RiskInputs` has
+no explicit `direction` field, and the RR calculation's `abs()` usage
+discards which side of entry each level sits on.
+
+**Impact:** This is the live decision pipeline's final risk check, not
+a backtest-only measurement bug. Confirmed NOT currently exploitable via
+the real, wired call site for the backwards-stop case specifically
+(`main.py`'s own SL/TP construction is provably always correctly
+oriented relative to direction — `stop = entry - direction * atr *
+mult`), but the NaN-bypass and negative-balance gaps ARE reachable
+through real, plausible upstream states: a real broker/data-feed outage
+producing NaN prices, or a real losing streak driving computed equity
+negative. **This is the single most severe class of finding in this
+forensic pass** — a corrupted-data or already-blown-account scenario is
+precisely when a risk gate must be MOST conservative, and this one was
+silently permissive instead.
+
+**Fix (CONFIRMED, applied same phase):** (1) A new fail-closed
+validation block at the top of `evaluate_risk()`: every numeric
+`RiskInputs` field is checked with `math.isfinite()`; any NaN/inf
+immediately returns `passed=False` naming the offending field(s). (2)
+`account_balance <= 0` immediately returns `passed=False`. (3) A new
+directional-sanity check after the RR floor: infers intended direction
+from which side of `entry_price` the `take_profit_price` sits on, and
+rejects a `stop_loss_price` on the wrong (same) side as a "backwards
+stop." All three checks are additive-only — every existing passing case
+(confirmed via the pre-existing `tests/test_risk_rr_boundary.py`,
+`tests/test_phase1.py` risk tests) continues to pass unchanged.
+
+**Regression tests:** New `tests/test_risk_engine_fuzzing.py` (32
+tests) — per-field NaN/inf rejection, negative/zero balance rejection,
+SL==entry / TP==entry degenerate-geometry rejection, backwards-stop
+rejection for both long and short (with correct-geometry regression
+pins that these are NOT falsely rejected), drawdown/exposure/
+correlation boundary values, a combined-adversarial case, and a
+no-crash sweep across 8×8×8×8 fuzzed value combinations. Existing
+suites re-run unchanged and green: `tests/test_risk_rr_boundary.py`,
+`tests/test_phase1.py`, `tests/test_behavior.py`,
+`tests/test_live_portfolio_state.py` (59/59).
+
+**Status:** FIXED, tested, regression-pinned. Full suite verified
+clean: 2187 passed, 2 skipped, zero failures.

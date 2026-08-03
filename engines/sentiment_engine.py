@@ -162,6 +162,46 @@ def _retail_sentiment_proxy(
     }
 
 
+def _bar_time_is_live(bar_time, tolerance_hours: float = 72.0) -> bool:
+    """True only when ``bar_time`` is close enough to wall-clock "now"
+    that a current-snapshot-only external data source can be trusted for
+    this bar.
+
+    Forensic Audit, 2026-08-04 (BUG-005): neither COT (`_load_cot_data`
+    reads the single most-recently-downloaded weekly snapshot, no
+    per-date history) nor MarketAux (`get_news_sentiment`'s `hours_back`
+    window is measured from `time.time()`, the real wall clock) has any
+    notion of "what was true as of this bar's own date" — both always
+    answer with TODAY's positioning/news. Reproduced directly: a
+    hand-constructed engine with `_symbol` set and a real COT cache file
+    returned BULLISH/score=48 for a bar dated 2021-01-10 using a COT
+    snapshot captured 2026-08-03 — over 5 years of leaked "future"
+    information relative to the simulated bar.
+
+    This gate is the fix: skip COT/MarketAux entirely unless `bar_time`
+    is within `tolerance_hours` of real now. In LIVE trading the most
+    recent completed candle is always within a few hours of now, so this
+    is a no-op there (today's live behavior is unchanged). In ANY
+    backtest, `bar_time` is necessarily far in the past for the vast
+    majority of the run, so this correctly disables both external
+    sources rather than silently leaking. (Currently the reproduction
+    above is not reachable through the real, wired `run_backtest()` path
+    at all — that construction loop never sets `engine._symbol`, so
+    `symbol` resolves to "UNKNOWN" and both lookups already return None
+    — but that is an unrelated gap, and this bar-time gate closes the
+    real vulnerability at its source so it stays safe regardless of
+    whether that separate gap is ever fixed later.)
+    """
+    if bar_time is None:
+        return False
+    try:
+        now = datetime.now(timezone.utc)
+        bt = bar_time if bar_time.tzinfo is not None else bar_time.replace(tzinfo=timezone.utc)
+        return abs((now - bt).total_seconds()) <= tolerance_hours * 3600
+    except (AttributeError, TypeError):
+        return False
+
+
 def _marketaux_sentiment_signal(symbol: str) -> dict | None:
     """MarketAux news sentiment as a signal input (H021).
 
@@ -212,8 +252,24 @@ class SentimentEngine(BaseEngine):
         score = 0.0
         cot_available = False
 
+        # BUG-005 fix (2026-08-04): neither COT nor MarketAux has a
+        # per-date history — both always answer with TODAY's snapshot.
+        # Only trust them when this bar's own timestamp is close to real
+        # "now" (live trading); skip both during a backtest/historical
+        # run, where bar_time is necessarily far in the past. See
+        # _bar_time_is_live()'s own docstring and
+        # reports/forensic/13_CONFIRMED_BUGS.md BUG-005.
+        bar_time = df.index[-1] if len(df) else None
+        is_live = _bar_time_is_live(bar_time, self.thresholds.get("live_data_tolerance_hours", 72.0))
+        if not is_live:
+            reasons.append(
+                "COT/MarketAux skipped — bar time is not close to 'now' "
+                "(backtest/historical mode); using retail price-position "
+                "proxy only to avoid lookahead (BUG-005)"
+            )
+
         # --- Primary: COT Data ---
-        cot = _load_cot_data(symbol)
+        cot = _load_cot_data(symbol) if is_live else None
         if cot:
             cot_available = True
             net_pos = cot.get("large_spec_net", 0)
@@ -247,7 +303,7 @@ class SentimentEngine(BaseEngine):
         retail = _retail_sentiment_proxy(df, lookback=min(200, len(df)))
 
         # --- H021 (PLANNED): MarketAux news sentiment ---
-        marketaux = _marketaux_sentiment_signal(symbol)
+        marketaux = _marketaux_sentiment_signal(symbol) if is_live else None
 
         if not cot_available:
             # Use retail proxy as primary signal
@@ -301,6 +357,7 @@ class SentimentEngine(BaseEngine):
             reasons=reasons,
             raw={
                 "timeframe_used": tf,
+                "is_live": is_live,
                 "cot_available": cot_available,
                 "retail_pct_from_low": retail["pct_from_low"],
                 "retail_contrarian": retail["contrarian_signal"],

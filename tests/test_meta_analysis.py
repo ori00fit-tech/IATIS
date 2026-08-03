@@ -15,6 +15,7 @@ import pytest
 
 from backtest.meta_analysis import (
     MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS,
+    compute_effective_configuration_summary,
     compute_meta_analysis,
     sampler_caveat,
 )
@@ -570,3 +571,68 @@ def test_dependence_not_detected_hypothesis_bundle_mode_multiple_bundles():
     trials = [_hypothesis_row(i, hypothesis_idx=i % 2, objective_value=1.0) for i in range(MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS)]
     result = compute_meta_analysis(space, trials, sampler="tpe", mission_id="m1")
     assert result.dependence_detected is False
+
+
+# ── compute_effective_configuration_summary (Forensic Audit follow-up, 2026-08-03) ──
+# Invariant 4 from the fff9806b90c2 investigation: "N trials" alone doesn't
+# say how many are genuinely distinct executable configurations.
+
+def test_effective_config_summary_single_hypothesis_all_trials_duplicate():
+    # Mirrors the actual fff9806b90c2 shape: 1 hypothesis bundle, 50 trials
+    # -> all 50 collapse to exactly 1 effective configuration.
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(i, hypothesis_idx=0, sl_atr_multiplier=2.0) for i in range(50)]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.total_complete_trials == 50
+    assert summary.unique_effective_configurations == 1
+    assert summary.duplicate_trials == 49
+
+
+def test_effective_config_summary_two_hypotheses_two_unique_configs():
+    space = _hypothesis_space()  # 2 bundles by default (SMC/H1, NNFX+Wyckoff/H4)
+    trials = [_hypothesis_row(i, hypothesis_idx=i % 2, sl_atr_multiplier=2.0) for i in range(10)]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.total_complete_trials == 10
+    assert summary.unique_effective_configurations == 2
+    assert summary.duplicate_trials == 8
+
+
+def test_effective_config_summary_risk_param_variation_still_counts_as_unique():
+    # Same hypothesis, but a DIFFERENT sl_atr_multiplier each trial -> the
+    # risk override is part of the executable config, so each is unique.
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(i, hypothesis_idx=0, sl_atr_multiplier=1.0 + i * 0.1) for i in range(5)]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_effective_configurations == 5
+    assert summary.duplicate_trials == 0
+
+
+def test_effective_config_summary_excludes_pruned_and_failed_trials():
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [
+        _hypothesis_row(0, hypothesis_idx=0),
+        {**_hypothesis_row(1, hypothesis_idx=0), "state": "PRUNED"},
+        {**_hypothesis_row(2, hypothesis_idx=0), "state": "FAIL"},
+    ]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.total_complete_trials == 1
+    assert summary.unique_effective_configurations == 1
+    assert summary.duplicate_trials == 0
+
+
+def test_effective_config_summary_flat_mode_works_without_hypothesis_bundles():
+    # Regression guard: the function must work for a mission that never
+    # used hypothesis bundles at all (the flat/default mode).
+    space = _space()  # timeframes_choices=(("H1",), ("H4","D1","H1")), etc.
+    trials = [_row(0, tf_idx=0, engine_idx=0), _row(1, tf_idx=1, engine_idx=0)]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.total_complete_trials == 2
+    assert summary.unique_effective_configurations == 2
+    assert summary.duplicate_trials == 0
+
+
+def test_effective_config_summary_to_dict_shape():
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(0, hypothesis_idx=0)]
+    d = compute_effective_configuration_summary(space, trials).to_dict()
+    assert set(d.keys()) == {"total_complete_trials", "unique_effective_configurations", "duplicate_trials"}

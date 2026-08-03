@@ -1821,6 +1821,18 @@ function MissionDetail({
               </Badge>
             </div>
           )}
+          {status.effective_config_summary && status.effective_config_summary.total_complete_trials > 0 && (
+            <div className="flex items-center gap-2 text-[0.78em]">
+              <span className="text-muted uppercase tracking-[1px] text-[0.7em]">Effective configurations</span>
+              <Badge tone={status.effective_config_summary.duplicate_trials === 0 ? 'good' : 'marginal'}>
+                {`${status.effective_config_summary.unique_effective_configurations} unique across ${status.effective_config_summary.total_complete_trials} complete trial(s)${
+                  status.effective_config_summary.duplicate_trials > 0
+                    ? ` — ${status.effective_config_summary.duplicate_trials} duplicate`
+                    : ''
+                }`}
+              </Badge>
+            </div>
+          )}
           <div className="flex flex-col gap-1">
             {symbols.map((sym) => {
               const counts = status.progress.by_symbol[sym]

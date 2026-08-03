@@ -289,6 +289,7 @@ async def missions_status(
     progress = research_missions.mission_progress(mission_id) if mission else {"by_symbol": {}, "total": 0}
 
     search_space_kind = None
+    effective_config_summary = None
     if mission and mission.get("search_space_json"):
         # Forensic Audit Phase 1, item C (2026-08-02) — surfaces which axis
         # this mission's trials actually vary across (SIGNAL_VARIATION /
@@ -300,12 +301,23 @@ async def missions_status(
         space = search_space_from_dict(json.loads(mission["search_space_json"]))
         search_space_kind = classify_search_space_variation(space)
 
+        # Forensic Audit follow-up (2026-08-03), Invariant 4 from the
+        # fff9806b90c2 investigation — "N trials" alone doesn't say how
+        # many are genuinely distinct executable configurations. Computed
+        # from the same rows the leaderboard endpoint already serves, no
+        # new D1 query shape.
+        from backtest.meta_analysis import compute_effective_configuration_summary
+
+        trials = research_missions.leaderboard(mission_id)
+        effective_config_summary = compute_effective_configuration_summary(space, trials).to_dict()
+
     return {
         "mission_id": mission_id,
         "mission": mission,
         "progress": progress,
         "job_status": job.status if job else None,
         "search_space_kind": search_space_kind,
+        "effective_config_summary": effective_config_summary,
     }
 
 

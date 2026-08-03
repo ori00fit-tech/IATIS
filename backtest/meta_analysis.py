@@ -108,6 +108,83 @@ def sampler_caveat(sampler: str) -> str:
 
 
 @dataclass(frozen=True)
+class EffectiveConfigSummary:
+    """Forensic Audit follow-up (2026-08-03) — mission fff9806b90c2's
+    "50 trials, 1 effective configuration" report surfaced a real gap:
+    the Mission Center had no way to show how many of a mission's trials
+    are genuinely distinct EXECUTABLE configurations, only a total trial
+    count. This answers that directly, independent of whether the
+    degenerate case was caused by a genuine single-hypothesis mission
+    (the confirmed root cause for that mission) or would ever be caused
+    by something else in the future — the fingerprint doesn't care why
+    two trials collapsed, only whether they did."""
+    total_complete_trials: int
+    unique_effective_configurations: int
+    duplicate_trials: int
+
+    def to_dict(self) -> dict:
+        return {
+            "total_complete_trials": self.total_complete_trials,
+            "unique_effective_configurations": self.unique_effective_configurations,
+            "duplicate_trials": self.duplicate_trials,
+        }
+
+
+def _effective_config_fingerprint(symbol: str | None, resolved: dict[str, Any]) -> str:
+    """A stable key representing the ACTUAL executable configuration a
+    trial ran — deliberately excludes trial_id/created_at/seed (per the
+    operator's own Invariant 3: 'two trials may only be considered
+    distinct if their effective executable configurations differ').
+    Indicator/context-filter lists are sorted by their own canonical JSON
+    so two functionally-identical bundles listed in a different order
+    still fingerprint identically."""
+    return json.dumps(
+        {
+            "symbol": symbol,
+            "timeframes": sorted(resolved["timeframes"]),
+            "engines": sorted(resolved["engines"]),
+            "indicators": sorted(
+                (json.dumps(d, sort_keys=True) for d in resolved["indicators"]),
+            ),
+            "context_filters": sorted(
+                (json.dumps(d, sort_keys=True) for d in resolved["context_filters"]),
+            ),
+            "engine_variants": resolved["engine_variants"],
+            "risk_overrides": resolved["risk_overrides"],
+        },
+        sort_keys=True,
+    )
+
+
+def compute_effective_configuration_summary(
+    space: MissionSearchSpace, trials: list[dict[str, Any]],
+) -> EffectiveConfigSummary:
+    """Pure function over already-fetched leaderboard() rows — mirrors
+    this module's own no-D1-access convention. Only COMPLETE trials are
+    counted (a PRUNED/FAILED trial never ran a real backtest, so it has
+    no 'effective configuration' to compare). Malformed/unparseable
+    params_json (should not happen for a real row, but this is read-only
+    reporting, never worth crashing a mission-detail page over) is
+    silently skipped rather than raising."""
+    complete = [t for t in trials if t.get("state") == "COMPLETE"]
+    fingerprints: set[str] = set()
+    for t in complete:
+        try:
+            raw_params = json.loads(t["params_json"])
+            resolved = resolve_point(space, raw_params)
+        except (TypeError, ValueError, KeyError):
+            continue
+        fingerprints.add(_effective_config_fingerprint(t.get("symbol"), resolved))
+    total = len(complete)
+    unique = len(fingerprints)
+    return EffectiveConfigSummary(
+        total_complete_trials=total,
+        unique_effective_configurations=unique,
+        duplicate_trials=max(0, total - unique),
+    )
+
+
+@dataclass(frozen=True)
 class DimensionFrequency:
     dimension: str  # "engine" | "timeframe"
     value: str

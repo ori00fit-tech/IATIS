@@ -176,6 +176,35 @@ async def missions_create(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # Forensic Audit follow-up (2026-08-03) — operator-reported "50 trials,
+    # 1 effective configuration" (mission fff9806b90c2). Traced end-to-end
+    # (UI -> API -> MissionSearchSpace -> suggest_point/resolve_point ->
+    # mission_runner) and confirmed the pipeline correctly preserves and
+    # independently samples 2+ hypothesis bundles when given them (see
+    # tests/test_optimizer.py::test_hypothesis_bundles_are_actually_sampled_not_stuck_on_index_zero
+    # and tests/test_mission_runner.py::test_mission_run_with_hypothesis_bundles_uses_both_bundles,
+    # both real end-to-end proofs, not assumptions). MissionSearchSpace
+    # already rejects an EMPTY hypothesis_bundle_choices list — but a
+    # LIST OF EXACTLY ONE was silently accepted, producing a mathematically
+    # correct but wasteful "search" with nothing to search (every trial
+    # samples the sole choice) and no warning before n_trials_per_symbol
+    # runs execute. Fail fast here instead, matching the UI's own framing
+    # ("search across named hypotheses" implies 2+). Deliberately NOT added
+    # to MissionSearchSpace.__post_init__ itself — that shared dataclass is
+    # also used to reconstruct ALREADY-COMPLETED missions (mission_validator.py,
+    # the meta-analysis endpoint) that may legitimately have this exact
+    # shape; the guard belongs only at mission-CREATION time.
+    if body.hypothesis_bundle_choices is not None and len(body.hypothesis_bundle_choices) == 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "hypothesis_bundle_choices has only 1 entry — hypothesis-search "
+                "mode requires 2+ named hypotheses to search across, or every "
+                "trial will sample the same one. Add another hypothesis, or omit "
+                "hypothesis_bundle_choices to run a fixed-configuration mission."
+            ),
+        )
+
     mission_id = uuid.uuid4().hex[:12]
     name = body.name or mission_id
 

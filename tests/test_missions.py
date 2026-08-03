@@ -397,6 +397,35 @@ def test_missions_create_rejects_hypothesis_bundle_duplicate_names(client):
     assert "unique" in r.json()["detail"]
 
 
+def test_missions_create_rejects_a_single_hypothesis_bundle(client):
+    # Forensic Audit follow-up (2026-08-03) — the fail-fast fix for
+    # mission fff9806b90c2's "50 trials, 1 effective configuration"
+    # report: hypothesis-search mode with exactly 1 named hypothesis is
+    # a config error, not a silently-accepted degenerate search.
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "hypothesis_bundle_choices": [
+            {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+        ]},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+    assert "2+ named hypotheses" in r.json()["detail"]
+
+
+def test_missions_create_accepts_two_hypothesis_bundles(client, monkeypatch):
+    # Regression guard: the fix above must not reject the real, intended
+    # 2+-hypothesis case — this is the exact request shape the operator's
+    # own report implies they meant to send.
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    bundles = [
+        {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []},
+        {"name": "NNFX + Wyckoff", "timeframes": ["H4"], "engines": ["nnfx", "wyckoff"], "indicators": [], "context_filters": []},
+    ]
+    r = client.post("/research/missions", json={**_VALID_BODY, "hypothesis_bundle_choices": bundles}, headers=HDR)
+    assert r.status_code == 200, r.text
+
+
 def test_missions_create_rejects_hypothesis_bundle_unknown_engine(client):
     r = client.post(
         "/research/missions",

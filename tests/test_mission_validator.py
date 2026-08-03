@@ -19,8 +19,12 @@ import pandas as pd
 
 from backtest import mission_runner, mission_validator
 from backtest.mission_validator import (
+    CROSS_SYMBOL,
     MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD,
     NO_EDGE,
+    SAME_SYMBOL,
+    SAME_SYMBOL_CONFIRMED,
+    SAME_SYMBOL_NOT_CONFIRMED,
     STRONG_LEAD,
     WEAK_LEAD,
     ValidationConfig,
@@ -80,10 +84,14 @@ def _seed_mission_and_trial(mission_id: str, trial_symbol: str = "EURUSD", state
 
 
 def _small_vc(tmp_path: Path, validation_id: str, mission_id: str,
-              validation_symbols=("EURUSD", "GBPUSD")) -> ValidationConfig:
+              validation_symbols=("EURUSD", "GBPUSD"), validation_mode: str = CROSS_SYMBOL) -> ValidationConfig:
+    # Default CROSS_SYMBOL — preserves this file's pre-existing test intent
+    # (multi-symbol generalization checks) now that SAME_SYMBOL is the
+    # dataclass's own default (Forensic Audit Phase 1, item D, 2026-08-02).
     return ValidationConfig(
         validation_id=validation_id, mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
         validation_symbols=tuple(validation_symbols), data_dir=tmp_path, start=None, end=None,
+        validation_mode=validation_mode,
         wf_windows=2, wf_min_trades_per_window=1, wf_warmup_bars=50,
         rb_multipliers=(0.8, 1.0, 1.2), rb_params=("sl_atr_multiplier",), rb_min_trades=1,
         mc_n_simulations=50, mc_seed=1, output_dir=tmp_path / "reports",
@@ -390,6 +398,7 @@ def test_verdict_boundaries(monkeypatch):
         vc = ValidationConfig(
             validation_id=vid, mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
             validation_symbols=tuple(symbols), data_dir=Path("."), start=None, end=None,
+            validation_mode=CROSS_SYMBOL,
             output_dir=Path("/tmp"),
         )
         monkeypatch.setattr(mv, "_evaluate_symbol",
@@ -398,3 +407,96 @@ def test_verdict_boundaries(monkeypatch):
 
         validation = research_mission_validations.get_validation(vid)
         assert validation["overall_verdict"] == expected, (symbols, passing_symbols, validation)
+
+
+# ── Validation Mode Explicitness (Forensic Audit Phase 1, item D, 2026-08-02) ──
+# The confirmed gap: nothing tied trial_symbol to validation_symbols — only
+# a symbol COUNT was enforced. SAME_SYMBOL is the new default; CROSS_SYMBOL
+# preserves today's exact behavior byte-for-byte (test_verdict_boundaries
+# above, run with validation_mode=CROSS_SYMBOL, is that regression proof).
+
+def _fake_eval_all(symbol, point, vc, *, passing_symbols):
+    passed = symbol in passing_symbols
+    return {
+        "symbol": symbol, "passed": passed,
+        "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
+        "criteria_breakdown": {}, "feature_mining": None, "started_at": "t", "finished_at": "t",
+    }
+
+
+def test_same_symbol_mode_uses_only_same_symbol_vocabulary(monkeypatch):
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-same-symbol-vocab"
+    _seed_mission_and_trial(mission_id)
+    vc = ValidationConfig(
+        validation_id="v-same-vocab", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=("EURUSD",), data_dir=Path("."), start=None, end=None,
+        validation_mode=SAME_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=["EURUSD"]))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-same-vocab")
+    assert validation["overall_verdict"] in (SAME_SYMBOL_CONFIRMED, SAME_SYMBOL_NOT_CONFIRMED)
+    assert validation["overall_verdict"] not in (NO_EDGE, WEAK_LEAD, STRONG_LEAD)
+    assert validation["validation_mode"] == SAME_SYMBOL
+
+
+def test_same_symbol_confirmed_when_the_one_symbol_passes(monkeypatch):
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-same-symbol-confirmed"
+    _seed_mission_and_trial(mission_id)
+    vc = ValidationConfig(
+        validation_id="v-same-confirmed", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=("EURUSD",), data_dir=Path("."), start=None, end=None,
+        validation_mode=SAME_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=["EURUSD"]))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-same-confirmed")
+    assert validation["overall_verdict"] == SAME_SYMBOL_CONFIRMED
+
+
+def test_same_symbol_not_confirmed_when_the_one_symbol_fails(monkeypatch):
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-same-symbol-not-confirmed"
+    _seed_mission_and_trial(mission_id)
+    vc = ValidationConfig(
+        validation_id="v-same-not-confirmed", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=("EURUSD",), data_dir=Path("."), start=None, end=None,
+        validation_mode=SAME_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=[]))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-same-not-confirmed")
+    assert validation["overall_verdict"] == SAME_SYMBOL_NOT_CONFIRMED
+
+
+def test_cross_symbol_mode_still_uses_cross_symbol_vocabulary(monkeypatch):
+    # The byte-for-byte-unchanged regression proof for CROSS_SYMBOL mode,
+    # explicit and standalone (not just implied by test_verdict_boundaries).
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-cross-symbol-vocab"
+    _seed_mission_and_trial(mission_id)
+    vc = ValidationConfig(
+        validation_id="v-cross-vocab", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=("GBPUSD", "XAUUSD"), data_dir=Path("."), start=None, end=None,
+        validation_mode=CROSS_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=["GBPUSD", "XAUUSD"]))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-cross-vocab")
+    assert validation["overall_verdict"] in (NO_EDGE, WEAK_LEAD, STRONG_LEAD)
+    assert validation["overall_verdict"] not in (SAME_SYMBOL_CONFIRMED, SAME_SYMBOL_NOT_CONFIRMED)
+    assert validation["validation_mode"] == CROSS_SYMBOL

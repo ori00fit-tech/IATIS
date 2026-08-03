@@ -510,3 +510,30 @@ def test_signal_variation_hypothesis_bundle_mode_ignores_vestigial_flat_dimensio
         hypothesis_bundle_choices=(bundle,),
     )
     assert search_space_has_signal_variation(space) is False
+
+
+# ── Forensic Audit Phase 1, item A (2026-08-02) — Mission Search-Space
+# Claim reproduction. The operator observed a real mission whose UI implied
+# it searched engine+timeframe+context combinations, but whose 22 trials
+# all shared one entry-signal stream (only risk/cost params varied). Root
+# cause, confirmed by direct read of MissionCenter.tsx's MissionBuilder.
+# submit(): flat mode (hypothesisMode=false, the UI's default) ALWAYS
+# wraps every signal dimension in a single-element array —
+# `timeframes_choices: [timeframes]`, `engine_set_choices: [engines]`,
+# `indicator_set_choices: [indicatorSpecs]`,
+# `context_filter_set_choices: [contextSpecs]` — regardless of how many
+# timeframes/engines/indicators/context filters the operator picked inside
+# that one combo. This test pins that exact request shape and proves it
+# structurally can never produce signal variation, independent of contents.
+
+def test_flat_mode_request_shape_has_no_signal_variation():
+    # Mirrors MissionCenter.tsx:571-574 verbatim: every dimension wrapped
+    # in a SINGLE-element tuple, even with multiple values inside it.
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1", "H4", "D1"),),
+        engine_set_choices=(("nnfx", "price_action", "smc", "wyckoff"),),
+        indicator_set_choices=(({"name": "rsi", "mode": "confirmation", "params": {}, "weight": 0.0},),),
+        context_filter_set_choices=(({"name": "session", "mode": "entry_filter", "params": {}, "weight": 0.0},),),
+        risk_param_ranges={"sl_atr_multiplier": (1.0, 3.0)},
+    )
+    assert search_space_has_signal_variation(space) is False

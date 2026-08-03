@@ -24,6 +24,7 @@ import {
   type CriteriaEntry, type DimensionFrequency, type Verdict, type FeatureAssociation,
   type ValidationRow, type ConsensusClaim, type PooledBreakdownRow, type OpportunityCandidate,
   type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
+  getDirectionSymmetryAudit, type DirectionSymmetryResponse, type SymmetryFinding,
 } from './api'
 
 const POLL_MS = 4000
@@ -638,6 +639,14 @@ function MissionBuilder({
           </div>
         </div>
 
+        {!hypothesisMode && (
+          <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+            Flat mode fixes ONE engine/timeframe/indicator/context combination for every trial — only risk/cost
+            parameters actually vary across trials. To search across genuinely different signal configurations,
+            enable "Search across named hypotheses" below and define 2+ bundles.
+          </div>
+        )}
+
         <label className="flex items-center gap-2 text-[0.78em] text-text cursor-pointer">
           <input type="checkbox" checked={hypothesisMode} onChange={(e) => setHypothesisMode(e.target.checked)} />
           <span className="font-bold">Search across named hypotheses</span>
@@ -745,13 +754,18 @@ function StatusBadge({ status }: { status: string }) {
 
 function VerdictBadge({ verdict }: { verdict: Verdict | null }) {
   if (!verdict) return <Badge tone="neutral">pending</Badge>
-  const tone = verdict === 'STRONG_LEAD' ? 'good' : verdict === 'WEAK_LEAD' ? 'marginal' : 'poor'
+  const tone = verdict === 'STRONG_LEAD' || verdict === 'SAME_SYMBOL_CONFIRMED' ? 'good'
+    : verdict === 'WEAK_LEAD' ? 'marginal'
+    : 'poor'
   return <Badge tone={tone}>{verdict}</Badge>
 }
 
-// Per-trial "Validate…" action — never auto-picks a candidate, the
-// operator must open this on a specific COMPLETE row and choose the
-// cross-symbol validation set themselves (≥2 symbols, server-enforced).
+// Per-trial "Validate…" action — never auto-picks a candidate. Defaults
+// to SAME_SYMBOL mode (confirms ONLY the trial's own symbol, read-only —
+// nothing to pick). Toggling to CROSS_SYMBOL reveals the existing ≥2-
+// symbol picker plus a persistent, unambiguous banner (Forensic Audit
+// Phase 1, item D, 2026-08-02 — "must become an invariant in the code,
+// not just a UI tweak").
 function ValidateAction({
   missionId, trial, symbolsData,
 }: {
@@ -760,6 +774,7 @@ function ValidateAction({
   symbolsData: SymbolsResponse | null
 }) {
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<'SAME_SYMBOL' | 'CROSS_SYMBOL'>('SAME_SYMBOL')
   const [validationSymbols, setValidationSymbols] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -767,15 +782,22 @@ function ValidateAction({
 
   if (trial.state !== 'COMPLETE') return <span className="text-muted text-[0.75em]">—</span>
 
+  const setModeChecked = (next: 'SAME_SYMBOL' | 'CROSS_SYMBOL') => {
+    setMode(next)
+    setValidationSymbols(next === 'CROSS_SYMBOL' ? [] : [trial.symbol])
+  }
+
   const submit = async () => {
     setError(null)
-    if (validationSymbols.length < 2) { setError('Pick at least 2 validation symbols.'); return }
+    const symbols = mode === 'SAME_SYMBOL' ? [trial.symbol] : validationSymbols
+    if (mode === 'CROSS_SYMBOL' && symbols.length < 2) { setError('Pick at least 2 validation symbols.'); return }
     setSubmitting(true)
     try {
       await createValidation(missionId, {
         trial_number: trial.trial_number,
         trial_symbol: trial.symbol,
-        validation_symbols: validationSymbols,
+        validation_symbols: symbols,
+        validation_mode: mode,
       })
       setOpen(false)
       setDone(true)
@@ -788,13 +810,34 @@ function ValidateAction({
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} className="text-[0.75em] text-accent hover:underline">
+      <button onClick={() => { setOpen((o) => !o); setModeChecked('SAME_SYMBOL') }}
+        className="text-[0.75em] text-accent hover:underline">
         {done ? 'Launched — see Validations below' : 'Validate…'}
       </button>
       {open && (
         <div className="absolute z-20 right-0 mt-1 w-72 bg-panel border border-border rounded shadow-md p-3 flex flex-col gap-2">
-          <span className="text-[0.7em] text-muted uppercase">Validation symbols (≥2)</span>
-          <SymbolMultiSelect value={validationSymbols} onChange={setValidationSymbols} symbolsData={symbolsData} />
+          <div className="flex gap-1">
+            {(['SAME_SYMBOL', 'CROSS_SYMBOL'] as const).map((m) => (
+              <button key={m} onClick={() => setModeChecked(m)}
+                className={`px-2 py-1 rounded text-[0.72em] border ${mode === m ? 'border-accent text-accent' : 'border-border text-muted'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+          {mode === 'SAME_SYMBOL' ? (
+            <div className="text-[0.78em] text-text">
+              Validating <span className="font-mono">{trial.symbol}</span> only — its own training symbol,
+              not cross-symbol evidence.
+            </div>
+          ) : (
+            <>
+              <div className="text-[0.75em] text-red bg-red/10 border border-red/30 rounded px-2 py-1.5 font-bold">
+                CROSS-SYMBOL VALIDATION — this is not same-symbol validation.
+              </div>
+              <span className="text-[0.7em] text-muted uppercase">Validation symbols (≥2)</span>
+              <SymbolMultiSelect value={validationSymbols} onChange={setValidationSymbols} symbolsData={symbolsData} />
+            </>
+          )}
           {error && <div className="text-red text-[0.75em]">{error}</div>}
           <button onClick={submit} disabled={submitting}
             className="px-3 py-1.5 rounded bg-accent text-bg font-bold text-[0.78em] disabled:opacity-50">
@@ -1108,6 +1151,7 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
     <div className="border-t border-border pt-3 mt-1 flex flex-col gap-3">
       <div className="flex items-center gap-2 flex-wrap">
         <StatusBadge status={data.job_status ?? v?.status ?? 'unknown'} />
+        {v && <Badge tone={v.validation_mode === 'SAME_SYMBOL' ? 'marginal' : 'neutral'}>{v.validation_mode}</Badge>}
         {v && <VerdictBadge verdict={v.overall_verdict} />}
         {v && (
           <span className="text-[0.78em] text-muted">
@@ -1116,6 +1160,13 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
         )}
         {v?.error && <span className="text-red text-[0.78em]">{v.error}</span>}
       </div>
+      {v && v.validation_mode === 'SAME_SYMBOL' && (
+        <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+          SAME_SYMBOL validation — this only confirms the trial's own symbol and is NOT cross-symbol evidence.
+          It does not rule out curve-fitting. Run a CROSS_SYMBOL validation against ≥3 other symbols before
+          treating this as a lead.
+        </div>
+      )}
       {v && (() => {
         let candidateLock: CandidateLock | null = null
         let dateOverlap: DateOverlap | null = null
@@ -1206,6 +1257,7 @@ function ValidationsPanel({ missionId }: { missionId: string }) {
                   </span>
                   <div className="flex items-center gap-2 shrink-0">
                     <StatusBadge status={v.status} />
+                    <Badge tone={v.validation_mode === 'SAME_SYMBOL' ? 'marginal' : 'neutral'}>{v.validation_mode}</Badge>
                     <VerdictBadge verdict={v.overall_verdict} />
                   </div>
                 </button>
@@ -1745,6 +1797,22 @@ function MissionDetail({
             <KpiCard label="Sampler" value={status.mission?.sampler ?? '—'} />
             <KpiCard label="Objective" value={status.mission?.objective_metric ?? '—'} />
           </div>
+          {status.search_space_kind && (
+            <div className="flex items-center gap-2 text-[0.78em]">
+              <span className="text-muted uppercase tracking-[1px] text-[0.7em]">Search space</span>
+              <Badge tone={
+                status.search_space_kind === 'SIGNAL_VARIATION' ? 'good'
+                  : status.search_space_kind === 'MIXED' ? 'neutral'
+                  : status.search_space_kind === 'RISK_ONLY_VARIATION' ? 'marginal'
+                  : 'poor'
+              }>
+                {status.search_space_kind === 'RISK_ONLY_VARIATION' ? 'Risk-only variation — signal fixed across all trials'
+                  : status.search_space_kind === 'SIGNAL_VARIATION' ? 'Signal variation'
+                  : status.search_space_kind === 'MIXED' ? 'Mixed (signal + risk) variation'
+                  : 'No variation — every trial identical'}
+              </Badge>
+            </div>
+          )}
           <div className="flex flex-col gap-1">
             {symbols.map((sym) => {
               const counts = status.progress.by_symbol[sym]
@@ -1835,6 +1903,79 @@ function MissionDetail({
   )
 }
 
+// Forensic System Audit Phase 1, item B (2026-08-02) — a standalone
+// diagnostic panel, not tied to any one mission. Stateless on the
+// backend (fresh AST scan every request), so this re-fetches on every
+// click rather than polling — matches this endpoint's own design.
+function DirectionSymmetryPanel() {
+  const [report, setReport] = useState<DirectionSymmetryResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const runScan = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setReport(await getDirectionSymmetryAudit())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const byFile = useMemo(() => {
+    if (!report) return []
+    const groups = new Map<string, SymmetryFinding[]>()
+    for (const f of report.findings) {
+      if (!groups.has(f.file)) groups.set(f.file, [])
+      groups.get(f.file)!.push(f)
+    }
+    return Array.from(groups.entries())
+  }, [report])
+
+  return (
+    <Panel title="Direction Symmetry Audit" right="static, advisory-only — never blocks a build">
+      <div className="p-4 flex flex-col gap-3">
+        <button onClick={runScan} disabled={loading}
+          className="self-start px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.78em] hover:bg-accent/10 disabled:opacity-50">
+          {loading ? 'Scanning…' : report ? 'Re-run Scan' : 'Run Scan'}
+        </button>
+        {error && <div className="text-red text-[0.8em]">{error}</div>}
+        {report && (
+          <>
+            <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+              {report.caveat}
+            </div>
+            <div className="text-[0.75em] text-muted">
+              {report.findings.length} finding(s) across {report.files_scanned.length} file(s)
+              (engines/, confluence/, risk/) — generated {report.generated_at}.
+            </div>
+            {report.findings.length === 0 ? (
+              <Empty>No findings — every scanned function referencing a directional token also referenced its mirror.</Empty>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {byFile.map(([file, findings]) => (
+                  <div key={file} className="flex flex-col gap-1">
+                    <span className="font-mono text-[0.78em] text-text">{file}</span>
+                    {findings.map((f, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[0.78em] pl-3">
+                        <Badge tone={f.severity === 'MEDIUM' ? 'marginal' : 'neutral'}>{f.severity}</Badge>
+                        <span className="text-muted">L{f.line} {f.function}()</span>
+                        <span className="text-text">{f.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 export function MissionCenter() {
   const [selectedMission, setSelectedMission] = useState<string | null>(null)
   const [prefillRequest, setPrefillRequest] = useState<PrefillRequest | null>(null)
@@ -1847,6 +1988,7 @@ export function MissionCenter() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
+      <DirectionSymmetryPanel />
       <div ref={builderAnchorRef}>
         <MissionBuilder
           onCreated={setSelectedMission}

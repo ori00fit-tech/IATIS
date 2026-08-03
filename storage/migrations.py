@@ -131,6 +131,20 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE shadow_signals ADD COLUMN regime TEXT",
         ],
     ),
+    (
+        7,
+        "validation_mode_column",
+        # Forensic Audit Phase 1, item D (2026-08-02): SAME_SYMBOL (default
+        # going forward, via the API) vs. explicit CROSS_SYMBOL. The DDL/
+        # migration default is deliberately 'CROSS_SYMBOL' — the OPPOSITE of
+        # the new API default — because it honestly describes what every
+        # pre-existing row structurally was (validation_symbols always
+        # excluded trial_symbol, always >=2 entries), not a behavior change
+        # for historical rows.
+        [
+            "ALTER TABLE research_mission_validations ADD COLUMN validation_mode TEXT DEFAULT 'CROSS_SYMBOL'",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

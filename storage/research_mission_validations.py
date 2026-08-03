@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS research_mission_validations (
     finished_at              TEXT,
     error                    TEXT,
     candidate_lock_json      TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): git+dataset fingerprint drift vs. the trial's own recorded fingerprint. Informational only, never blocks.
-    date_overlap_json        TEXT    -- Diagnostic Infrastructure Phase 1 (2026-08-02): does this validation's date range overlap the original mission's training window. Informational only.
+    date_overlap_json        TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): does this validation's date range overlap the original mission's training window. Informational only.
+    validation_mode          TEXT NOT NULL DEFAULT 'CROSS_SYMBOL'  -- Forensic Audit Phase 1, item D (2026-08-02): SAME_SYMBOL|CROSS_SYMBOL. Default here matches every pre-existing row's real shape (>=2 symbols, trial_symbol excluded) — the API's own default is the OPPOSITE (SAME_SYMBOL), a deliberate, documented mismatch.
 )
 """
 
@@ -101,17 +102,20 @@ def upsert_validation(
     objective_metric: str,
     criteria: dict,
     status: str = "queued",
+    validation_mode: str = "CROSS_SYMBOL",
 ) -> None:
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
             """INSERT INTO research_mission_validations
                (id, mission_id, trial_number, trial_symbol, status,
-                validation_symbols_json, objective_metric, criteria_json, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)
+                validation_symbols_json, objective_metric, criteria_json, created_at,
+                validation_mode)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET status=excluded.status""",
             (validation_id, mission_id, trial_number, trial_symbol, status,
-             json.dumps(validation_symbols), objective_metric, json.dumps(criteria), _now()),
+             json.dumps(validation_symbols), objective_metric, json.dumps(criteria), _now(),
+             validation_mode),
         )
 
 

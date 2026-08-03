@@ -800,3 +800,184 @@ suites re-run unchanged and green: `tests/test_risk_rr_boundary.py`,
 
 **Status:** FIXED, tested, regression-pinned. Full suite verified
 clean: 2187 passed, 2 skipped, zero failures.
+
+## BUG-007
+
+**Severity:** P1
+
+**Category:** Measurement-Instrument Forensics — `backtest/monte_carlo.py`,
+the next stage of the audit chain downstream of the already-fixed
+`backtest_engine.py` (`backtest_engine.py` → `mission_runner.py`/
+`runner.py` → `walk_forward.py`/`robustness.py`/`monte_carlo.py`). A bug
+here can silently misreport the risk profile of every Monte Carlo
+simulation run by every caller (`backtest/runner.py`, Mission Center's
+validation pipeline via `mission_validator.py`).
+
+**Claim:** `run_monte_carlo()`'s `risk_of_ruin` was computed from
+**final equity vs. starting capital**:
+```python
+if (initial_capital - equity) / initial_capital >= ruin_threshold:
+    ruins += 1
+```
+`equity` here is the sum of a fixed multiset of trade PnLs — an
+order-independent statistic, identical for every permutation the
+function's own shuffle produces. The function already computes a
+genuinely path-dependent quantity in the very same loop iteration —
+`max_dd` (peak-to-trough intra-sequence drawdown) — and never uses it
+for the ruin check. "Risk of Ruin" is supposed to answer "how likely is
+a catastrophic loss AT ANY POINT along the path," which structurally
+requires the path-dependent quantity, not the order-independent one.
+
+A second, unrelated issue in the same file: `MonteCarloResult.
+print_summary()` was defined at the same indentation level as
+`run_monte_carlo()`'s own function body — i.e. nested INSIDE that
+function, after its own `return` statement — making it permanently
+unreachable dead code, never an actual method of the `MonteCarloResult`
+dataclass (confirmed via `hasattr(instance, "print_summary")` returning
+`False` pre-fix).
+
+**Observed:** Direct reproduction — a trade sequence with a positive
+overall sum (`total_return ≈ +9.5%` in one prior test run) reported
+`risk_of_ruin = 0.0%` at `ruin_threshold=0.03` under the pre-fix formula
+(final equity never dips below the 3% threshold from starting capital
+for an overall-profitable sequence, so the check can *never* fire for
+any such sequence, regardless of how violent the intra-sequence swings
+were). A direct, independent recomputation of the SAME shuffled
+simulations using `max_dd >= 0.03` as the criterion showed 372/1000 =
+37.2% of paths genuinely breached a 3% intra-sequence drawdown at some
+point — the entire class of catastrophic-swing paths was invisible to
+the metric.
+
+**Expected:** `risk_of_ruin` should reflect the fraction of simulated
+paths whose intra-sequence drawdown (already computed as `max_dd`)
+reaches the ruin threshold, independent of whether the sequence ends up
+net profitable.
+
+**File/Line:** `backtest/monte_carlo.py`, inside `run_monte_carlo()`'s
+per-simulation loop (the `if (initial_capital - equity) / initial_capital
+>= ruin_threshold:` line, immediately after `max_dds.append(max_dd *
+100)`); `print_summary()`'s incorrect indentation (previously nested
+after `run_monte_carlo()`'s own `return MonteCarloResult(...)`).
+
+**Execution path:** `backtest/runner.py`'s `write_summary()` and
+`backtest/mission_validator.py`'s per-symbol validation both call
+`run_monte_carlo()` on real closed trades and surface `risk_of_ruin`
+directly in `backtest_summary_*.json` / a mission validation's Monte
+Carlo block — an operator-facing number, not an internal-only detail.
+
+**Reproduction:** `tests/test_monte_carlo_forensics.py` —
+(1) `hasattr(MonteCarloResult(...), "print_summary")` plus a real call,
+confirming the dataclass method now exists and runs; (2) a hand-built,
+overall-profitable trade sequence whose shuffled orderings must, by
+construction, sometimes pass through a large intra-sequence drawdown,
+confirming `risk_of_ruin > 0` post-fix (impossible pre-fix for any
+overall-profitable sequence); (3) a direct, independent re-shuffle
+(same seed) recomputation using `max_dd >= ruin_threshold` cross-checked
+bit-for-bit against `run_monte_carlo()`'s own reported `risk_of_ruin`;
+(4) a floor case confirming small, non-threatening trades still report
+`0.0%` (no false positives introduced); (5) the pre-existing
+insufficient-trades short-circuit (`< 5` closed trades) still returns
+an all-zero result unchanged.
+
+**Root cause:** The ruin check used the wrong in-scope variable —
+`equity` (order-independent) instead of the already-computed `max_dd`
+(path-dependent) — sitting two lines above it in the same loop
+iteration. Not a missing computation, a wrong-variable bug.
+
+**Impact:** Every Monte Carlo report this codebase has ever produced
+understated risk of ruin for any overall-profitable trade sequence,
+regardless of how severe its intra-sequence drawdowns were — the exact
+scenario "Risk of Ruin" exists to warn about. Separately noted, NOT
+treated as a code bug requiring a fix in this pass: pure-permutation
+(without-replacement) shuffling cannot change a fixed multiset's sum/
+mean/std, so `median_return`/`p5_return`/`p95_return`/`mean_return`/
+`probability_profit`/`median_sharpe`/`p5_sharpe` are all measured to be
+near-identical across every simulation (confirmed empirically —
+`median_sharpe` and `p5_sharpe` agreed to 1e-15 relative precision in a
+1000-simulation run) — these are real, non-fabricated numbers, but they
+provide essentially zero genuine uncertainty quantification under this
+methodology. Only `max_dd`-derived statistics are genuinely
+path-dependent. This is a **methodology limitation** (pure-permutation
+vs. bootstrap-with-replacement is a legitimate, separate design
+decision requiring its own consideration — not an unambiguous bug to
+silently "fix" by changing the resampling scheme) and is recorded here
+for transparency, not remediated in this pass.
+
+**Fix (CONFIRMED, applied same phase):** Changed the ruin check to
+reuse the already-computed `max_dd`:
+```python
+if max_dd >= ruin_threshold:
+    ruins += 1
+```
+No new computation — `max_dd` was already being tracked in the same
+loop for the `max_dds` list. Moved `print_summary()`'s method body to
+its correct location inside the `MonteCarloResult` `@dataclass` block
+(immediately after its `p5_sharpe` field) and deleted the dead
+duplicate that remained after `run_monte_carlo()`'s `return`.
+
+**Regression tests:** New `tests/test_monte_carlo_forensics.py` (5
+tests, all passing) — see Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned. Full suite verified
+clean: 2192 passed, 2 skipped, zero failures (isolated from two
+unrelated, pre-existing live-credential test assumptions that broke
+only because this session's `.env` gained real `GEMINI_API_KEY`/
+`ALPACA_API_KEY`/`ALPACA_API_SECRET` values for separate, unrelated
+manual verification purposes — confirmed via a controlled re-run with
+those three values blanked, restored immediately after).
+
+## Measurement-Instrument Audit — walk_forward.py / robustness.py (closure)
+
+Continuing the same chain (`backtest_engine.py` → `mission_runner.py`/
+`runner.py` → `walk_forward.py`/`robustness.py`/`monte_carlo.py`, the
+last of which is BUG-007 above), `backtest/walk_forward.py` and
+`backtest/robustness.py` were both read line-by-line and checked
+specifically for: window-splitting/embargo math, warmup-bar collision
+bugs (the class of bug already found and fixed once in this exact area
+— the walk-forward `TypeError` prerequisite bug the "Backtesting Lab
+Pro Phase A" work fixed before this session), parameter-sweep/
+engine-override composition, sensitivity-band computation, and CLI
+argument wiring.
+
+**One real, non-behavioral finding — FIXED:** `walk_forward.py`'s
+`split_windows()` docstring claimed *"Window 1's warmup comes from the
+head of the dataset, so its tradeable span is shorter — this is stated
+in results rather than papered over."* Direct reproduction (a 1000-bar
+synthetic H4 series split into 3 windows) showed this is false under
+the current implementation: every window's tradeable span is
+`usable // n_windows` bars except the LAST, which absorbs the integer-
+division remainder — window 1 is never shorter than windows 2..N-1.
+This is a stale/inaccurate comment, not a computation bug (the actual
+`bars`/`trades`/`profit_factor` values reported per window are
+unaffected) — fixed the docstring to state the real, reproduced
+behavior instead of a claim that no longer matches the code.
+
+**No further measurement bugs confirmed** in either module after
+scrutiny of: `split_windows()`'s embargo math (verified the warmup
+slice is exactly `warmup_bars` for every window, matching where
+`run_backtest()`'s own decision loop starts, `range(config.warmup_bars,
+len(df) - 1)` — no window can trade into its own embargo or another
+window's bars); `run_walk_forward()`'s per-window `BacktestConfig`
+construction (fixed parameters across all windows, no adaptive
+leakage, matching the module's own documented "consistency test, not
+train/optimize" scope); `robustness.py`'s `_run_point()`/
+`run_param_sweep()` composition of `engine_overrides` with the swept
+parameter (dict-merge semantics correctly let an explicit sweep value
+override a stale `engine_overrides` entry for the same field — matches
+the module's own documented "perturbs around your override, not the
+production default" note); a specific, checked-and-ruled-out hypothesis
+that a per-symbol frozen sweep parameter could default to exactly
+`0.0` (which would make every multiplier point identical and the
+sweep vacuously "STABLE") — confirmed false by direct inspection of
+`BacktestConfig`'s dataclass defaults (`commission_pips: float = 0.5`,
+`slippage_pips: float = 0.5`) and `REAL_SPREAD_PIPS` (no zero entries);
+the `_STABLE_BAND` relative-tolerance comparison's behavior at `PF=0`
+and `PF=inf` baselines (both degrade to correct, conservative
+classifications, not silent false negatives).
+
+**Status:** CLOSED. Task "audit walk_forward.py / monte_carlo.py /
+robustness.py for measurement bugs" complete — BUG-007 (monte_carlo.py)
+is the one confirmed, fixed bug from this pass; the docstring fix above
+is the only other finding, applied directly (no regression risk, no
+`BUG-00X` entry warranted for a comment-only change with zero effect on
+reported values).

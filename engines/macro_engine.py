@@ -211,10 +211,20 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
     }
 
 
-def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
+def decide(features: dict, t: dict, usd_is_base: bool = False) -> tuple[Bias, float, list[str]]:
     """Decision Logic layer — turns an extract_features() snapshot into
-    a bias/score opinion. Pure function of (features, thresholds), never
-    touches a DataFrame or fetches anything."""
+    a bias/score opinion. Pure function of (features, thresholds,
+    usd_is_base), never touches a DataFrame or fetches anything.
+
+    usd_is_base (Forensic Audit, 2026-08-04 — BUG-008): whether the
+    symbol currently being analyzed has USD as its BASE currency (e.g.
+    USDJPY, USDCHF, USDCAD) rather than its quote currency (EURUSD,
+    GBPUSD, ...) or a USD-denominated non-FX asset (XAUUSD, BTCUSD,
+    indices). A stronger dollar makes USDJPY/USDCHF/USDCAD RISE, the
+    OPPOSITE of every other symbol this engine was originally written
+    for — the DXY->bias mapping below must flip for exactly this case.
+    Defaults to False (today's original, unchanged behavior) so every
+    existing caller that doesn't pass this is unaffected."""
     reasons: list[str] = []
     score = 0.0
     bias = Bias.NEUTRAL
@@ -226,12 +236,15 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
     if dxy_direction is not None:
         spread_pct = features["dxy_spread_pct"] or 0.0
         dxy_score = min(abs(spread_pct) * t.get("dxy_score_scale", 15.0), t.get("dxy_score_cap", 40.0))
+        usd_up_bias = Bias.BULLISH if usd_is_base else Bias.BEARISH
+        usd_down_bias = Bias.BEARISH if usd_is_base else Bias.BULLISH
+        base_note = " — USD is the BASE currency for this pair, so USD strength is bullish for it" if usd_is_base else ""
         if dxy_direction == "up":
-            bias = Bias.BEARISH
-            reasons.append(f"DXY rising (spread={spread_pct:+.2f}%) — USD bullish")
+            bias = usd_up_bias
+            reasons.append(f"DXY rising (spread={spread_pct:+.2f}%) — USD bullish{base_note}")
         else:
-            bias = Bias.BULLISH
-            reasons.append(f"DXY falling (spread={spread_pct:+.2f}%) — USD bearish")
+            bias = usd_down_bias
+            reasons.append(f"DXY falling (spread={spread_pct:+.2f}%) — USD bearish{base_note}")
         score += dxy_score * t.get("dxy_weight", 0.6)
     else:
         reasons.append("DXY data unavailable")
@@ -281,6 +294,15 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
     return bias, score, reasons
 
 
+def is_usd_base_symbol(symbol: str) -> bool:
+    """True when USD is the BASE currency of `symbol` (USDJPY, USDCHF,
+    USDCAD, ...) rather than its quote currency (EURUSD, GBPUSD, ...) or
+    a USD-denominated non-FX asset (XAUUSD, BTCUSD, US30, ...). Matches
+    this codebase's own FX naming convention (base currency listed
+    first, e.g. `config/symbols.yaml`'s `internal: USDJPY`)."""
+    return bool(symbol) and symbol.upper().startswith("USD")
+
+
 class MacroEngine(BaseEngine):
     name = "Macro"
 
@@ -289,8 +311,17 @@ class MacroEngine(BaseEngine):
         signature — it is never read. Macro's facts come entirely from
         an external daily/weekly/monthly snapshot (DXY/SPY/VIX/GLD/
         yields/oil/copper/natgas/credit-spread/Fed-balance-sheet) via
-        core/alt_data_loader.py's load_macro_snapshot."""
+        core/alt_data_loader.py's load_macro_snapshot.
+
+        `self._symbol` (set by main.py's live engine-construction loop,
+        BUG-005's precedent) IS consulted here, for exactly one purpose:
+        BUG-008's fix — inverting the DXY->bias mapping for USD-base
+        pairs (USDJPY/USDCHF/USDCAD). Absent (e.g. every existing
+        zero-arg test construction, or the backtest engine-construction
+        loop, which does not set it) defaults to `usd_is_base=False`,
+        i.e. today's original, unchanged mapping."""
         t = self.thresholds
+        usd_is_base = is_usd_base_symbol(getattr(self, "_symbol", ""))
         try:
             from core.alt_data_loader import load_macro_snapshot
         except ImportError:
@@ -312,8 +343,8 @@ class MacroEngine(BaseEngine):
             )
 
         features = extract_features(snapshot, t)
-        bias, score, reasons = decide(features, t)
-        raw = {**features, "timeframe_used": "D1"}
+        bias, score, reasons = decide(features, t, usd_is_base=usd_is_base)
+        raw = {**features, "timeframe_used": "D1", "usd_is_base": usd_is_base}
 
         return EngineOutput(
             engine_name=self.name,

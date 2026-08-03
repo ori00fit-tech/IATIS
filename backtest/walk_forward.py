@@ -164,9 +164,14 @@ def split_windows(
     Returns:
         List of (window_frame, test_start, test_end). ``window_frame``
         includes ``warmup_bars`` of prior history; ``test_start`` marks
-        where evaluable bars begin. Window 1's warmup comes from the
-        head of the dataset, so its tradeable span is shorter — this is
-        stated in results rather than papered over.
+        where evaluable bars begin. Every window's tradeable span is
+        ``usable // n_windows`` bars except the LAST, which additionally
+        absorbs the integer-division remainder (so ``sum(bars per
+        window) == usable`` exactly, no bars silently dropped). Window
+        1's warmup slice is drawn from the head of the dataset (there is
+        no earlier data to draw from) rather than from a prior window's
+        trading region — this affects what indicators can "see" going
+        into window 1, not the SIZE of its tradeable span.
 
     Raises:
         ValueError: if the dataset cannot yield N windows each with at

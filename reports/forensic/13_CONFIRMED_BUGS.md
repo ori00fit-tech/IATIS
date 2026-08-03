@@ -925,3 +925,59 @@ only because this session's `.env` gained real `GEMINI_API_KEY`/
 `ALPACA_API_KEY`/`ALPACA_API_SECRET` values for separate, unrelated
 manual verification purposes — confirmed via a controlled re-run with
 those three values blanked, restored immediately after).
+
+## Measurement-Instrument Audit — walk_forward.py / robustness.py (closure)
+
+Continuing the same chain (`backtest_engine.py` → `mission_runner.py`/
+`runner.py` → `walk_forward.py`/`robustness.py`/`monte_carlo.py`, the
+last of which is BUG-007 above), `backtest/walk_forward.py` and
+`backtest/robustness.py` were both read line-by-line and checked
+specifically for: window-splitting/embargo math, warmup-bar collision
+bugs (the class of bug already found and fixed once in this exact area
+— the walk-forward `TypeError` prerequisite bug the "Backtesting Lab
+Pro Phase A" work fixed before this session), parameter-sweep/
+engine-override composition, sensitivity-band computation, and CLI
+argument wiring.
+
+**One real, non-behavioral finding — FIXED:** `walk_forward.py`'s
+`split_windows()` docstring claimed *"Window 1's warmup comes from the
+head of the dataset, so its tradeable span is shorter — this is stated
+in results rather than papered over."* Direct reproduction (a 1000-bar
+synthetic H4 series split into 3 windows) showed this is false under
+the current implementation: every window's tradeable span is
+`usable // n_windows` bars except the LAST, which absorbs the integer-
+division remainder — window 1 is never shorter than windows 2..N-1.
+This is a stale/inaccurate comment, not a computation bug (the actual
+`bars`/`trades`/`profit_factor` values reported per window are
+unaffected) — fixed the docstring to state the real, reproduced
+behavior instead of a claim that no longer matches the code.
+
+**No further measurement bugs confirmed** in either module after
+scrutiny of: `split_windows()`'s embargo math (verified the warmup
+slice is exactly `warmup_bars` for every window, matching where
+`run_backtest()`'s own decision loop starts, `range(config.warmup_bars,
+len(df) - 1)` — no window can trade into its own embargo or another
+window's bars); `run_walk_forward()`'s per-window `BacktestConfig`
+construction (fixed parameters across all windows, no adaptive
+leakage, matching the module's own documented "consistency test, not
+train/optimize" scope); `robustness.py`'s `_run_point()`/
+`run_param_sweep()` composition of `engine_overrides` with the swept
+parameter (dict-merge semantics correctly let an explicit sweep value
+override a stale `engine_overrides` entry for the same field — matches
+the module's own documented "perturbs around your override, not the
+production default" note); a specific, checked-and-ruled-out hypothesis
+that a per-symbol frozen sweep parameter could default to exactly
+`0.0` (which would make every multiplier point identical and the
+sweep vacuously "STABLE") — confirmed false by direct inspection of
+`BacktestConfig`'s dataclass defaults (`commission_pips: float = 0.5`,
+`slippage_pips: float = 0.5`) and `REAL_SPREAD_PIPS` (no zero entries);
+the `_STABLE_BAND` relative-tolerance comparison's behavior at `PF=0`
+and `PF=inf` baselines (both degrade to correct, conservative
+classifications, not silent false negatives).
+
+**Status:** CLOSED. Task "audit walk_forward.py / monte_carlo.py /
+robustness.py for measurement bugs" complete — BUG-007 (monte_carlo.py)
+is the one confirmed, fixed bug from this pass; the docstring fix above
+is the only other finding, applied directly (no regression risk, no
+`BUG-00X` entry warranted for a comment-only change with zero effect on
+reported values).

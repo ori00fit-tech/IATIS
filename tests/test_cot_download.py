@@ -149,7 +149,12 @@ def test_sentiment_engine_consumes_real_cot(tmp_path, monkeypatch):
                            report_date="2026-08-03", large_spec_net=130_000)
     update_caches(week5, now=now)
 
-    idx = pd.date_range("2026-07-01", periods=120, freq="4h", tz="UTC")
+    # Anchored to real wall-clock "now" (2026-08-04 — BUG-005), not a fixed
+    # historical date: SentimentEngine only consults COT/MarketAux when the
+    # decision bar's own timestamp is close to "now" — a fixed date would
+    # eventually drift into the past and start hitting that gate instead of
+    # exercising the COT-consumption logic this test is actually about.
+    idx = pd.date_range(end=pd.Timestamp.now(tz="UTC"), periods=120, freq="4h")
     close = pd.Series(range(120), index=idx) * 0.0001 + 1.08
     df = pd.DataFrame({"open": close, "high": close + 0.001,
                        "low": close - 0.001, "close": close,

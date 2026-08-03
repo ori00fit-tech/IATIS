@@ -463,3 +463,154 @@ XAUUSD/BTCUSD/ETHUSD evidence hypotheses against the fixed engine (and
 comparing pre/post-fix PF) is a natural, high-value next step — out of
 scope for this pass (which fixes the tool, not the historical record),
 same boundary already established for BUG-002/BUG-003.
+
+## BUG-005
+
+**Severity:** P1
+
+**Category:** Engine Forensics — Sentiment engine lookahead (external
+data source, not OHLC). Found during the ICT→Quant→Wyckoff→Divergence→
+Sentiment→Macro REAL/PARTIAL/STUB audit, item #2 of the forensic
+roadmap. Disabled by default (`config/engines.yaml` `enabled.sentiment:
+false`, not part of prod4) — does not affect the live pipeline or the
+carrier-asset (XAUUSD/BTCUSD/ETHUSD) PF claims, but is reachable via
+Mission Center's already-shipped ad-hoc engine-toggle for research runs.
+
+**Claim:** `engines/sentiment_engine.py`'s COT (`_load_cot_data`) and
+MarketAux (`_marketaux_sentiment_signal`) data sources have no per-date
+history at all — both always answer with data as of TODAY (wall-clock
+"now"), regardless of which historical bar a backtest is simulating.
+Neither function receives or consults the bar's own timestamp.
+
+**Observed:** A hand-constructed `SentimentEngine` (with `_symbol` set,
+matching how the LIVE pipeline — but not the backtest pipeline —
+constructs it) called with `mtf_data` whose last bar is dated
+2021-01-10 returned `BULLISH, score=48` sourced from a COT snapshot
+whose own `timestamp` field was captured 2026-08-03 — over 5 years of
+"future" information relative to the simulated bar, used as if it were
+contemporaneous.
+
+**Important nuance, verified before fixing (not assumed)**: this exact
+scenario is NOT currently reachable through the real, wired
+`run_backtest()` engine-construction loop
+(`backtesting/backtest_engine.py:512-542`), which never sets
+`engine._symbol` on any engine it constructs (confirmed: `grep -rn
+"_symbol" engines/*.py` shows only `sentiment_engine.py` reads it;
+`grep -n "_symbol" backtesting/backtest_engine.py` returns nothing).
+Sentiment's `symbol` variable therefore always resolves to `"UNKNOWN"`
+in any real backtest today, so `_load_cot_data("UNKNOWN")` reads a
+nonexistent file (returns `None`) and `_marketaux_sentiment_signal
+("UNKNOWN")` short-circuits immediately (`"UNKNOWN"` is not in
+`MARKETAUX_SYMBOL_MAP`) — both silently no-op, and Sentiment falls back
+to the causally-safe retail price-position proxy only. **This is a
+latent landmine, not a currently-firing bug**: the lookahead
+vulnerability is real and reproducible in the underlying functions, but
+is currently blocked by an unrelated gap (missing `_symbol`
+propagation) rather than by design. If that separate gap is ever fixed
+— a plausible, innocent-looking future change (e.g. to make Sentiment
+functional in backtests at all) — the lookahead trap would fire
+immediately and silently, corrupting any research run that enables
+Sentiment. Fixing the vulnerability at its source (regardless of the
+`_symbol` gap's own status) is the correct, forward-safe fix.
+
+**Expected:** Sentiment's external, current-snapshot-only data sources
+(COT, MarketAux) should only ever be consulted when the decision bar's
+own timestamp is genuinely close to "now" (live trading) — never for a
+historical/backtest bar, where "now"'s positioning/news would not have
+existed at that point in the simulated timeline.
+
+**Evidence:** Reproduced directly: (1) a manually-`_symbol`-set engine
+with a real COT cache file returned BULLISH/48 for a 2021-dated bar
+before the fix; (2) confirmed via direct inspection that
+`run_backtest()`'s real engine-construction loop never sets `_symbol`,
+so this exact path is not reachable through the wired system today;
+(3) confirmed the fix preserves live behavior exactly — a bar dated at
+real `pd.Timestamp.now()` still returns BULLISH/48 from the same COT
+data post-fix, while the 2021-dated bar now correctly returns NEUTRAL
+with COT/MarketAux both skipped.
+
+**File / Line (pre-fix):** `engines/sentiment_engine.py`,
+`SentimentEngine.analyze()` (originally lines 198-312) —
+`cot = _load_cot_data(symbol)` and
+`marketaux = _marketaux_sentiment_signal(symbol)` were called
+unconditionally, with no check against the bar's own timestamp anywhere
+in the function.
+
+**Execution path:** `SentimentEngine.analyze(mtf_data)` →
+`_load_cot_data(symbol)` (reads `data/cot/{SYMBOL}.json`, a single
+most-recently-downloaded weekly snapshot, no date parameter) and/or
+`_marketaux_sentiment_signal(symbol)` → `fundamentals.marketaux_client.
+get_news_sentiment(symbol, hours_back=48)` (a live HTTP call with its
+cutoff measured from real `time.time()`) — reachable whenever Sentiment
+is enabled for a run, live or backtest, with no bar-time awareness.
+
+**Reproduction:** `SentimentEngine()` constructed with `_symbol` set
+manually (bypassing the currently-blocking, unrelated `_symbol`-
+propagation gap in `run_backtest()`), `IATIS_COT_DIR` pointed at a temp
+dir containing a real COT snapshot payload, called with `mtf_data` whose
+last bar was dated 2021-01-10 — returned BULLISH/48 pre-fix, NEUTRAL
+(COT/MarketAux both skipped, `raw["is_live"] is False`) post-fix. A
+second call with `mtf_data` ending at real `pd.Timestamp.now()`
+confirmed identical BULLISH/48 output before and after the fix — proving
+live behavior is completely unchanged.
+
+**Root cause:** COT and MarketAux are fundamentally "current snapshot
+only" data sources (a weekly cache file with no history; a live news API
+with no historical archive) — the engine was written assuming it would
+only ever be called in live trading (where the current bar genuinely IS
+"now"), with no defensive check for the case where it's called on a
+historical bar instead (backtesting, Mission Center research).
+
+**Impact:** Zero impact on the live pipeline or CLAUDE.md's
+carrier-asset PF claims (Sentiment stays `enabled: false`, not part of
+prod4). Real impact on the integrity of ANY future evaluation of H012
+(Sentiment/COT) or H021 (MarketAux) via backtesting or Mission Center —
+without this fix, enabling Sentiment for research would silently
+contaminate every historical trial with today's positioning/news,
+making any measured PF for a "Sentiment-enabled" run meaningless. Also
+flags a second, separate, currently-real gap worth a future look:
+`run_backtest()` never propagates `_symbol` to constructed engines at
+all, which today accidentally protects against this exact lookahead (by
+making COT/MarketAux silently inert) but ALSO means Sentiment's
+COT/MarketAux contribution can never be genuinely evaluated via
+backtesting until that gap is deliberately addressed — not fixed as
+part of this bug (would need a design decision about historical
+COT/MarketAux archives, out of scope here).
+
+**Fix (CONFIRMED, applied same phase):** New `_bar_time_is_live(bar_time,
+tolerance_hours=72.0)` helper — `True` only when the bar's own timestamp
+is within `tolerance_hours` of real wall-clock now. `analyze()` now
+computes `bar_time = df.index[-1]` and gates both `_load_cot_data(...)`
+and `_marketaux_sentiment_signal(...)` behind `is_live`, skipping both
+(falling back to the retail proxy only) whenever `is_live` is False.
+`raw["is_live"]` added for transparency. Threshold configurable via
+`self.thresholds.get("live_data_tolerance_hours", 72.0)`, matching every
+other engine's `.get(key, DEFAULT)` convention. In live trading the most
+recent completed candle is always within a few hours of now, so this is
+a no-op there — confirmed by reproduction (3).
+
+**Regression test:**
+`tests/test_sentiment_engine.py::test_cot_and_marketaux_are_skipped_for_a_historical_bar`
+(the authoritative proof — real COT/MarketAux data available, historical
+bar, both must be `assert_not_called()`),
+`tests/test_sentiment_engine.py::test_cot_and_marketaux_are_used_for_a_live_bar`
+(regression pin — live bar behaves exactly as before),
+`tests/test_sentiment_engine.py::test_bar_time_is_live_helper_boundary`
+(direct unit test of the gate's boundary behavior). Two pre-existing
+tests needed updating (not silently left broken): `tests/
+test_sentiment_engine.py`'s `_flat_df()` helper and `tests/
+test_cot_download.py::test_sentiment_engine_consumes_real_cot` both used
+a fixed historical date that this fix correctly began gating off — both
+now anchor to real `pd.Timestamp.now()` so they keep exercising the
+COT/MarketAux logic they were actually written to test, per the
+established "test asserted a reality this fix legitimately changed"
+pattern already seen for BUG-002/003/004's own regression suites this
+session. Full suite re-run after the fix:
+`tests/test_sentiment_engine.py` (11/11) and `tests/test_cot_download.py`
+(11/11).
+
+**Status:** FIXED, tested, regression-pinned. The separate `run_backtest()`
+`_symbol`-propagation gap noted above is explicitly NOT fixed as part of
+this bug — flagged as a distinct, future design decision (would need a
+plan for historical COT/MarketAux archives before Sentiment could be
+genuinely backtestable), not silently bundled in here.

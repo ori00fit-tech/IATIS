@@ -36,6 +36,19 @@ class MonteCarloResult:
     median_sharpe:      float
     p5_sharpe:          float
 
+    def print_summary(self) -> None:
+        print(f"\n{'='*50}")
+        print(f"Monte Carlo ({self.simulations} simulations)")
+        print(f"{'='*50}")
+        print(f"Return:    median={self.median_return:.1f}%  "
+              f"[{self.p5_return:.1f}% — {self.p95_return:.1f}%]")
+        print(f"Max DD:    median={self.median_max_dd:.1f}%  "
+              f"worst={self.worst_max_dd:.1f}%  95th={self.p95_max_dd:.1f}%")
+        print(f"Risk Ruin: {self.risk_of_ruin:.1f}%")
+        print(f"P(Profit): {self.probability_profit:.1f}%")
+        print(f"Sharpe:    median={self.median_sharpe:.2f}  "
+              f"5th pct={self.p5_sharpe:.2f}")
+
 
 def run_monte_carlo(
     trades: list[TradeRecord],
@@ -99,7 +112,7 @@ def run_monte_carlo(
         returns.append(total_return)
         max_dds.append(max_dd * 100)
 
-        if (initial_capital - equity) / initial_capital >= ruin_threshold:
+        if max_dd >= ruin_threshold:
             ruins += 1
 
         # Sharpe (simplified)
@@ -127,16 +140,3 @@ def run_monte_carlo(
         median_sharpe      = float(np.median(sharpes_arr)),
         p5_sharpe          = float(np.percentile(sharpes_arr, 5)),
     )
-
-    def print_summary(self) -> None:
-        print(f"\n{'='*50}")
-        print(f"Monte Carlo ({self.simulations} simulations)")
-        print(f"{'='*50}")
-        print(f"Return:    median={self.median_return:.1f}%  "
-              f"[{self.p5_return:.1f}% — {self.p95_return:.1f}%]")
-        print(f"Max DD:    median={self.median_max_dd:.1f}%  "
-              f"worst={self.worst_max_dd:.1f}%  95th={self.p95_max_dd:.1f}%")
-        print(f"Risk Ruin: {self.risk_of_ruin:.1f}%")
-        print(f"P(Profit): {self.probability_profit:.1f}%")
-        print(f"Sharpe:    median={self.median_sharpe:.2f}  "
-              f"5th pct={self.p5_sharpe:.2f}")

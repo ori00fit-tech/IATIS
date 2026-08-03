@@ -800,3 +800,123 @@ suites re-run unchanged and green: `tests/test_risk_rr_boundary.py`,
 
 **Status:** FIXED, tested, regression-pinned. Full suite verified
 clean: 2187 passed, 2 skipped, zero failures.
+
+## BUG-007
+
+**Severity:** P1
+
+**Category:** Measurement-Instrument Forensics — `backtest/monte_carlo.py`,
+the next stage of the audit chain downstream of the already-fixed
+`backtest_engine.py` (`backtest_engine.py` → `mission_runner.py`/
+`runner.py` → `walk_forward.py`/`robustness.py`/`monte_carlo.py`). A bug
+here can silently misreport the risk profile of every Monte Carlo
+simulation run by every caller (`backtest/runner.py`, Mission Center's
+validation pipeline via `mission_validator.py`).
+
+**Claim:** `run_monte_carlo()`'s `risk_of_ruin` was computed from
+**final equity vs. starting capital**:
+```python
+if (initial_capital - equity) / initial_capital >= ruin_threshold:
+    ruins += 1
+```
+`equity` here is the sum of a fixed multiset of trade PnLs — an
+order-independent statistic, identical for every permutation the
+function's own shuffle produces. The function already computes a
+genuinely path-dependent quantity in the very same loop iteration —
+`max_dd` (peak-to-trough intra-sequence drawdown) — and never uses it
+for the ruin check. "Risk of Ruin" is supposed to answer "how likely is
+a catastrophic loss AT ANY POINT along the path," which structurally
+requires the path-dependent quantity, not the order-independent one.
+
+A second, unrelated issue in the same file: `MonteCarloResult.
+print_summary()` was defined at the same indentation level as
+`run_monte_carlo()`'s own function body — i.e. nested INSIDE that
+function, after its own `return` statement — making it permanently
+unreachable dead code, never an actual method of the `MonteCarloResult`
+dataclass (confirmed via `hasattr(instance, "print_summary")` returning
+`False` pre-fix).
+
+**Observed:** Direct reproduction — a trade sequence with a positive
+overall sum (`total_return ≈ +9.5%` in one prior test run) reported
+`risk_of_ruin = 0.0%` at `ruin_threshold=0.03` under the pre-fix formula
+(final equity never dips below the 3% threshold from starting capital
+for an overall-profitable sequence, so the check can *never* fire for
+any such sequence, regardless of how violent the intra-sequence swings
+were). A direct, independent recomputation of the SAME shuffled
+simulations using `max_dd >= 0.03` as the criterion showed 372/1000 =
+37.2% of paths genuinely breached a 3% intra-sequence drawdown at some
+point — the entire class of catastrophic-swing paths was invisible to
+the metric.
+
+**Expected:** `risk_of_ruin` should reflect the fraction of simulated
+paths whose intra-sequence drawdown (already computed as `max_dd`)
+reaches the ruin threshold, independent of whether the sequence ends up
+net profitable.
+
+**File/Line:** `backtest/monte_carlo.py`, inside `run_monte_carlo()`'s
+per-simulation loop (the `if (initial_capital - equity) / initial_capital
+>= ruin_threshold:` line, immediately after `max_dds.append(max_dd *
+100)`); `print_summary()`'s incorrect indentation (previously nested
+after `run_monte_carlo()`'s own `return MonteCarloResult(...)`).
+
+**Execution path:** `backtest/runner.py`'s `write_summary()` and
+`backtest/mission_validator.py`'s per-symbol validation both call
+`run_monte_carlo()` on real closed trades and surface `risk_of_ruin`
+directly in `backtest_summary_*.json` / a mission validation's Monte
+Carlo block — an operator-facing number, not an internal-only detail.
+
+**Reproduction:** `tests/test_monte_carlo_forensics.py` —
+(1) `hasattr(MonteCarloResult(...), "print_summary")` plus a real call,
+confirming the dataclass method now exists and runs; (2) a hand-built,
+overall-profitable trade sequence whose shuffled orderings must, by
+construction, sometimes pass through a large intra-sequence drawdown,
+confirming `risk_of_ruin > 0` post-fix (impossible pre-fix for any
+overall-profitable sequence); (3) a direct, independent re-shuffle
+(same seed) recomputation using `max_dd >= ruin_threshold` cross-checked
+bit-for-bit against `run_monte_carlo()`'s own reported `risk_of_ruin`;
+(4) a floor case confirming small, non-threatening trades still report
+`0.0%` (no false positives introduced); (5) the pre-existing
+insufficient-trades short-circuit (`< 5` closed trades) still returns
+an all-zero result unchanged.
+
+**Root cause:** The ruin check used the wrong in-scope variable —
+`equity` (order-independent) instead of the already-computed `max_dd`
+(path-dependent) — sitting two lines above it in the same loop
+iteration. Not a missing computation, a wrong-variable bug.
+
+**Impact:** Every Monte Carlo report this codebase has ever produced
+understated risk of ruin for any overall-profitable trade sequence,
+regardless of how severe its intra-sequence drawdowns were — the exact
+scenario "Risk of Ruin" exists to warn about. Separately noted, NOT
+treated as a code bug requiring a fix in this pass: pure-permutation
+(without-replacement) shuffling cannot change a fixed multiset's sum/
+mean/std, so `median_return`/`p5_return`/`p95_return`/`mean_return`/
+`probability_profit`/`median_sharpe`/`p5_sharpe` are all measured to be
+near-identical across every simulation (confirmed empirically —
+`median_sharpe` and `p5_sharpe` agreed to 1e-15 relative precision in a
+1000-simulation run) — these are real, non-fabricated numbers, but they
+provide essentially zero genuine uncertainty quantification under this
+methodology. Only `max_dd`-derived statistics are genuinely
+path-dependent. This is a **methodology limitation** (pure-permutation
+vs. bootstrap-with-replacement is a legitimate, separate design
+decision requiring its own consideration — not an unambiguous bug to
+silently "fix" by changing the resampling scheme) and is recorded here
+for transparency, not remediated in this pass.
+
+**Fix (CONFIRMED, applied same phase):** Changed the ruin check to
+reuse the already-computed `max_dd`:
+```python
+if max_dd >= ruin_threshold:
+    ruins += 1
+```
+No new computation — `max_dd` was already being tracked in the same
+loop for the `max_dds` list. Moved `print_summary()`'s method body to
+its correct location inside the `MonteCarloResult` `@dataclass` block
+(immediately after its `p5_sharpe` field) and deleted the dead
+duplicate that remained after `run_monte_carlo()`'s `return`.
+
+**Regression tests:** New `tests/test_monte_carlo_forensics.py` (5
+tests, all passing) — see Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned. Pending: full-suite
+verification and commit (this same phase).

@@ -11,6 +11,7 @@ Proves the Major fixes:
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from backtesting.backtest_engine import BacktestConfig, Trade, check_exit
 
@@ -187,6 +188,66 @@ def test_run_backtest_entry_bar_exit_flips_a_would_be_missed_stopout():
         "the entry bar's own excursion must be caught — this is the real loss "
         "the pre-fix loop silently turned into a reported win"
     )
+
+
+# ── Same-bar equity_curve correction (Forensic Audit, 2026-08-04 — BUG-003) ──
+# A direct side-effect of the BUG-002 fix above: once the entry bar itself
+# could close a trade same-bar, the equity_curve point already appended for
+# that bar (before the same-bar close ran) was stale — it kept showing the
+# pre-trade balance, and the trade's real PnL only appeared one entry late.
+
+def test_same_bar_exit_updates_equity_curve_immediately_not_one_bar_late():
+    """Authoritative proof: for every trade that opens AND exits on the same
+    bar, the equity_curve entry recorded for that bar must already reflect
+    the trade's PnL — not the pre-trade balance, corrected only on the next
+    entry. Uses the same wide-wick/tight-SL synthetic setup as the BUG-002
+    same-bar-exit test (guaranteed to produce real same-bar exits)."""
+    import logging
+
+    import numpy as np
+
+    from backtesting.backtest_engine import BacktestConfig, run_backtest
+
+    logging.disable(logging.CRITICAL)
+    try:
+        n = 300
+        idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+        rng = np.random.default_rng(3)
+        close = 1.10 + np.cumsum(rng.normal(0, 0.0006, n)) + np.linspace(0, 0.02, n)
+        o = np.roll(close, 1)
+        o[0] = close[0]
+        df = pd.DataFrame(
+            {
+                "open": o,
+                "high": np.maximum(o, close) + 0.004,
+                "low": np.minimum(o, close) - 0.004,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        cfg = BacktestConfig.from_profile(
+            "EURUSD", warmup_bars=60, step_bars=1, sl_atr_multiplier=0.3,
+        )
+        result = run_backtest(df, cfg)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    same_bar_exits = [t for t in result.trades if t.exit_bar == t.entry_bar]
+    assert len(same_bar_exits) > 0, (
+        "test data must produce same-bar exits — if this fails, the "
+        "BUG-002 fix regressed and this test can no longer exercise BUG-003"
+    )
+    for t in same_bar_exits:
+        i = t.entry_bar - 1  # the loop's `i` when this trade opened (entry_bar = i+1)
+        idx_at_open_iter = i - cfg.warmup_bars + 1
+        prev_val = result.equity_curve[idx_at_open_iter - 1]
+        entry_val = result.equity_curve[idx_at_open_iter]
+        assert entry_val - prev_val == pytest.approx(t.pnl_usd, abs=1e-6), (
+            f"trade entry_bar={t.entry_bar} pnl_usd={t.pnl_usd} not reflected "
+            f"in its own bar's equity_curve entry (prev={prev_val}, "
+            f"this_bar={entry_val}) — the equity point is stale/one-bar-late"
+        )
 
 
 def test_backtest_defaults_match_production_config():

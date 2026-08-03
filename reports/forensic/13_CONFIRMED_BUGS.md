@@ -226,3 +226,103 @@ not a claim that any prior number was fabricated. Re-running
 already-registered evidence hypotheses against the fixed engine is a
 natural follow-up, not performed as part of this forensic pass (out of
 scope — this pass fixes the tool, not the historical record).
+
+## BUG-003
+
+**Severity:** P2
+
+**Category:** Backtest Forensics — equity-curve reporting accuracy (direct
+side-effect of the BUG-002 fix above, not an independent finding).
+
+**Claim:** After BUG-002's fix (checking a trade's own entry bar for a
+same-bar SL/TP exit), the `equity_curve` list entry recorded for that
+same bar is stale — it still shows the pre-trade balance. The trade's
+real PnL only appears in the NEXT entry, one bar later than it actually
+happened.
+
+**Observed:** For a trade with `entry_bar == exit_bar` (i.e. it both
+opens and closes on the same bar), `result.equity_curve[i]` (the point
+appended during the loop iteration that opened the trade) equals the
+PREVIOUS point exactly — the trade's `pnl_usd` doesn't show up until
+`result.equity_curve[i+1]`.
+
+**Expected:** The equity_curve entry for the bar a trade's PnL was
+realized on should reflect that PnL immediately — no report/metric
+built from this array should have to look one entry ahead to find out
+what happened on a given bar.
+
+**Evidence:** Reproduced directly against the (already-BUG-002-fixed)
+`run_backtest()` using the same wide-wick/tight-SL synthetic setup as
+BUG-002's own reproduction (300 bars, seed 3, `sl_atr_multiplier=0.3`):
+28/28 same-bar-exit trades all showed `equity_curve[idx_at_open_iter] ==
+equity_curve[idx_at_open_iter - 1]` (unchanged) while
+`equity_curve[idx_at_open_iter + 1]` carried the full PnL delta —
+confirmed by direct inspection of the array around each trade's index,
+not inferred.
+
+**File / Line (pre-fix):** `backtesting/backtest_engine.py`, main loop —
+`result.equity_curve.append(balance)` (originally line 644) runs once
+per iteration, BEFORE the "Skip if in trade or not on step" check and
+before the pipeline/entry logic that opens a new trade and (post
+BUG-002) immediately checks it for a same-bar exit. That same-bar close
+updates `balance` AFTER the equity append for that same iteration has
+already happened.
+
+**Execution path:** `run_backtest()` main loop, iteration `i` → equity
+append (pre-trade balance) → pipeline runs, EXECUTE decision → `Trade`
+opened → BUG-002's same-bar `check_exit()` fires → `_close_trade()`
+updates `balance` → loop moves to iteration `i+1` → NEXT equity append
+is the first point to reflect the updated balance.
+
+**Reproduction:** Ran the real `run_backtest()` against the same
+synthetic OHLCV as BUG-002's `test_run_backtest_checks_exit_on_the_
+entry_bar_itself`, located every same-bar-exit trade's corresponding
+`equity_curve` index by loop-index arithmetic
+(`idx_at_open_iter = (entry_bar - 1) - warmup_bars + 1`), and directly
+compared `equity_curve[idx_at_open_iter]` /
+`equity_curve[idx_at_open_iter - 1]` / `equity_curve[idx_at_open_iter +
+1]` against each trade's known `pnl_usd`. Confirmed the discrepancy on
+all 28 same-bar trades in the reproduction set.
+
+**Root cause:** A code-ordering gap: `equity_curve.append(balance)`
+executes unconditionally near the top of each loop iteration, but the
+same-bar exit check BUG-002 introduced runs later in that same
+iteration — so the equity snapshot is taken before that iteration's own
+trade-close side effect exists.
+
+**Impact:** Does not affect any trade's own recorded outcome (entry/
+exit/PnL/win-loss — all correct per BUG-002's fix); does not affect
+final balance, total return, or `execute_count`/`win_rate` (all computed
+from `result.trades`, not `equity_curve`). It does affect
+`BacktestResult.compute()`'s `max_drawdown_pct` and `sharpe_ratio`
+(both derived directly from `equity_curve`), and every consumer that
+renders the equity/drawdown curve or monthly-returns heatmap from this
+array (`backtest/report.py`'s `chart_data.json`, Backtesting Charts'
+`EquityCurveSvg`/`DrawdownCurveSvg`, `MonthlyReturnsHeatmap`) — for a
+same-bar-exit trade specifically, the curve shows a one-bar-late step
+instead of the PnL landing on the bar it actually happened on. Confined
+to same-bar-exit trades only (a minority of trades in most runs); does
+not touch the live decision pipeline for the same reason BUG-002 didn't
+(`backtesting/backtest_engine.py` is backtest-only).
+
+**Fix (CONFIRMED, applied same phase):** Immediately after the same-bar
+`_close_trade()` call updates `balance`, the loop now patches the
+already-appended entry in place: `result.equity_curve[-1] = balance` —
+correcting that bar's point to include the same-bar trade's PnL, rather
+than restructuring the append's position in the loop (which would have
+required threading the append past every existing `continue` in the
+gate-rejection branches).
+
+**Regression test:**
+`tests/test_backtest_exits.py::test_same_bar_exit_updates_equity_curve_immediately_not_one_bar_late`
+— re-derives the exact `equity_curve` index for every same-bar-exit
+trade in a real `run_backtest()` run and asserts the delta between that
+index and the previous one equals the trade's `pnl_usd` exactly
+(`pytest.approx`, `abs=1e-6`). Full suite re-run after the fix: 12/12 in
+`tests/test_backtest_exits.py`.
+
+**Status:** FIXED, tested, regression-pinned. Same disclosed limitation
+as BUG-002: historical `reports/`/`research/results/registry.json`
+evidence computed before this fix is not re-run — this is a
+measurement-accuracy correction to the tool, not a retroactive claim
+about any prior recorded number.

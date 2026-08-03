@@ -869,6 +869,13 @@ def run_backtest(
                 balance += _close_trade(open_trade, exit_price, reason, i + 1, next_bar.name)
                 result.trades.append(open_trade)
                 open_trade = None
+                # BUG-003 fix (2026-08-03): this bar's equity_curve point was
+                # already appended above (line ~644) BEFORE this same-bar
+                # close updated `balance` — that entry is stale, still
+                # showing the pre-trade balance. Patch it in place so the
+                # trade's PnL shows up on the bar it actually happened on,
+                # not one entry late (see reports/forensic/13_CONFIRMED_BUGS.md).
+                result.equity_curve[-1] = balance
 
         except Exception as exc:
             logger.debug(f"Bar {i} skipped: {exc}")

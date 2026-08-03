@@ -57,6 +57,17 @@ class EngineOutput:
     sample_size: int | None = None
     evidence_level: str = "HEURISTIC"   # HEURISTIC | MEASURED (no engine is MEASURED yet)
 
+    # Forensic Audit (2026-08-04) — a NEUTRAL/score=0 EngineOutput is
+    # ambiguous on its own: it could mean "the engine looked and honestly
+    # found no pattern" or "the engine raised an unhandled exception and
+    # safe_analyze() swallowed it." tally_votes()/the live gate still only
+    # ever read bias/score (unchanged, zero decision-logic impact) — this
+    # field exists purely so a human or a future monitoring metric can
+    # distinguish "no opinion" from "broken" without parsing `reasons`
+    # strings. False for every real analyze() call; only safe_analyze()'s
+    # except branch ever sets it True.
+    crashed: bool = False
+
     def to_dict(self) -> dict:
         return {
             "engine": self.engine_name,
@@ -71,6 +82,7 @@ class EngineOutput:
             "expected_drawdown": self.expected_drawdown,
             "sample_size": self.sample_size,
             "evidence_level": self.evidence_level,
+            "crashed": self.crashed,
         }
 
 
@@ -133,4 +145,5 @@ class BaseEngine(ABC):
                 bias=Bias.NEUTRAL,
                 score=0.0,
                 reasons=[f"Engine error, abstaining: {exc}"],
+                crashed=True,
             )

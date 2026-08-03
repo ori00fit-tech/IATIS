@@ -121,6 +121,26 @@ def test_engine_abstains_on_crash():
     assert output.score == 0.0
 
 
+def test_crashed_flag_distinguishes_engine_error_from_honest_abstention():
+    """Forensic Audit (2026-08-04): a NEUTRAL/score=0 EngineOutput is
+    ambiguous by itself — 'no pattern found' and 'engine raised an
+    exception' looked identical to any downstream reader before this
+    field existed. Only safe_analyze()'s except branch may set it True;
+    a real analyze() call (even one that legitimately abstains) defaults
+    to False."""
+    class BrokenEngine(SMCEngine):
+        def analyze(self, mtf_data):
+            raise ValueError("simulated failure")
+
+    crashed_output = BrokenEngine().safe_analyze({})
+    assert crashed_output.crashed is True
+    assert crashed_output.to_dict()["crashed"] is True
+
+    honest_neutral = EngineOutput("Honest", Bias.NEUTRAL, 0.0, reasons=["no clear pattern"])
+    assert honest_neutral.crashed is False
+    assert honest_neutral.to_dict()["crashed"] is False
+
+
 # ---------- confluence ----------
 
 def test_voting_system_picks_majority():

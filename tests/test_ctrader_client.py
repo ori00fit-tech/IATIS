@@ -1,5 +1,7 @@
 """tests/test_ctrader_client.py — cTrader client unit tests (no API connection)."""
 from __future__ import annotations
+import threading
+import time
 import pytest
 from execution.ctrader_client import (
     IATIS_TO_CTRADER, CTRADER_TO_IATIS, ASSET_CLASS,
@@ -227,6 +229,104 @@ def test_on_disconnect_ignores_superseded_client(monkeypatch):
 
     c._on_disconnect(current, "connection lost")  # the live client → reconnect
     assert scheduled["n"] == 1
+
+
+# ─── Reconnect single-flight / terminal-failure behavior ───────────────────
+# Forensic Audit (2026-08-04) — P0 cTrader lifecycle re-audit, requested
+# explicit proof that (a) only one reconnect loop can ever be active and
+# (b) the client isn't permanently wedged after "Giving up after N
+# reconnect attempts" — a later disconnect (or an operator's manual
+# connect()) must be able to start a fresh attempt sequence.
+
+def test_schedule_reconnect_is_single_flight(monkeypatch):
+    """Two rapid _schedule_reconnect() calls (e.g. two near-simultaneous
+    disconnect events) must start exactly ONE background retry thread —
+    the second call is a no-op while the first is still running."""
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)  # instant backoff
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_connect(timeout=30.0):
+        started.set()
+        release.wait(timeout=5)
+        return True
+
+    monkeypatch.setattr(c, "connect", _blocking_connect)
+
+    c._schedule_reconnect()
+    assert started.wait(timeout=2), "first reconnect loop never started"
+    threads_before = threading.active_count()
+
+    c._schedule_reconnect()  # must be a no-op — _reconnecting is already True
+    assert threading.active_count() == threads_before
+
+    release.set()  # let the first loop's connect() return and finish
+
+
+def test_reconnect_resets_flag_and_stops_after_max_attempts(monkeypatch):
+    """After RECONNECT_MAX_ATTEMPTS failed attempts, the loop must give up
+    (not retry forever) AND reset _reconnecting to False — proving the
+    client is NOT permanently wedged: a later disconnect/schedule_reconnect
+    call can still start a fresh attempt sequence."""
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    attempts = []
+
+    def _always_fails(timeout=30.0):
+        attempts.append(1)
+        return False
+
+    monkeypatch.setattr(c, "connect", _always_fails)
+
+    c._schedule_reconnect()
+    # Poll for the background thread to finish (bounded wait, no sleep loop
+    # in the test itself beyond a short deterministic timeout).
+    deadline = time.time() + 5
+    while c._reconnecting and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert len(attempts) == c.RECONNECT_MAX_ATTEMPTS
+    assert c._reconnecting is False        # not wedged
+    assert c._reconnect_attempt == c.RECONNECT_MAX_ATTEMPTS
+
+    # A fresh disconnect after giving up must be able to start a NEW loop.
+    attempts.clear()
+    c._reconnect_attempt = 0  # mirrors a real successful connect()'s reset,
+                              # or an operator manually re-arming after
+                              # "Manual intervention required"
+    c._schedule_reconnect()
+    deadline = time.time() + 5
+    while c._reconnecting and time.time() < deadline:
+        time.sleep(0.01)
+    assert len(attempts) == c.RECONNECT_MAX_ATTEMPTS  # ran again, not stuck
+
+
+def test_reconnect_stops_immediately_on_intentional_disconnect(monkeypatch):
+    """disconnect() setting _intentional_disconnect must cancel a reconnect
+    loop that's already sleeping between attempts — no further connect()
+    calls after the flag flips."""
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    attempts = []
+
+    def _fake_sleep(seconds):
+        c._intentional_disconnect = True  # simulate disconnect() firing mid-backoff
+
+    monkeypatch.setattr(m.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(c, "connect", lambda timeout=30.0: attempts.append(1) or False)
+
+    c._schedule_reconnect()
+    deadline = time.time() + 5
+    while c._reconnecting and time.time() < deadline:
+        pass
+    assert attempts == []  # cancelled before any connect() attempt ran
+    assert c._reconnecting is False
 
 
 def test_stop_client_is_best_effort(monkeypatch):

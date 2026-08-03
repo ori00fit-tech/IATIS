@@ -18,6 +18,7 @@ from backtest.optimizer import (
     EvalResult,
     MissionSearchSpace,
     _finite_objective,
+    classify_search_space_variation,
     distributions_for,
     evaluate_point,
     make_sampler,
@@ -525,6 +526,50 @@ def test_signal_variation_hypothesis_bundle_mode_ignores_vestigial_flat_dimensio
 # timeframes/engines/indicators/context filters the operator picked inside
 # that one combo. This test pins that exact request shape and proves it
 # structurally can never produce signal variation, independent of contents.
+
+# ── classify_search_space_variation (Forensic Audit Phase 1, item C) ──────
+# Real coverage gap closed here (2026-08-04): this function is wired into
+# execution/routes/missions.py's GET /research/missions/{id} response
+# (`search_space_kind`, surfaced as a frontend badge) but had ZERO tests
+# anywhere before this pass — despite being the exact mechanism meant to
+# proactively label a mission like the operator-reported "22 trials,
+# all risk-only" case, rather than requiring a human to notice it after
+# the fact in Meta-Analysis.
+
+def test_classify_risk_only_variation():
+    assert classify_search_space_variation(_risk_only_space()) == "RISK_ONLY_VARIATION"
+
+
+def test_classify_signal_variation_no_risk_sweep():
+    space = _risk_only_space(
+        timeframes_choices=(("H1",), ("H4",)),
+        risk_param_ranges={},
+    )
+    assert classify_search_space_variation(space) == "SIGNAL_VARIATION"
+
+
+def test_classify_mixed_when_both_signal_and_risk_vary():
+    space = _risk_only_space(timeframes_choices=(("H1",), ("H4",)))
+    assert classify_search_space_variation(space) == "MIXED"
+
+
+def test_classify_none_when_nothing_varies_at_all():
+    space = _risk_only_space(risk_param_ranges={}, risk_param_grid={})
+    assert classify_search_space_variation(space) == "NONE"
+
+
+def test_classify_hypothesis_bundle_mode_single_bundle_is_risk_only_when_swept():
+    bundle = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    space = _risk_only_space(hypothesis_bundle_choices=(bundle,))
+    assert classify_search_space_variation(space) == "RISK_ONLY_VARIATION"
+
+
+def test_classify_hypothesis_bundle_mode_multiple_bundles_is_mixed_when_risk_also_swept():
+    bundle_a = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    bundle_b = {"name": "NNFX", "timeframes": ["H4"], "engines": ["nnfx"], "indicators": [], "context_filters": []}
+    space = _risk_only_space(hypothesis_bundle_choices=(bundle_a, bundle_b))
+    assert classify_search_space_variation(space) == "MIXED"
+
 
 def test_flat_mode_request_shape_has_no_signal_variation():
     # Mirrors MissionCenter.tsx:571-574 verbatim: every dimension wrapped

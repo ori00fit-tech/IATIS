@@ -519,6 +519,64 @@ def test_on_error_already_logged_in_outside_auth_context_still_errors(client):
     assert client._state == ConnectionState.ERROR
 
 
+# ── _on_error_res (ProtoOAErrorRes, the message-based ALREADY_LOGGED_IN path) ──
+# Forensic Audit (2026-08-04) — P0 cTrader lifecycle re-audit. This handler
+# (not _on_error, the send()-Deferred errback tested above) is the OTHER
+# place ALREADY_LOGGED_IN is swallowed, per its own docstring: "Continue
+# the bootstrap chain instead" — previously untested anywhere in the suite.
+
+def test_on_error_res_already_logged_in_continues_from_tcp_connected(client, monkeypatch):
+    """ALREADY_LOGGED_IN while awaiting app-auth must advance straight to
+    APP_AUTH_OK and send account-auth — not just avoid ERROR, but actually
+    continue the real bootstrap chain, matching the docstring's claim."""
+    client._state = ConnectionState.TCP_CONNECTED
+    sentinel_client = object()
+    client._client = sentinel_client
+    sent = []
+    monkeypatch.setattr(client, "_send_account_auth", lambda c: sent.append(c))
+
+    msg = SimpleNamespace(errorCode="ALREADY_LOGGED_IN", description="already authorized")
+    client._on_error_res(msg)
+
+    assert client._state == ConnectionState.APP_AUTH_OK
+    assert sent == [sentinel_client]
+
+
+def test_on_error_res_already_logged_in_continues_from_app_auth_ok(client, monkeypatch):
+    """Same rejection one stage later (awaiting account-auth) must advance
+    to ACCOUNT_AUTH_OK and fan out to trader/symbols/reconcile requests."""
+    client._state = ConnectionState.APP_AUTH_OK
+    sentinel_client = object()
+    client._client = sentinel_client
+    calls = {"trader": [], "symbols": [], "reconcile": []}
+    monkeypatch.setattr(client, "_send_trader_req", lambda c: calls["trader"].append(c))
+    monkeypatch.setattr(client, "_send_symbols_list_req", lambda c: calls["symbols"].append(c))
+    monkeypatch.setattr(client, "_send_reconcile_req", lambda c: calls["reconcile"].append(c))
+
+    msg = SimpleNamespace(errorCode="ALREADY_LOGGED_IN", description="already authorized")
+    client._on_error_res(msg)
+
+    assert client._state == ConnectionState.ACCOUNT_AUTH_OK
+    assert calls == {"trader": [sentinel_client], "symbols": [sentinel_client], "reconcile": [sentinel_client]}
+
+
+def test_on_error_res_already_logged_in_at_unexpected_state_is_a_noop_not_a_crash(client, monkeypatch):
+    """A stray ALREADY_LOGGED_IN arriving at a state neither branch handles
+    (e.g. already SYMBOLS_LOADED) must not crash and must not advance the
+    state machine incorrectly — falls through to `return` with no action."""
+    client._state = ConnectionState.SYMBOLS_LOADED
+    client._client = object()
+    msg = SimpleNamespace(errorCode="ALREADY_LOGGED_IN", description="already authorized")
+    client._on_error_res(msg)  # must not raise
+    assert client._state == ConnectionState.SYMBOLS_LOADED  # unchanged
+
+
+def test_on_error_res_real_error_sets_error_state(client):
+    msg = SimpleNamespace(errorCode="CH_ACCESS_TOKEN_INVALID", description="token expired")
+    client._on_error_res(msg)
+    assert client._state == ConnectionState.ERROR
+
+
 # ── _on_message dispatcher ────────────────────────────────────────────────
 
 def test_on_message_routes_trader_res_to_its_handler(client, monkeypatch):

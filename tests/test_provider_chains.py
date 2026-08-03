@@ -262,3 +262,63 @@ def test_mt5_not_in_default_chains():
 def test_provider_chain_override_can_include_mt5():
     chain = dp.provider_chain_for("EUR/USD", {"fx": ["ctrader", "mt5", "twelve_data"]})
     assert chain == ["ctrader", "mt5", "twelve_data"]
+
+
+# ── get_shared_ctrader_client() thread-safety (Forensic Audit, 2026-08-04) ──
+# P0 cTrader lifecycle re-audit: the user's live logs showed overlapping
+# TCP_CONNECTED events ~5s apart. get_shared_ctrader_client()'s own
+# docstring already names the exact failure mode this guards against
+# ("two independently-connecting CTraderClient instances in the same
+# process fight over that slot forever") and wires a threading.Lock
+# around the singleton's construction — this proves that guard actually
+# holds under real concurrent access, not just by reading the code.
+
+def test_get_shared_ctrader_client_constructs_exactly_once_under_concurrency(monkeypatch):
+    import threading as _threading
+    import time as _time
+
+    dp._ctrader_feed_client = None
+    dp._ctrader_feed_lock = None
+    monkeypatch.setenv("CTRADER_CLIENT_ID", "x")
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "y")
+
+    construct_count = {"n": 0}
+    connect_count = {"n": 0}
+
+    class _FakeCTraderClient:
+        def __init__(self):
+            construct_count["n"] += 1
+            # Widen the race window: a real connect() takes real wall-clock
+            # time too, which is exactly what let two threads both observe
+            # `_ctrader_feed_client is None` before the fix existed.
+            _time.sleep(0.05)
+
+        def connect(self, timeout=30):
+            connect_count["n"] += 1
+            return True
+
+    monkeypatch.setattr("execution.ctrader_client.CTraderClient", _FakeCTraderClient)
+
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def _worker():
+        try:
+            results.append(dp.get_shared_ctrader_client())
+        except BaseException as exc:  # noqa: BLE001 — surfaced via `errors`, not swallowed
+            errors.append(exc)
+
+    threads = [_threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert errors == []
+    assert construct_count["n"] == 1, "exactly one CTraderClient must be constructed"
+    assert connect_count["n"] == 1, "exactly one connect() attempt must run"
+    assert len(results) == 8
+    assert all(r is results[0] for r in results), "every caller must get the SAME shared instance"
+
+    dp._ctrader_feed_client = None
+    dp._ctrader_feed_lock = None

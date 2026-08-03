@@ -981,3 +981,99 @@ is the one confirmed, fixed bug from this pass; the docstring fix above
 is the only other finding, applied directly (no regression risk, no
 `BUG-00X` entry warranted for a comment-only change with zero effect on
 reported values).
+
+## BUG-008
+
+**Severity:** P1 (dormant today — the engine is disabled and zero-
+weighted in production, so no live trade is affected right now — but a
+real, confirmed correctness defect that would misprice ~3 of the 24
+configured symbols the instant this engine is ever re-enabled).
+
+**Category:** Engine correctness — `engines/macro_engine.py`. Triggered
+by re-checking a batch of externally-sourced audit claims against the
+real code (per this session's standing rule: never accept an audit's
+word for a finding — reproduce it against the actual code first). Most
+of that batch's claims were not independently verified in this pass
+(scope: pick the most concrete, checkable ones); this one was, and
+confirmed real.
+
+**Claim:** `MacroEngine`'s DXY-to-bias mapping (`decide()`: `if
+dxy_direction == "up": bias = Bias.BEARISH; else: bias = Bias.BULLISH`)
+is completely symbol-agnostic — the engine's own `analyze()` accepts
+`mtf_data` only to satisfy the abstract signature and never reads it,
+and (confirmed by grep) never referenced `self._symbol` at all prior to
+this fix. The fixed mapping "a stronger dollar is bearish for the pair"
+is correct for every symbol where USD is the QUOTE currency (EURUSD,
+GBPUSD, AUDUSD, NZDUSD) or a USD-denominated non-FX asset (XAUUSD,
+BTCUSD, indices) — but backwards for USDJPY, USDCHF, and USDCAD, where
+USD is the BASE currency: a stronger dollar makes those three pairs
+RISE, not fall.
+
+**Observed:** Direct reproduction — identical DXY-rising input fed
+through the real `MacroEngine.analyze()` twice, once with `self._symbol
+= "EURUSD"` and once with `self._symbol = "USDJPY"` (matching
+`main.py`'s real, existing `engine._symbol = symbol` attribute-
+assignment pattern, the same mechanism BUG-005 already established as
+load-bearing for per-symbol engine context): EURUSD correctly came back
+`BEARISH`; USDJPY ALSO came back `BEARISH` pre-fix — objectively wrong,
+since a rising dollar should make USDJPY rise (BULLISH), not fall.
+
+**Expected:** USDJPY/USDCHF/USDCAD should receive the OPPOSITE DXY-
+driven bias from every other configured symbol on identical DXY data.
+
+**File/Line:** `engines/macro_engine.py`, `decide()`'s DXY-direction
+branch (previously ~lines 229-234); `MacroEngine.analyze()` (never read
+`self._symbol`, pre-fix).
+
+**Execution path:** Currently NONE live — confirmed `config/
+engines.yaml`'s `enabled.macro: false` and `config.yaml`'s
+`confluence.weights.macro: 0.0`, so `main.py::build_active_engines()`
+never constructs a `MacroEngine` instance in production today. Reachable
+only via Mission Center's ad-hoc `engine_variants`/engine-toggle sandbox
+(explicitly labeled "exploratory, not evidence" there) — and would
+become live-reachable the instant a human re-enables `macro` following
+a fresh pre-registered hypothesis, per this engine's own frozen-state
+governance. Fixed now rather than left as a landmine for that future
+re-enable, matching BUG-005's precedent exactly.
+
+**Reproduction:** `tests/test_macro_engine.py` (7 new tests) —
+`is_usd_base_symbol()` unit tests (accepts USDJPY/USDCHF/USDCAD
+case-insensitively, rejects EURUSD/GBPUSD/XAUUSD/BTCUSD/US30/empty
+string); `decide()`-level tests proving the mapping is unchanged
+(`usd_is_base=False`, the default) for the non-base case and correctly
+inverted (`usd_is_base=True`) for both DXY-rising and DXY-falling
+inputs; the authoritative end-to-end reproduction — identical DXY data
+through two real `MacroEngine` instances differing only in `_symbol`
+(`"EURUSD"` vs `"USDJPY"`) producing opposite bias; a regression pin
+that omitting `_symbol` entirely (every existing zero-arg construction
+site, and the backtest engine-construction loop, which does not set it)
+still defaults to `usd_is_base=False` — today's original mapping,
+unaffected by this fix. 43/43 pass.
+
+**Root cause:** The engine was written assuming USD is always the
+"other side" of the pair (true for the majority of configured symbols)
+without ever checking which currency is actually the base — a missing
+case, not a wrong formula.
+
+**Impact:** Zero live impact today (engine disabled + zero-weighted).
+Would have produced a systematically inverted signal for exactly the
+subset of symbols where the assumption doesn't hold (USDJPY/USDCHF/
+USDCAD — 3 of the 24 symbols in `config/symbols.yaml`) the moment the
+engine is ever promoted to live use.
+
+**Fix (CONFIRMED, applied same phase):** New `is_usd_base_symbol(symbol)`
+helper (`symbol.upper().startswith("USD")`, matching this codebase's own
+FX naming convention). `decide()` gains an optional `usd_is_base: bool =
+False` parameter (default preserves the original mapping for every
+existing caller); when `True`, the DXY-up/down → bias mapping is
+inverted, with the reasons text explicitly stating why. `MacroEngine.
+analyze()` now computes `usd_is_base = is_usd_base_symbol(getattr(self,
+"_symbol", ""))` and threads it into `decide()`; `raw["usd_is_base"]` is
+also surfaced for visibility/debugging.
+
+**Regression tests:** `tests/test_macro_engine.py` (+7 tests, see
+Reproduction above). Full suite verified clean: 2193 passed, 2 skipped
+(the same 6 pre-existing, unrelated credential-dependent failures from
+BUG-007's note — confirmed unchanged, zero new failures).
+
+**Status:** FIXED, tested, regression-pinned.

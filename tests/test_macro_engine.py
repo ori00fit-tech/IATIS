@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 
 from engines.base_engine import Bias
-from engines.macro_engine import MacroEngine, decide, extract_features
+from engines.macro_engine import MacroEngine, decide, extract_features, is_usd_base_symbol
 
 
 def _series_df(vals: list[float], freq: str = "D") -> pd.DataFrame:
@@ -340,3 +340,94 @@ def test_config_engines_yaml_thresholds_macro_supplies_every_default(monkeypatch
     engine.thresholds = thresholds
     out = engine.safe_analyze({})
     assert out.bias in (Bias.BULLISH, Bias.BEARISH, Bias.NEUTRAL)
+
+
+# ---------------------------------------------------------------------------
+# BUG-008 (Forensic Audit, 2026-08-04) — DXY->bias mapping was symbol-
+# agnostic: it always treated a stronger dollar as bearish for "the pair",
+# which is correct for EURUSD/GBPUSD/XAUUSD/BTCUSD (USD is quote/priced-in)
+# but backwards for USDJPY/USDCHF/USDCAD, where USD is the BASE currency —
+# a stronger dollar makes those pairs RISE. Currently dormant (macro is
+# `enabled: false`, `weights.macro: 0.0` in production), so no live trade
+# is affected today, but the defect would fire the instant macro is ever
+# re-enabled — fixed at the source regardless (same "latent landmine"
+# discipline as BUG-005's SentimentEngine fix).
+# ---------------------------------------------------------------------------
+
+def test_is_usd_base_symbol_identifies_usd_base_pairs():
+    assert is_usd_base_symbol("USDJPY") is True
+    assert is_usd_base_symbol("USDCHF") is True
+    assert is_usd_base_symbol("USDCAD") is True
+    assert is_usd_base_symbol("usdjpy") is True  # case-insensitive
+
+
+def test_is_usd_base_symbol_rejects_usd_quote_and_non_fx_symbols():
+    assert is_usd_base_symbol("EURUSD") is False
+    assert is_usd_base_symbol("GBPUSD") is False
+    assert is_usd_base_symbol("XAUUSD") is False
+    assert is_usd_base_symbol("BTCUSD") is False
+    assert is_usd_base_symbol("US30") is False
+    assert is_usd_base_symbol("") is False
+
+
+def test_decide_dxy_rising_is_bearish_when_usd_is_not_base():
+    """Regression pin: the original, unchanged mapping for every non-
+    USD-base symbol (EURUSD, GBPUSD, XAUUSD, BTCUSD, ...) — the default
+    usd_is_base=False must reproduce today's exact behavior. Spread is
+    large enough (3.0%) to clear the score-neutral floor on the DXY
+    component alone, with no risk votes to confound it."""
+    features = _base_features(dxy_direction="up", dxy_spread_pct=3.0)
+    bias, _, _ = decide(features, {})
+    assert bias == Bias.BEARISH
+
+
+def test_decide_dxy_rising_is_bullish_when_usd_is_base():
+    """BUG-008 reproduction: for a USD-base pair, a stronger dollar must
+    flip the DXY-driven bias to BULLISH, the exact opposite of the
+    non-base case above on identical DXY input."""
+    features = _base_features(dxy_direction="up", dxy_spread_pct=3.0)
+    bias, _, reasons = decide(features, {}, usd_is_base=True)
+    assert bias == Bias.BULLISH
+    assert any("BASE currency" in r for r in reasons)
+
+
+def test_decide_dxy_falling_is_bearish_when_usd_is_base():
+    features = _base_features(dxy_direction="down", dxy_spread_pct=-3.0)
+    bias, _, _ = decide(features, {}, usd_is_base=True)
+    assert bias == Bias.BEARISH
+
+
+def test_engine_flips_bias_for_usdjpy_vs_eurusd_on_identical_dxy_data(monkeypatch):
+    """End-to-end reproduction through the real MacroEngine.analyze():
+    identical DXY-rising data must produce OPPOSITE bias for USDJPY
+    (USD-base) vs. a non-USD-base symbol, via main.py's real _symbol
+    attribute-assignment pattern (BUG-005 precedent)."""
+    import core.alt_data_loader as adl
+    snapshot = {"DXY": _series_df(list(np.linspace(100, 130, 40)))}
+    monkeypatch.setattr(adl, "load_macro_snapshot", lambda symbols: snapshot)
+
+    eurusd_engine = MacroEngine()
+    eurusd_engine._symbol = "EURUSD"
+    out_eurusd = eurusd_engine.safe_analyze({})
+
+    usdjpy_engine = MacroEngine()
+    usdjpy_engine._symbol = "USDJPY"
+    out_usdjpy = usdjpy_engine.safe_analyze({})
+
+    assert out_eurusd.bias == Bias.BEARISH
+    assert out_usdjpy.bias == Bias.BULLISH
+    assert out_usdjpy.raw["usd_is_base"] is True
+    assert out_eurusd.raw["usd_is_base"] is False
+
+
+def test_engine_without_symbol_attribute_defaults_to_non_usd_base(monkeypatch):
+    """Every existing zero-arg construction site (tests, the backtest
+    engine-construction loop, which does not set _symbol) must keep
+    producing today's original mapping — no AttributeError, no behavior
+    change when _symbol was never set."""
+    import core.alt_data_loader as adl
+    snapshot = {"DXY": _series_df(list(np.linspace(100, 130, 40)))}
+    monkeypatch.setattr(adl, "load_macro_snapshot", lambda symbols: snapshot)
+    out = MacroEngine().safe_analyze({})
+    assert out.bias == Bias.BEARISH
+    assert out.raw["usd_is_base"] is False

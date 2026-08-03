@@ -1271,3 +1271,264 @@ response always has.
 Reproduction above).
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-011
+
+**Severity:** P1 (backtest-measurement — directly undermines the
+platform's central, measured "H4 with D1 confirmation" claim)
+
+**Category:** Lookahead-adjacent data-freshness bug in the MTF-view
+construction path (backtest/injected/replay only — confirmed the live
+decision pipeline is unaffected).
+
+**Claim (found during a forensic audit pass over `backtesting/
+backtest_engine.py`'s position-sizing/warmup/MTF-alignment logic, areas
+not yet scrutinized line-by-line this session — the entry/SL/TP/close
+paths were already independently verified):** every backtest bar's D1
+(and, for an H1-base config, H4) confirmation view is built by
+`core.timeframe_sync.build_multi_timeframe_view()`, which calls
+`df.resample(rule)` on the TRUNCATED base-timeframe window
+(`window = df.iloc[:i+1]`, `backtesting/backtest_engine.py:679`
+pre-fix). Pandas' `resample()` buckets by calendar day regardless of
+whether the base data actually covers the full day — so unless the
+truncated window happens to end exactly at a day boundary (1 of 6
+possible H4 bars/day), the last row of the resulting D1 frame is a
+PARTIAL, still-forming "today" candle, not the last fully-closed day.
+`confluence/mtf_confirmation.py::check_mtf_confirmation()` then reads
+`ewm(...).iloc[-1]`/ADX off that same partial row and folds it directly
+into the ±8-point MTF score adjustment CLAUDE.md's whole "H4 with D1
+confirmation" measured-edge claim rests on.
+
+**Observed (reproduced directly, not assumed):** synthetic H4 OHLCV
+truncated mid-day-3 (only 3 of 6 H4 bars present for that day) → the
+pre-fix D1 view's last row was labeled `2026-01-03` (the current,
+partial day) with a `close` computed from only those 3 bars —
+`101.03`, matching NEITHER the true last-closed day (`2026-01-02`,
+`100.898`) NOR the true fully-formed `2026-01-03` (`101.193`, using all
+6 bars once the day actually completes).
+
+**Expected:** the D1 (or H4) view's last row must be the last FULLY
+CLOSED period as of the base window's own last bar — the same
+still-forming-bar contract BUG-010 already established for live fetches.
+
+**File/Line:** `core/timeframe_sync.py::resample()` (line ~35 pre-fix,
+no still-forming protection at all) and `build_multi_timeframe_view()`
+(line ~59, called by every one of `backtesting/backtest_engine.py`
+line 679/`main.py`'s injected-replay + native-fetch-fallback paths,
+`scripts/m15_smart_backtest.py`, `scripts/engine_ablation.py`,
+`scripts/diagnose_h009_gap.py`).
+
+**Execution path:** every backtest bar's pipeline run (`run_backtest`'s
+main loop, gated by `config.use_mtf_confirmation`, default ON) calls
+`build_multi_timeframe_view(window, timeframes)` before engine
+evaluation — so this affected essentially every MTF-confirmation score
+in every backtest/walk-forward/robustness/Mission-Center trial ever run
+with an H4 or H1 base timeframe (the vast majority; `config.yaml`'s
+production `data.timeframes: [H4, D1, H1]`). **Live trading is
+unaffected**: confirmed `main.py::_load_market_data()`'s real (non-
+fallback) path fetches D1 natively via `load_multi_timeframe_with_
+failover()` — never resampled — and BUG-010 already trims any
+still-forming bar from that native fetch. Only the resample-from-a-
+finer-series construction path (backtest/injected/replay, and `main.py`'s
+rarely-hit native-failover-exception fallback) was exposed.
+
+**Reproduction:** `tests/test_timeframe_sync.py` (new file, 8 tests) —
+direct before/after comparison against a hand-built full-vs-truncated
+H4 series (proves the exact partial-candle contamination and its fix);
+an exact-day-boundary case (proves the fix doesn't over-trim a genuinely
+complete day); backward-compat (`base_minutes` omitted → old, un-trimmed
+behavior preserved byte-for-byte, since the parameter is opt-in);
+empty-DataFrame no-op; unsupported-timeframe still raises;
+`build_multi_timeframe_view()` threads `base_minutes` automatically for
+both a D1-from-H4 and a combined H4-and-D1-from-H1 scenario.
+
+**Root cause:** `core.timeframe_sync.resample()` was written assuming
+its input DataFrame always fully covers every bucket it produces — true
+for a live, natively-fetched, already-closed-bar series, but false for
+any TRUNCATED window (exactly the shape a backtest's bar-by-bar loop
+produces via `df.iloc[:i+1]`). No still-forming-bucket check existed
+anywhere in this module.
+
+**Impact:** Every backtest/walk-forward/robustness/Mission-Center run
+using MTF confirmation on an H4 or H1 base timeframe measured its
+D1-agreement score against a data-source that, for 5 of 6 possible H4
+decision points per day, was reading a partial/wrong daily candle
+instead of the last closed one — directly undermining the reliability of
+every historically-reported PF/win-rate number that used the default
+`use_mtf_confirmation=True` (the documented default, matching the "the
+backtest must simulate the SAME system that trades" design principle).
+Does not change entries/exits/thresholds (rule 6 is not implicated —
+this is a data-construction correctness fix, not a strategy change);
+does re-measure every future backtest against genuinely closed D1/H4
+data going forward.
+
+**Fix (CONFIRMED, applied same phase):** `core/timeframe_sync.py::
+resample()` gains an optional `base_minutes: int | None = None`
+parameter (default `None` preserves the exact prior, un-trimmed
+behavior for any caller that omits it — though after this fix, no
+in-repo caller does). When given, the resampled series' LAST row is
+dropped if the base series' own last bar doesn't reach that row's true
+period end — the same still-forming-bar protection BUG-010 gave live
+fetches, generalized to the resample-from-a-finer-series construction
+path. `build_multi_timeframe_view()` now always passes its own computed
+`base_minutes` through automatically, so every existing call site
+(backtest, injected/replay, `main.py`'s native-fetch-fallback,
+`scripts/m15_smart_backtest.py`, `scripts/engine_ablation.py`) gets the
+fix with zero call-site changes.
+
+**Collateral golden-value update:** `tests/test_engine_config_extraction_
+no_behavior_change.py`'s pinned Wyckoff-scenario-A golden score legitimately
+changed (`40.0` → `25.0`, bias unchanged `BULLISH`) — its fixed-`end`-
+timestamp fixture's H4/D1 views were previously reading a partial last
+candle; this fix corrects that input, and the golden value was
+recaptured against the now-correct data (same discipline already
+established for that file's own prior wall-clock-flake fix). All 5
+other engine/scenario combinations in that file were independently
+re-verified unaffected.
+
+**Regression tests:** `tests/test_timeframe_sync.py` (+8, new file) —
+see Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-012
+
+**Severity:** P2 (backtest-measurement — a headline KPI, not a trading
+decision)
+
+**Category:** Statistical-formula annualization bug — same family as
+BUG-009 (`engines/quant_engine.py`'s hardcoded 365-day assumption),
+recurring at the backtest-report layer.
+
+**Claim (found during the same forensic audit pass as BUG-011):**
+`BacktestResult.compute()` (`backtesting/backtest_engine.py`) computed
+Sharpe ratio as `returns.mean() / returns.std() * sqrt(252)` — a fixed
+daily-return annualization factor — regardless of the base (decision)
+timeframe's actual bar cadence. `equity_curve` gets exactly one point
+per BASE-timeframe bar (the unconditional `result.equity_curve.append
+(balance)` inside the main loop, happens even on `step_bars`-skipped
+bars), not one point per calendar day. The production base timeframe is
+H4 (`config.yaml` `data.timeframes: [H4, D1, H1]`) — 6 bars/day, not 1
+— so `returns` is an H4-frequency series, and annualizing it with
+`sqrt(252)` (the correct factor only for a genuinely daily series)
+undercounts the true periods/year by a factor of 6.
+
+**Observed (reproduced directly):** for the SAME real equity curve from
+a real H4-base-timeframe `run_backtest()` call, the pre-fix formula
+(`sqrt(252)`) and the timeframe-aware correct formula (`sqrt(252*6)`)
+differ by exactly `sqrt(6) ≈ 2.449` — confirmed via `pytest.approx`
+equality in the regression test below, not just derived on paper.
+
+**Expected:** Sharpe's annualization factor must scale with the base
+timeframe's real bars/year (`252 * bars_per_day` for non-24/7 assets,
+`365 * bars_per_day` for crypto — mirroring BUG-009's own 252-vs-365
+trading-calendar distinction), not a flat daily constant.
+
+**File/Line:** `backtesting/backtest_engine.py::BacktestResult.compute()`
+(line ~332 pre-fix, `np.sqrt(252)` hardcoded); `equity_curve.append`
+(line ~654, one point per base-timeframe bar, confirmed by direct read).
+
+**Execution path:** every `BacktestResult.compute()` call (every
+`run_backtest()` invocation — backtest/walk_forward/robustness/Mission
+Center trials) with a non-daily base timeframe. Purely a reported-KPI
+issue: `sharpe_ratio` is a summary/diagnostic field, never consulted by
+any gating/decision logic (confirmed by grep — `run_backtest()`'s own
+EXECUTE/NO_TRADE decision never reads it), so this never changed which
+trades were taken, only how the run's own Sharpe was reported downstream
+(Backtesting Charts KPI cards, Mission Center leaderboards/consensus
+claims, `research/edge_gate.py`'s promotion-criteria consumers if Sharpe
+is ever added there).
+
+**Reproduction:** `tests/test_backtest_exits.py` (+3 tests) —
+`_periods_per_year()` unit tests across D1/H4/H1 × forex/crypto;
+`test_backtest_result_sharpe_uses_base_timeframe_bar_cadence` runs a
+real synthetic H4 `run_backtest()`, computes Sharpe two ways from the
+SAME real equity curve (the old flat-`sqrt(252)` formula and the fixed
+timeframe-aware one), and asserts `result.sharpe_ratio` matches the
+corrected formula exactly and differs from the naive one by precisely
+`sqrt(6)`; `test_backtest_result_sharpe_unchanged_for_d1_base_timeframe`
+is the explicit backward-compatibility pin — a D1-base-timeframe run's
+Sharpe is BYTE-IDENTICAL before/after this fix (`periods_per_year(D1,...)
+== 252`, the same constant as before).
+
+**Root cause:** the Sharpe formula was written assuming a daily-return
+series (correct only when the base timeframe IS D1) without ever
+branching on the actual decision timeframe's bar cadence — the same
+class of oversight BUG-009 already found and fixed once in
+`engines/quant_engine.py`, recurring here undetected.
+
+**Impact:** every backtest report's Sharpe ratio was systematically
+UNDERSTATED by `sqrt(bars_per_day)` for any non-daily base timeframe —
+`~2.45x` understated for the production H4 default, `~4.9x` for H1. No
+trading-decision impact (Sharpe is never gated on); real impact on any
+downstream comparison, ranking, or promotion criterion that uses Sharpe
+(Mission Center leaderboards, Experiment Comparison, any future
+`edge_gate.py` Sharpe threshold).
+
+**Fix (CONFIRMED, applied same phase):** new `_periods_per_year(timeframe,
+symbol)` helper (mirrors BUG-009's `_is_24_7_asset` precedent for the
+252-vs-365 trading-calendar distinction) computing `days_per_year *
+(1440 / bar_minutes)`. `BacktestResult` gains a `timeframe: str = "D1"`
+field (default reproduces the OLD `sqrt(252)` behavior exactly for any
+caller that never sets it — `bars_per_day=1` when `timeframe="D1"`).
+`run_backtest()`'s `BacktestResult(...)` construction now passes
+`timeframe=timeframes[0] if timeframes else "D1"`. `compute()`'s Sharpe
+line now uses `sqrt(_periods_per_year(self.timeframe, self.symbol))`
+instead of the hardcoded `sqrt(252)`.
+
+**Regression tests:** `tests/test_backtest_exits.py` (+3) — see
+Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned.
+
+---
+
+## Findings investigated and NOT treated as bugs (same forensic pass)
+
+**Reversal-veto default mismatch (Mission Center engine-toggle exposure,
+MEDIUM confidence, no code change applied):** `BacktestConfig.
+use_reversal_veto` defaults `True` (`backtesting/backtest_engine.py`),
+while `main.py`'s live decision path has `check_reversal_veto()`
+structurally removed (not merely disabled by config — the call site
+doesn't exist there at all, per the file's own comment: "H013 reversal
+veto removed from the live path... stays in confluence/reversal_veto.py
+for backtesting/backtest_engine.py and scripts/engine_ablation.py, which
+still A/B it in research"). Today this is a coincidental no-op for the
+DEFAULT backtest configuration: the veto requires ≥2 of
+{Divergence, Wyckoff, Sentiment} non-NEUTRAL, and `config/engines.yaml`
+only enables Wyckoff among that trio — matching prod4 exactly, so the
+default backtest never triggers it either. It becomes a real, armed
+discrepancy only if an operator uses Mission Center's engine-toggle
+sandbox to enable Divergence or Sentiment for an ad-hoc research run —
+at which point the veto can fire in that backtest with no live-equivalent
+counterpart. Every backtest a Mission Center trial produces is already
+labeled "exploratory, not evidence," and CLAUDE.md rule 6 (never change
+entries/exits/thresholds mid-sample without a pre-registered hypothesis)
+argues against silently changing this gate's default behavior outside
+that discipline. **No code change applied** — documented here as a
+known, bounded discrepancy for anyone reading a Mission Center trial
+that used a non-default engine set with the reversal veto still on.
+
+**0.01-lot position-size floor "overshooting" risk_per_trade during deep
+drawdown (LOW-MEDIUM confidence, verdict: NOT A BUG):** `_calc_position_
+size()`'s `max(0.01, ...)` floor can produce a position whose actual
+dollar risk at the stop materially exceeds the configured
+`risk_per_trade` when the risk-correct size would be below 0.01 lots
+(most plausible when `balance` has already shrunk significantly, e.g.
+deep into a drawdown). Concrete numbers checked: `balance=$50`,
+`risk_per_trade=1%%` → correct size `≈0.0004` lots, floored to `0.01` →
+actual risk `≈$12.50` (a 25× overshoot of the configured 1%%). On
+reflection this is **realistic broker-constraint modeling, not a
+measurement bug**: real brokers genuinely enforce a 0.01-lot minimum: a
+live account in the same situation would be forced to take the same
+oversized risk (or skip the trade entirely) — the backtest correctly
+reflects that real-world floor rather than pretending risk scales
+infinitely small. Not fixed. Flagged here because it IS a real, material
+effect on `max_drawdown_pct`/Monte-Carlo risk-of-ruin fidelity for any
+run that lets balance shrink substantially (long single-symbol runs,
+walk-forward, Monte Carlo resampling) — worth knowing about when
+interpreting those numbers, not worth "fixing" away the realism.

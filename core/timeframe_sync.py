@@ -32,13 +32,31 @@ _AGG = {
 }
 
 
-def resample(df: pd.DataFrame, target_timeframe: str) -> pd.DataFrame:
-    """Resample an OHLCV DataFrame to a higher timeframe."""
+def resample(df: pd.DataFrame, target_timeframe: str, base_minutes: int | None = None) -> pd.DataFrame:
+    """Resample an OHLCV DataFrame to a higher timeframe.
+
+    base_minutes: bar duration (minutes) of `df` itself, if known. When
+    given, the resampled series' LAST row is dropped if `df`'s own last
+    bar doesn't reach that row's period end — i.e. the coarser candle is
+    still forming. This is the same still-forming-bar protection BUG-010
+    added for live fetches (core/data_providers.py::_drop_still_forming_bar),
+    generalized to the resample-from-a-finer-series construction path used
+    by backtests/injected/replay data. Without this, a D1 view built from
+    a truncated intraday window (e.g. a backtest's df.iloc[:i+1]) silently
+    reads a PARTIAL "today" candle instead of the last fully-closed day —
+    directly undermining the D1-confirmation score every backtest trade
+    decision relies on (BUG-011).
+    """
     if target_timeframe not in _RESAMPLE_RULE:
         raise ValueError(f"Unsupported timeframe: {target_timeframe}")
 
     rule = _RESAMPLE_RULE[target_timeframe]
     out = df.resample(rule).agg(_AGG).dropna()
+    if base_minutes is not None and len(out) > 0 and len(df) > 0:
+        period_end = out.index[-1] + pd.tseries.frequencies.to_offset(rule)
+        last_bar_covers_to = df.index[-1] + pd.Timedelta(minutes=base_minutes)
+        if last_bar_covers_to < period_end:
+            out = out.iloc[:-1]
     logger.debug(f"Resampled {len(df)} bars -> {len(out)} bars @ {target_timeframe}")
     return out
 
@@ -75,6 +93,6 @@ def build_multi_timeframe_view(df_base: pd.DataFrame, timeframes: list[str]) -> 
         if _TF_MINUTES.get(tf, 60) < base_minutes:
             logger.debug(f"Skipping {tf}: finer than base {base_label}, cannot upsample")
             continue
-        views[tf] = resample(df_base, tf)
+        views[tf] = resample(df_base, tf, base_minutes=base_minutes)
 
     return views

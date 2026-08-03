@@ -54,6 +54,31 @@ RISK_OVERRIDE_FIELDS: tuple[str, ...] = (
     "warmup_bars", "step_bars",
 )
 
+# BUG-012 (2026-08-XX) — a recurrence, at the backtest-report layer, of the
+# same "hardcoded 365/252-day annualization ignores the actual bar cadence"
+# family already fixed once this session in engines/quant_engine.py
+# (BUG-009). BacktestResult.equity_curve appends once per BASE-timeframe
+# bar (backtesting/backtest_engine.py's main loop), not once per trading
+# day — so Sharpe's sqrt(periods/year) must scale with the base timeframe's
+# actual bars/day, or it silently understates Sharpe by sqrt(bars_per_day)
+# for any base timeframe coarser than D1 (H4's 6 bars/day -> ~sqrt(6)=2.45x
+# understatement).
+_TF_MINUTES_FOR_SHARPE: dict[str, int] = {"M15": 15, "H1": 60, "H4": 240, "D1": 1440}
+_CRYPTO_TICKERS_FOR_SHARPE = ("BTC", "ETH", "XRP", "LTC", "SOL")
+
+
+def _periods_per_year(timeframe: str, symbol: str) -> float:
+    """Trading periods/year for Sharpe annualization, matching the base
+    (decision) timeframe's real bar cadence rather than a flat daily
+    assumption. 24/7 assets (crypto) use 365 calendar days/year; everything
+    else uses 252 trading days/year (mirrors engines/quant_engine.py's own
+    trading_days_per_year_fx default) — the same distinction BUG-009 already
+    established for realized-vol annualization."""
+    bar_minutes = _TF_MINUTES_FOR_SHARPE.get(timeframe, 1440)
+    days_per_year = 365.0 if any(c in symbol.upper() for c in _CRYPTO_TICKERS_FOR_SHARPE) else 252.0
+    bars_per_day = 1440.0 / bar_minutes
+    return days_per_year * bars_per_day
+
 
 @dataclass
 class BacktestConfig:
@@ -236,6 +261,13 @@ class BacktestResult:
     start_date: str
     end_date: str
     total_bars: int
+    # BUG-012 (2026-08-XX): equity_curve gets one point per BASE (decision)
+    # timeframe bar (see the unconditional result.equity_curve.append(balance)
+    # in the main loop below), not one point per calendar day — so annualizing
+    # Sharpe needs the actual bar cadence, not a flat daily assumption.
+    # Defaults to "D1" (bars_per_day=1), which reproduces the OLD sqrt(252)
+    # behavior exactly for any caller that never sets this.
+    timeframe: str = "D1"
 
     total_runs: int = 0
     execute_count: int = 0
@@ -297,7 +329,8 @@ class BacktestResult:
             self.total_return_pct = float((equity[-1] - equity[0]) / equity[0])
             returns = np.diff(equity) / equity[:-1]
             if len(returns) > 1 and returns.std() > 0:
-                self.sharpe_ratio = float(returns.mean() / returns.std() * np.sqrt(252))
+                periods_per_year = _periods_per_year(self.timeframe, self.symbol)
+                self.sharpe_ratio = float(returns.mean() / returns.std() * np.sqrt(periods_per_year))
 
         return self
 
@@ -588,6 +621,7 @@ def run_backtest(
         start_date=str(df.index[config.warmup_bars].date()),
         end_date=str(df.index[-1].date()),
         total_bars=len(df),
+        timeframe=timeframes[0] if timeframes else "D1",
     )
     result.equity_curve.append(balance)
 

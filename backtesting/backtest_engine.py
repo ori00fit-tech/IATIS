@@ -601,8 +601,9 @@ def run_backtest(
         """Finalize a trade at ``exit_price`` and return its pnl_usd.
 
         Single close path (was duplicated 4× for BUY/SELL × SL/TP).
-        Commission is charged once per round trip, consistently via
-        _pip_value_usd for forex.
+        Commission and swap are charged once per round trip, via
+        _pip_value_usd for forex and via config.pip_size * dpp (the same
+        scaling _calc_pnl_usd uses) for non-forex (metal/index).
         """
         sign = 1.0 if trade.direction == "BUY" else -1.0
         diff = sign * (exit_price - trade.entry_price)
@@ -623,8 +624,17 @@ def run_backtest(
             trade.pnl_usd -= (config.commission_pips + swap_pips) * _pip_value_usd(
                 trade.entry_price, trade.position_size
             )
-        elif swap_pips:
-            trade.pnl_usd -= swap_pips * config.pip_size * trade.position_size
+        else:
+            # BUG-004 fix (2026-08-04): commission_pips was previously
+            # never subtracted here at all for non-forex assets (metal/
+            # index — XAUUSD, BTCUSD, ETHUSD, XAGUSD, USOIL, US30, NAS100,
+            # SPX500), and the swap-only branch it replaces was also
+            # missing the `* dpp` scale factor _calc_pnl_usd uses
+            # everywhere else for non-forex. See
+            # reports/forensic/13_CONFIRMED_BUGS.md BUG-004.
+            cost_pips = config.commission_pips + swap_pips
+            if cost_pips:
+                trade.pnl_usd -= cost_pips * config.pip_size * trade.position_size * dpp
         trade.exit_reason = exit_reason
         return trade.pnl_usd
 
@@ -850,6 +860,32 @@ def run_backtest(
                 decision=decision,
             )
             result.execute_count += 1
+
+            # Same-bar exit check (forensic fix, 2026-08-03 — BUG-002): a
+            # resting SL/TP order is live from the instant of entry, so the
+            # entry bar's OWN remaining high/low range (the excursion after
+            # its open, where the trade was just entered) must be checked
+            # too — not just bars strictly after it. The next loop
+            # iteration's own exit check only ever looks at df.iloc[i+2]
+            # onward, permanently skipping df.iloc[i+1] (this trade's own
+            # entry bar). Confirmed this can silently erase a real stop-out
+            # entirely: a same-bar stop-hunt wick that recovers before the
+            # next-checked bar was previously invisible to the simulation,
+            # capable of flipping a real loss into a reported win — see
+            # reports/forensic/13_CONFIRMED_BUGS.md BUG-002.
+            same_bar_exit = check_exit(open_trade, next_bar, slip)
+            if same_bar_exit is not None:
+                exit_price, reason = same_bar_exit
+                balance += _close_trade(open_trade, exit_price, reason, i + 1, next_bar.name)
+                result.trades.append(open_trade)
+                open_trade = None
+                # BUG-003 fix (2026-08-03): this bar's equity_curve point was
+                # already appended above (line ~644) BEFORE this same-bar
+                # close updated `balance` — that entry is stale, still
+                # showing the pre-trade balance. Patch it in place so the
+                # trade's PnL shows up on the bar it actually happened on,
+                # not one entry late (see reports/forensic/13_CONFIRMED_BUGS.md).
+                result.equity_curve[-1] = balance
 
         except Exception as exc:
             logger.debug(f"Bar {i} skipped: {exc}")

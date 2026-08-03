@@ -684,3 +684,119 @@ skipped, zero failures.
 code reading (`ENGINE_HYPOTHESIS_MAP`, `allow_live_trading`'s one call
 site) before implementing — not taken on faith from any external
 report.
+
+---
+
+## BUG-006
+
+**Severity:** P0
+
+**Category:** Risk Engine Forensics — live sovereign risk gate
+(`risk/risk_engine.py`). This module's own docstring: *"it has the
+authority to make a trade not exist at all... any single failure blocks
+the trade. No partial credit."* Confirmed used by the live pipeline
+(`main.py:455`, `_risk_gate()`) — not a backtest-only concern.
+
+**Claim:** Every hard-gate check in `evaluate_risk()` is a `>=`/`<`/`>`
+comparison. In Python, a comparison against `NaN` is ALWAYS `False` —
+so a NaN input to ANY of `current_drawdown_pct`, `entry_price`/
+`stop_loss_price`/`take_profit_price` (feeding the RR calc),
+`correlated_exposure_pct`, or `current_open_risk_pct` would silently
+BYPASS that specific hard gate instead of blocking the trade. Separately,
+a negative or zero `account_balance` (a real, reachable state — see
+`risk/live_portfolio_state.py`'s `equity = starting_balance + Σpnl`,
+which can genuinely go negative after enough real losses) produced a
+NEGATIVE position size rather than being refused outright. A third,
+independent gap: the RR floor only ever compares magnitudes via `abs()`,
+never which SIDE of entry the stop/target actually sit on — a backwards
+stop (on the same side as the target) could compute a technically-passing
+RR ratio.
+
+**Observed:** Direct reproduction, pre-fix:
+- `current_drawdown_pct=NaN` → `passed=True` (the drawdown-stop hard
+  halt never fired).
+- `entry_price=NaN` → `passed=True`, `position_size_units=0.0` (the RR
+  floor never fired; `passed=True` is still the wrong signal even
+  though the size happened to compute to zero).
+- `correlated_exposure_pct=NaN` → `passed=True` (the correlation cap
+  never fired).
+- `account_balance=-500.0` → `passed=True`, `position_size_units=-1000.0`
+  (a negative position size).
+- `entry_price=1.10, stop_loss_price=1.20, take_profit_price=1.30`
+  (target above entry implies a long, so the stop should be below
+  entry — instead it's above, on the same side as the target) →
+  `passed=True` (RR computed as 2.0 from magnitudes alone, clearing the
+  2.0 floor despite the backwards geometry).
+
+**Expected:** A sovereign risk gate must fail CLOSED on invalid,
+degenerate, or nonsensical input — refuse the trade, never silently
+compute a "passed" result from corrupted or garbage numbers.
+
+**File / Line (pre-fix):** `risk/risk_engine.py`, `evaluate_risk()`
+(originally lines 62-144) — no input validation existed at all before
+the hard-gate comparisons began.
+
+**Execution path:** `main.py:_risk_gate()` → `compute_portfolio_state()`
+(supplies `account_balance`/`current_drawdown_pct`/
+`correlated_exposure_pct`, all real, D1-backed, arithmetic on real
+closed-trade data — not synthetic) + `range_atr()`-derived entry/stop/
+target → `RiskInputs(...)` → `evaluate_risk(risk_inputs, config)` — the
+final sovereign check before a live trade is sized and (via
+`execution/trade_executor.py`) potentially executed.
+
+**Reproduction:** `tests/test_risk_engine_fuzzing.py` — direct calls to
+the real `evaluate_risk()` with NaN/inf in every numeric `RiskInputs`
+field individually and in combination, negative/zero account balance,
+degenerate SL/TP geometry (SL==entry, TP==entry, backwards stop for
+both long and short), and a boundary/adversarial value sweep (`0.0,
+-1.0, 1.0, NaN, inf, -inf, 1e300, -1e300`) across every combination of
+`account_balance`/`entry_price`/`stop_loss_price`/`take_profit_price`
+confirming the function never raises and never returns `passed=True`
+on any invalid combination. 32/32 pass post-fix.
+
+**Root cause:** `evaluate_risk()` trusted every numeric input
+unconditionally and relied entirely on Python's native comparison
+operators to reject bad values — but IEEE-754 NaN semantics make every
+such comparison silently `False`, the exact opposite of "fail closed."
+The directional-sanity gap is a separate root cause: `RiskInputs` has
+no explicit `direction` field, and the RR calculation's `abs()` usage
+discards which side of entry each level sits on.
+
+**Impact:** This is the live decision pipeline's final risk check, not
+a backtest-only measurement bug. Confirmed NOT currently exploitable via
+the real, wired call site for the backwards-stop case specifically
+(`main.py`'s own SL/TP construction is provably always correctly
+oriented relative to direction — `stop = entry - direction * atr *
+mult`), but the NaN-bypass and negative-balance gaps ARE reachable
+through real, plausible upstream states: a real broker/data-feed outage
+producing NaN prices, or a real losing streak driving computed equity
+negative. **This is the single most severe class of finding in this
+forensic pass** — a corrupted-data or already-blown-account scenario is
+precisely when a risk gate must be MOST conservative, and this one was
+silently permissive instead.
+
+**Fix (CONFIRMED, applied same phase):** (1) A new fail-closed
+validation block at the top of `evaluate_risk()`: every numeric
+`RiskInputs` field is checked with `math.isfinite()`; any NaN/inf
+immediately returns `passed=False` naming the offending field(s). (2)
+`account_balance <= 0` immediately returns `passed=False`. (3) A new
+directional-sanity check after the RR floor: infers intended direction
+from which side of `entry_price` the `take_profit_price` sits on, and
+rejects a `stop_loss_price` on the wrong (same) side as a "backwards
+stop." All three checks are additive-only — every existing passing case
+(confirmed via the pre-existing `tests/test_risk_rr_boundary.py`,
+`tests/test_phase1.py` risk tests) continues to pass unchanged.
+
+**Regression tests:** New `tests/test_risk_engine_fuzzing.py` (32
+tests) — per-field NaN/inf rejection, negative/zero balance rejection,
+SL==entry / TP==entry degenerate-geometry rejection, backwards-stop
+rejection for both long and short (with correct-geometry regression
+pins that these are NOT falsely rejected), drawdown/exposure/
+correlation boundary values, a combined-adversarial case, and a
+no-crash sweep across 8×8×8×8 fuzzed value combinations. Existing
+suites re-run unchanged and green: `tests/test_risk_rr_boundary.py`,
+`tests/test_phase1.py`, `tests/test_behavior.py`,
+`tests/test_live_portfolio_state.py` (59/59).
+
+**Status:** FIXED, tested, regression-pinned. Full suite verified
+clean: 2187 passed, 2 skipped, zero failures.

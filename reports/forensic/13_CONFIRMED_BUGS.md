@@ -1532,3 +1532,92 @@ effect on `max_drawdown_pct`/Monte-Carlo risk-of-ruin fidelity for any
 run that lets balance shrink substantially (long single-symbol runs,
 walk-forward, Monte Carlo resampling) — worth knowing about when
 interpreting those numbers, not worth "fixing" away the realism.
+
+---
+
+## BUG-013
+
+**Severity:** P4 (diagnostics-only — zero effect on any trading decision
+or reported PF/win-rate)
+
+**Category:** Diagnostic-funnel mislabeling (backtest gate-rejection
+attribution), found during the same forensic audit pass as BUG-011/
+BUG-012, Finding 5 (originally logged as LOW confidence, confirmed and
+fixed once its exact mechanism was pinned down).
+
+**Claim:** `BacktestResult.gate_rejections` exists specifically to turn
+"0/4 CONSISTENT" from a dead end into a diagnosable funnel (its own
+docstring). The `if/elif` chain attributing a rejected bar to a specific
+bucket had no branch for "the winning bias itself is NEUTRAL" — that
+case fell through to the final `else: result.gate_rejections["votes"]
++= 1`, the SAME bucket used for "a real direction won but not enough
+engines/weight agreed on it." An operator reading the funnel could not
+distinguish "no real signal existed" from "a real signal existed but
+was too weak."
+
+**Observed (reproduced directly):** `confluence.voting_system.tally_votes()`
+was read and confirmed: whenever it returns `winning_bias == NEUTRAL`
+(an exact conviction tie, or all-NEUTRAL engine outputs), `agree_count`
+is ALWAYS `0` — so `vote.agree_count >= min_engines` and `vote.winning_
+bias.value != "NEUTRAL"` were failing SIMULTANEOUSLY for every NEUTRAL-
+winner bar, with no way for the pre-fix elif chain to tell that apart
+from a real-direction-but-insufficient-agreement bar. Confirmed with a
+real synthetic-data backtest run (`min_engines_agreeing` forced
+impossibly high to make every real-direction bar land in "votes"): the
+pre-fix code would have shown `votes: 360` (342 genuine insufficient-
+agreement + 18 genuinely NEUTRAL, indistinguishable); post-fix,
+`votes: 342` and the new `neutral_bias: 18` are cleanly separated.
+
+**Expected:** a NEUTRAL winning bias (no real direction) should be
+attributed to its own bucket, distinct from "a real direction existed
+but didn't reach quorum."
+
+**File/Line:** `backtesting/backtest_engine.py` — `gate_rejections`
+default dict (line ~282) and the rejection-attribution `if/elif` chain
+(line ~812, final `else` branch pre-fix).
+
+**Execution path:** every rejected bar in every backtest/walk-forward/
+robustness/Mission-Center trial whose winning bias was NEUTRAL. `ok`
+(the actual EXECUTE/NO_TRADE boolean) is completely unaffected — this
+is a pure post-hoc attribution change, zero effect on which bars execute
+or any reported trade/PF/win-rate.
+
+**Reproduction:** `tests/test_backtest_exits.py` (+2 tests) —
+`test_tally_votes_neutral_winner_always_has_zero_agree_count` pins the
+load-bearing invariant this fix depends on (a conviction-tie scenario
+and an all-NEUTRAL-engines scenario both confirm `agree_count == 0`
+whenever `winning_bias == NEUTRAL`); `test_gate_rejections_
+distinguishes_neutral_bias_from_insufficient_votes` runs a real
+synthetic-data backtest with `min_engines_agreeing` forced to 99 (so
+every real-direction bar is guaranteed to land in "votes") and asserts
+BOTH `gate_rejections["votes"] > 0` and `gate_rejections["neutral_bias"]
+> 0` on the same run, plus `execute_count == 0` (confirming the fix
+changes attribution only, never execution).
+
+**Root cause:** the elif chain's final `else` branch was a catch-all
+written before the NEUTRAL-vs-insufficient-agreement distinction was
+considered — both conditions of `ok`'s vote-related clauses
+(`agree_count >= min_engines`, `winning_bias != NEUTRAL`) can fail at
+once, and the pre-fix code had no way to attribute the rejection to
+whichever was the more informative cause.
+
+**Impact:** none on trading behavior. Real impact only on the
+readability of the `gate_rejections` diagnostic funnel — anyone using it
+to distinguish "the market gave no real signal" from "a real signal
+existed but conviction was too weak/scattered" (e.g. for Mission Center
+consensus analysis, or manually diagnosing a low-trade-count run) now
+gets the correct breakdown.
+
+**Fix (CONFIRMED, applied same phase):** `gate_rejections` gains a new
+`"neutral_bias"` key (additive — no existing consumer asserts an exact
+key set, confirmed by grep across `backtest/runner.py`, `backtest/
+walk_forward.py`, `scripts/engine_ablation.py`, and every test file).
+The elif chain gains one new branch, `elif vote.winning_bias.value ==
+"NEUTRAL": result.gate_rejections["neutral_bias"] += 1`, inserted before
+the final `else` (now purely "a real direction won but didn't reach
+quorum").
+
+**Regression tests:** `tests/test_backtest_exits.py` (+2) — see
+Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned.

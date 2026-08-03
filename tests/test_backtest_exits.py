@@ -419,3 +419,85 @@ def test_backtest_result_sharpe_unchanged_for_d1_base_timeframe():
     returns = np.diff(equity) / equity[:-1]
     old_sharpe = float(returns.mean() / returns.std() * np.sqrt(252))
     assert result.sharpe_ratio == pytest.approx(old_sharpe, rel=1e-9)
+
+
+# ── gate_rejections funnel: "no real direction" vs "insufficient agreement" ──
+
+def test_tally_votes_neutral_winner_always_has_zero_agree_count():
+    """Load-bearing invariant the gate_rejections split below depends on:
+    confluence.voting_system.tally_votes() only ever returns agree_count=0
+    together with a NEUTRAL winning_bias (a dead heat or no real signal),
+    never a NEUTRAL winner with agree_count>0 — confirmed by direct read
+    of tally_votes()'s own branching, pinned here as a regression guard."""
+    from confluence.voting_system import tally_votes
+    from engines.base_engine import Bias, EngineOutput
+
+    # Exact conviction tie -> NEUTRAL (no information), per tally_votes'
+    # own documented anti-coin-flip design.
+    outputs = [
+        EngineOutput("A", Bias.BULLISH, 50.0, reasons=[]),
+        EngineOutput("B", Bias.BEARISH, 50.0, reasons=[]),
+    ]
+    vote = tally_votes(outputs, weights={"a": 1.0, "b": 1.0})
+    assert vote.winning_bias == Bias.NEUTRAL
+    assert vote.agree_count == 0
+
+    # All-NEUTRAL engines -> NEUTRAL, agree_count=0.
+    outputs2 = [EngineOutput("A", Bias.NEUTRAL, 0.0, reasons=[])]
+    vote2 = tally_votes(outputs2, weights={"a": 1.0})
+    assert vote2.winning_bias == Bias.NEUTRAL
+    assert vote2.agree_count == 0
+
+
+def test_gate_rejections_distinguishes_neutral_bias_from_insufficient_votes():
+    """Forensic-audit Finding 5: gate_rejections used to lump a genuine
+    'no real direction won' outcome (winning_bias == NEUTRAL) into the
+    same 'votes' bucket as 'a real direction won but not enough engines/
+    weight agreed on it' — making the diagnostic funnel unable to tell
+    the two apart. Diagnostics-only (never changes which bars execute):
+    forces min_engines_agreeing impossibly high (99) so 'a real direction
+    won' bars always land in 'votes', while genuinely NEUTRAL votes still
+    land in the new, separate 'neutral_bias' bucket."""
+    import logging
+
+    import numpy as np
+
+    from backtesting.backtest_engine import BacktestConfig, run_backtest
+    from utils.helpers import load_config
+
+    logging.disable(logging.CRITICAL)
+    try:
+        n = 500
+        idx = pd.date_range("2024-01-01", periods=n, freq="4h", tz="UTC")
+        rng = np.random.default_rng(3)
+        close = 1.10 + np.cumsum(rng.normal(0, 0.0006, n))
+        o = np.roll(close, 1)
+        o[0] = close[0]
+        df = pd.DataFrame(
+            {
+                "open": o,
+                "high": np.maximum(o, close) + 0.0004,
+                "low": np.minimum(o, close) - 0.0004,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        cfg = BacktestConfig.from_profile("EURUSD", warmup_bars=60, step_bars=1)
+        engine_config = dict(load_config())
+        engine_config["confluence"] = {
+            **engine_config["confluence"],
+            "min_score_to_trade": 0.0,
+            "min_engines_agreeing": 99,
+            "min_informative_weight_share": 0.0,
+        }
+        result = run_backtest(df, cfg, engine_config=engine_config)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    # Both buckets must be real (nonzero) and distinct — the whole point
+    # of the fix. Neither bucket's presence changes result.execute_count
+    # (still zero: min_engines_agreeing=99 is unreachable by design).
+    assert result.gate_rejections["votes"] > 0
+    assert result.gate_rejections["neutral_bias"] > 0
+    assert result.execute_count == 0

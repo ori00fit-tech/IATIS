@@ -283,7 +283,7 @@ class BacktestResult:
         default_factory=lambda: {
             "mqs": 0, "score": 0, "votes": 0,
             "contradiction": 0, "reversal_veto": 0, "info_share": 0,
-            "indicator_filter": 0, "context_filter": 0,
+            "indicator_filter": 0, "context_filter": 0, "neutral_bias": 0,
         }
     )
     # Backtesting Lab Pro Phase D (2026-07-27) — which indicator (by
@@ -827,6 +827,12 @@ def run_backtest(
                     result.gate_rejections["contradiction"] += 1
                 elif not info_share_ok:
                     result.gate_rejections["info_share"] += 1
+                elif vote.winning_bias.value == "NEUTRAL":
+                    # Distinct from "votes" (insufficient agree_count):
+                    # engines DID agree enough, they just agreed on
+                    # nothing directional. Diagnostics-only split — `ok`
+                    # already ANDs both conditions identically either way.
+                    result.gate_rejections["neutral_bias"] += 1
                 else:
                     result.gate_rejections["votes"] += 1
                 continue

@@ -250,6 +250,65 @@ def test_same_bar_exit_updates_equity_curve_immediately_not_one_bar_late():
         )
 
 
+# ── Non-forex commission/swap deduction (Forensic Audit, 2026-08-04 — BUG-004) ──
+# commission_pips (and, dormant until data/swap_rates.json is filled in,
+# swap_pips) was previously NEVER subtracted from pnl_usd for non-forex
+# asset classes (metal/index — XAUUSD, BTCUSD, ETHUSD, XAGUSD, USOIL, US30,
+# NAS100, SPX500) even though REAL_SPREAD_PIPS provides real measured
+# commission values for exactly those symbols.
+
+def test_run_backtest_deducts_commission_from_pnl_usd_for_non_forex_assets():
+    """Authoritative proof: every closed XAUUSD (metal asset class) trade's
+    pnl_usd must be gross_pnl_usd MINUS the real commission cost, not equal
+    to gross_pnl_usd (which is what the pre-fix code silently produced)."""
+    import logging
+
+    import numpy as np
+
+    from backtesting.backtest_engine import BacktestConfig, run_backtest
+
+    logging.disable(logging.CRITICAL)
+    try:
+        n = 400
+        idx = pd.date_range("2024-01-01", periods=n, freq="4h", tz="UTC")
+        rng = np.random.default_rng(7)
+        close = 2000 + np.cumsum(rng.normal(0, 3.0, n)) + np.linspace(0, 40, n)
+        o = np.roll(close, 1)
+        o[0] = close[0]
+        df = pd.DataFrame(
+            {
+                "open": o,
+                "high": np.maximum(o, close) + 2.0,
+                "low": np.minimum(o, close) - 2.0,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        cfg = BacktestConfig.from_profile("XAUUSD", warmup_bars=60, step_bars=1)
+        result = run_backtest(df, cfg)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    closed = [t for t in result.trades if t.exit_bar >= 0]
+    assert len(closed) > 0, "test data must produce at least one real XAUUSD trade"
+    assert cfg.asset_class == "metal"
+    assert cfg.commission_pips > 0, "REAL_SPREAD_PIPS must supply a nonzero XAUUSD commission"
+
+    for t in closed:
+        expected_commission_usd = (
+            cfg.commission_pips * cfg.pip_size * t.position_size * cfg.dollar_per_point
+        )
+        sign = 1.0 if t.direction == "BUY" else -1.0
+        diff = sign * (t.exit_price - t.entry_price)
+        gross_usd = diff * t.position_size * cfg.dollar_per_point
+        assert gross_usd - t.pnl_usd == pytest.approx(expected_commission_usd, abs=1e-6), (
+            f"trade pnl_usd={t.pnl_usd} does not reflect the real commission cost "
+            f"({expected_commission_usd}) — commission is being silently dropped "
+            f"for this non-forex asset class"
+        )
+
+
 def test_backtest_defaults_match_production_config():
     """Guards against silent drift between the validated system and the
     production system (previous drift: min_rr 3.0 vs 2.0, SL mult 1.5 vs 2.5).

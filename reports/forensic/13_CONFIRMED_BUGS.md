@@ -326,3 +326,140 @@ as BUG-002: historical `reports/`/`research/results/registry.json`
 evidence computed before this fix is not re-run — this is a
 measurement-accuracy correction to the tool, not a retroactive claim
 about any prior recorded number.
+
+## BUG-004
+
+**Severity:** P0
+
+**Category:** Backtest Forensics — P&L calculation correctness (cost
+modeling). Directly relevant to CLAUDE.md's "measured edge" claim, since
+it affects exactly the carrier assets (XAUUSD, BTCUSD, ETHUSD) that
+claim is based on.
+
+**Claim:** `run_backtest()`'s trade-closing logic (`_close_trade`)
+never subtracted `commission_pips` from a trade's `pnl_usd` for any
+non-forex asset class (metal/index — which covers XAUUSD, XAGUSD,
+USOIL, US30, NAS100, SPX500, and crypto BTCUSD/ETHUSD per
+`BacktestConfig.from_profile`'s asset-class mapping), even though
+`REAL_SPREAD_PIPS` (measured real broker spreads, 2026-07-06) supplies
+non-trivial commission values for exactly those symbols (XAUUSD: 12.0
+pips = $12/lot; BTCUSD: 1200.0 pips = $12/lot; ETHUSD: 290.0 pips =
+$2.90/lot; etc.).
+
+**Observed:** For a closed XAUUSD trade, `trade.pnl_usd` equals its
+gross P&L (`price_diff * position_size * dollar_per_point`) exactly —
+zero commission deducted, despite `config.commission_pips == 12.0`.
+`trade.pnl_pips` (a separate, display-only field) DOES include the
+commission subtraction, so the discrepancy is silent: the "pips" figure
+looks cost-aware while the actual money figure used for every
+downstream metric is not.
+
+**Expected:** Every closed trade's `pnl_usd` — forex or not — should
+reflect the same real trading cost (commission + swap) that
+`REAL_SPREAD_PIPS`/`data/swap_rates.json` were built to model.
+
+**Evidence:** Reproduced directly against the real, unmodified
+(pre-fix) `run_backtest()` using synthetic XAUUSD-shaped OHLCV (400
+bars, seed 7, H4). `BacktestConfig.from_profile("XAUUSD", ...)` resolved
+`asset_class="metal"`, `commission_pips=12.0`, `pip_size=0.01`,
+`dollar_per_point=100.0`. Across 5 real closed trades, every one showed
+`trade.pnl_usd == gross_usd` to floating-point precision (zero
+commission subtracted), while the hand-computed expected commission
+(`commission_pips * pip_size * position_size * dollar_per_point`) was
+$0.73-$0.89 per trade — a real, nonzero, silently-dropped cost.
+
+**File / Line (pre-fix):** `backtesting/backtest_engine.py`, the
+`_close_trade` closure inside `run_backtest()` (originally lines
+599-629):
+```python
+trade.pnl_usd = _calc_pnl_usd(diff, trade.position_size, trade.entry_price)
+if ac == "forex":
+    trade.pnl_usd -= (config.commission_pips + swap_pips) * _pip_value_usd(
+        trade.entry_price, trade.position_size
+    )
+elif swap_pips:
+    trade.pnl_usd -= swap_pips * config.pip_size * trade.position_size
+```
+The `if ac == "forex":` branch is the ONLY place commission is ever
+subtracted from `pnl_usd`. The `elif swap_pips:` branch handles swap
+only for non-forex, and — a second, related, currently-DORMANT bug
+found in the same lines — is missing the `* dpp` (dollar-per-point)
+scale factor that `_calc_pnl_usd` uses everywhere else for non-forex,
+so even that swap deduction would have been wrong once
+`swap_pips_per_night` is ever nonzero for a metal/index/crypto symbol
+(currently always 0.0 in practice — CLAUDE.md: "Swap model ships OFF
+(`data/swap_rates.json` all zeros)" — so this half of the bug has never
+fired live, but was live-armed to fire incorrectly the moment swap
+rates are filled in for gold/crypto).
+
+**Execution path:** `run_backtest()` main loop → any exit path
+(`check_exit()` SL/TP/gap, the BUG-002 same-bar check, or the
+end-of-data forced close) → `_close_trade()` → `ac != "forex"` branch →
+commission silently never applied.
+
+**Reproduction:** Ran the real `run_backtest()` on synthetic XAUUSD
+OHLCV, inspected every closed trade's `pnl_usd` against a hand-computed
+gross P&L and hand-computed expected commission cost using the exact
+same formula `_calc_pnl_usd` uses for non-forex. 5/5 trades confirmed
+zero commission applied pre-fix; 5/5 confirmed correct commission
+applied post-fix (delta between gross and net exactly equals
+`commission_pips * pip_size * position_size * dollar_per_point` to
+within floating-point tolerance).
+
+**Root cause:** The `_close_trade` closure's cost-deduction branch was
+written forex-first (`_pip_value_usd`'s USD-per-pip formula only makes
+sense for forex's 100,000-unit lot convention) and the non-forex
+`elif` branch was added later for swap only, without also covering
+commission — an incomplete generalization when non-forex asset-class
+support (metals/indices/crypto) was added to this cost-modeling layer.
+
+**Impact:** Every historical backtest, walk-forward run, robustness
+sweep, and Mission Center trial for a non-forex symbol
+(XAUUSD/XAGUSD/USOIL/US30/NAS100/SPX500/BTCUSD/ETHUSD) computed via
+this engine has had its trade-level P&L systematically overstated by
+the real commission amount — for every single trade, not just some.
+This is a real bias in the positive direction on exactly the carrier
+assets CLAUDE.md identifies as the system's measured edge
+("disciplined trend-capture on carrier assets (XAUUSD, BTCUSD,
+ETHUSD)"). The per-trade magnitude observed in this reproduction was
+modest relative to typical trade PnL (~$0.7-0.9 commission vs.
+~$100-200 typical trade PnL in the sample, i.e. roughly a 0.5-1% cost
+drag per trade) — this is NOT a claim that the measured carrier-asset
+edge is fabricated or reverses under the fix, only that every PF/
+win-rate/drawdown number computed from this engine for these symbols
+was measured with real trading cost silently omitted, in the direction
+that makes the system look better than it is. Confirmed NOT to touch
+the live decision pipeline (same reasoning as BUG-002/003 —
+`backtesting/backtest_engine.py` is backtest-only, never imported by
+`main.py`/`scheduler.py`), so live trade execution and its own
+commission handling (wherever that lives in the execution layer) are
+unaffected by this bug or its fix.
+
+**Fix (CONFIRMED, applied same phase):** Replaced the `elif swap_pips:`
+branch with a unified non-forex cost branch that subtracts BOTH
+commission and swap, scaled consistently with `_calc_pnl_usd`'s own
+non-forex formula (`cost_pips * pip_size * position_size * dpp`) —
+fixing the missing commission deduction and the dormant `dpp`-scaling
+gap in the swap path in the same change, since both were the same root
+cause (an incomplete non-forex generalization of the cost-deduction
+branch).
+
+**Regression test:**
+`tests/test_backtest_exits.py::test_run_backtest_deducts_commission_from_pnl_usd_for_non_forex_assets`
+— real `run_backtest()` run on synthetic XAUUSD data, asserts every
+closed trade's `gross_usd - pnl_usd` equals the exact expected
+commission cost. Full suite re-run after the fix: 13/13 in
+`tests/test_backtest_exits.py`.
+
+**Status:** FIXED, tested, regression-pinned. Same disclosed limitation
+as BUG-002/BUG-003: historical `reports/`/`research/results/registry.json`
+evidence for non-forex symbols computed before this fix is NOT re-run
+as part of this forensic pass — this fixes the measurement tool, it
+does not retroactively revise any already-recorded PF/win-rate number.
+**Flagged as a priority follow-up, not performed here**: given this
+bug's direct bearing on the carrier-asset PF claims CLAUDE.md's
+"measured edge" statement rests on, re-running the registered
+XAUUSD/BTCUSD/ETHUSD evidence hypotheses against the fixed engine (and
+comparing pre/post-fix PF) is a natural, high-value next step — out of
+scope for this pass (which fixes the tool, not the historical record),
+same boundary already established for BUG-002/BUG-003.

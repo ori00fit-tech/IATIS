@@ -601,8 +601,9 @@ def run_backtest(
         """Finalize a trade at ``exit_price`` and return its pnl_usd.
 
         Single close path (was duplicated 4× for BUY/SELL × SL/TP).
-        Commission is charged once per round trip, consistently via
-        _pip_value_usd for forex.
+        Commission and swap are charged once per round trip, via
+        _pip_value_usd for forex and via config.pip_size * dpp (the same
+        scaling _calc_pnl_usd uses) for non-forex (metal/index).
         """
         sign = 1.0 if trade.direction == "BUY" else -1.0
         diff = sign * (exit_price - trade.entry_price)
@@ -623,8 +624,17 @@ def run_backtest(
             trade.pnl_usd -= (config.commission_pips + swap_pips) * _pip_value_usd(
                 trade.entry_price, trade.position_size
             )
-        elif swap_pips:
-            trade.pnl_usd -= swap_pips * config.pip_size * trade.position_size
+        else:
+            # BUG-004 fix (2026-08-04): commission_pips was previously
+            # never subtracted here at all for non-forex assets (metal/
+            # index — XAUUSD, BTCUSD, ETHUSD, XAGUSD, USOIL, US30, NAS100,
+            # SPX500), and the swap-only branch it replaces was also
+            # missing the `* dpp` scale factor _calc_pnl_usd uses
+            # everywhere else for non-forex. See
+            # reports/forensic/13_CONFIRMED_BUGS.md BUG-004.
+            cost_pips = config.commission_pips + swap_pips
+            if cost_pips:
+                trade.pnl_usd -= cost_pips * config.pip_size * trade.position_size * dpp
         trade.exit_reason = exit_reason
         return trade.pnl_usd
 

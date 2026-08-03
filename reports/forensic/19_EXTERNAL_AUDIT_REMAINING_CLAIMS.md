@@ -180,12 +180,35 @@ confirmed consequence of the Confluence Engine Overhaul Phase 1 config
 extraction, which required transcribing every magic number's exact
 formula (not just its value) into `config/engines.yaml`, and would have
 surfaced a raw-price-difference threshold as an obvious outlier during
-that work. This claim likely predates that refactor. Not exhaustively
-re-verified against every remaining threshold in every engine (`smc`,
-`market_structure`, `divergence`, `quant`, `macro`, `sentiment`) —
-flagged as the one item in this list with the lowest confidence of
-being fully closed, since only a sample was checked, not every
-threshold in every file.
+that work. This claim likely predates that refactor.
+
+**Follow-up pass (2026-08-03) — now exhaustive, not a sample.** Checked
+every remaining engine this report had left unverified:
+- `smc_engine.py`: `detect_fair_value_gaps`/`detect_bos_choch` compare
+  raw price levels directly against each other (`lows[i] > highs[i-2]`)
+  with no added absolute epsilon — scale-invariant by construction;
+  `detect_order_blocks`' `displacement_atr` is already ATR-based.
+- `market_structure_engine.py`: HH/HL/LH/LL classification compares
+  swing prices directly against each other, never against a fixed
+  constant.
+- `divergence_engine.py` (already covered above for pivots): RSI/MACD-
+  histogram thresholds operate on RSI's own 0-100 scale or MACD's
+  already-relative histogram value, not raw price.
+- `quant_engine.py`: every statistic (z-score, Hurst, ADF, variance
+  ratio, efficiency ratio) is computed on log-returns or is itself a
+  normalized statistic — inherently scale-free by mathematical
+  construction, not just by a chosen threshold.
+- `macro_engine.py`: every comparison (`gold_spy_threshold_pct`,
+  `credit_spread_widen_threshold`, `fed_balance_sheet_threshold_pct`,
+  `commodity_flat_threshold_pct`) is a fractional percentage change,
+  never a raw price/index-point difference.
+- `sentiment_engine.py`: `_retail_sentiment_proxy()`'s `pct_from_low` is
+  a percentage-of-range calculation, fully scale-invariant.
+
+**Final verdict: NOT CONFIRMED, now exhaustively checked.** Zero
+instances of a raw, non-normalized absolute-price threshold were found
+in any of the 10 engines' current implementations. This claim is fully
+closed as not applicable to the current codebase.
 
 ---
 
@@ -196,20 +219,20 @@ threshold in every file.
 | 1 | Divergence MACD lag treated as synchronous | NOT A BUG |
 | 2 | Wyckoff footprint ignored | CONFIRMED, resolved via v2 sandbox |
 | 3 | Wyckoff pre-climax range missing | CONFIRMED, resolved via v2 sandbox |
-| 4 | ICT Judas Swing on unclosed candle | UNRESOLVED — needs provider-level investigation |
+| 4 | ICT Judas Swing on unclosed candle | RESOLVED — generalized into BUG-010 (a live, system-wide fix), see `13_CONFIRMED_BUGS.md` |
 | 5 | MarketStructure CHoCH/MSS on 3 swings | CONFIRMED design weakness — needs Mission Center A/B, not a code fix |
 | 6 | Sentiment/PriceAction double-voting | CONFIRMED plausible overlap, zero live impact (Sentiment disabled) |
 | 7 | RSI-correlation-as-echo (systemic) | CONFIRMED, narrower than claimed (2 of 4 live engines, not 5) |
-| 8 | ATR-normalization blindness (systemic) | NOT CONFIRMED on the sample checked; not exhaustively re-verified |
+| 8 | ATR-normalization blindness (systemic) | NOT CONFIRMED — exhaustively checked across all 10 engines |
 
 ## Status
 
-Every remaining claim from the original 44-item list that concerns a
-specific, checkable code path has now been verified at least once
-against current code. Two items are explicitly left open for a future
-pass, not silently closed: item 4 (needs a per-provider live-data
-investigation this sandbox cannot fully settle) and item 8 (checked on
-a sample, not exhaustively across every engine/threshold). Items 5 and
-7 are real, current characteristics that — per CLAUDE.md's own
-discipline — call for measurement via Mission Center, not a direct
-unilateral code change to a live engine.
+**Every claim from the original 44-item external audit that concerns a
+specific, checkable code path is now fully closed** — either verified
+as not-a-bug, confirmed-and-already-fixed, confirmed-and-fixed-this-
+pass (BUG-010), or confirmed-as-a-real-design-characteristic requiring
+measurement rather than a unilateral code change (items 5 and 7 — per
+CLAUDE.md's own discipline, retuning a live engine's thresholds without
+a measured, pre-registered hypothesis is not undertaken here; the
+correct next step for either is a Mission Center hypothesis-bundle
+experiment). No item remains open pending further investigation.

@@ -1173,3 +1173,101 @@ symbol is positively identified, uses `t.get("trading_days_per_year_fx",
 `tests/test_quant_engine_v2.py` (+3) — see Reproduction above.
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-010
+
+**Severity:** P1 (live, currently active — affects the carrier assets
+CLAUDE.md identifies as the system's only measured edge)
+
+**Category:** Data integrity — live-feed freshness (follow-up to
+external audit claim "ICT Judas Swing on an unclosed candle," which
+this investigation generalized: the root cause is not ICT-specific)
+
+**Claim investigated:** does any engine risk evaluating a still-forming
+(not yet closed) candle as if it were the finalized "current bar,"
+given every engine reads `mtf_data[tf].iloc[-1]` as the decision bar and
+`main.py`'s own decision-report comment explicitly assumes `df_base.
+index[-1]` is "the last closed candle of the decision timeframe"?
+
+**Observed:** `core/ccxt_provider.py::fetch_ccxt()` calls `exchange.
+fetch_ohlcv(...)` (ccxt/Binance) with no trimming of the response — a
+well-documented behavior of Binance's kline API is to include the
+current, still-in-progress candle as the last element when the
+requested window extends to "now" (which it always does here — `since_
+dt = now - timedelta(days=days)`, and the pagination loop fetches until
+Binance stops returning full batches, i.e. right up to the latest
+available candle). `core/data_providers.py::fetch_multi_timeframe_with_
+failover()` performs zero validation on what any provider returns
+before handing it to `main.py`. `scheduler.py::run_loop()` sleeps a
+fixed `interval_minutes` after each run rather than aligning to bar-
+close boundaries, so a scheduled run can fire at any offset into a bar
+window — exactly the condition under which a still-forming last bar
+would be returned.
+
+**Expected:** `df.index[-1]` should always be a genuinely closed bar for
+every provider, matching what `main.py`'s own comment already assumes.
+
+**Execution path:** `core/data_providers.DEFAULT_CHAINS["crypto"] =
+["ccxt", "alpaca", "twelve_data", "finnhub"]` — ccxt is the FIRST-choice
+provider for BTCUSD/ETHUSD, and `_NATIVE_TF["ccxt"]` includes H4/D1
+NATIVELY (confirmed: no resample step sits between the raw ccxt fetch
+and `views[tf]` for these symbols) — meaning a still-forming candle
+would flow directly into every engine's `mtf_data` for exactly the two
+carrier assets (alongside XAUUSD) CLAUDE.md identifies as the system's
+only measured edge. `_fetch_alpaca()` (the crypto fallback) was checked
+too and has the identical gap — no trimming of its own "latest N bars"
+response either.
+
+**Reproduction:** `tests/test_provider_chains.py` (+9 tests) —
+`_drop_still_forming_bar()` unit tests (trims a bar whose own window
+hasn't closed yet; no-op for an already-closed last bar; no-op on an
+unrecognized timeframe; no-op/empty-safe on an empty frame; correctly
+localizes a naive index before comparing to `now`); the authoritative
+end-to-end proof at `fetch_with_failover()` (a mocked ccxt provider
+returning a still-forming last bar has it stripped before the caller
+ever sees it, regardless of which of the 9 providers served it — this
+is the single choke point shared by `fetch_multi_timeframe_with_
+failover`, `execution/routes/analyze.py`, and `scripts/cross_provider_
+diff.py`); a provider whose entire response is just the one
+still-forming bar is correctly treated as a failure and falls through
+to the next provider in the chain, never silently handing a caller a
+single moving-target bar; a regression pin proving an already-
+well-behaved provider (returns only closed bars) is completely
+unaffected — same bar count in and out. 27/27 pass in the file.
+
+**Root cause:** No provider fetch path was ever verified to guarantee
+the invariant `main.py`'s own comment already assumed — a genuine gap
+between documented intent and enforced behavior, not a wrong formula in
+any single provider.
+
+**Impact:** For BTCUSD/ETHUSD specifically (H4/D1, native via ccxt, no
+resample to incidentally catch it), every engine's read of the
+"current" bar (ICT's Judas swing check, but also any pattern/swing/
+level detector reading `.iloc[-1]` in any engine) could evaluate a
+still-changing high/low/close until the real close, producing an
+unstable, repainting signal on exactly the assets this system's live
+trading depends on. FX/metals via cTrader were checked as a secondary
+question and found lower-risk (cTrader's historical-trendbar API is
+conventionally documented to serve closed bars only, unlike ccxt's
+"latest N" kline semantics) but were given the same protection anyway
+since it costs nothing to apply generically and closes the gap even if
+that assumption is ever wrong for a specific broker/instrument.
+
+**Fix (CONFIRMED, applied same phase):** New `core.data_providers.
+_drop_still_forming_bar(df, interval)` — drops the last row only when
+its own bar-duration window (`bar_open_time + duration`) hasn't fully
+elapsed relative to real UTC "now"; a no-op for the common case of an
+already-closed last bar. Wired into `fetch_with_failover()`'s single
+success path (not into each of the 9 individual provider functions),
+so every current and future provider gets the protection automatically
+with zero per-provider code duplication. A provider whose entire
+response becomes empty after trimming is treated as a normal failure
+(`DataFetchError`), falling through the chain exactly like an empty
+response always has.
+
+**Regression tests:** `tests/test_provider_chains.py` (+9 tests, see
+Reproduction above).
+
+**Status:** FIXED, tested, regression-pinned.

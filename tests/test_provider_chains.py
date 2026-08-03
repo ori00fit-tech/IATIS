@@ -322,3 +322,115 @@ def test_get_shared_ctrader_client_constructs_exactly_once_under_concurrency(mon
 
     dp._ctrader_feed_client = None
     dp._ctrader_feed_lock = None
+
+
+# ── Still-forming last bar (Forensic Audit follow-up, 2026-08-04) ──────────
+# main.py's own decision-report comment assumes df.index[-1] is "the last
+# CLOSED candle of the decision timeframe" — but no provider fetch was
+# actually verified/enforced to guarantee that. ccxt/Binance's fetchOHLCV in
+# particular is well known to include the current, still-forming candle for
+# whatever bucket "now" falls into. This directly affects the crypto carrier
+# assets (BTCUSD/ETHUSD), whose H4/D1 come NATIVELY from ccxt (no resample
+# step in between to incidentally drop it).
+
+def _df_ending_now(n=100, freq="h"):
+    """A synthetic OHLCV frame whose LAST bar's open time is the most
+    recent completed bucket boundary before real wall-clock now — i.e.
+    the last bar is fully closed. Used to prove the trim is a no-op for
+    a well-behaved provider."""
+    now = pd.Timestamp.now(tz="UTC").floor(freq)
+    idx = pd.date_range(end=now - pd.tseries.frequencies.to_offset(freq), periods=n, freq=freq, tz="UTC")
+    px = pd.Series(100.0, index=idx)
+    return pd.DataFrame({"open": px, "high": px + 1, "low": px - 1,
+                         "close": px, "volume": 1.0}, index=idx)
+
+
+def _df_with_forming_last_bar(n=100, freq="h"):
+    """A synthetic OHLCV frame whose LAST bar's open time is the CURRENT,
+    still-in-progress bucket (mirrors what ccxt/Binance can return)."""
+    now = pd.Timestamp.now(tz="UTC").floor(freq)
+    idx = pd.date_range(end=now, periods=n, freq=freq, tz="UTC")
+    px = pd.Series(100.0, index=idx)
+    return pd.DataFrame({"open": px, "high": px + 1, "low": px - 1,
+                         "close": px, "volume": 1.0}, index=idx)
+
+
+def test_drop_still_forming_bar_trims_a_bar_still_in_progress():
+    df = _df_with_forming_last_bar(n=10, freq="h")
+    trimmed = dp._drop_still_forming_bar(df, "H1")
+    assert len(trimmed) == len(df) - 1
+    assert trimmed.index[-1] == df.index[-2]
+
+
+def test_drop_still_forming_bar_is_a_noop_for_a_closed_last_bar():
+    df = _df_ending_now(n=10, freq="h")
+    trimmed = dp._drop_still_forming_bar(df, "H1")
+    assert len(trimmed) == len(df)
+    assert trimmed.index[-1] == df.index[-1]
+
+
+def test_drop_still_forming_bar_noop_on_unknown_timeframe():
+    df = _df_with_forming_last_bar(n=10, freq="h")
+    trimmed = dp._drop_still_forming_bar(df, "UNKNOWN_TF")
+    assert len(trimmed) == len(df)
+
+
+def test_drop_still_forming_bar_noop_on_empty_df():
+    df = _df_with_forming_last_bar(n=0, freq="h").iloc[0:0]
+    trimmed = dp._drop_still_forming_bar(df, "H1")
+    assert trimmed.empty
+
+
+def test_drop_still_forming_bar_localizes_naive_index():
+    df = _df_with_forming_last_bar(n=10, freq="h")
+    naive = df.copy()
+    naive.index = naive.index.tz_localize(None)
+    trimmed = dp._drop_still_forming_bar(naive, "H1")
+    assert len(trimmed) == len(naive) - 1
+
+
+def test_fetch_with_failover_trims_forming_bar_from_a_real_provider(monkeypatch):
+    """The authoritative end-to-end proof: fetch_with_failover() — the
+    single choke point used by fetch_multi_timeframe_with_failover(),
+    execution/routes/analyze.py, and scripts/cross_provider_diff.py —
+    strips a provider's still-forming last bar before it ever reaches a
+    caller, regardless of which provider served it."""
+    def fake_ccxt(symbol, interval, outputsize):
+        return _df_with_forming_last_bar(n=min(outputsize, 50), freq="h")
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    df, provider = dp.fetch_with_failover("BTC/USD", "H1", outputsize=50, providers=["ccxt"])
+    assert provider == "ccxt"
+    # The forming bar is gone — last remaining bar's own window has fully closed.
+    assert (df.index[-1] + pd.Timedelta(hours=1)) <= pd.Timestamp.now(tz="UTC")
+
+
+def test_fetch_with_failover_does_not_trim_an_already_closed_bar(monkeypatch):
+    """Regression pin: a provider that already only returns closed bars
+    (the common/expected case) is completely unaffected — same bar count
+    in and out."""
+    def fake_ccxt(symbol, interval, outputsize):
+        return _df_ending_now(n=min(outputsize, 50), freq="h")
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    df, provider = dp.fetch_with_failover("BTC/USD", "H1", outputsize=50, providers=["ccxt"])
+    assert len(df) == 50
+
+
+def test_fetch_with_failover_falls_through_when_only_bar_is_still_forming(monkeypatch):
+    """A provider whose ENTIRE response is just the one still-forming bar
+    must be treated as a failure (empty-after-trim), falling through to
+    the next provider in the chain — never silently handing a caller a
+    single, moving-target bar."""
+    def fake_ccxt(symbol, interval, outputsize):
+        return _df_with_forming_last_bar(n=1, freq="h")
+
+    def fake_twelve_data(symbol, interval, outputsize, use_cache):
+        return _df_ending_now(n=10, freq="h")
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    monkeypatch.setattr(dp, "_fetch_twelve_data", fake_twelve_data)
+    df, provider = dp.fetch_with_failover(
+        "BTC/USD", "H1", outputsize=10, providers=["ccxt", "twelve_data"],
+    )
+    assert provider == "twelve_data"

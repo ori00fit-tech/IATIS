@@ -425,6 +425,65 @@ def test_missions_status_404_when_unknown(client):
     assert r.status_code == 404
 
 
+# ── search_space_kind (P1 evidence-pipeline audit, 2026-08-04) ─────────────
+# Real coverage gap closed here: GET /research/missions/{id} has computed
+# and returned search_space_kind since Forensic Audit Phase 1 item C, but
+# no test anywhere asserted the field is actually present/correct in the
+# real HTTP response — only the underlying classify_search_space_variation()
+# function had (newly-added) unit coverage. This is the exact mechanism
+# meant to proactively label a mission like the operator-reported "22
+# trials, all risk-only" case in the UI, so it needs an end-to-end proof.
+
+def test_missions_status_reports_risk_only_search_space_kind(client):
+    from storage import research_missions
+
+    research_missions.upsert_mission(
+        mission_id="mission-risk-only-test",
+        name="risk only test", sampler="tpe", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=10, min_trades=10, seed=1,
+        search_space={
+            "timeframes_choices": [["H4"]],
+            "engine_set_choices": [["nnfx", "price_action"]],
+            "indicator_set_choices": [[]],
+            "context_filter_set_choices": [[]],
+            "engine_variant_choices": [{}],
+            "hypothesis_bundle_choices": None,
+            "risk_param_ranges": {"sl_atr_multiplier": [1.0, 3.0]},
+            "risk_param_grid": {},
+        },
+        config={}, status="finished",
+    )
+
+    r = client.get("/research/missions/mission-risk-only-test", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["search_space_kind"] == "RISK_ONLY_VARIATION"
+
+
+def test_missions_status_reports_signal_variation_search_space_kind(client):
+    from storage import research_missions
+
+    research_missions.upsert_mission(
+        mission_id="mission-signal-variation-test",
+        name="signal variation test", sampler="tpe", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=10, min_trades=10, seed=1,
+        search_space={
+            "timeframes_choices": [["H1"], ["H4"]],
+            "engine_set_choices": [["nnfx"], ["smc", "wyckoff"]],
+            "indicator_set_choices": [[]],
+            "context_filter_set_choices": [[]],
+            "engine_variant_choices": [{}],
+            "hypothesis_bundle_choices": None,
+            "risk_param_ranges": {},
+            "risk_param_grid": {},
+        },
+        config={}, status="finished",
+    )
+
+    r = client.get("/research/missions/mission-signal-variation-test", headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["search_space_kind"] == "SIGNAL_VARIATION"
+
+
 def test_missions_leaderboard_returns_empty_for_unknown_mission(client):
     r = client.get("/research/missions/does-not-exist-at-all/leaderboard", headers=HDR)
     assert r.status_code == 200

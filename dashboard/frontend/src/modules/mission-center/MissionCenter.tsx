@@ -547,6 +547,14 @@ function MissionBuilder({
       }
       const names = bundles.map((b) => b.name.trim())
       if (new Set(names).size !== names.length) { setError('Hypothesis names must be unique.'); return }
+      // Forensic Audit follow-up (2026-08-03) — mirrors the backend's own
+      // fail-fast check: hypothesis-search mode with only 1 hypothesis
+      // silently produces a "no variation" mission (every trial samples
+      // the sole choice) with no warning before trials execute.
+      if (bundles.length === 1) {
+        setError('Add at least 2 hypotheses to search across, or turn off "Search across named hypotheses" to run one fixed configuration.')
+        return
+      }
     } else {
       if (timeframes.length === 0) { setError('Select at least one timeframe.'); return }
       if (engines.length === 0) { setError('Select at least one engine.'); return }

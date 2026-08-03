@@ -1077,3 +1077,197 @@ Reproduction above). Full suite verified clean: 2193 passed, 2 skipped
 BUG-007's note — confirmed unchanged, zero new failures).
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-009
+
+**Severity:** P3 (dormant, currently zero live impact)
+
+**Category:** Engine correctness — statistical formula (external audit
+claim #9/44, "Quant: annualized volatility assumes 365 days — forex is
+261 days only")
+
+**Claim (external audit, verified independently rather than taken on its
+word):** `engines/quant_engine.py::_bars_per_year()` always computes
+`bars_per_year = (365 * 24 * 60) / minutes_per_bar`, regardless of asset
+class. Real FX/metals trade only ~261 days/year (52 weeks × 5 trading
+days), not 365. Since `realized_vol_annualized = sigma_bar *
+sqrt(bars_per_year)`, using 365 instead of 261 for FX symbols overstates
+`sqrt(bars_per_year)` — and therefore `realized_vol_annualized` — by
+`sqrt(365/261) ≈ 1.183`, i.e. **~18.3% too HIGH**.
+
+**Important correction to the audit's own claim:** the external audit
+stated this makes volatility "understated by 15%, leading to oversized
+positions." Independently re-derived the math rather than accepting the
+audit's word: the direction is backwards — using 365 in place of 261
+makes annualized volatility TOO HIGH, not too low, which (if the field
+were ever scored) would bias toward UNDER-sized positions, not
+oversized ones. Recorded here so the correct direction is on record, not
+the audit's stated one.
+
+**Observed:** `_bars_per_year("D1", {})` returned `365.0` for every
+timeframe/symbol combination prior to this fix, including real FX pairs
+like EURUSD/XAUUSD.
+
+**Expected:** A symbol identified as FX/metals (not 24/7) should
+annualize using ~261 trading days; a 24/7 asset (crypto) should keep 365.
+
+**File/Line:** `engines/quant_engine.py::_bars_per_year()` (lines
+~64-68 pre-fix), `extract_features()` (line ~249, the only call site),
+`QuantEngine.analyze()` (never passed a symbol into `extract_features()`
+pre-fix).
+
+**Execution path:** Currently NONE live — confirmed `config/
+engines.yaml`'s `engines.enabled.quant: false`, so `main.py::
+build_active_engines()` never constructs a live `QuantEngine`.
+Additionally confirmed by grep that `decide()` never reads
+`features["realized_vol_annualized"]` or `features["bars_per_year_used"]`
+— both are informational-only fields, serialized into `raw`/`features`
+but never consulted for `bias`/`score`. So even before this fix, the
+claimed causal impact ("oversized positions → bigger losses") was FALSE
+as stated: zero fields feeding this formula ever reached a trading
+decision. Reachable only via Mission Center's ad-hoc engine-toggle
+sandbox (exploratory, not evidence) and would become live-reachable only
+after a future re-enable following a fresh pre-registered hypothesis.
+
+**Reproduction:** `tests/test_indicators_quant_stats.py` (+4 tests) —
+no-symbol-context calls keep the exact prior 365-day values (backward-
+compatibility pin); a real FX symbol (`"EURUSD"`/`"XAUUSD"`) gets the
+corrected `261.0`-day count, config-overridable via
+`trading_days_per_year_fx`; a crypto symbol (`"BTCUSD"`/`"ETHUSDT"`)
+keeps `365.0`; the `bars_per_year_default` unknown-timeframe fallback is
+unaffected by symbol. `tests/test_quant_engine_v2.py` (+3 tests) —
+`extract_features()`'s new optional 4th `symbol` param defaults to `""`
+and is fully backward-compatible with every existing 3-positional-arg
+call; a real FX symbol changes `bars_per_year_used`/
+`realized_vol_annualized` but leaves `decide()`'s `bias`/`score`
+byte-identical (the direct proof the field is decision-inert);
+`QuantEngine.analyze()` correctly threads `getattr(self, "_symbol", "")`
+through (same pattern as BUG-008's `MacroEngine` fix) with the same
+zero-decision-impact property confirmed end-to-end via `safe_analyze()`.
+124/124 pass across both files.
+
+**Root cause:** The annualization formula was written assuming a 24/7
+trading calendar (correct for crypto, the engine's original test/dev
+context) without ever branching on asset class.
+
+**Impact:** Zero live impact today (engine disabled; affected fields
+never scored). Would produce a ~18% overstated `realized_vol_annualized`
+for FX/metals symbols the moment the engine is re-enabled AND that field
+is wired into a scored decision in the future — neither is true today.
+
+**Fix (CONFIRMED, applied same phase):** New `_is_24_7_asset(symbol)`
+helper (mirrors `core/market_quality.py`'s inline crypto-ticker pattern,
+same precedent as BUG-008's `is_usd_base_symbol()`). `_bars_per_year()`
+gains an optional `symbol: str = ""` parameter (default preserves the
+exact prior 365-day behavior for every existing caller); when a non-24/7
+symbol is positively identified, uses `t.get("trading_days_per_year_fx",
+261.0)` instead of 365. `extract_features()` gains the matching optional
+`symbol: str = ""` 4th parameter, threaded into `_bars_per_year()`.
+`QuantEngine.analyze()` now passes `getattr(self, "_symbol", "")`.
+`config/engines.yaml`'s `thresholds.quant` block gains
+`trading_days_per_year_fx: 261.0`.
+
+**Regression tests:** `tests/test_indicators_quant_stats.py` (+4),
+`tests/test_quant_engine_v2.py` (+3) — see Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-010
+
+**Severity:** P1 (live, currently active — affects the carrier assets
+CLAUDE.md identifies as the system's only measured edge)
+
+**Category:** Data integrity — live-feed freshness (follow-up to
+external audit claim "ICT Judas Swing on an unclosed candle," which
+this investigation generalized: the root cause is not ICT-specific)
+
+**Claim investigated:** does any engine risk evaluating a still-forming
+(not yet closed) candle as if it were the finalized "current bar,"
+given every engine reads `mtf_data[tf].iloc[-1]` as the decision bar and
+`main.py`'s own decision-report comment explicitly assumes `df_base.
+index[-1]` is "the last closed candle of the decision timeframe"?
+
+**Observed:** `core/ccxt_provider.py::fetch_ccxt()` calls `exchange.
+fetch_ohlcv(...)` (ccxt/Binance) with no trimming of the response — a
+well-documented behavior of Binance's kline API is to include the
+current, still-in-progress candle as the last element when the
+requested window extends to "now" (which it always does here — `since_
+dt = now - timedelta(days=days)`, and the pagination loop fetches until
+Binance stops returning full batches, i.e. right up to the latest
+available candle). `core/data_providers.py::fetch_multi_timeframe_with_
+failover()` performs zero validation on what any provider returns
+before handing it to `main.py`. `scheduler.py::run_loop()` sleeps a
+fixed `interval_minutes` after each run rather than aligning to bar-
+close boundaries, so a scheduled run can fire at any offset into a bar
+window — exactly the condition under which a still-forming last bar
+would be returned.
+
+**Expected:** `df.index[-1]` should always be a genuinely closed bar for
+every provider, matching what `main.py`'s own comment already assumes.
+
+**Execution path:** `core/data_providers.DEFAULT_CHAINS["crypto"] =
+["ccxt", "alpaca", "twelve_data", "finnhub"]` — ccxt is the FIRST-choice
+provider for BTCUSD/ETHUSD, and `_NATIVE_TF["ccxt"]` includes H4/D1
+NATIVELY (confirmed: no resample step sits between the raw ccxt fetch
+and `views[tf]` for these symbols) — meaning a still-forming candle
+would flow directly into every engine's `mtf_data` for exactly the two
+carrier assets (alongside XAUUSD) CLAUDE.md identifies as the system's
+only measured edge. `_fetch_alpaca()` (the crypto fallback) was checked
+too and has the identical gap — no trimming of its own "latest N bars"
+response either.
+
+**Reproduction:** `tests/test_provider_chains.py` (+9 tests) —
+`_drop_still_forming_bar()` unit tests (trims a bar whose own window
+hasn't closed yet; no-op for an already-closed last bar; no-op on an
+unrecognized timeframe; no-op/empty-safe on an empty frame; correctly
+localizes a naive index before comparing to `now`); the authoritative
+end-to-end proof at `fetch_with_failover()` (a mocked ccxt provider
+returning a still-forming last bar has it stripped before the caller
+ever sees it, regardless of which of the 9 providers served it — this
+is the single choke point shared by `fetch_multi_timeframe_with_
+failover`, `execution/routes/analyze.py`, and `scripts/cross_provider_
+diff.py`); a provider whose entire response is just the one
+still-forming bar is correctly treated as a failure and falls through
+to the next provider in the chain, never silently handing a caller a
+single moving-target bar; a regression pin proving an already-
+well-behaved provider (returns only closed bars) is completely
+unaffected — same bar count in and out. 27/27 pass in the file.
+
+**Root cause:** No provider fetch path was ever verified to guarantee
+the invariant `main.py`'s own comment already assumed — a genuine gap
+between documented intent and enforced behavior, not a wrong formula in
+any single provider.
+
+**Impact:** For BTCUSD/ETHUSD specifically (H4/D1, native via ccxt, no
+resample to incidentally catch it), every engine's read of the
+"current" bar (ICT's Judas swing check, but also any pattern/swing/
+level detector reading `.iloc[-1]` in any engine) could evaluate a
+still-changing high/low/close until the real close, producing an
+unstable, repainting signal on exactly the assets this system's live
+trading depends on. FX/metals via cTrader were checked as a secondary
+question and found lower-risk (cTrader's historical-trendbar API is
+conventionally documented to serve closed bars only, unlike ccxt's
+"latest N" kline semantics) but were given the same protection anyway
+since it costs nothing to apply generically and closes the gap even if
+that assumption is ever wrong for a specific broker/instrument.
+
+**Fix (CONFIRMED, applied same phase):** New `core.data_providers.
+_drop_still_forming_bar(df, interval)` — drops the last row only when
+its own bar-duration window (`bar_open_time + duration`) hasn't fully
+elapsed relative to real UTC "now"; a no-op for the common case of an
+already-closed last bar. Wired into `fetch_with_failover()`'s single
+success path (not into each of the 9 individual provider functions),
+so every current and future provider gets the protection automatically
+with zero per-provider code duplication. A provider whose entire
+response becomes empty after trimming is treated as a normal failure
+(`DataFetchError`), falling through the chain exactly like an empty
+response always has.
+
+**Regression tests:** `tests/test_provider_chains.py` (+9 tests, see
+Reproduction above).
+
+**Status:** FIXED, tested, regression-pinned.

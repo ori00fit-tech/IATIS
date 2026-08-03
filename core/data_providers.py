@@ -1030,6 +1030,44 @@ def _fetch_mt5(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
 
 
+# Forensic Audit follow-up (2026-08-04) — a provider's "latest N bars"
+# response can include the CURRENT, still-forming candle for whatever
+# timeframe bucket "now" falls into (a well-documented behavior of
+# ccxt/Binance's fetchOHLCV in particular, and not verifiably ruled out
+# for several other providers either — none of them are documented here
+# as trimming it). Its high/low/close keep changing until the bar
+# actually closes, which would make every engine's df.iloc[-1] read a
+# moving target instead of the closed bar main.py's own decision-report
+# comment ("last closed candle of the decision timeframe") assumes.
+# Mirrors core/timeframe_sync.py's private _TF_MINUTES (copied, not
+# imported — different module, same precedent as quant_engine.py's own
+# local copy) extended with M1/M5/M30, since this trim applies to every
+# timeframe this module fetches, not just the 4 core/timeframe_sync.py
+# resamples between.
+_TF_MINUTES_FOR_TRIM: dict[str, int] = {
+    "M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440,
+}
+
+
+def _drop_still_forming_bar(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """Drops the last row only when its own bar-duration window hasn't
+    fully elapsed yet (bar_open_time + duration > now) — a no-op for the
+    common case of a provider that already only returns closed bars, or
+    a live fetch that happens to land right after a bar just closed."""
+    if df.empty:
+        return df
+    minutes = _TF_MINUTES_FOR_TRIM.get(interval)
+    if minutes is None:
+        return df
+    last_open = df.index[-1]
+    if getattr(last_open, "tzinfo", None) is None:
+        last_open = last_open.tz_localize("UTC")
+    bar_close = last_open + pd.Timedelta(minutes=minutes)
+    if bar_close > pd.Timestamp.now(tz="UTC"):
+        return df.iloc[:-1]
+    return df
+
+
 def fetch_with_failover(
     symbol: str,
     interval: str,
@@ -1088,6 +1126,12 @@ def fetch_with_failover(
 
             if df is None or df.empty:
                 raise DataFetchError(f"{provider}: returned empty DataFrame")
+
+            df = _drop_still_forming_bar(df, interval)
+            if df.empty:
+                raise DataFetchError(
+                    f"{provider}: only bar returned was still forming — no closed bar yet"
+                )
 
             logger.info(f"Data fetched via {provider}: {len(df)} bars for {symbol} ({latency}ms)")
             return df, provider

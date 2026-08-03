@@ -158,9 +158,14 @@ thresholds:
     halflife_fast_bars: 10
     halflife_max_bars_for_mr_vote: 20
 
-    # Realized volatility (annualized)
+    # Realized volatility (annualized). trading_days_per_year_fx corrects
+    # the FX/metals trading calendar (~261 days/year, not 365) — only
+    # applied when analyze() positively identifies a non-24/7 symbol;
+    # unknown-symbol/direct-function callers keep the prior 365-day
+    # assumption (see engines/quant_engine.py::_bars_per_year).
     realized_vol_window: 20
     bars_per_year_default: 8760.0
+    trading_days_per_year_fx: 261.0
 
     # Volatility clustering (ARCH-effect proxy) — informational only
     vol_clustering_lookback: 100

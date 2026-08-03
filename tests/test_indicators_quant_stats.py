@@ -141,6 +141,46 @@ def test_bars_per_year_arithmetic():
     assert _bars_per_year("UNKNOWN_TF", {"bars_per_year_default": 100.0}) == pytest.approx(100.0)
 
 
+def test_bars_per_year_no_symbol_keeps_365_day_assumption():
+    """No symbol context (direct-function callers, unit tests) must keep
+    the exact pre-existing 365-day behavior — a caller has to positively
+    identify a non-24/7 symbol to get the corrected 261-day count."""
+    from engines.quant_engine import _bars_per_year
+
+    assert _bars_per_year("D1", {}, symbol="") == pytest.approx(365.0)
+    assert _bars_per_year("H1", {}, symbol="") == pytest.approx(8760.0)
+
+
+def test_bars_per_year_fx_symbol_uses_261_trading_days():
+    """External audit follow-up (2026-08-04): FX/metals trade ~261
+    days/year, not 365 — using 365 overstates sqrt(bars_per_year), and
+    therefore realized_vol_annualized, by ~18% for these symbols. The
+    external audit's own claimed error direction ("understated by 15%")
+    was backwards; this pins the CORRECT direction and magnitude."""
+    from engines.quant_engine import _bars_per_year
+
+    assert _bars_per_year("D1", {}, symbol="EURUSD") == pytest.approx(261.0)
+    assert _bars_per_year("H1", {}, symbol="XAUUSD") == pytest.approx((261.0 * 24 * 60) / 60)
+    # Config override respected.
+    assert _bars_per_year("D1", {"trading_days_per_year_fx": 252.0}, symbol="EURUSD") == pytest.approx(252.0)
+
+
+def test_bars_per_year_crypto_symbol_keeps_365_days():
+    """A crypto symbol trades 24/7/365 — must NOT get the FX correction."""
+    from engines.quant_engine import _bars_per_year
+
+    assert _bars_per_year("D1", {}, symbol="BTCUSD") == pytest.approx(365.0)
+    assert _bars_per_year("D1", {}, symbol="ETHUSDT") == pytest.approx(365.0)
+
+
+def test_bars_per_year_unknown_timeframe_ignores_symbol():
+    """The bars_per_year_default fallback path is unaffected by symbol —
+    it's a timeframe-lookup miss, unrelated to the trading-calendar fix."""
+    from engines.quant_engine import _bars_per_year
+
+    assert _bars_per_year("UNKNOWN_TF", {}, symbol="EURUSD") == pytest.approx(8760.0)
+
+
 def test_adf_pvalue_matches_direct_statsmodels_call():
     rng = np.random.default_rng(3)
     s = pd.Series(np.cumsum(rng.normal(0, 1, 200)) + 1000)

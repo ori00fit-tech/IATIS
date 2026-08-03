@@ -851,6 +851,25 @@ def run_backtest(
             )
             result.execute_count += 1
 
+            # Same-bar exit check (forensic fix, 2026-08-03 — BUG-002): a
+            # resting SL/TP order is live from the instant of entry, so the
+            # entry bar's OWN remaining high/low range (the excursion after
+            # its open, where the trade was just entered) must be checked
+            # too — not just bars strictly after it. The next loop
+            # iteration's own exit check only ever looks at df.iloc[i+2]
+            # onward, permanently skipping df.iloc[i+1] (this trade's own
+            # entry bar). Confirmed this can silently erase a real stop-out
+            # entirely: a same-bar stop-hunt wick that recovers before the
+            # next-checked bar was previously invisible to the simulation,
+            # capable of flipping a real loss into a reported win — see
+            # reports/forensic/13_CONFIRMED_BUGS.md BUG-002.
+            same_bar_exit = check_exit(open_trade, next_bar, slip)
+            if same_bar_exit is not None:
+                exit_price, reason = same_bar_exit
+                balance += _close_trade(open_trade, exit_price, reason, i + 1, next_bar.name)
+                result.trades.append(open_trade)
+                open_trade = None
+
         except Exception as exc:
             logger.debug(f"Bar {i} skipped: {exc}")
             result.error_count += 1

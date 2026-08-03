@@ -109,3 +109,120 @@ symbols now returns 400), plus
 `SAME_SYMBOL`-vocabulary tests in the same file.
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-002
+
+**Severity:** P0
+
+**Category:** Backtest Forensics — execution simulation / gap handling.
+
+**Claim:** `backtesting/backtest_engine.py`'s `run_backtest()` loop never
+checks a newly-opened trade's own entry bar for an SL/TP touch — only
+bars strictly AFTER the entry bar are ever checked. A resting stop/limit
+order is live from the instant of entry, so this is a real simulation
+gap, not a cosmetic one: it can silently ERASE a genuine same-bar
+stop-out and report the trade as a winner instead.
+
+**Observed:** Traced every real `check_exit()` call made during a real
+`run_backtest()` run (synthetic OHLCV, real engines, real gates — no
+mocks) by wrapping the function: for a trade with `entry_bar=210`, the
+FIRST bar ever passed to `check_exit()` for that trade was bar **211**
+(entry_bar + 1). Bar 210 — the entry bar itself, whose OPEN price was
+literally the trade's entry price — was never checked at all.
+
+**Expected:** The entry bar's own remaining high/low range (the
+excursion after the open where the trade was entered) must be checked
+against SL/TP immediately, the same as every subsequent bar — matching
+how a real resting stop-loss order behaves in live trading.
+
+**Evidence:**
+- Direct trace against a real `run_backtest()` run confirmed via
+  monkeypatched `check_exit`: 3/3 real trades produced had their first
+  exit-check bar at `entry_bar + 1`, never `entry_bar`.
+- Adversarial reproduction (wide intrabar wicks, tight `sl_atr_multiplier
+  =0.3`): **28 of 28** trades in a real `run_backtest()` run would have
+  exited via SL on their own entry bar if checked, per `check_exit()`
+  applied directly to that bar — none of them were.
+- **Decisive, outcome-flipping reproduction**: hand-crafted a 4-bar
+  sequence where the entry bar (bar[0]) wicks below SL (a classic
+  "stop-hunt" candle) then recovers, and price later rallies to TP by
+  bar[3]. The PRE-FIX bar sequence the loop actually checked (bars 1-3
+  only) reports **TP — a win**. Checking the entry bar itself (bar[0],
+  as a correct simulation must) reports **SL — a loss**. The trade's
+  final outcome, sign of PnL included, literally flips.
+
+**File / Line (pre-fix):** `backtesting/backtest_engine.py`, the main
+loop (`for i in range(config.warmup_bars, len(df) - 1):`, originally
+lines 631-648) — the "Check open trade" block at the top of each
+iteration only ever calls `check_exit(open_trade, next_bar, slip)` where
+`next_bar = df.iloc[i + 1]` of the CURRENT iteration; by the time a
+newly-opened trade's own entry bar (`df.iloc[i+1]` from the iteration
+that opened it) would need checking, the loop has already advanced to
+iteration `i+1`, where `next_bar` refers to `df.iloc[i+2]`.
+
+**Execution path:** `run_backtest()` → main loop → (EXECUTE decision) →
+`Trade(entry_bar=i+1, ...)` constructed → next loop iteration's
+"Check open trade" block → `check_exit(trade, df.iloc[i+2], slip)`,
+permanently skipping `df.iloc[i+1]`.
+
+**Reproduction:** See the three reproductions above — all performed
+against the real, unmodified (pre-fix) `run_backtest()`/`check_exit()`
+code, using real synthetic OHLCV and (for the trace + 28/28 case) the
+real engine pipeline, not mocks.
+
+**Root cause:** An off-by-one in the loop's bar-index bookkeeping: the
+"Check open trade" block runs once per outer-loop iteration, at the TOP
+of the iteration, using that iteration's own `next_bar`. A trade opened
+at the BOTTOM of iteration `i` (using that same `next_bar` as its entry
+bar) is never re-presented to the "Check open trade" block using its own
+entry bar — the block only ever runs again on the FOLLOWING iteration,
+whose `next_bar` has already advanced one bar further.
+
+**Impact:** Every historical backtest run through this engine (which
+also underlies `backtest/mission_runner.py`, `backtest/walk_forward.py`,
+and `backtest/robustness.py` — all of which call `run_backtest()`) could
+have missed genuine same-bar stop-outs, especially in volatile
+conditions (news spikes, thin liquidity, tight stops relative to
+intrabar range) where a wick-and-recover candle is common. This biases
+reported win rate, profit factor, and drawdown in an unpredictable
+direction (not uniformly optimistic or pessimistic — depends on whether
+the missed bar's price recovers favorably or unfavorably before the next
+checked bar) — a real threat to the "is the experiment itself valid"
+question this whole audit exists to answer. **Confirmed NOT to touch the
+live decision pipeline** — `backtesting/backtest_engine.py` is
+backtest-only; `main.py`/`scheduler.py` use a separate live pipeline that
+never imports this module — so this fix changes measurement accuracy
+only, never live trading behavior, and does not conflict with CLAUDE.md
+rule 6 ("never change entries/exits/thresholds mid-sample," which
+governs the live forward-demo system).
+
+**Fix (CONFIRMED, applied same phase):** Immediately after constructing
+a new `Trade` and incrementing `result.execute_count`, the loop now also
+calls `check_exit(open_trade, next_bar, slip)` against that SAME entry
+bar before moving to the next iteration — if it fires, the trade is
+closed and recorded right there (same `_close_trade`/`result.trades.append`
+path every other exit already uses), exactly mirroring how the existing
+"Check open trade" block handles every later bar.
+
+**Regression test:**
+`tests/test_backtest_exits.py::test_run_backtest_checks_exit_on_the_entry_bar_itself`
+(real `run_backtest()` run, real engines, asserts ≥1 trade now exits with
+`exit_bar == entry_bar`) and
+`tests/test_backtest_exits.py::test_run_backtest_entry_bar_exit_flips_a_would_be_missed_stopout`
+(the literal outcome-flip proof — TP under the old bar sequence, SL once
+the entry bar is checked). Full suite re-run after the fix: 168 tests
+across `test_backtest_runner_wf.py`, `test_robustness.py`,
+`test_engine_variants.py`, `test_phase1.py`, `test_behavior.py`,
+`test_decision_timeframe.py`, and the golden-value regression suite
+`test_engine_config_extraction_no_behavior_change.py` — zero failures.
+
+**Status:** FIXED, tested, regression-pinned. **Not yet re-run against
+historical committed backtest reports** — any PF/win-rate numbers in
+`research/results/registry.json` or `reports/` computed before this fix
+may shift slightly on re-run; this is a measurement-accuracy correction,
+not a claim that any prior number was fabricated. Re-running
+already-registered evidence hypotheses against the fixed engine is a
+natural follow-up, not performed as part of this forensic pass (out of
+scope — this pass fixes the tool, not the historical record).

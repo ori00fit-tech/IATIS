@@ -92,6 +92,103 @@ def test_zero_slippage_supported():
 
 # ── Production alignment ────────────────────────────────────────────────
 
+# ── Same-bar exit check (Forensic Audit, 2026-08-03 — BUG-002) ────────────
+# The entry bar's OWN post-open excursion must be checked against SL/TP,
+# not just bars strictly after it — a resting stop order is live from the
+# instant of entry. Before the fix, run_backtest()'s next-iteration exit
+# check only ever inspected df.iloc[i+2] onward, permanently skipping
+# df.iloc[i+1] (a newly-opened trade's own entry bar).
+
+def test_run_backtest_checks_exit_on_the_entry_bar_itself():
+    """Authoritative behavior-change proof: real synthetic OHLCV with wide
+    intrabar wicks relative to a tight SL, run through the REAL
+    run_backtest() pipeline (not a mock) — asserts at least one real trade
+    exits ON its own entry bar, which was structurally impossible before
+    the fix (every trade's first-ever exit check used to be its
+    entry_bar + 1)."""
+    import logging
+
+    import numpy as np
+
+    from backtesting.backtest_engine import BacktestConfig, run_backtest
+
+    logging.disable(logging.CRITICAL)
+    try:
+        n = 300
+        idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+        rng = np.random.default_rng(3)
+        close = 1.10 + np.cumsum(rng.normal(0, 0.0006, n)) + np.linspace(0, 0.02, n)
+        o = np.roll(close, 1)
+        o[0] = close[0]
+        df = pd.DataFrame(
+            {
+                "open": o,
+                # Wide intrabar wicks relative to a tight SL below — makes
+                # a same-bar SL/TP touch very likely, the exact adversarial
+                # shape that exposed the bug.
+                "high": np.maximum(o, close) + 0.004,
+                "low": np.minimum(o, close) - 0.004,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        cfg = BacktestConfig.from_profile(
+            "EURUSD", warmup_bars=60, step_bars=1, sl_atr_multiplier=0.3,
+        )
+        result = run_backtest(df, cfg)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    assert len(result.trades) > 0, "test data must produce at least one real trade"
+    same_bar_exits = [t for t in result.trades if t.exit_bar == t.entry_bar]
+    assert len(same_bar_exits) > 0, (
+        "expected at least one trade to exit on its own entry bar — "
+        "if this fails, the same-bar exit check regressed"
+    )
+    for t in same_bar_exits:
+        assert t.exit_reason in ("SL", "TP", "SL_GAP", "TP_GAP")
+
+
+def test_run_backtest_entry_bar_exit_flips_a_would_be_missed_stopout():
+    """The severe variant: proves the fix doesn't just re-check the entry
+    bar, it can change the trade's FINAL reported outcome. Directly
+    compares check_exit() called on the entry bar (now wired into the
+    loop) against the bar sequence the pre-fix loop would have checked
+    (entry_bar + 1 onward) — a same-bar stop-hunt wick that recovers
+    before the next bar was previously invisible to the simulation."""
+    idx = pd.date_range("2024-01-01", periods=4, freq="h", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "open": [1.1000, 1.1010, 1.1040, 1.1080],
+            "high": [1.1015, 1.1050, 1.1070, 1.1110],
+            "low": [1.0950, 1.1000, 1.1030, 1.1075],  # bar[0]'s low pierces SL
+            "close": [1.1010, 1.1040, 1.1060, 1.1100],
+        },
+        index=idx,
+    )
+    entry_price, sl, tp = 1.1000, 1.0980, 1.1100
+    trade = _trade("BUY", entry=entry_price, sl=sl, tp=tp)
+
+    # Pre-fix behavior: only bars AFTER the entry bar were ever checked.
+    pre_fix_result = None
+    for i in (1, 2, 3):
+        pre_fix_result = check_exit(trade, bars.iloc[i], SLIP)
+        if pre_fix_result is not None:
+            break
+    assert pre_fix_result is not None and pre_fix_result[1] == "TP", (
+        "sanity check: without the entry-bar check, this scenario reports a win"
+    )
+
+    # Fixed behavior: the entry bar itself is checked first (as
+    # run_backtest()'s loop now does immediately after opening a trade).
+    fixed_result = check_exit(trade, bars.iloc[0], SLIP)
+    assert fixed_result is not None and fixed_result[1] == "SL", (
+        "the entry bar's own excursion must be caught — this is the real loss "
+        "the pre-fix loop silently turned into a reported win"
+    )
+
+
 def test_backtest_defaults_match_production_config():
     """Guards against silent drift between the validated system and the
     production system (previous drift: min_rr 3.0 vs 2.0, SL mult 1.5 vs 2.5).

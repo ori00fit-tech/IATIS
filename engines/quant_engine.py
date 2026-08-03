@@ -60,12 +60,44 @@ from utils.indicators import (
 # imported, since that name is underscore-private to its own module.
 _TF_MINUTES_LOCAL = {"M15": 15, "H1": 60, "H4": 240, "D1": 1440}
 
+# Mirrors core/market_quality.py's own inline is_crypto pattern (not an
+# exported function there — reproduced locally, same precedent already
+# used for BUG-008's is_usd_base_symbol()).
+_CRYPTO_TICKERS = ("BTC", "ETH", "XRP", "LTC", "SOL")
 
-def _bars_per_year(tf: str, t: dict) -> float:
+
+def _is_24_7_asset(symbol: str) -> bool:
+    return any(c in symbol.upper() for c in _CRYPTO_TICKERS)
+
+
+def _bars_per_year(tf: str, t: dict, symbol: str = "") -> float:
+    """Forensic Audit follow-up (2026-08-04): realized-vol annualization
+    was always assuming a 365-day trading calendar, correct for crypto
+    but wrong for FX/metals, which trade only ~261 days/year (52 weeks x
+    5 days). Using 365 instead of 261 makes sqrt(bars_per_year) — and
+    therefore realized_vol_annualized — ~18% TOO HIGH for FX, not
+    "understated" as an earlier external audit claimed; independently
+    re-derived here, not taken on the audit's word. `symbol` is optional
+    and defaults to "" (unknown context), which preserves the exact
+    prior 365-day behavior for every existing caller/test that doesn't
+    pass one — only a caller that positively identifies a non-24/7
+    symbol gets the corrected 261-day count.
+
+    Currently zero live-decision impact either way: realized_vol_
+    annualized/bars_per_year_used are informational-only fields, never
+    read by decide() (grep-confirmed) — and Quant is a disabled engine
+    (config/engines.yaml engines.enabled.quant: false). Fixed at the
+    source anyway so a future re-enable doesn't inherit a known-wrong
+    constant.
+    """
     minutes = _TF_MINUTES_LOCAL.get(tf)
     if minutes is None:
         return t.get("bars_per_year_default", 8760.0)
-    return (365 * 24 * 60) / minutes
+    if symbol and not _is_24_7_asset(symbol):
+        days_per_year = t.get("trading_days_per_year_fx", 261.0)
+    else:
+        days_per_year = 365.0
+    return (days_per_year * 24 * 60) / minutes
 
 
 def _atr_percentile(df: pd.DataFrame, period: int = 14, lookback: int = 100) -> float:
@@ -195,16 +227,19 @@ def _classify_regime(
     return "RANDOM", votes, confidence
 
 
-def extract_features(df: pd.DataFrame, t: dict, tf: str) -> dict:
+def extract_features(df: pd.DataFrame, t: dict, tf: str, symbol: str = "") -> dict:
     """Feature Extraction layer — every statistic decide() needs,
     including the regime classification itself (a deterministic fact
     derived from other pure facts, same category as ict_engine.py's
     `zone` classification). Pure function of (df, thresholds, timeframe
-    label); zero bias/score logic. 3-arg signature (not Wyckoff's 2-arg
-    shape) because realized-vol annualization is genuinely timeframe-
-    dependent — ict_engine.py's own extract_features(mtf_data, t)
-    already establishes "whatever inputs the facts need" as the real
-    pattern, not literally always 2 args."""
+    label, optional symbol); zero bias/score logic. 3-required-arg
+    signature (not Wyckoff's 2-arg shape) because realized-vol
+    annualization is genuinely timeframe-dependent — ict_engine.py's own
+    extract_features(mtf_data, t) already establishes "whatever inputs
+    the facts need" as the real pattern, not literally always 2 args.
+    `symbol` is optional/keyword-friendly and defaults to "" (no
+    behavior change for any pre-existing 3-positional-arg caller) — see
+    _bars_per_year()'s own docstring for why it matters."""
     close = df["close"]
     log_close = np.log(close)
     log_returns = log_close.diff()
@@ -246,7 +281,7 @@ def extract_features(df: pd.DataFrame, t: dict, tf: str) -> dict:
         log_close.tail(t.get("halflife_lookback", 100)), min_obs=t.get("halflife_min_bars", 30),
     )
 
-    bars_per_year = _bars_per_year(tf, t)
+    bars_per_year = _bars_per_year(tf, t, symbol)
     realized_vol = realized_volatility(
         log_returns.tail(t.get("realized_vol_window", 20)), bars_per_year,
     )
@@ -418,7 +453,7 @@ class QuantEngine(BaseEngine):
                 reasons=[f"Insufficient data for quant analysis (need {min_bars}+ bars)"],
             )
 
-        features = extract_features(df, t, tf)
+        features = extract_features(df, t, tf, getattr(self, "_symbol", ""))
         bias, score, reasons = decide(features, t)
 
         raw = {**features, "timeframe_used": tf}

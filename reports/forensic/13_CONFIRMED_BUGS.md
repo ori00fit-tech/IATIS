@@ -1077,3 +1077,99 @@ Reproduction above). Full suite verified clean: 2193 passed, 2 skipped
 BUG-007's note — confirmed unchanged, zero new failures).
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-009
+
+**Severity:** P3 (dormant, currently zero live impact)
+
+**Category:** Engine correctness — statistical formula (external audit
+claim #9/44, "Quant: annualized volatility assumes 365 days — forex is
+261 days only")
+
+**Claim (external audit, verified independently rather than taken on its
+word):** `engines/quant_engine.py::_bars_per_year()` always computes
+`bars_per_year = (365 * 24 * 60) / minutes_per_bar`, regardless of asset
+class. Real FX/metals trade only ~261 days/year (52 weeks × 5 trading
+days), not 365. Since `realized_vol_annualized = sigma_bar *
+sqrt(bars_per_year)`, using 365 instead of 261 for FX symbols overstates
+`sqrt(bars_per_year)` — and therefore `realized_vol_annualized` — by
+`sqrt(365/261) ≈ 1.183`, i.e. **~18.3% too HIGH**.
+
+**Important correction to the audit's own claim:** the external audit
+stated this makes volatility "understated by 15%, leading to oversized
+positions." Independently re-derived the math rather than accepting the
+audit's word: the direction is backwards — using 365 in place of 261
+makes annualized volatility TOO HIGH, not too low, which (if the field
+were ever scored) would bias toward UNDER-sized positions, not
+oversized ones. Recorded here so the correct direction is on record, not
+the audit's stated one.
+
+**Observed:** `_bars_per_year("D1", {})` returned `365.0` for every
+timeframe/symbol combination prior to this fix, including real FX pairs
+like EURUSD/XAUUSD.
+
+**Expected:** A symbol identified as FX/metals (not 24/7) should
+annualize using ~261 trading days; a 24/7 asset (crypto) should keep 365.
+
+**File/Line:** `engines/quant_engine.py::_bars_per_year()` (lines
+~64-68 pre-fix), `extract_features()` (line ~249, the only call site),
+`QuantEngine.analyze()` (never passed a symbol into `extract_features()`
+pre-fix).
+
+**Execution path:** Currently NONE live — confirmed `config/
+engines.yaml`'s `engines.enabled.quant: false`, so `main.py::
+build_active_engines()` never constructs a live `QuantEngine`.
+Additionally confirmed by grep that `decide()` never reads
+`features["realized_vol_annualized"]` or `features["bars_per_year_used"]`
+— both are informational-only fields, serialized into `raw`/`features`
+but never consulted for `bias`/`score`. So even before this fix, the
+claimed causal impact ("oversized positions → bigger losses") was FALSE
+as stated: zero fields feeding this formula ever reached a trading
+decision. Reachable only via Mission Center's ad-hoc engine-toggle
+sandbox (exploratory, not evidence) and would become live-reachable only
+after a future re-enable following a fresh pre-registered hypothesis.
+
+**Reproduction:** `tests/test_indicators_quant_stats.py` (+4 tests) —
+no-symbol-context calls keep the exact prior 365-day values (backward-
+compatibility pin); a real FX symbol (`"EURUSD"`/`"XAUUSD"`) gets the
+corrected `261.0`-day count, config-overridable via
+`trading_days_per_year_fx`; a crypto symbol (`"BTCUSD"`/`"ETHUSDT"`)
+keeps `365.0`; the `bars_per_year_default` unknown-timeframe fallback is
+unaffected by symbol. `tests/test_quant_engine_v2.py` (+3 tests) —
+`extract_features()`'s new optional 4th `symbol` param defaults to `""`
+and is fully backward-compatible with every existing 3-positional-arg
+call; a real FX symbol changes `bars_per_year_used`/
+`realized_vol_annualized` but leaves `decide()`'s `bias`/`score`
+byte-identical (the direct proof the field is decision-inert);
+`QuantEngine.analyze()` correctly threads `getattr(self, "_symbol", "")`
+through (same pattern as BUG-008's `MacroEngine` fix) with the same
+zero-decision-impact property confirmed end-to-end via `safe_analyze()`.
+124/124 pass across both files.
+
+**Root cause:** The annualization formula was written assuming a 24/7
+trading calendar (correct for crypto, the engine's original test/dev
+context) without ever branching on asset class.
+
+**Impact:** Zero live impact today (engine disabled; affected fields
+never scored). Would produce a ~18% overstated `realized_vol_annualized`
+for FX/metals symbols the moment the engine is re-enabled AND that field
+is wired into a scored decision in the future — neither is true today.
+
+**Fix (CONFIRMED, applied same phase):** New `_is_24_7_asset(symbol)`
+helper (mirrors `core/market_quality.py`'s inline crypto-ticker pattern,
+same precedent as BUG-008's `is_usd_base_symbol()`). `_bars_per_year()`
+gains an optional `symbol: str = ""` parameter (default preserves the
+exact prior 365-day behavior for every existing caller); when a non-24/7
+symbol is positively identified, uses `t.get("trading_days_per_year_fx",
+261.0)` instead of 365. `extract_features()` gains the matching optional
+`symbol: str = ""` 4th parameter, threaded into `_bars_per_year()`.
+`QuantEngine.analyze()` now passes `getattr(self, "_symbol", "")`.
+`config/engines.yaml`'s `thresholds.quant` block gains
+`trading_days_per_year_fx: 261.0`.
+
+**Regression tests:** `tests/test_indicators_quant_stats.py` (+4),
+`tests/test_quant_engine_v2.py` (+3) — see Reproduction above.
+
+**Status:** FIXED, tested, regression-pinned.

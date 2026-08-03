@@ -170,6 +170,57 @@ def test_extract_features_json_serializable():
     json.dumps(features, default=str)
 
 
+def test_extract_features_default_symbol_preserves_prior_behavior():
+    """extract_features()'s 4th positional/keyword `symbol` param must be
+    fully backward-compatible: every pre-existing 3-arg call keeps the
+    exact prior 365-day realized-vol annualization."""
+    df = load_synthetic(bars=300, timeframe="H1", seed=11)
+    f_no_symbol = extract_features(df, {}, "H1")
+    f_empty_symbol = extract_features(df, {}, "H1", "")
+    assert f_no_symbol["bars_per_year_used"] == f_empty_symbol["bars_per_year_used"] == pytest.approx(8760.0)
+    assert f_no_symbol["realized_vol_annualized"] == pytest.approx(f_empty_symbol["realized_vol_annualized"])
+
+
+def test_extract_features_fx_symbol_corrects_annualization_but_not_decision():
+    """A real FX/metals symbol gets the corrected 261-trading-day
+    annualization for realized_vol_annualized/bars_per_year_used, but
+    decide() never reads either field (grep-confirmed) -- so bias/score
+    must be byte-identical to the same run with no symbol context."""
+    df = load_synthetic(bars=300, timeframe="H1", seed=11)
+    f_no_symbol = extract_features(df, {}, "H1")
+    f_fx = extract_features(df, {}, "H1", "EURUSD")
+
+    assert f_fx["bars_per_year_used"] == pytest.approx((261.0 * 24 * 60) / 60)
+    assert f_no_symbol["bars_per_year_used"] != f_fx["bars_per_year_used"]
+    assert f_fx["realized_vol_annualized"] != f_no_symbol["realized_vol_annualized"]
+
+    bias_a, score_a, _ = decide(f_no_symbol, {})
+    bias_b, score_b, _ = decide(f_fx, {})
+    assert bias_a == bias_b
+    assert score_a == pytest.approx(score_b)
+
+
+def test_analyze_threads_self_symbol_into_extract_features():
+    """QuantEngine.analyze() must pass self._symbol through (same
+    getattr(self, "_symbol", "") pattern as BUG-008's MacroEngine fix) so
+    a real engine built with a symbol attached gets the corrected FX
+    annualization automatically, with zero decision-output change."""
+    df = load_synthetic(bars=600, timeframe="H1", seed=3)
+    mtf = build_multi_timeframe_view(df, ["H1", "H4", "D1"])
+
+    engine_no_symbol = QuantEngine()
+    engine_fx = QuantEngine()
+    engine_fx._symbol = "EURUSD"
+
+    out_no_symbol = engine_no_symbol.safe_analyze(mtf)
+    out_fx = engine_fx.safe_analyze(mtf)
+
+    assert out_no_symbol.bias == out_fx.bias
+    assert out_no_symbol.score == pytest.approx(out_fx.score)
+    assert out_no_symbol.raw["bars_per_year_used"] != out_fx.raw["bars_per_year_used"]
+    assert out_fx.raw["bars_per_year_used"] == pytest.approx((261.0 * 24 * 60) / 60)
+
+
 # ---------------------------------------------------------------------------
 # Engine-level (QuantEngine.safe_analyze)
 # ---------------------------------------------------------------------------

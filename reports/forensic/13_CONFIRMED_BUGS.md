@@ -918,5 +918,10 @@ duplicate that remained after `run_monte_carlo()`'s `return`.
 **Regression tests:** New `tests/test_monte_carlo_forensics.py` (5
 tests, all passing) — see Reproduction above.
 
-**Status:** FIXED, tested, regression-pinned. Pending: full-suite
-verification and commit (this same phase).
+**Status:** FIXED, tested, regression-pinned. Full suite verified
+clean: 2192 passed, 2 skipped, zero failures (isolated from two
+unrelated, pre-existing live-credential test assumptions that broke
+only because this session's `.env` gained real `GEMINI_API_KEY`/
+`ALPACA_API_KEY`/`ALPACA_API_SECRET` values for separate, unrelated
+manual verification purposes — confirmed via a controlled re-run with
+those three values blanked, restored immediately after).

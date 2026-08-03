@@ -323,3 +323,99 @@ def test_backtest_defaults_match_production_config():
     assert bt.min_rr == cfg["risk"]["min_risk_reward"]
     assert bt.sl_atr_multiplier == cfg["risk"]["sl_atr_multiplier"]
     assert bt.risk_per_trade == cfg["risk"]["risk_per_trade_max"]
+
+
+# ── BUG-012: Sharpe annualization must match the base timeframe's real bar cadence ──
+
+def test_periods_per_year_scales_with_base_timeframe_not_a_flat_daily_count():
+    from backtesting.backtest_engine import _periods_per_year
+
+    assert _periods_per_year("D1", "EURUSD") == pytest.approx(252.0)
+    assert _periods_per_year("H4", "EURUSD") == pytest.approx(252.0 * 6)
+    assert _periods_per_year("H1", "EURUSD") == pytest.approx(252.0 * 24)
+    # 24/7 assets (crypto) use 365 calendar days, not 252 trading days.
+    assert _periods_per_year("D1", "BTCUSD") == pytest.approx(365.0)
+    assert _periods_per_year("H4", "BTCUSD") == pytest.approx(365.0 * 6)
+
+
+def test_backtest_result_sharpe_uses_base_timeframe_bar_cadence():
+    """Authoritative proof (BUG-012): a backtest on an H4 base timeframe must
+    NOT use the flat sqrt(252) daily-return annualization — equity_curve gets
+    one point per H4 bar (6/day), so the correct factor is sqrt(252*6), not
+    sqrt(252). Constructs the SAME equity curve two ways (a live run's real
+    BacktestResult, and a hand-computed 'old, wrong' Sharpe using a flat
+    sqrt(252)) and shows they differ by exactly the predicted sqrt(6) factor."""
+    import logging
+
+    import numpy as np
+
+    from backtesting.backtest_engine import (
+        BacktestConfig, build_engine_config_override, run_backtest,
+    )
+
+    logging.disable(logging.CRITICAL)
+    try:
+        n = 400
+        idx = pd.date_range("2024-01-01", periods=n, freq="4h", tz="UTC")
+        rng = np.random.default_rng(11)
+        close = 1.10 + np.cumsum(rng.normal(0, 0.0006, n)) + np.linspace(0, 0.01, n)
+        o = np.roll(close, 1)
+        o[0] = close[0]
+        df = pd.DataFrame(
+            {
+                "open": o,
+                "high": np.maximum(o, close) + 0.0004,
+                "low": np.minimum(o, close) - 0.0004,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx,
+        )
+        cfg = BacktestConfig.from_profile("EURUSD", warmup_bars=60, step_bars=1)
+        engine_config = build_engine_config_override(timeframes=["H4", "D1", "H1"])
+        result = run_backtest(df, cfg, engine_config=engine_config)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    assert result.timeframe == "H4"
+    equity = np.array(result.equity_curve)
+    assert len(equity) > 2
+    returns = np.diff(equity) / equity[:-1]
+    assert returns.std() > 0, "test data must produce non-degenerate returns"
+
+    naive_sharpe = float(returns.mean() / returns.std() * np.sqrt(252))
+    corrected_sharpe = float(returns.mean() / returns.std() * np.sqrt(252 * 6))
+
+    assert result.sharpe_ratio == pytest.approx(corrected_sharpe, rel=1e-9)
+    assert result.sharpe_ratio != pytest.approx(naive_sharpe, rel=1e-9)
+    assert result.sharpe_ratio == pytest.approx(naive_sharpe * (6 ** 0.5), rel=1e-9)
+
+
+def test_backtest_result_sharpe_unchanged_for_d1_base_timeframe():
+    """Regression guard: a D1-base-timeframe backtest's Sharpe must be
+    IDENTICAL before/after BUG-012's fix (periods_per_year(D1,...) == 252,
+    same as the old hardcoded constant) — the fix only changes non-daily
+    base timeframes."""
+    import numpy as np
+
+    from backtesting.backtest_engine import BacktestResult, _periods_per_year
+
+    assert _periods_per_year("D1", "EURUSD") == 252.0
+
+    result = BacktestResult(
+        config=BacktestConfig(), symbol="EURUSD",
+        start_date="2024-01-01", end_date="2024-02-01", total_bars=30,
+        timeframe="D1",
+    )
+    # compute() only computes win_rate/PF/Sharpe once there's >=1 closed
+    # trade — a dummy winning trade is enough to exercise that path.
+    result.trades = [_trade("BUY", entry=1.10, sl=1.09, tp=1.12)]
+    result.trades[0].exit_bar = 1
+    result.trades[0].pnl_usd = 100.0
+    result.equity_curve = [10_000.0, 10_050.0, 10_020.0, 10_100.0, 10_150.0]
+    result.compute()
+
+    equity = np.array(result.equity_curve)
+    returns = np.diff(equity) / equity[:-1]
+    old_sharpe = float(returns.mean() / returns.std() * np.sqrt(252))
+    assert result.sharpe_ratio == pytest.approx(old_sharpe, rel=1e-9)

@@ -58,7 +58,17 @@ _GOLDEN = {
         "SMC": ("BEARISH", 45.5),
         "PriceAction": ("BEARISH", 70.0),
         "NNFX": ("BEARISH", 68.0),
-        "Wyckoff": ("BULLISH", 40.0),
+        # Wyckoff score recaptured 2026-08-XX (BUG-011 fix,
+        # core/timeframe_sync.py): the H4/D1 views these fixtures build
+        # used to include a still-forming, partial last candle (the base
+        # H1 window didn't yet cover that candle's full period) —
+        # resample() now correctly drops it, same still-forming-bar
+        # protection BUG-010 gave live fetches. Bias is unchanged
+        # (BULLISH); only Wyckoff's score is sensitive to this particular
+        # scenario's now-corrected MTF data (40.0 -> 25.0) — every other
+        # engine/scenario combination in this file was re-verified
+        # unaffected.
+        "Wyckoff": ("BULLISH", 25.0),
         "ICT": ("NEUTRAL", 10.0),
         "MarketStructure": ("BEARISH", 65.0),
     },

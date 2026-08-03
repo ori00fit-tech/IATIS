@@ -614,3 +614,73 @@ session. Full suite re-run after the fix:
 this bug — flagged as a distinct, future design decision (would need a
 plan for historical COT/MarketAux archives before Sentiment could be
 genuinely backtestable), not silently bundled in here.
+
+---
+
+## GOVERNANCE-001 (hardening, not a bug)
+
+**Severity:** P1 (governance hardening — nothing is currently broken;
+this closes a gap that would only matter if a future config change
+opened it).
+
+**Category:** Live-capital governance. `research/edge_gate.py`.
+
+**Claim:** `check_edge_gate()`'s own module docstring states RESEARCH
+status means "approved for paper trading / data collection only (not
+live)" — but until this fix, that distinction was enforced only by
+convention, never in code. `check_edge_gate()` treated `PASSED` and
+`RESEARCH` identically (both simply had to be `in ALLOWED_STATUSES`),
+and the actual live-vs-demo decision lived entirely in
+`execution/trade_executor.py`'s `allow_live_trading` flag — a
+completely separate mechanism with zero cross-check against which
+hypothesis status backs the engines actually voting on that decision.
+
+**Observed:** Confirmed via `research/edge_gate.py`'s
+`ENGINE_HYPOTHESIS_MAP`: every currently-enabled prod4 engine
+(smc→H101, price_action→H102, nnfx→H004, wyckoff→H006) is `RESEARCH`
+status, not `PASSED`. Confirmed via `grep -rn "allow_live_trading"` that
+this flag is checked in exactly one place
+(`execution/trade_executor.py:211`, `if env != "demo" and not
+self.allow_live_trading:`) — a broker-account-environment check with no
+awareness of engine/hypothesis state at all. So the only thing
+currently standing between these RESEARCH-status engines and real
+capital is one global boolean, not a per-engine promotion check.
+
+**Expected:** If `allow_live_trading` is ever set `True`, an engine
+whose backing hypothesis is `RESEARCH` (or `PASSED` without qualifying
+evidence per `PROMOTION_CRITERIA`) should never be allowed to
+contribute to a live-capital decision — the code should enforce this,
+not just the docstring.
+
+**Fix (CONFIRMED, applied same phase):** `check_edge_gate()` gains an
+`allow_live_trading: bool = False` parameter. When `True`, every
+enabled engine's hypothesis must be genuinely `PASSED` AND clear
+`PROMOTION_CRITERIA` (via the newly-factored-out
+`_promotion_criteria_unmet()`, the same check `audit_passed_hypotheses()`
+already used) — otherwise `EdgeNotProvenError` is raised loudly at boot.
+`main.py`'s `build_active_engines()` now threads
+`config["execution"]["allow_live_trading"]` into this call.
+**Completely inert today**: `allow_live_trading` is `False` in the real
+`config.yaml`, so this new branch never executes under current
+configuration — verified by the full existing test suite passing
+unchanged. This is a forward-looking hardening, not a fix to any
+currently-firing bug.
+
+**Regression tests:**
+`tests/test_promotion_criteria.py::test_allow_live_trading_false_is_unaffected_by_research_status`
+(regression pin — current production config unaffected),
+`test_allow_live_trading_true_blocks_research_status_engine` (the
+authoritative proof — a RESEARCH-status engine is refused once the flag
+flips),
+`test_allow_live_trading_true_blocks_passed_without_qualifying_evidence`
+(a PASSED status alone still isn't enough — must clear
+`PROMOTION_CRITERIA` too),
+`test_allow_live_trading_true_permits_genuinely_qualifying_passed_engine`
+(the positive case — not a blanket ban on live trading, only on
+unproven engines). Full suite re-run after the fix: 2155 passed, 2
+skipped, zero failures.
+
+**Status:** APPLIED. Identified independently and confirmed by direct
+code reading (`ENGINE_HYPOTHESIS_MAP`, `allow_live_trading`'s one call
+site) before implementing — not taken on faith from any external
+report.

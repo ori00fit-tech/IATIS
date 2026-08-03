@@ -7,8 +7,11 @@ walk_forward / monte_carlo. Legacy PASSED rows (H009) must be flagged,
 not silently trusted — and boot must never break over it.
 """
 
+import pytest
+
 from research.edge_gate import (
     PROMOTION_CRITERIA,
+    EdgeNotProvenError,
     audit_passed_hypotheses,
     check_edge_gate,
 )
@@ -64,3 +67,63 @@ def test_real_registry_flags_h009_and_boot_survives():
     assert any("H009" in w for w in warnings)
     check_edge_gate({"smc": True, "price_action": True,
                      "nnfx": True, "wyckoff": True})  # must not raise
+
+
+# ── Live-capital governance hardening (Forensic Audit, 2026-08-04) ─────────
+# check_edge_gate() previously treated PASSED and RESEARCH identically no
+# matter what — the only thing standing between a RESEARCH-status engine
+# and real capital was the completely independent allow_live_trading flag
+# in execution/trade_executor.py, with zero cross-check. These tests pin
+# the fix: allow_live_trading=True now demands a genuinely PASSED,
+# evidence-qualifying hypothesis per enabled engine.
+
+def test_allow_live_trading_false_is_unaffected_by_research_status():
+    """Regression pin: the default (current production) config keeps
+    working exactly as before — RESEARCH-status prod4 engines are fine
+    when allow_live_trading is False (or omitted)."""
+    check_edge_gate({"smc": True, "price_action": True,
+                     "nnfx": True, "wyckoff": True})
+    check_edge_gate({"smc": True, "price_action": True,
+                     "nnfx": True, "wyckoff": True}, allow_live_trading=False)
+
+
+def test_allow_live_trading_true_blocks_research_status_engine(monkeypatch):
+    """The authoritative proof: flipping allow_live_trading to True must
+    refuse to let a RESEARCH-status engine (H101, SMC's real hypothesis)
+    pass the gate — this is the exact scenario that was previously
+    silently allowed."""
+    import research.edge_gate as eg
+
+    monkeypatch.setattr(eg, "_load_registry", lambda: {
+        "hypotheses": {"H101": {"status": "RESEARCH"}}
+    })
+    with pytest.raises(EdgeNotProvenError, match="paper/demo-only"):
+        check_edge_gate({"smc": True}, allow_live_trading=True)
+
+
+def test_allow_live_trading_true_blocks_passed_without_qualifying_evidence(monkeypatch):
+    """A PASSED status alone isn't enough for real capital either — it
+    must clear the same codified promotion bar audit_passed_hypotheses()
+    already checks (min_trades/min_oos_pf/walk_forward/monte_carlo)."""
+    import research.edge_gate as eg
+
+    monkeypatch.setattr(eg, "_load_registry", lambda: {
+        "hypotheses": {"H101": {"status": "PASSED", "notes": "legacy, no evidence block"}}
+    })
+    with pytest.raises(EdgeNotProvenError, match="without qualifying evidence"):
+        check_edge_gate({"smc": True}, allow_live_trading=True)
+
+
+def test_allow_live_trading_true_permits_genuinely_qualifying_passed_engine(monkeypatch):
+    """The positive case: a PASSED hypothesis WITH a qualifying evidence
+    block must clear the gate under allow_live_trading=True — this isn't
+    a blanket ban on live trading, only on unproven engines."""
+    import research.edge_gate as eg
+
+    monkeypatch.setattr(eg, "_load_registry", lambda: {
+        "hypotheses": {"H101": {"status": "PASSED", "evidence": {
+            "oos_trades": 350, "oos_pf": 1.31,
+            "walk_forward": True, "monte_carlo": True,
+        }}}
+    })
+    check_edge_gate({"smc": True}, allow_live_trading=True)  # must not raise

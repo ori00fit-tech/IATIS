@@ -118,8 +118,14 @@ def build_active_engines(config: dict) -> list:
 
     # Hard gate: refuse to enable any engine without a proven edge.
     # Raises EdgeNotProvenError loudly rather than silently trading on
-    # an unproven idea. See research/edge_gate.py.
-    check_edge_gate(enabled)
+    # an unproven idea. See research/edge_gate.py. allow_live_trading is
+    # threaded through so RESEARCH-status engines (governance hardening,
+    # 2026-08-04) can never trade real capital regardless of this flag's
+    # value — only a genuinely PASSED, evidence-qualifying hypothesis can.
+    check_edge_gate(
+        enabled,
+        allow_live_trading=bool(config.get("execution", {}).get("allow_live_trading", False)),
+    )
 
     dtf = decision_timeframe(config)
     symbol = config.get("data", {}).get("symbol", "")

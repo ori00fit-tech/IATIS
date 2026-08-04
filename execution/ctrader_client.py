@@ -437,7 +437,7 @@ class CTraderClient:
             logger.debug("📤 Sending: ProtoOAApplicationAuthReq")
             d = client.send(req, responseTimeoutInSeconds=self.AUTH_TIMEOUT)
             d.addCallback(lambda res: self._on_app_auth(client, res))
-            d.addErrback(lambda f: self._on_error("app_auth", f))
+            d.addErrback(lambda f: self._on_error("app_auth", client, f))
         except Exception as exc:
             logger.error(f"❌ Failed to send app auth: {exc}")
             self._set_state(ConnectionState.ERROR)
@@ -470,7 +470,7 @@ class CTraderClient:
             logger.debug(f"📤 Sending: ProtoOAAccountAuthReq (account {self.account_id})")
             d = client.send(req, responseTimeoutInSeconds=self.AUTH_TIMEOUT)
             d.addCallback(lambda res: self._on_account_auth(client, res))
-            d.addErrback(lambda f: self._on_error("account_auth", f))
+            d.addErrback(lambda f: self._on_error("account_auth", client, f))
         except Exception as exc:
             logger.error(f"❌ Failed to send account auth: {exc}")
             self._set_state(ConnectionState.ERROR)
@@ -501,7 +501,7 @@ class CTraderClient:
             req.ctidTraderAccountId = self.account_id
             logger.debug("📤 Sending: ProtoOATraderReq")
             d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
-            d.addErrback(lambda f: self._on_error("trader_req", f))
+            d.addErrback(lambda f: self._on_error("trader_req", client, f))
         except Exception as exc:
             logger.error(f"❌ Failed to send trader req: {exc}")
 
@@ -515,7 +515,7 @@ class CTraderClient:
             req.ctidTraderAccountId = self.account_id
             logger.debug("📤 Sending: ProtoOASymbolsListReq")
             d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
-            d.addErrback(lambda f: self._on_error("symbols_list", f))
+            d.addErrback(lambda f: self._on_error("symbols_list", client, f))
         except Exception as exc:
             logger.error(f"❌ Failed to send symbols list req: {exc}")
 
@@ -540,7 +540,7 @@ class CTraderClient:
             req.ctidTraderAccountId = self.account_id
             logger.debug("📤 Sending: ProtoOAReconcileReq")
             d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
-            d.addErrback(lambda f: self._on_error("reconcile", f))
+            d.addErrback(lambda f: self._on_error("reconcile", client, f))
         except ImportError:
             logger.warning(
                 "⚠️ ProtoOAReconcileReq not available in this ctrader-open-api "
@@ -570,7 +570,7 @@ class CTraderClient:
             req.symbolId.extend(symbol_ids)
             logger.debug(f"📤 Sending: ProtoOASymbolByIdReq ({len(symbol_ids)} ids)")
             d = client.send(req, responseTimeoutInSeconds=self.BOOTSTRAP_TIMEOUT)
-            d.addErrback(lambda f: self._on_error("symbol_details", f))
+            d.addErrback(lambda f: self._on_error("symbol_details", client, f))
         except Exception as exc:
             logger.error(f"❌ Failed to send symbol details req: {exc}")
 
@@ -1007,7 +1007,26 @@ class CTraderClient:
     # the old check matched the substring across every _on_error call site.
     _ALREADY_LOGGED_IN_BENIGN_CONTEXTS = frozenset({"app_auth", "account_auth"})
 
-    def _on_error(self, context: str, failure: Any) -> None:
+    def _on_error(self, context: str, client: Any, failure: Any) -> None:
+        # Ignore an errback firing for a request sent by a superseded client.
+        # Every send() carries its own responseTimeoutInSeconds timer (e.g.
+        # AUTH_TIMEOUT=15s for app/account auth); _stop_client() tears down
+        # the old Client's service but does not cancel its already-in-flight
+        # Deferreds, so a stale timeout can fire well after a NEW connect()
+        # has already succeeded and progressed past auth. Before this guard,
+        # that late errback still called _set_state(ERROR) unconditionally —
+        # forcibly erroring out a healthy, already-authenticated connection
+        # and triggering a spurious reconnect (observed live 2026-08-04: a
+        # rapid ALREADY_LOGGED_IN / "Protocol error (app_auth): (15.0,
+        # 'Deferred')" / Giving-up loop that never let a connection survive
+        # long enough to reach READY). Mirrors the exact guard
+        # _on_tcp_connected/_on_disconnect already apply for the same class
+        # of superseded-client race.
+        if client is not None and client is not self._client:
+            logger.debug(
+                f"Ignoring stale {context} error from a superseded cTrader client."
+            )
+            return
         error_msg = (
             failure.getErrorMessage() if hasattr(failure, "getErrorMessage")
             else str(failure)
@@ -1264,11 +1283,12 @@ class CTraderClient:
             )
 
             def subscribe() -> None:
+                client = self._client
                 req = ProtoOASubscribeSpotsReq()
                 req.ctidTraderAccountId = self.account_id
                 req.symbolId.append(symbol_id)
-                d = self._client.send(req, responseTimeoutInSeconds=timeout)
-                d.addErrback(lambda f: self._on_error("subscribe_spots", f))
+                d = client.send(req, responseTimeoutInSeconds=timeout)
+                d.addErrback(lambda f: self._on_error("subscribe_spots", client, f))
 
             with self._lock:
                 self._spots.pop(symbol_id, None)
@@ -1369,14 +1389,15 @@ class CTraderClient:
                 count, period, to_timestamp_ms, now_ms=int(time.time() * 1000))
 
             def send() -> None:
+                client = self._client
                 req = ProtoOAGetTrendbarsReq()
                 req.ctidTraderAccountId = self.account_id
                 req.symbolId = symbol_id
                 req.period = period_val
                 req.fromTimestamp = from_ms
                 req.toTimestamp = to_ms
-                d = self._client.send(req, responseTimeoutInSeconds=timeout)
-                d.addErrback(lambda f: (self._on_error("trendbars", f),
+                d = client.send(req, responseTimeoutInSeconds=timeout)
+                d.addErrback(lambda f: (self._on_error("trendbars", client, f),
                                         self._trendbar_event.set()))
 
             with self._lock:

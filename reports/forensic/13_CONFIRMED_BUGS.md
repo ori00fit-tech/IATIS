@@ -1621,3 +1621,135 @@ quorum").
 Reproduction above.
 
 **Status:** FIXED, tested, regression-pinned.
+
+---
+
+## BUG-014
+
+**Severity:** P0 (live-trading impact — the exact symptom reported live
+by the operator, still reproducing on the current deployed commit)
+
+**Category:** cTrader connection lifecycle (execution/ctrader_client.py) —
+found while re-investigating the operator's report that the P0 fixes
+from `16_CTRADER_LIFECYCLE_AUDIT.md` (2026-08-04, commits `06a77e0`
+through `9b039ab`) had NOT resolved the live symptom. The VPS was first
+confirmed to be running commit `96ea36c` (>= `9b039ab`), ruling out the
+stale-deploy theory that report's own §1 named as the most likely
+explanation — this is a genuinely new, previously-unaudited defect on
+current code, not a repeat of an already-fixed one.
+
+**Claim:** `_on_error(context, failure)` — the errback attached to
+*every* `client.send()` Deferred (app_auth, account_auth, trader_req,
+symbols_list, reconcile, symbol_details, subscribe_spots, trendbars) —
+has no way to tell whether the `failure` it just received belongs to
+the CURRENT, live `self._client` or to a previous, already-torn-down
+client. `_on_tcp_connected` and `_on_disconnect` both explicitly guard
+against exactly this race (`if client is not None and client is not
+self._client: return`, with an inline comment naming it as the fix for
+the 2026-07-22 ALREADY_LOGGED_IN/fd-leak storm) — `_on_error` was never
+given the same guard.
+
+**Observed (live logs, operator-supplied, 2026-08-04 04:57–05:03 UTC,
+VPS commit `96ea36c`):** a rapid, self-sustaining cycle —
+`TCP_CONNECTED` → `ALREADY_LOGGED_IN` (correctly handled, bootstrap
+"continuing") → seconds later, `❌ Protocol error (app_auth): (15.0,
+'Deferred')` → `TCP_CONNECTED → ERROR` → `DISCONNECTED` → `Giving up
+after 10 reconnect attempts` → immediate reconnect → repeat, every
+2–18 seconds, for the full 6-minute window supplied. `AUTH_TIMEOUT =
+15.0` (the exact literal in the log line) confirmed the failure is
+Twisted's own `Deferred.addTimeout` `TimeoutError(15.0, "Deferred")` —
+`str()` of that 2-arg exception renders as the literal tuple shown in
+the log, not a defect in our own error-formatting code. Correlated
+`journalctl -u iatis-scheduler` output for the same window showed every
+EXECUTE-verdict signal declined with `DataFetchError: cTrader feed:
+connect failed` — the connection never surviving long enough to reach
+`READY` directly explains the "connects, but nothing ever trades"
+symptom as a downstream consequence of this bug, not a separate defect.
+
+**Expected:** an errback firing for a request sent by a client that has
+since been superseded by a new `connect()` (`_stop_client()` tears down
+the old Twisted service but does not — and by design of Twisted's
+`send()`/timeout API, cannot — cancel that client's own already-
+scheduled response-timeout callback) must be ignored, exactly like a
+superseded `_on_tcp_connected`/`_on_disconnect` callback already is.
+
+**File/Line:** `execution/ctrader_client.py` — `_on_error` (was line
+1010, no guard); all 8 `d.addErrback(lambda f: self._on_error(context,
+f))` call sites (`_send_app_auth`, `_send_account_auth`,
+`_send_trader_req`, `_send_symbols_list_req`, `_send_reconcile_req`,
+`_send_symbol_details_req`, `_get_spot_scaled`'s `subscribe()` closure,
+`get_trendbars`'s `send()` closure).
+
+**Execution path:** every `client.send(...)` call in the file routes
+its errback through `_on_error`. The two auth-stage requests
+(`AUTH_TIMEOUT = 15.0`) are the ones observed live, but every context
+was equally vulnerable — a slow `symbols_list`/`reconcile`/`trendbars`
+response from a torn-down client could just as easily have clobbered a
+healthy, later connection's state.
+
+**Reproduction:** `tests/test_ctrader_message_handlers.py` (+3 new
+tests): `test_on_error_from_the_current_client_still_sets_error_state`
+(regression pin — passing the live client explicitly must behave
+identically to the pre-fix, client-agnostic `None` case, never
+suppressing a real error); `test_on_error_from_a_superseded_client_is_ignored`
+(the authoritative proof — sets `self._client` to a NEW object, drives
+`_state` to `APP_AUTH_OK` as if a reconnect already succeeded, then
+fires `_on_error("app_auth", <stale-object>, TimeoutError(...))` and
+asserts `_state` is completely unclobbered); `test_on_error_from_a_
+superseded_client_is_ignored_even_for_a_real_error` (the guard applies
+uniformly, not just to the benign-ALREADY_LOGGED_IN case already
+covered elsewhere in this file).
+
+**Root cause:** `_on_error`'s signature (`context: str, failure: Any`)
+never carried a `client` reference at all, unlike its two sibling
+callbacks — an omission from when the superseded-client guard pattern
+was first introduced (commits `06a77e0`/`a62d5ca`), not something that
+regressed later. `_stop_client()`'s own docstring already documents
+that it is a *best-effort* teardown of the Twisted service/socket; it
+was never responsible for — and cannot, via the third-party
+`ctrader-open-api`/Twisted `Deferred.addTimeout` API — cancel an
+already-scheduled response-timeout callback on that old client's own
+in-flight `send()` calls.
+
+**Impact:** live/demo cTrader connections could not reliably survive
+past their own auth handshake once ANY prior connection attempt's
+15-second auth timer was still pending when a new attempt progressed —
+directly matching the operator's reported "connects but never trades"
+symptom (feed never reaches `READY`, `TradeExecutor` declines every
+signal with `DataFetchError: cTrader feed: connect failed`). No effect
+on backtesting/research code paths (this file's `CTraderClient` is a
+live/paper-execution-only construct, not imported by `backtesting/
+backtest_engine.py`).
+
+**Fix (CONFIRMED, applied same phase):** `_on_error` gains a `client:
+Any` parameter and the identical superseded-client guard already used
+by `_on_tcp_connected`/`_on_disconnect`
+(`if client is not None and client is not self._client: return`,
+logged at DEBUG). All 8 call sites now pass the `client` that actually
+issued the request — the 6 method-scoped sites already had `client` as
+a parameter in scope; the 2 closure-based sites (`_get_spot_scaled`,
+`get_trendbars`) now capture `client = self._client` at send-time
+(the same instant the request is actually dispatched) instead of
+re-reading `self._client` implicitly, so the guard has a meaningful,
+frozen reference to compare against by the time the errback fires.
+
+**Regression tests:** `tests/test_ctrader_message_handlers.py` (+3, see
+Reproduction above). Existing `_on_error` tests in that file, `tests/
+test_ctrader_execution_logic.py`, and every other consumer updated to
+pass the new `client` argument (`None` where the test doesn't care
+which client — preserves their original client-agnostic intent
+exactly). Full affected-file suite (`test_provider_chains.py` +
+`test_ctrader_client.py` + `test_ctrader_message_handlers.py` +
+`test_ctrader_execution_logic.py`) re-run: 152/152 passing (up from
+141/141 in the prior audit pass, +11 net new/updated). Full project
+suite re-run with zero regressions outside these files.
+
+**Status:** FIXED, tested, regression-pinned. **Operator action still
+required**: deploy this commit (`git pull` + `sudo systemctl restart
+iatis-scheduler iatis-api`, as two separate commands per CLAUDE.md's
+ops runbook) and watch `journalctl -u iatis-scheduler` for one full
+connection cycle — expect `TCP_CONNECTED` → (optionally `ALREADY_LOGGED_IN`,
+handled) → `APP_AUTH_OK` → `ACCOUNT_AUTH_OK` → `READY` to complete
+cleanly with no further `Protocol error (app_auth)`/`Giving up` lines
+absent a genuine new disconnect, and for EXECUTE-verdict signals to stop
+declining with `DataFetchError: cTrader feed: connect failed`.

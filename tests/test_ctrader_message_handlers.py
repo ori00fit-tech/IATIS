@@ -490,12 +490,12 @@ def test_disconnect_marks_intentional_before_tearing_down(client):
 
 def test_on_error_already_logged_in_is_benign_and_does_not_set_error_state(client):
     client._state = ConnectionState.APP_AUTH_OK
-    client._on_error("app_auth", RuntimeError("ALREADY_LOGGED_IN — already authorized"))
+    client._on_error("app_auth", None, RuntimeError("ALREADY_LOGGED_IN — already authorized"))
     assert client._state == ConnectionState.APP_AUTH_OK  # unchanged, not ERROR
 
 
 def test_on_error_real_failure_sets_error_state(client):
-    client._on_error("trader_req", RuntimeError("TIMEOUT waiting for response"))
+    client._on_error("trader_req", None, RuntimeError("TIMEOUT waiting for response"))
     assert client._state == ConnectionState.ERROR
 
 
@@ -504,7 +504,7 @@ def test_on_error_uses_get_error_message_when_available(client):
         def getErrorMessage(self):
             return "ALREADY_LOGGED_IN"
     client._state = ConnectionState.ACCOUNT_AUTH_OK
-    client._on_error("account_auth", _Failure())
+    client._on_error("account_auth", None, _Failure())
     assert client._state == ConnectionState.ACCOUNT_AUTH_OK  # benign path taken
 
 
@@ -515,8 +515,51 @@ def test_on_error_already_logged_in_outside_auth_context_still_errors(client):
     unexpected, not benign, and must still surface as an error — the old
     check matched the substring across every _on_error call site."""
     client._state = ConnectionState.SYMBOLS_LOADED
-    client._on_error("reconcile", RuntimeError("ALREADY_LOGGED_IN — already authorized"))
+    client._on_error("reconcile", None, RuntimeError("ALREADY_LOGGED_IN — already authorized"))
     assert client._state == ConnectionState.ERROR
+
+
+def test_on_error_from_the_current_client_still_sets_error_state(client):
+    """Regression pin for the superseded-client guard below: passing the
+    CURRENT self._client explicitly must behave identically to passing
+    None — the guard must never suppress a real error on the live
+    connection."""
+    live = object()
+    client._client = live
+    client._on_error("trader_req", live, RuntimeError("TIMEOUT waiting for response"))
+    assert client._state == ConnectionState.ERROR
+
+
+def test_on_error_from_a_superseded_client_is_ignored(client):
+    """BUG-014 (forensic re-audit, 2026-08-04): _on_error had no
+    superseded-client guard, unlike _on_tcp_connected/_on_disconnect. A
+    send()-Deferred errback (e.g. AUTH_TIMEOUT firing 15s after a
+    torn-down client's app_auth request) could still fire on a NEW,
+    healthy connection and force it into ERROR — observed live as a
+    rapid ALREADY_LOGGED_IN / "Protocol error (app_auth): (15.0,
+    'Deferred')" / Giving-up loop that never let a connection survive
+    long enough to reach READY. A genuinely stale client's errback must
+    now be ignored entirely, leaving the live connection's state and
+    even its state class untouched."""
+    stale = object()
+    live = object()
+    client._client = live  # a reconnect has already happened
+    client._state = ConnectionState.APP_AUTH_OK  # the new connection made real progress
+    client._on_error("app_auth", stale, RuntimeError("TIMEOUT waiting for response"))
+    assert client._state == ConnectionState.APP_AUTH_OK  # unclobbered
+
+
+def test_on_error_from_a_superseded_client_is_ignored_even_for_a_real_error(client):
+    """The guard applies to every failure shape, not just the benign
+    ALREADY_LOGGED_IN case tested above — a stale client's real timeout
+    is just as invalid a signal about the live connection's health as a
+    stale ALREADY_LOGGED_IN would be."""
+    stale = object()
+    live = object()
+    client._client = live
+    client._state = ConnectionState.SYMBOLS_LOADED
+    client._on_error("symbols_list", stale, RuntimeError("network reset"))
+    assert client._state == ConnectionState.SYMBOLS_LOADED
 
 
 # ── _on_error_res (ProtoOAErrorRes, the message-based ALREADY_LOGGED_IN path) ──

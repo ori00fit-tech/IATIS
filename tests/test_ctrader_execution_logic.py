@@ -308,7 +308,7 @@ def test_already_logged_in_errback_is_benign(client):
     from execution.ctrader_client import ConnectionState
 
     client._set_state(ConnectionState.TCP_CONNECTED)
-    client._on_error("app_auth", RuntimeError("ALREADY_LOGGED_IN — already authorized"))
+    client._on_error("app_auth", None, RuntimeError("ALREADY_LOGGED_IN — already authorized"))
     assert client._state == ConnectionState.TCP_CONNECTED  # unchanged
 
 

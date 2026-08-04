@@ -159,6 +159,18 @@ async def candles(
 
         fetch_symbol = _fetch_symbol_for_internal(internal, _get_config())
         chain = provider_chain_for(fetch_symbol, _get_config().get("data", {}).get("provider_chains"))
+        # cTrader allows only ONE authenticated session per account+app —
+        # the scheduler process already owns it (execution/trade_executor.py,
+        # execution/reconciliation.py both go through core.data_providers.
+        # get_shared_ctrader_client(), and reconciliation.py's own docstring
+        # states the boundary explicitly: "The API server process must never
+        # call reconcile() itself... The scheduler owns the session"). This
+        # endpoint runs inside the API process, so it must never reach for
+        # cTrader itself — doing so races the scheduler's session and
+        # produces exactly the DuplicateSessionError / orphaned-session
+        # symptoms diagnosed 2026-08-04. Twelve Data/FCS/AV/Finnhub (the
+        # rest of the same chain) still serve this endpoint's candles.
+        chain = [p for p in chain if p != "ctrader"]
         try:
             df, provider = fetch_with_failover(fetch_symbol, interval, outputsize=outputsize, providers=chain)
         except DataFetchError as exc:

@@ -1168,18 +1168,29 @@ _MIN_RESAMPLE_BASE_BARS = 900
 def _deepen_with_history(symbol: str, tf: str | None, df: pd.DataFrame) -> pd.DataFrame:
     """Left-extend a short fetched frame with the local history archive.
 
-    The archive is data/{SYMBOL}_{TF}_2y.csv (core/data_manager.py's cache,
-    also refreshed by scripts/download_deep_history). Merge rules: identical
-    lowercase OHLCV schema, indexes coerced to UTC, and the FETCHED bars win
-    on duplicate timestamps — the archive only ever supplies older bars, so
-    live decisions keep pricing off the live feed. Any failure returns the
-    frame unchanged; this is a deepener, never a gate.
+    The archive is data/{SYMBOL}_{TF}_deep.csv, written by
+    scripts/download_deep_history.py (the tool this deepener was actually
+    designed against — its own docstring already measures real per-provider
+    depth, e.g. ~6.5y H4 / ~19y D1 on Twelve Data Free). Confirmed BUG
+    (2026-08-04): this function previously looked for
+    data/{SYMBOL}_{TF}_2y.csv instead — the cache path core/data_manager.py's
+    separate, unrelated DataManager class writes, which nothing in the live
+    or scheduled pipeline ever populates (only the manual, un-timered
+    scripts/download_all_data.py does). The filename never matched what
+    download_deep_history.py actually produces, so this deepener silently
+    no-op'd on every real deployment — the exact NNFX/MTF "Insufficient
+    data" starvation class it was built to fix never got fixed. Merge
+    rules: identical lowercase OHLCV schema, indexes coerced to UTC, and
+    the FETCHED bars win on duplicate timestamps — the archive only ever
+    supplies older bars, so live decisions keep pricing off the live feed.
+    Any failure returns the frame unchanged; this is a deepener, never a
+    gate.
     """
     if tf is None or len(df) >= _MIN_RESAMPLE_BASE_BARS:
         return df
     try:
         from core.data_manager import DATA_DIR
-        path = DATA_DIR / f"{symbol}_{tf}_2y.csv"
+        path = DATA_DIR / f"{symbol}_{tf}_deep.csv"
         if not path.exists():
             return df
         hist = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -1256,15 +1267,8 @@ def fetch_multi_timeframe_with_failover(
             best_base_df = df
             best_base_label = tf
 
-    # Resample whatever is still missing from the best base — after
-    # left-extending a short base with the on-disk history archive. A
-    # provider-capped window (FCS caps at 300 H1 bars; Twelve Data Free
-    # 403s on native H4/D1) resamples to < 210 H4 bars / < 50 D1 bars,
-    # which is exactly the DATA STARVATION class the audit flags (663
-    # NNFX 'Insufficient data' decisions). The archive supplies the deep
-    # past; the freshly fetched bars win on any overlap.
+    # Resample whatever is still missing from the best fetched base.
     if best_base_df is not None:
-        best_base_df = _deepen_with_history(symbol, best_base_label, best_base_df)
         for tf in timeframes:
             if tf not in views:
                 try:
@@ -1276,6 +1280,23 @@ def fetch_multi_timeframe_with_failover(
                     logger.info(f"Resampled {symbol} @ {tf} from {best_base_label}")
                 except Exception as exc:
                     logger.warning(f"Could not resample {tf}: {exc}")
+
+    # Deepen every produced view (native OR resampled) against its OWN
+    # target-timeframe archive (data/{SYMBOL}_{TF}_deep.csv, written by
+    # scripts/download_deep_history.py). A provider-capped window (FCS's
+    # 300-bar cap) or a resample from a thin base (Twelve Data Free 403s
+    # on native H4/D1, forcing a resample from a thin H1 fetch) can land
+    # under NNFX's 210-H4-bar EMA200 floor or the MTF gate's 50-D1-bar
+    # floor — exactly the DATA STARVATION class the audit flags (663
+    # NNFX "Insufficient data" decisions). Deliberately applied per FINAL
+    # timeframe here, not to the pre-resample base: download_deep_
+    # history.py writes already-resampled H4/D1 archives directly (it
+    # requests Twelve Data's own 4h/1day series, not H1), never a
+    # base-timeframe one, so a base-level archive lookup would never
+    # find a real file in practice. The archive only ever supplies older
+    # bars; the freshly fetched/resampled bars win on any overlap.
+    for tf in list(views.keys()):
+        views[tf] = _deepen_with_history(symbol, tf, views[tf])
 
     if not views:
         raise DataFetchError(

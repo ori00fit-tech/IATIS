@@ -261,3 +261,25 @@ or after `9b039ab` (2026-07-23); if not, `git pull` + `sudo systemctl
 restart iatis-scheduler iatis-api` (as two separate commands, per
 `CLAUDE.md`'s own documented pitfall) to deploy the already-fixed code.
 This cannot be verified from this sandboxed session (no VPS/SSH access).
+
+## Addendum (2026-08-04, same day) — §5's "no path exists" claim was incomplete
+
+A follow-up trace, prompted by a live log showing a second `🔌 Connecting
+to...` line appear while a prior attempt's own state transitions were
+still in flight, found a real, distinct gap this pass's §5 missed: §5's
+"no path exists for two live sessions" verified only the *concurrent-call*
+race (two threads/processes constructing a client at the same instant —
+correctly guarded by `get_shared_ctrader_client()`'s lock and
+`_acquire_process_lock()`'s flock). It did not check what happens to a
+connect() attempt's underlying Twisted client *after* connect() times out
+and returns `False` without tearing it down — that client keeps running,
+unsupervised, in the background reactor thread, and since
+`get_shared_ctrader_client()` never retries on the same instance (a fresh
+`CTraderClient()` is constructed on the next call instead), a second, live
+instance can end up running concurrently with the orphaned first one —
+neither lock catches this because by the time the second instance is
+constructed, the first `connect()` call has already returned and released
+its lock. Fixed as **BUG-016** in `13_CONFIRMED_BUGS.md` (new
+`_abandon_incomplete_connection()`, called from all three of `connect()`'s
+failure-return paths). §5's guarantee now holds with this addition; it did
+not hold as stated at the time this report was written.

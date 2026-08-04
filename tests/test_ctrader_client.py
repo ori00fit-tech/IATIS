@@ -337,6 +337,165 @@ def test_stop_client_is_best_effort(monkeypatch):
     c._stop_client(object())  # reactor import/branch guarded → must not raise
 
 
+# ─── connect()-timeout orphan-session fix (2026-08-04) ─────────────────────
+# Root cause: check_status()'s timeout branch only ever stopped *waiting* —
+# it never stopped the connection attempt itself, so a timed-out connect()
+# left the underlying Twisted Client running unsupervised in the background
+# reactor thread. get_shared_ctrader_client() (core/data_providers.py) never
+# retries connect() on the *same* CTraderClient instance — a failed attempt
+# is simply discarded and a brand-new instance is created next call — so the
+# orphan kept running as a second, independent, unsupervised session against
+# the same broker account, racing the new one for the account's single
+# session slot. This is what the operator suspected as a "double connection"
+# race; _abandon_incomplete_connection() is the fix.
+
+def test_abandon_incomplete_connection_stops_client_and_nulls_reference(monkeypatch):
+    c = _mk_client()
+    fake_client = object()
+    c._client = fake_client
+    stopped = []
+    monkeypatch.setattr(c, "_stop_client", lambda client: stopped.append(client))
+
+    c._abandon_incomplete_connection()
+
+    assert stopped == [fake_client]
+    assert c._client is None
+
+
+def test_abandon_incomplete_connection_is_a_noop_when_no_client_exists(monkeypatch):
+    c = _mk_client()
+    assert c._client is None
+    calls = []
+    monkeypatch.setattr(c, "_stop_client", lambda client: calls.append(client))
+
+    c._abandon_incomplete_connection()
+
+    assert calls == [None]  # _stop_client itself already no-ops on None
+    assert c._client is None
+
+
+class _FakeCtraderOpenApiClient:
+    """Stand-in for ctrader_open_api.Client, good enough to drive
+    connect()'s real control flow without a live TCP connection. Never
+    fires the connected callback, so the state machine stays DISCONNECTED
+    and connect() falls through to its post-wait fallback branch."""
+
+    instances: list["_FakeCtraderOpenApiClient"] = []
+
+    def __init__(self, host, port, protocol):
+        self.host, self.port, self.protocol = host, port, protocol
+        self.stop_calls = 0
+        _FakeCtraderOpenApiClient.instances.append(self)
+
+    def setConnectedCallback(self, cb):
+        pass
+
+    def setMessageReceivedCallback(self, cb):
+        pass
+
+    def setDisconnectedCallback(self, cb):
+        pass
+
+    def startService(self):
+        pass  # deliberately never connects — exercises the timeout/fallback path
+
+    def stopService(self):
+        self.stop_calls += 1
+
+
+def _install_fake_ctrader_reactor(monkeypatch):
+    """Injects minimal fake ctrader_open_api/twisted.internet modules so
+    connect()'s real body (past its lazy imports) can run deterministically
+    with no network and no real Twisted reactor thread."""
+    import sys
+    import types
+
+    _FakeCtraderOpenApiClient.instances = []
+
+    fake_coa = types.ModuleType("ctrader_open_api")
+    fake_coa.Client = _FakeCtraderOpenApiClient
+    fake_coa.TcpProtocol = object
+
+    fake_reactor = types.SimpleNamespace(
+        running=True,
+        callFromThread=lambda fn, *a, **kw: fn(*a, **kw),  # synchronous, deterministic
+        callLater=lambda delay, fn, *a, **kw: fn(*a, **kw),
+        run=lambda **kw: None,
+    )
+    fake_twisted_internet = types.ModuleType("twisted.internet")
+    fake_twisted_internet.reactor = fake_reactor
+    fake_twisted = types.ModuleType("twisted")
+    fake_twisted.internet = fake_twisted_internet
+
+    monkeypatch.setitem(sys.modules, "ctrader_open_api", fake_coa)
+    monkeypatch.setitem(sys.modules, "twisted", fake_twisted)
+    monkeypatch.setitem(sys.modules, "twisted.internet", fake_twisted_internet)
+    return fake_reactor
+
+
+def test_connect_timeout_tears_down_the_orphaned_client(monkeypatch):
+    """The literal regression test for the root cause above: a connect()
+    that never reaches READY within its timeout must stop the Client it
+    just created — not abandon it running in the background — and must
+    null self._client so a late callback from it is ignored as
+    superseded, not clobber a future connection's state."""
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    # Force elapsed > timeout on check_status()'s very first synchronous
+    # invocation (callFromThread runs it immediately, before connect()
+    # reaches connected.wait()) — a strictly increasing fake clock avoids
+    # any real sleeping or clock-resolution flakiness.
+    counter = {"t": 0.0}
+
+    def _fake_time():
+        counter["t"] += 100.0
+        return counter["t"]
+
+    monkeypatch.setattr(m.time, "time", _fake_time)
+
+    result = c.connect(timeout=0)
+
+    assert result is False
+    assert len(_FakeCtraderOpenApiClient.instances) == 1
+    created_client = _FakeCtraderOpenApiClient.instances[0]
+    assert created_client.stop_calls == 1, (
+        "the timed-out connect() must stop the Client it created, "
+        "not leave it running as an orphaned session"
+    )
+    assert c._client is None
+
+
+def test_connect_success_does_not_tear_down_the_live_client(monkeypatch):
+    """Control case: a connect() that DOES reach READY must keep the live
+    client running — _abandon_incomplete_connection must not fire on the
+    success path."""
+    import sys
+
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    monkeypatch.setattr(m.time, "time", lambda: 0.0)
+
+    class _FakeReadyClient(_FakeCtraderOpenApiClient):
+        def startService(self):
+            c._state = m.ConnectionState.READY
+
+    monkeypatch.setattr(
+        sys.modules["ctrader_open_api"], "Client", _FakeReadyClient
+    )
+    _FakeCtraderOpenApiClient.instances = []
+
+    result = c.connect(timeout=5)
+
+    assert result is True
+    assert len(_FakeCtraderOpenApiClient.instances) == 1
+    assert _FakeCtraderOpenApiClient.instances[0].stop_calls == 0
+    assert c._client is _FakeCtraderOpenApiClient.instances[0]
+
+
 # ─── Cross-process session lock (audit P0-3) ───────────────────────────────
 # The 2026-07-22 ALREADY_LOGGED_IN fix made a second, colliding auth attempt
 # non-fatal for THIS process's own reconnects, but its own code comment

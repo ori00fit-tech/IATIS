@@ -1513,6 +1513,15 @@ function TrialBreakdownPanel({
   const byDirection = (metrics.by_direction ?? {}) as Record<string, BreakdownBucket>
   const bySession = (metrics.by_session ?? {}) as Record<string, BreakdownBucket>
   const hasBreakdown = Object.keys(byRegime).length > 0 || Object.keys(byDirection).length > 0 || Object.keys(bySession).length > 0
+  // Prune Forensic Audit (2026-08-04, reports/forensic/21_...) — WHY bars
+  // didn't trade. By construction this is exactly what a low-trade-count/
+  // pruned trial has (no closed-trade breakdown above, since by_regime/
+  // by_direction/by_session are computed over closed trades only) — so it
+  // is rendered independently of hasBreakdown, not gated behind it.
+  const gateRejections = (metrics.gate_rejections ?? {}) as Record<string, number>
+  const contextRejections = (metrics.context_rejections ?? {}) as Record<string, number>
+  const indicatorRejections = (metrics.indicator_rejections ?? {}) as Record<string, number>
+  const hasGateRejections = Object.keys(gateRejections).length > 0
 
   // Same query key MetaAnalysisPanel/TopOpportunitiesPanel already use for
   // this mission — React Query dedupes, no duplicate network call.
@@ -1560,14 +1569,42 @@ function TrialBreakdownPanel({
     >
       <div className="p-4 flex flex-col gap-4">
         <TrialConfigSummary config={resolvedConfig} />
-        {!hasBreakdown ? (
-          <Empty>No regime/direction/session breakdown available for this trial (0 closed trades, or an older mission run).</Empty>
+        {!hasBreakdown && !hasGateRejections ? (
+          <Empty>No regime/direction/session/gate-rejection breakdown available for this trial (0 closed trades, or an older mission run predating this data).</Empty>
         ) : (
-          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))]">
-            {Object.keys(byDirection).length > 0 && <PerformanceBreakdownTable title="Direction" buckets={byDirection} />}
-            {Object.keys(bySession).length > 0 && <PerformanceBreakdownTable title="Session" buckets={bySession} />}
-            {Object.keys(byRegime).length > 0 && <PerformanceBreakdownTable title="Regime" buckets={byRegime} />}
-          </div>
+          <>
+            {hasBreakdown && (
+              <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(240px,1fr))]">
+                {Object.keys(byDirection).length > 0 && <PerformanceBreakdownTable title="Direction" buckets={byDirection} />}
+                {Object.keys(bySession).length > 0 && <PerformanceBreakdownTable title="Session" buckets={bySession} />}
+                {Object.keys(byRegime).length > 0 && <PerformanceBreakdownTable title="Regime" buckets={byRegime} />}
+              </div>
+            )}
+            {hasGateRejections && (
+              <div className="flex flex-col gap-2">
+                <span className="text-[0.72em] text-muted uppercase tracking-[1px]">
+                  Gate rejections — why bars didn't trade
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(gateRejections)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([reason, count]) => (
+                      <Badge key={reason} tone="neutral">{`${reason}: ${count}`}</Badge>
+                    ))}
+                </div>
+                {Object.keys(indicatorRejections).length > 0 && (
+                  <div className="text-[0.75em] text-muted">
+                    Indicator filter: {Object.entries(indicatorRejections).map(([k, v]) => `${k}=${v}`).join(', ')}
+                  </div>
+                )}
+                {Object.keys(contextRejections).length > 0 && (
+                  <div className="text-[0.75em] text-muted">
+                    Context filter: {Object.entries(contextRejections).map(([k, v]) => `${k}=${v}`).join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
         <div className="border-t border-border pt-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 flex-wrap">

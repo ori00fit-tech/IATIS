@@ -940,6 +940,37 @@ class CTraderClient:
         except Exception as exc:
             logger.debug(f"Stale cTrader client teardown skipped: {exc}")
 
+    def _abandon_incomplete_connection(self) -> None:
+        """Tear down the Client this connect() attempt just created, when
+        connect() is about to report failure (timeout, protocol error, or
+        an unhandled exception) with the state machine short of READY.
+
+        Root cause this closes (found 2026-08-04 during a live-log
+        investigation the operator suspected was a double-connection
+        race): check_status()'s timeout branch only stops *waiting* — it
+        never stops the connection attempt itself, so on a timeout the
+        handshake keeps advancing (TCP_CONNECTED → APP_AUTH_OK → ...) in
+        the background reactor thread with nothing left holding a
+        reference to it. get_shared_ctrader_client()
+        (core/data_providers.py) never retries connect() on the *same*
+        instance — a failed attempt is simply discarded and a brand-new
+        CTraderClient is created on the next call — so without this
+        teardown, the orphaned client keeps running as an independent,
+        unsupervised session against the SAME broker account, racing the
+        new one for the account's single-session slot. This is a second,
+        distinct cause of ALREADY_LOGGED_IN / INVALID_REQUEST symptoms,
+        separate from (and not covered by) the already-fixed superseded-
+        client-callback storm the other guards in this file address —
+        those guard against a *second callback* on one instance; this
+        guards against a second *live instance* outliving its own
+        reported failure. Nulling self._client afterward also makes the
+        superseded-client guards (_on_tcp_connected/_on_disconnect/
+        _on_error) correctly ignore any callback that still fires from
+        the now-stopped client.
+        """
+        stale, self._client = self._client, None
+        self._stop_client(stale)
+
     def _schedule_reconnect(self) -> None:
         """Retry connect() with bounded exponential backoff.
 
@@ -1118,6 +1149,7 @@ class CTraderClient:
 
             if error_holder[0]:
                 logger.error(f"❌ Connection error: {error_holder[0]}")
+                self._abandon_incomplete_connection()
                 return False
 
             if self._state == ConnectionState.READY:
@@ -1130,10 +1162,12 @@ class CTraderClient:
                 return True
 
             logger.error(f"❌ Connection incomplete. State: {self._state.value}")
+            self._abandon_incomplete_connection()
             return False
 
         except Exception as exc:
             logger.error(f"❌ Connect failed: {exc}", exc_info=True)
+            self._abandon_incomplete_connection()
             return False
 
     # ─── Account ─────────────────────────────────────────────────────────────

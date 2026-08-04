@@ -1965,3 +1965,154 @@ change.
 then `sudo systemctl restart iatis-scheduler` and `sudo systemctl
 restart iatis-api` (as two separate commands), then watch one full
 connection cycle for `READY` with no further `CH_ACCESS_TOKEN_INVALID`.
+
+---
+
+## BUG-016
+
+**Severity:** P0 (live connection integrity — this is a second,
+independent root cause of the exact symptom class `16_CTRADER_LIFECYCLE_
+AUDIT.md` investigated: overlapping `TCP_CONNECTED`/`APP_AUTH_OK` lines,
+`ALREADY_LOGGED_IN`, and an `INVALID_REQUEST — Trading account is not
+authorized` error observed on live logs after a genuine `ACCOUNT_AUTH_OK`
+— matches the operator's own hypothesis, stated during the live-log
+review, that "maybe it connects twice at the same time and interference/
+split happens.")
+
+**Category:** cTrader connection lifecycle (`execution/ctrader_client.py`
+`connect()`) — found during a follow-up trace of `core/data_providers.py`'s
+`get_shared_ctrader_client()` and `execution/ctrader_client.py:1721`'s
+`test_connection()`, prompted by a live log showing a second `🔌
+Connecting to demo.ctraderapi.com:5035...` line appear while a prior
+connection attempt's own state transitions were still in flight.
+
+**Claim:** `16_CTRADER_LIFECYCLE_AUDIT.md` (2026-08-04) concluded "No path
+exists (by direct code read, not assumed) for two live, authenticated
+`CTraderClient` sessions to exist simultaneously from this codebase" —
+true for the *concurrent-call* race that audit checked (two threads/
+processes racing to construct a client at the same instant, guarded by
+`get_shared_ctrader_client()`'s `threading.Lock` and `_acquire_process_
+lock()`'s cross-process `flock`), but incomplete: it did not check what
+happens to a connection attempt *after* `connect()` gives up on it.
+
+**Observed (confirmed by direct code read):** `connect()`'s `check_
+status()` polling closure (`execution/ctrader_client.py`, inside
+`connect()`) has three branches: reached `READY` → `connected.set()`;
+reached `ERROR` → `connected.set()`; `elapsed > timeout` → sets
+`error_holder[0]` and calls `connected.set()`. The third branch — the
+ordinary connect-timeout path — does nothing else: it does not call
+`client.stopService()`, does not cancel the pending Twisted `Deferred`
+chain, and does not touch `self._client`. `connect()` then returns
+`False` to its caller, but the underlying `ctrader_open_api.Client`
+object it created (`client = Client(...)`, `self._client = client`) is
+still fully alive: `client.startService()` already ran, and the reactor
+thread keeps driving its connection/auth handshake (`_on_tcp_connected` →
+`_send_app_auth` → ... ) completely independently of the Python call that
+already returned `False`.
+
+`core/data_providers.py`'s `get_shared_ctrader_client()` — the sole live
+caller for the data-fetch path — never retries `connect()` on the *same*
+`CTraderClient` instance: `client = CTraderClient(); if not client.connect
+(timeout=30): raise DataFetchError(...)` discards `client` entirely on
+failure; `_ctrader_feed_client` stays `None`. The *next* call (next
+scheduler tick, next symbol) re-enters the lock, sees `_ctrader_feed_
+client is None`, and constructs a **brand-new** `CTraderClient()` instance,
+calling `connect()` on it too. If the *first* attempt's underlying
+connection is still alive in the background (the common case for a
+connect that was merely slow, not actually broken — e.g. any tick where
+the broker took longer than the 30s ceiling to answer app-auth), two
+independent, live `CTraderClient` Python objects now exist simultaneously,
+both driving their own auth handshake against the *same* account+app —
+exactly the double-connection scenario the operator suspected. The
+existing superseded-client guards in `_on_tcp_connected`/`_on_disconnect`/
+`_on_error` (`if client is not None and client is not self._client:`) do
+**not** protect against this: each guard is scoped to a single
+`CTraderClient` instance's own `self._client` attribute, so it cannot
+detect or suppress a second, entirely separate `CTraderClient` object's
+callbacks. `get_shared_ctrader_client()`'s `threading.Lock` and
+`_acquire_process_lock()`'s `flock` also do not protect against this: both
+guard *construction*, and by the time the second instance is constructed
+the first `connect()` call has already returned (lock released) — there
+is nothing "concurrent" for either lock to catch.
+
+**Expected:** a `connect()` attempt that gives up (timeout, protocol
+error, or an unhandled exception before reaching `READY`) must leave no
+live connection behind — the Client it created should be torn down before
+`connect()` reports failure, so a subsequent fresh attempt is never
+racing an orphaned prior one for the account's single session slot.
+
+**File/Line:** `execution/ctrader_client.py`, `CTraderClient.connect()`
+— the `if error_holder[0]:`, the post-`connected.wait()` fallback
+(`ConnectionState` not `READY`), and the outer `except Exception:` branch,
+all three of which previously `return False` with no teardown.
+
+**Execution path:** any live scheduler tick where `get_shared_ctrader_
+client()` (data-fetch path) or a direct `CTraderClient().connect()` caller
+(e.g. `test_connection()`) issues a `connect()` that does not reach
+`READY` within its timeout window while the broker/handshake is still
+genuinely making progress in the background — not a hard/immediate
+failure, but a slow one. Every such attempt left a zombie session running
+that the next scheduler tick's fresh `get_shared_ctrader_client()` call
+would then race against.
+
+**Reproduction:** `tests/test_ctrader_client.py` (+4 new tests, zero
+prior coverage existed for `connect()`'s failure-path teardown — every
+existing `connect()`-adjacent test relies on `ctrader_open_api`/`twisted`
+being absent from this sandbox and only ever exercises the outer
+`except ImportError` short-circuit): `test_abandon_incomplete_connection_
+stops_client_and_nulls_reference` / `..._is_a_noop_when_no_client_exists`
+(unit-level proof of the new teardown helper); `test_connect_timeout_
+tears_down_the_orphaned_client` (the literal regression test — injects
+minimal fake `ctrader_open_api`/`twisted.internet.reactor` modules via
+`sys.modules` so `connect()`'s real body runs deterministically with no
+network, forces the timeout branch with a strictly-increasing fake clock,
+and asserts the `Client` instance `connect()` created had `stopService()`
+called on it exactly once and `self._client` is `None` afterward);
+`test_connect_success_does_not_tear_down_the_live_client` (control case —
+a `connect()` that reaches `READY` must never call the new teardown, and
+`self._client` must still reference the live, running client).
+
+**Root cause:** `connect()`'s timeout/error/exception paths conflated
+"stop waiting for this attempt" with "stop this attempt" — they only ever
+did the former. `get_shared_ctrader_client()`'s no-retry-on-same-instance
+design (itself correct and necessary — a failed instance shouldn't be
+reused) then means a torn-down-in-Python-only client keeps running,
+unsupervised, as a real, separate session.
+
+**Impact:** live cTrader data-fetch and execution paths only (`core/
+data_providers.py`'s `_fetch_ctrader`/`get_shared_ctrader_client`,
+`execution/trade_executor.py`'s use of the same shared client) — no
+research/backtest/Mission Center code path touches `execution/
+ctrader_client.py` at all. Directly explains, as a second and previously
+unaccounted-for mechanism alongside `16_CTRADER_LIFECYCLE_AUDIT.md`'s
+already-fixed 2026-07 reconnect-storm class: overlapping connection-state
+log lines, repeated `ALREADY_LOGGED_IN`, and account-session errors
+(`INVALID_REQUEST — Trading account is not authorized`) that occur *after*
+a real `ACCOUNT_AUTH_OK` — consistent with a second, competing session
+displacing the first mid-handshake.
+
+**Fix (CONFIRMED, applied same phase):** new `CTraderClient._abandon_
+incomplete_connection()` — tears down (`self._stop_client(...)`) and nulls
+`self._client` — called from all three of `connect()`'s failure-return
+sites (`error_holder[0]` branch, the post-wait non-`READY` fallback, and
+the outer `except Exception:` handler) before returning `False`. The
+success path (`self._state == ConnectionState.READY`) is untouched. Nulling
+`self._client` also means any callback that still fires from the
+now-stopped, orphaned client afterward is correctly ignored by the
+existing superseded-client guards (`client is not None and client is not
+self._client`) instead of being able to clobber a later, genuinely live
+connection's state.
+
+**Regression tests:** `tests/test_ctrader_client.py` (+4, see Reproduction
+above). Full affected-file suite: `test_ctrader_client.py` +
+`test_ctrader_message_handlers.py` + `test_ctrader_execution_logic.py` +
+`test_provider_chains.py` — 162/162 passing (158 pre-existing + 4 new).
+Full project suite re-run with zero regressions outside these files.
+
+**Status:** FIXED, tested, regression-pinned. No operator action required
+— this is a pure code fix with no external state to update (unlike
+BUG-015's archive-population step or the token-refresh finding above).
+Recommended, not required: after deploying, watch a live scheduler run
+for the previously-reported overlapping-`🔌 Connecting`/`INVALID_REQUEST`
+pattern to confirm it no longer recurs — this cannot be verified from
+this sandboxed session (no live broker/network access here).

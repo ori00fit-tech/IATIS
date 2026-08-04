@@ -1753,3 +1753,141 @@ handled) → `APP_AUTH_OK` → `ACCOUNT_AUTH_OK` → `READY` to complete
 cleanly with no further `Protocol error (app_auth)`/`Giving up` lines
 absent a genuine new disconnect, and for EXECUTE-verdict signals to stop
 declining with `DataFetchError: cTrader feed: connect failed`.
+
+---
+
+## BUG-015
+
+**Severity:** P0 (live decision quality — the operator's own reported
+"NNFX = Insufficient data / MTF D1 = inert" symptom, and 665 NNFX
+"Insufficient data" decisions the operator's own philosophy audit
+counted directly)
+
+**Category:** Data-layer archive deepening (`core/data_providers.py`) —
+found while investigating the operator's report that NNFX (needs 210
+decision-TF bars for EMA200) and the MTF D1 gate (needs 50 D1 bars) were
+starving on live FX/metals symbols, where Twelve Data's free plan 403s on
+native H4/D1 and the pipeline falls back to resampling from a thin H1
+fetch (~500 H1 bars → ~125 H4 bars, well under NNFX's floor).
+
+**Claim:** `_deepen_with_history()` exists specifically to left-extend a
+short fetched/resampled frame from a local disk archive before it starves
+NNFX/MTF — its own comment already names the exact symptom class ("A
+provider-capped window... resamples to < 210 H4 bars / < 50 D1 bars,
+which is exactly the DATA STARVATION class the audit flags"). This
+mechanism was silently dead in every real deployment, for two independent
+reasons layered on top of each other.
+
+**Observed (confirmed by direct code read, not assumed):**
+1. **Filename mismatch.** `_deepen_with_history()` looked for `data/
+   {SYMBOL}_{TF}_2y.csv` — the cache path `core/data_manager.py`'s
+   separate, unrelated `DataManager` class writes via its own `_cache_
+   path()`. Nothing in the live or scheduled pipeline ever populates this
+   file (grepped: `DataManager(` is only ever constructed by the manual,
+   un-timered `scripts/download_all_data.py` — confirmed against every
+   `.timer`/`.service` unit in the repo, none reference it). The tool that
+   actually *is* meant to populate this archive, `scripts/download_deep_
+   history.py` (measures real per-provider depth — ~6.5y H4 / ~19y D1 on
+   Twelve Data Free), writes a completely different filename: `data/
+   {SYMBOL}_{TF}_deep.csv`. The two names never matched, on any commit —
+   confirmed via `git log -S _deepen_with_history` that both functions
+   have coexisted with mismatched names since the deepener was introduced
+   (`7c0400b`, 2026-07-22).
+2. **Wrong object deepened, independent of (1).** Even with the filename
+   fixed, `fetch_multi_timeframe_with_failover()` called `_deepen_with_
+   history(symbol, best_base_label, best_base_df)` on the pre-resample
+   FETCH BASE (e.g. `"H1"`, the only timeframe Twelve Data Free actually
+   serves natively) — never on the H4/D1 timeframes actually being
+   resampled. `download_deep_history.py` never produces an H1-labeled
+   archive (its own `label = {"4h": "H4", "1day": "D1"}` and default
+   `--timeframes 4h 1day` — it downloads H4/D1 series directly). So a
+   base-level archive lookup could never find a matching file in
+   practice, even after fix (1) alone — proven by writing
+   `test_multi_tf_failover_deepens_starved_h4_resample_from_archive`
+   against fix (1) only, which failed with `50 >= 210` (the resampled H4
+   view stayed exactly as thin as the fetch, unchanged) before fix (2)
+   was applied.
+
+**Expected:** a thin, starved H4/D1 view (whether fetched natively-but-
+capped, e.g. FCS's 300-bar limit, or resampled from a thin base) should be
+left-extended from the real, already-downloadable `data/{SYMBOL}_{TF}_
+deep.csv` archive before being handed to NNFX/the MTF gate.
+
+**File/Line:** `core/data_providers.py` — `_deepen_with_history()`'s
+archive path construction, and `fetch_multi_timeframe_with_failover()`'s
+resample block (the `if best_base_df is not None:` section).
+
+**Execution path:** every live/paper decision for an FX/metals/indices
+symbol whose provider chain has no native H4/D1 source available at
+request time (Twelve Data Free plan-gated, or a temporary cTrader outage
+falling through to Twelve Data) — i.e. exactly the class the operator's
+own philosophy audit already measured at 665 NNFX "Insufficient data"
+decisions and an inert MTF D1 gate.
+
+**Reproduction:** `tests/test_provider_chains.py` (+7 new tests, zero
+prior coverage existed for `_deepen_with_history` at all):
+`test_deepen_with_history_noop_when_no_archive_file` (regression pin —
+existing no-archive behavior unchanged); `test_deepen_with_history_
+reads_the_deep_csv_archive` (the archive is actually found and used, at
+the corrected filename); `test_deepen_with_history_ignores_a_stray_2y_
+csv_file` (the authoritative proof for fix (1) — a file under the OLD,
+wrong name is never picked up, so this pins that the fix changed *which*
+path is read, not just that *some* file works); `test_deepen_with_
+history_fresh_bars_win_on_overlap` (the freshness guarantee — a real
+overlapping-timestamp merge, fresh values win, archive still supplies the
+older non-overlapping bars); `test_deepen_with_history_noop_when_already_
+deep_enough` (short-circuits before touching disk at all once a view is
+already ≥900 bars); `test_multi_tf_failover_deepens_starved_h4_resample_
+from_archive` (the end-to-end proof for fix (2) — the exact live shape:
+no native H4 provider, a thin 200-bar H1 fetch resamples to 50 H4 bars,
+and only with a real `EURUSD_H4_deep.csv` archive present does the final
+H4 view clear NNFX's 210-bar floor; this test was written and confirmed
+failing against fix (1) alone before fix (2) was applied, then passing
+after).
+
+**Root cause:** two independent, additive defects — a filename that never
+matched between the archive's reader and its only real writer, and the
+deepener being wired onto the wrong object (the pre-resample base,
+instead of each final target timeframe) given what that writer actually
+produces (already-resampled H4/D1 series, not a base-timeframe one).
+Neither defect alone fully explains the dead mechanism; both had to be
+fixed for it to work at all.
+
+**Impact:** none on any evidence/registry/backtest code path (`_deepen_
+with_history` is exclusively part of the LIVE data-fetch chain,
+`fetch_multi_timeframe_with_failover`, never called by `backtesting/
+backtest_engine.py` or any research/Mission Center path). Direct impact
+on live decision quality: NNFX (a load-bearing engine per CLAUDE.md's
+frozen state — "nnfx + price_action are load-bearing") and the MTF D1
+confirmation gate were operating on starved data on every FX/metals
+symbol without a native H4/D1 provider, exactly matching the operator's
+own measured 665-decision starvation count and the live 1.11%-vs-~15%
+backtest EXECUTE-rate gap this session's own prior audit flagged as
+"should shrink once data is fixed."
+
+**Fix (CONFIRMED, applied same phase):**
+1. `_deepen_with_history()`'s archive path corrected to `data/{SYMBOL}_
+   {TF}_deep.csv`.
+2. `fetch_multi_timeframe_with_failover()` restructured to call `_deepen_
+   with_history(symbol, tf, views[tf])` once per FINAL timeframe (native
+   or resampled) after the resample loop, instead of once on the
+   pre-resample base before it — the archive-vs-writer mismatch this
+   corrects is described in Root cause above.
+
+**Regression tests:** `tests/test_provider_chains.py` (+7, see
+Reproduction above). Full affected-file suite: 40/40 passing (33
+pre-existing + 7 new). Full project suite re-run with zero regressions
+outside this file.
+
+**Status:** FIXED, tested, regression-pinned. **Operator action still
+required — this fix only makes the deepening mechanism functional; it
+does not itself create the archive.** On the VPS: `python3 scripts/
+download_deep_history.py` (needs `TWELVE_DATA_API_KEY` set; per its own
+docstring, defaults to every enabled symbol in `config.yaml`'s `data.
+twelve_data_symbols`, timeframes `4h 1day`) to populate `data/{SYMBOL}_
+{H4,D1}_deep.csv` for the live symbol universe. Re-run periodically (no
+systemd timer exists for this yet — worth a separate, small follow-up if
+the archive needs to stay current, though for a multi-year deep archive
+this is a low-frequency need, not urgent). After a fresh archive exists,
+watch `main.py`'s own `DATA STARVATION` log line — it should stop firing
+for FX/metals symbols on Twelve Data Free once the archive is present.

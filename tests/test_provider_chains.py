@@ -137,6 +137,93 @@ def test_h4_starvation_class_fixed_by_native_provider(monkeypatch):
     assert len(views["H4"]) == 750                          # not ~187 resampled
 
 
+# ── _deepen_with_history (BUG, 2026-08-04): FX/metals symbols with no
+# native H4/D1 provider (Twelve Data Free 403s on H4/D1) resample from a
+# short fetched H1 base and starve NNFX (needs 210 H4 bars for EMA200) and
+# the MTF D1 gate (needs 50 D1 bars) — exactly the "665 NNFX Insufficient
+# data" class the operator reported live. _deepen_with_history() exists
+# specifically to left-extend that thin base from a local archive file,
+# but looked for data/{SYM}_{TF}_2y.csv while scripts/download_deep_
+# history.py — the only tool that ever writes this archive — writes
+# data/{SYM}_{TF}_deep.csv. The mismatch meant this deepener silently
+# no-op'd on every real deployment. Zero test coverage existed for this
+# function before this fix.
+
+def test_deepen_with_history_noop_when_no_archive_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.data_manager.DATA_DIR", tmp_path)
+    short = _df(n=50, freq="4h")
+    result = dp._deepen_with_history("EURUSD", "H4", short)
+    assert len(result) == 50  # unchanged — no file to deepen from
+
+
+def test_deepen_with_history_reads_the_deep_csv_archive(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.data_manager.DATA_DIR", tmp_path)
+    archive = _df(n=900, freq="4h")
+    archive.index.name = "datetime"
+    archive.to_csv(tmp_path / "EURUSD_H4_deep.csv")
+    short = _df(n=50, freq="4h")
+    result = dp._deepen_with_history("EURUSD", "H4", short)
+    assert len(result) > 50  # deepened from the archive
+
+
+def test_deepen_with_history_ignores_a_stray_2y_csv_file(tmp_path, monkeypatch):
+    """Regression pin for the exact bug: a file under the OLD, wrong
+    filename must never be picked up — proves the fix actually changed
+    which path is read, not just that *a* file works."""
+    monkeypatch.setattr("core.data_manager.DATA_DIR", tmp_path)
+    archive = _df(n=900, freq="4h")
+    archive.index.name = "datetime"
+    archive.to_csv(tmp_path / "EURUSD_H4_2y.csv")  # old, wrong name
+    short = _df(n=50, freq="4h")
+    result = dp._deepen_with_history("EURUSD", "H4", short)
+    assert len(result) == 50  # NOT deepened — old filename is ignored
+
+
+def test_deepen_with_history_fresh_bars_win_on_overlap(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.data_manager.DATA_DIR", tmp_path)
+    archive = _df(n=900, freq="4h", mark=1.0)  # 2026-01-01 -> ~2026-06-19
+    archive.index.name = "datetime"
+    archive.to_csv(tmp_path / "EURUSD_H4_deep.csv")
+    # fresh starts 20 bars before the archive's last timestamp — a real
+    # overlap at the boundary, matching the actual live shape (archive =
+    # deep past, fresh fetch = most recent window extending to "now").
+    overlap_start = archive.index[-20]
+    fresh_idx = pd.date_range(overlap_start, periods=50, freq="4h", tz="UTC")
+    px = pd.Series(100.0, index=fresh_idx)
+    fresh = pd.DataFrame({"open": px, "high": px + 1, "low": px - 1,
+                          "close": px, "volume": 2.0}, index=fresh_idx)
+    result = dp._deepen_with_history("EURUSD", "H4", fresh)
+    # the overlapping timestamps must carry the FRESH value, not the archive's
+    assert float(result.loc[overlap_start, "volume"]) == 2.0
+    # the archive still supplies the older, non-overlapping bars
+    assert float(result["volume"].iloc[0]) == 1.0
+    assert len(result) > len(fresh)
+
+
+def test_deepen_with_history_noop_when_already_deep_enough():
+    already_deep = _df(n=dp._MIN_RESAMPLE_BASE_BARS, freq="4h")
+    result = dp._deepen_with_history("EURUSD", "H4", already_deep)
+    assert result is already_deep  # short-circuits before touching disk at all
+
+
+def test_multi_tf_failover_deepens_starved_h4_resample_from_archive(tmp_path, monkeypatch):
+    """End-to-end: the exact live class this bug caused — no native H4
+    provider (Twelve Data Free-style), a thin H1 base resamples to well
+    under NNFX's 210-bar floor, and the archive must lift it back above
+    that floor."""
+    monkeypatch.setattr("core.data_manager.DATA_DIR", tmp_path)
+    archive = _df(n=900, freq="4h")
+    archive.index.name = "datetime"
+    archive.to_csv(tmp_path / "EURUSD_H4_deep.csv")
+    monkeypatch.setattr(dp, "_fetch_twelve_data",
+                        lambda s, i, o, use_cache=True: _df(n=200, freq="h"))
+    # H4 isn't native on twelve_data (_NATIVE_TF), so H1 must also be
+    # requested — it's what actually gets fetched and resampled into H4.
+    views = dp.fetch_multi_timeframe_with_failover(
+        "EURUSD", ["H4", "H1"], outputsize=200, providers=["twelve_data"])
+    assert len(views["H4"]) >= 210  # cleared NNFX's EMA200 floor
+
+
 # ── cTrader guard ────────────────────────────────────────────────────────
 
 def test_ctrader_falls_through_cleanly_without_credentials(monkeypatch):

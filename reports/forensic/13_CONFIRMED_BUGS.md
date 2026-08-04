@@ -1891,3 +1891,77 @@ the archive needs to stay current, though for a multi-year deep archive
 this is a low-frequency need, not urgent). After a fresh archive exists,
 watch `main.py`'s own `DATA STARVATION` log line — it should stop firing
 for FX/metals symbols on Twelve Data Free once the archive is present.
+
+**Confirmed applied live (2026-08-04):** operator ran the download script
+on the deployed VPS after pulling this fix — 22 real archive files
+written (`EURUSD_H4_deep.csv` 10,744 bars/6.5y through `ETHUSD_D1_deep.csv`
+3,117 bars/8.5y, etc.), all with `dups=0, high<low=0`.
+
+---
+
+## Operational finding (not a code bug) — expired cTrader access token
+
+**Trigger:** after deploying BUG-014 (superseded-client guard) and
+confirming, via `sudo systemctl status iatis-scheduler` (single stable
+process, PID unchanged since restart, no crash-restart loop), that the
+cTrader `ALREADY_LOGGED_IN`/reconnect-storm class was genuinely resolved,
+the operator still observed the connection never reaching `READY`. The
+operator's own hypothesis was a second, undetected concurrent-connection
+race (the same class BUG-014 fixed).
+
+**Finding:** the live scheduler log contains the actual, unambiguous
+answer, from the server itself:
+```
+State transition: TCP_CONNECTED → APP_AUTH_OK
+Application authenticated
+Server error (ProtoOAErrorRes): CH_ACCESS_TOKEN_INVALID — Access token expired
+State transition: APP_AUTH_OK → ERROR
+```
+This is a *different* cTrader error code from `ALREADY_LOGGED_IN` (which
+already fires once earlier in the same log and is already handled as
+benign) — `CH_ACCESS_TOKEN_INVALID` is the server's account-auth-stage
+validity check on the literal `accessToken` string in the request, not a
+session-concurrency signal. A double-connect race would reproduce
+`ALREADY_LOGGED_IN` again, not this code. Ruled out concurrency directly:
+`systemctl status` showed exactly one process; this codebase has three
+independent, already-tested guards against a second live session
+(in-process singleton lock, cross-process `flock`, and BUG-014's
+superseded-client guard) — none of their failure modes produce
+`CH_ACCESS_TOKEN_INVALID`.
+
+**Root cause:** cTrader Open API access tokens expire (~30 days per
+Spotware's own OAuth docs, `expiresIn: 2628000` seconds in the token
+response). No code path in this repo has ever refreshed the token
+automatically — confirmed by grep, zero references to
+`CTRADER_REFRESH_TOKEN` anywhere in `execution/ctrader_client.py` or
+any other live/scheduled path; `scripts/measure_ctrader_spread.py`
+already had a comment anticipating exactly this failure mode
+("refresh it via CTRADER_REFRESH_TOKEN, or re-run the OAuth flow") but
+nothing implemented it.
+
+**Resolution (new tool, not a fix to existing code):** `scripts/
+ctrader_refresh_access_token.py` — exchanges the operator's saved
+`CTRADER_REFRESH_TOKEN` for a fresh `CTRADER_ACCESS_TOKEN` via cTrader's
+own documented refresh flow (`GET https://openapi.ctrader.com/apps/token`,
+`grant_type=refresh_token`, per help.ctrader.com/open-api/
+account-authentication/). Print-only by default; `--write` updates
+`.env` in place (preserving every other line) and prints the exact
+restart commands. Since cTrader issues a *new* refresh token on every
+refresh, both the new access token and new refresh token are always
+surfaced/saved together.
+
+**Tests:** `tests/test_ctrader_refresh_access_token.py` (8, all
+`requests.get`-mocked, no live network call in the suite) — the token
+endpoint/params are exactly as documented; readable `RuntimeError`s on
+a non-200 response, a non-JSON response, a response missing
+`accessToken`, and a network exception; the `.env` in-place rewrite
+preserves every other line/comment, appends the key if absent, and its
+anchored regex never clobbers a similarly-prefixed key (e.g.
+`CTRADER_ACCESS_TOKEN_EXPIRY`) when only `CTRADER_ACCESS_TOKEN` should
+change.
+
+**Status:** tool shipped, tested. **Operator action required**: run
+`python3 scripts/ctrader_refresh_access_token.py --write` on the VPS,
+then `sudo systemctl restart iatis-scheduler` and `sudo systemctl
+restart iatis-api` (as two separate commands), then watch one full
+connection cycle for `READY` with no further `CH_ACCESS_TOKEN_INVALID`.

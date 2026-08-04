@@ -171,9 +171,9 @@ def test_candles_502_when_all_providers_fail(client):
 
 def test_candles_uses_asset_class_provider_chain(client):
     """Regression: /candles must route through provider_chain_for (ccxt
-    first for crypto, ctrader first for fx/metals/indices) — not
-    fetch_with_failover's own generic default chain, which has no ccxt
-    entry at all and would never even try Binance for BTC/ETH."""
+    first for crypto) — not fetch_with_failover's own generic default
+    chain, which has no ccxt entry at all and would never even try
+    Binance for BTC/ETH."""
     from core.data_providers import provider_chain_for
     with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "ccxt")) as mock_fetch:
         r = client.get("/candles/BTCUSD", headers=HDR)
@@ -181,6 +181,31 @@ def test_candles_uses_asset_class_provider_chain(client):
     used_chain = mock_fetch.call_args.kwargs.get("providers")
     assert used_chain == provider_chain_for("BTC/USD")
     assert used_chain[0] == "ccxt"
+
+
+def test_candles_never_opens_a_ctrader_session(client):
+    """Regression (2026-08-04): cTrader allows only ONE authenticated
+    session per account+app, already owned by the scheduler process
+    (execution/trade_executor.py, execution/reconciliation.py both go
+    through core.data_providers.get_shared_ctrader_client() — see
+    reconciliation.py's own "the API server process must never..."
+    comment). /candles runs inside the API process — a dashboard user
+    opening a live EURUSD/XAUUSD chart must never make the API process
+    independently race the scheduler for cTrader's exclusive session
+    slot (the exact DuplicateSessionError/orphaned-session symptom
+    diagnosed this session). 'ctrader' must be stripped from the real
+    provider_chain_for() chain before it reaches fetch_with_failover,
+    even though that chain puts it first for fx/metals/indices."""
+    from core.data_providers import provider_chain_for
+    real_chain = provider_chain_for("EUR/USD")
+    assert "ctrader" in real_chain  # pin the premise: it WOULD be used otherwise
+    with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "twelve_data")) as mock_fetch:
+        r = client.get("/candles/EURUSD", headers=HDR)
+    assert r.status_code == 200
+    used_chain = mock_fetch.call_args.kwargs.get("providers")
+    assert "ctrader" not in used_chain
+    # every other provider in the real chain is preserved, in order
+    assert used_chain == [p for p in real_chain if p != "ctrader"]
 
 
 def test_ai_explain_trade_disabled_by_default(client):

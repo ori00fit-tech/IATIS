@@ -142,6 +142,27 @@ def test_trials_carry_a_real_fingerprint_computed_once_per_symbol(tmp_path, monk
     assert fingerprints[0] == fingerprints[1] == fingerprints[2]
 
 
+def test_recorded_trials_carry_gate_rejections_breakdown(tmp_path):
+    """Prune Forensic Audit (2026-08-04, reports/forensic/21_...) regression:
+    every recorded trial's metrics_json must carry gate_rejections/
+    context_rejections/indicator_rejections — before this fix, Mission
+    Center discarded these entirely, so a low-trade-count trial (pruned or
+    not) could never be diagnosed as "quorum failure" vs "neutral bias"
+    vs "score" vs a filter, only its final trade count."""
+    _write_dataset(tmp_path)
+    mc = _small_config(tmp_path, "mission-gate-rejections-check", n_trials=2)
+    run_mission(mc)
+
+    recorded = research_missions.existing_trials("mission-gate-rejections-check", "EURUSD")
+    assert len(recorded) == 2
+    for row in recorded:
+        metrics = json.loads(row["metrics_json"])
+        assert "gate_rejections" in metrics
+        assert "context_rejections" in metrics
+        assert "indicator_rejections" in metrics
+        assert isinstance(metrics["gate_rejections"], dict)
+
+
 # ── Resume ────────────────────────────────────────────────────────────────
 
 def test_resume_skips_already_completed_trials(tmp_path, monkeypatch):
@@ -240,6 +261,44 @@ def test_one_symbol_failure_does_not_abort_other_symbols(tmp_path):
 
     mission = research_missions.get_mission("mission-isolation-check")
     assert mission["status"] == "finished"
+
+
+def test_transient_record_trial_write_failure_does_not_abort_the_mission(tmp_path, monkeypatch):
+    """Regression (found 2026-08-04 while investigating an operator-reported
+    150-trial mission that did not complete): before this fix, an
+    unguarded research_missions.record_trial() call meant a single
+    transient D1 write hiccup on ANY trial propagated all the way up
+    through run_mission()'s outer try/except, marking the ENTIRE mission
+    'failed' and abandoning every trial after the one that hit the
+    hiccup — even though most trials up to that point had succeeded.
+    record_trial() must be guarded the same way evaluate_point() already
+    is: one trial's write failure is logged and skipped, never fatal to
+    the mission."""
+    _write_dataset(tmp_path)
+    mc = _small_config(tmp_path, "mission-record-trial-hiccup-check", n_trials=5)
+
+    from backtest import mission_runner as m
+    real_record_trial = research_missions.record_trial
+    call_count = {"n": 0}
+
+    def flaky_record_trial(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("D1 proxy timeout (transient)")
+        return real_record_trial(*args, **kwargs)
+
+    monkeypatch.setattr(m.research_missions, "record_trial", flaky_record_trial)
+
+    run_mission(mc)
+
+    mission = research_missions.get_mission("mission-record-trial-hiccup-check")
+    assert mission["status"] == "finished"  # not "failed" — the whole run must not abort
+    recorded = research_missions.existing_trials("mission-record-trial-hiccup-check", "EURUSD")
+    # 4 of the 5 trials landed — the 2nd one's write failed and was
+    # skipped (not retried, matching the exact same "log and move on"
+    # semantics evaluate_point()'s own FAIL path already has).
+    assert len(recorded) == 4
+    assert call_count["n"] == 5  # every trial still attempted its write
 
 
 def test_transient_cancellation_check_failure_does_not_mark_a_successful_mission_failed(tmp_path, monkeypatch):

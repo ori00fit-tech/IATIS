@@ -170,6 +170,62 @@ def test_evaluate_point_runs_end_to_end_and_produces_real_trades():
     assert result.metrics.total_trades == result.trades
 
 
+def test_evaluate_point_surfaces_gate_rejections_on_the_pruned_path(monkeypatch):
+    """Prune Forensic Audit (2026-08-04, reports/forensic/21_...)
+    regression: BacktestResult.gate_rejections/context_rejections/
+    indicator_rejections are computed by run_backtest() but, before this
+    fix, evaluate_point() silently discarded all three — so Mission
+    Center had zero visibility into WHY a low-trade-count trial was
+    starved (quorum "votes" vs "neutral_bias" vs "score" vs an
+    indicator/context filter). Pins that they now flow through
+    unmutated on the PRUNED (insufficient) path."""
+    import backtest.optimizer as optimizer_module
+
+    class _FakeBacktestResult:
+        trades: list = []
+        gate_rejections = {"votes": 42, "score": 3}
+        context_rejections = {"session": 5}
+        indicator_rejections = {"rsi": 2}
+
+    monkeypatch.setattr(
+        optimizer_module, "run_backtest",
+        lambda df, cfg, engine_config=None: _FakeBacktestResult(),
+    )
+
+    df = _ohlcv(50)
+    point = {"timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {}}
+    result = evaluate_point("EURUSD", df, point, min_trades=1, objective_metric="profit_factor")
+
+    assert result.insufficient is True  # 0 trades < min_trades=1
+    assert result.gate_rejections == {"votes": 42, "score": 3}
+    assert result.context_rejections == {"session": 5}
+    assert result.indicator_rejections == {"rsi": 2}
+
+
+def test_evaluate_point_surfaces_gate_rejections_on_the_complete_path(monkeypatch):
+    """Same regression as above, on the COMPLETE (not insufficient) path —
+    the fields must not be dropped there either."""
+    import backtest.optimizer as optimizer_module
+
+    class _FakeBacktestResult:
+        trades: list = []
+        gate_rejections = {"neutral_bias": 7}
+        context_rejections: dict = {}
+        indicator_rejections: dict = {}
+
+    monkeypatch.setattr(
+        optimizer_module, "run_backtest",
+        lambda df, cfg, engine_config=None: _FakeBacktestResult(),
+    )
+
+    df = _ohlcv(50)
+    point = {"timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {}}
+    result = evaluate_point("EURUSD", df, point, min_trades=0, objective_metric="profit_factor")
+
+    assert result.insufficient is False  # 0 trades >= min_trades=0
+    assert result.gate_rejections == {"neutral_bias": 7}
+
+
 def test_finite_objective_clips_inf_but_preserves_real_metrics_value():
     assert _finite_objective(float("inf")) == pytest.approx(1e6)
     assert _finite_objective(float("-inf")) == pytest.approx(-1e6)

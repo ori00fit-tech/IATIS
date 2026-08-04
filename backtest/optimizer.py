@@ -458,6 +458,19 @@ class EvalResult:
     # backtest/monte_carlo.py's run_monte_carlo() for one specific,
     # operator-chosen candidate.
     trade_records: list[TradeRecord] | None = None
+    # Prune Forensic Audit (2026-08-04, reports/forensic/21_...) — always
+    # populated (small dicts, cheap to keep, unlike trade_records). Before
+    # this, a PRUNED trial's own bar-by-bar rejection reasons (quorum
+    # "votes" vs "neutral_bias" vs "score" vs "info_share" vs indicator/
+    # context filters) were computed by run_backtest() and then silently
+    # discarded — so Mission Center had no way to tell "insufficient
+    # engine agreement" apart from "insufficient signal strength" apart
+    # from "filtered out by an indicator/context rule" for ANY trial,
+    # pruned or complete. These three dicts carry that breakdown through
+    # unmutated, straight from backtesting.backtest_engine.BacktestResult.
+    gate_rejections: dict = field(default_factory=dict)
+    context_rejections: dict = field(default_factory=dict)
+    indicator_rejections: dict = field(default_factory=dict)
 
 
 # Finite sentinel used ONLY to feed the sampler's acquisition function —
@@ -510,12 +523,18 @@ def evaluate_point(
     records = [trade_to_record(t, symbol) for t in bt.trades]
     metrics = calculate_metrics(records, initial_capital=cfg.initial_balance)
     trade_records = records if return_trades else None
+    gate_rejections = dict(bt.gate_rejections)
+    context_rejections = dict(bt.context_rejections)
+    indicator_rejections = dict(bt.indicator_rejections)
 
     trades = metrics.total_trades
     if trades < min_trades:
         return EvalResult(
             metrics=metrics, objective_value=None, insufficient=True,
             trades=trades, trade_records=trade_records,
+            gate_rejections=gate_rejections,
+            context_rejections=context_rejections,
+            indicator_rejections=indicator_rejections,
         )
 
     raw_value = getattr(metrics, objective_metric)
@@ -525,4 +544,7 @@ def evaluate_point(
         insufficient=False,
         trades=trades,
         trade_records=trade_records,
+        gate_rejections=gate_rejections,
+        context_rejections=context_rejections,
+        indicator_rejections=indicator_rejections,
     )

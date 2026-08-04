@@ -293,16 +293,31 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
             result = evaluate_point(symbol, train_df, point, mc.min_trades, mc.objective_metric)
         except Exception as exc:  # noqa: BLE001 — one trial's crash must never abort the mission
             _tell_safely(study, trial, state=optuna.trial.TrialState.FAIL)
-            research_missions.record_trial(
-                mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
-                state="FAIL", objective_value=None, params=raw_params, metrics=None,
-                trades=0, error=str(exc), started_at=started_at, finished_at=_now_iso(),
-                fingerprint=fingerprint,
-            )
+            try:
+                research_missions.record_trial(
+                    mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
+                    state="FAIL", objective_value=None, params=raw_params, metrics=None,
+                    trades=0, error=str(exc), started_at=started_at, finished_at=_now_iso(),
+                    fingerprint=fingerprint,
+                )
+            except Exception as record_exc:  # noqa: BLE001 — a D1 write hiccup recording
+                # a FAIL must not itself abort the mission either (see the
+                # matching comment on the PRUNED/COMPLETE record_trial calls
+                # below for the full reasoning).
+                logger.warning(f"{symbol} trial {trial.number}: record_trial (FAIL) failed — {record_exc}")
             logger.warning(f"{symbol} trial {trial.number}: evaluation failed — {exc}")
             continue
 
         metrics_payload = json_safe(result.metrics.to_dict())
+        # Prune Forensic Audit (2026-08-04, reports/forensic/21_...) —
+        # always attached, including on a PRUNED trial, so a human can
+        # see WHICH gate (quorum "votes", "neutral_bias", "score",
+        # "info_share", indicator/context filters, ...) dominated the
+        # rejections behind a low trade count, instead of only seeing
+        # the trade count itself.
+        metrics_payload["gate_rejections"] = json_safe(result.gate_rejections)
+        metrics_payload["context_rejections"] = json_safe(result.context_rejections)
+        metrics_payload["indicator_rejections"] = json_safe(result.indicator_rejections)
         if holdout_df is not None and len(holdout_df) > 0 and not result.insufficient:
             try:
                 holdout_result = evaluate_point(symbol, holdout_df, point, 1, mc.objective_metric)
@@ -312,22 +327,38 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
 
         if result.insufficient:
             _tell_safely(study, trial, state=optuna.trial.TrialState.PRUNED)
-            research_missions.record_trial(
-                mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
-                state="PRUNED", objective_value=None, params=raw_params,
-                metrics=metrics_payload, trades=result.trades, error=None,
-                started_at=started_at, finished_at=_now_iso(),
-                fingerprint=fingerprint,
-            )
+            try:
+                research_missions.record_trial(
+                    mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
+                    state="PRUNED", objective_value=None, params=raw_params,
+                    metrics=metrics_payload, trades=result.trades, error=None,
+                    started_at=started_at, finished_at=_now_iso(),
+                    fingerprint=fingerprint,
+                )
+            except Exception as exc:  # noqa: BLE001 — a transient D1 write hiccup on
+                # ONE trial must never abort a whole mission (150+ trials,
+                # hours of compute) — the same "one trial's crash never
+                # kills the run" contract evaluate_point()'s own except-
+                # block above already guarantees, extended to the D1 write
+                # step itself (previously unguarded — found 2026-08-04
+                # while investigating an operator-reported 150-trial
+                # mission that did not complete). Optuna's in-memory study
+                # already has this trial (_tell_safely above succeeded);
+                # only the D1 row is lost, so a later resume simply
+                # re-attempts this trial number rather than skipping it.
+                logger.warning(f"{symbol} trial {trial.number}: record_trial (PRUNED) failed — {exc}")
         else:
             _tell_safely(study, trial, values=result.objective_value)
-            research_missions.record_trial(
-                mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
-                state="COMPLETE", objective_value=result.objective_value, params=raw_params,
-                metrics=metrics_payload, trades=result.trades, error=None,
-                started_at=started_at, finished_at=_now_iso(),
-                fingerprint=fingerprint,
-            )
+            try:
+                research_missions.record_trial(
+                    mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
+                    state="COMPLETE", objective_value=result.objective_value, params=raw_params,
+                    metrics=metrics_payload, trades=result.trades, error=None,
+                    started_at=started_at, finished_at=_now_iso(),
+                    fingerprint=fingerprint,
+                )
+            except Exception as exc:  # noqa: BLE001 — see the PRUNED branch's comment above
+                logger.warning(f"{symbol} trial {trial.number}: record_trial (COMPLETE) failed — {exc}")
 
 
 def _write_report(mc: MissionConfig) -> None:

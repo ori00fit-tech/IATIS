@@ -2116,3 +2116,91 @@ Recommended, not required: after deploying, watch a live scheduler run
 for the previously-reported overlapping-`🔌 Connecting`/`INVALID_REQUEST`
 pattern to confirm it no longer recurs — this cannot be verified from
 this sandboxed session (no live broker/network access here).
+
+---
+
+## BUG-017
+
+**Severity:** P1 (research-pipeline robustness — an operator reported a
+150-trial Mission Center run that did not complete; this is a real,
+confirmed mechanism that produces exactly that symptom, found while
+investigating it)
+
+**Category:** Mission Center trial recording (`backtest/mission_runner.py`
+`_run_symbol()`) — every `research_missions.record_trial(...)` call (a
+synchronous D1 write) was unguarded, on all three of the FAIL/PRUNED/
+COMPLETE code paths.
+
+**Claim:** `mission_runner.py`'s own established contract, stated
+directly in its `evaluate_point()` exception handler's comment ("one
+trial's crash must never abort the mission"), was violated for the
+*recording* step: a trial's actual backtest evaluation was fully guarded
+(`try/except` around `evaluate_point()`), but the subsequent D1 write
+that persists its result was not.
+
+**Observed (confirmed by direct code read):** `_run_symbol()`'s loop
+called `research_missions.record_trial(...)` directly, with no
+surrounding `try/except`, in all three branches (the `except Exception`
+handler for a failed `evaluate_point()`, the `if result.insufficient:`
+PRUNED branch, and the `else:` COMPLETE branch). `run_mission()` does
+have an outer `try/except` (around the whole per-symbol loop), so an
+unhandled exception here does not leave the mission stuck forever — but
+it **does** propagate all the way up, mark the entire mission `status=
+"failed"`, and abandon every trial after the one that hit the failure,
+regardless of how many trials before it had already succeeded.
+
+**Expected:** a transient D1 write hiccup on one trial's recording step
+should be logged and skipped — exactly like a transient failure inside
+`evaluate_point()` itself already is — never abort the whole mission.
+
+**File/Line:** `backtest/mission_runner.py`, `_run_symbol()` — the three
+`research_missions.record_trial(...)` call sites.
+
+**Execution path:** any mission where `record_trial()`'s D1 write
+transiently fails partway through a multi-trial run (network hiccup,
+D1 proxy timeout, etc.) — plausible, though not independently confirmed
+against the specific operator-reported 150-trial mission from this
+sandbox (no live D1/log access here to verify it was the actual cause
+in that instance).
+
+**Reproduction:** `tests/test_mission_runner.py::
+test_transient_record_trial_write_failure_does_not_abort_the_mission` —
+monkeypatches `research_missions.record_trial` to raise on exactly the
+2nd call within a 5-trial mission; before the fix this test fails (the
+mission's `status` becomes `"failed"` and only 1 trial is recorded);
+after the fix, `status == "finished"` and 4 of 5 trials are recorded
+(only the one hit by the injected failure is skipped).
+
+**Root cause:** the "one trial's crash must never abort the mission"
+guarantee was applied to the evaluation step but not extended to the
+persistence step that immediately follows it, in any of the three
+outcome branches.
+
+**Impact:** Mission Center research-run reliability only — no evidence/
+registry/backtest-correctness code path is affected (`record_trial()`
+writes to `research_mission_trials_v2`, never to `research/results/
+registry.json`). A mission that would otherwise have produced N mostly-
+successful trials could previously be reduced to a handful before an
+early, unrelated D1 hiccup aborted the entire run.
+
+**Fix (CONFIRMED, applied same phase):** each of the three
+`record_trial()` call sites is now individually wrapped in its own
+`try/except Exception`, logging a warning (`"{symbol} trial {trial.
+number}: record_trial (FAIL|PRUNED|COMPLETE) failed — {exc}"`) and
+continuing to the next trial. `_tell_safely()` (which informs Optuna's
+in-memory study) is always called *before* the guarded write, so a
+skipped write only loses the D1 row — a later resume simply re-attempts
+that trial number rather than getting stuck.
+
+**Regression tests:** `tests/test_mission_runner.py` (+1, see
+Reproduction above). Full affected-file suite (`test_mission_runner.py`
++ `test_optimizer.py`): 75/75 passing. Full project suite re-run with
+zero regressions outside these files.
+
+**Status:** FIXED, tested, regression-pinned. Bundled with the same
+pass as the `gate_rejections` observability fix (see `reports/forensic/
+21_MISSION_PRUNE_FORENSIC_AUDIT.md`'s addendum) — both found while
+investigating the operator's incomplete-150-trial-mission report. No
+operator action required for the code fix itself; confirming whether
+this was the actual cause of that specific mission would need its real
+job log/status from the VPS, which this sandboxed session cannot access.

@@ -421,3 +421,75 @@ regression test.
 **J. NO CODE CHANGES MADE.** Confirmed — this entire investigation used
 only Grep/Read tools. `git status` was clean before this pass and is
 unchanged now.
+
+---
+
+## Addendum (2026-08-04, same day) — item H fix applied, plus a second, real finding
+
+The operator asked for fixes and separately reported a 150-trial mission
+that did not complete. Two fixes were applied in this follow-up pass.
+
+### Fix 1 — item H: `gate_rejections`/`context_rejections`/`indicator_rejections` now surfaced
+
+`backtest/optimizer.py`'s `EvalResult` gained three fields
+(`gate_rejections`, `context_rejections`, `indicator_rejections`,
+default `{}`), populated in `evaluate_point()` from
+`bt.gate_rejections`/`bt.context_rejections`/`bt.indicator_rejections`
+(previously read and then discarded) on **both** the PRUNED and
+COMPLETE return paths — the exact gap §9 identified. `backtest/
+mission_runner.py` now writes all three into every recorded trial's
+`metrics_json`. `MissionCenter.tsx`'s `TrialBreakdownPanel` renders them
+as a new "Gate rejections — why bars didn't trade" section, shown
+**independently** of the by_regime/by_direction/by_session breakdown
+(which needs closed trades and is therefore empty for exactly the
+low-trade-count trials this fix is for). Tests: `tests/test_optimizer.py`
+(+2, pinning both EvalResult paths carry the fields unmutated) and
+`tests/test_mission_runner.py` (+1, end-to-end: every recorded trial's
+`metrics_json` contains all three keys). `tsc -b`/`oxlint`/`npm run
+build` clean.
+
+### Fix 2 — new finding: `record_trial()` (a D1 write) was unguarded on every path, so one write hiccup could abort a whole mission
+
+While tracing why a 150-trial mission might not complete, found that
+`_run_symbol()`'s three `research_missions.record_trial(...)` calls
+(FAIL/PRUNED/COMPLETE branches) were **not** wrapped in their own
+try/except — only `evaluate_point()`'s own exceptions were guarded
+("one trial's crash must never abort the mission," per this module's
+own stated contract). `run_mission()`'s outer `try/except` (line 214)
+does catch an unhandled exception from deep inside `_run_symbol()`, so
+the mission is not left stuck forever — but it **is** marked `failed`
+as a whole and every trial after the one that hit the write failure is
+abandoned, even if 100+ trials before it had already succeeded. A
+single transient D1 hiccup at, say, trial 80 of 150 would produce
+exactly "ran a lot of trials, then didn't complete" — plausible, though
+not confirmed against this specific mission (no live D1/log access from
+this sandbox to verify it was the actual cause here).
+
+**Fix**: each of the three `record_trial()` calls is now individually
+wrapped in `try/except Exception`, logging a warning and continuing to
+the next trial rather than propagating — Optuna's in-memory study
+already has the trial via `_tell_safely()` (called first, before the
+write); only the D1 row is lost, and a later resume simply re-attempts
+that trial number. New regression test:
+`tests/test_mission_runner.py::test_transient_record_trial_write_failure_does_not_abort_the_mission`
+— monkeypatches `research_missions.record_trial` to fail once (trial 2
+of 5), asserts the mission still finishes with `status="finished"` (not
+`"failed"`) and 4 of 5 trials land, proving the mission survives a
+single write hiccup instead of aborting.
+
+### Verification
+
+`tests/test_optimizer.py` (58/58), `tests/test_mission_runner.py`
+(17/17, including both new tests), full project suite re-run clean
+(zero regressions outside these files). `tsc -b`, `oxlint src`, `npm
+run build` clean. `git status` on `research/results/registry.json`,
+`config.yaml`, `config/engines.yaml` unchanged (empty diff) — neither
+fix touches promotion/evidence logic or live config, matching every
+other Mission Center change this session.
+
+**Not confirmed**: whether Fix 2 is the actual cause of the operator's
+specific 150-trial incomplete mission — that would need the real job's
+log/status from the VPS (mission ID, and whether Mission Center shows
+it as `running` (still in progress), `failed`, or stuck). Both fixes
+are real, independently-justified improvements regardless of whether
+Fix 2 turns out to be the exact cause here.

@@ -217,6 +217,65 @@ def test_run_validation_reconstructs_hypothesis_bundle_mode_trial_correctly(tmp_
         assert r["error"] is None
 
 
+# ── Effective sample size / significance diagnostic ────────────────────────
+# (Mission Center Research Rigor Phase 2, 2026-08-XX) — informational only,
+# never a VALIDATION_CRITERIA entry, never blocking.
+
+def test_run_validation_records_significance_diagnostic_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-significance")
+
+    vc = _small_vc(tmp_path, "v-significance", "val-significance")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-significance")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        assert r["significance_json"] is not None
+        sig = json.loads(r["significance_json"])
+        assert set(sig) == {
+            "n_trades", "effective_sample_size", "autocorrelation_ratio",
+            "nominal_p_value", "ess_adjusted_p_value", "note",
+        }
+        if sig["effective_sample_size"] is not None:
+            # ESS is always <= n_trades, so the ESS-adjusted p-value can
+            # only ever be >= the nominal one (more conservative).
+            assert sig["effective_sample_size"] <= sig["n_trades"]
+            if sig["nominal_p_value"] is not None and sig["ess_adjusted_p_value"] is not None:
+                assert sig["ess_adjusted_p_value"] >= sig["nominal_p_value"]
+
+
+def test_compute_effective_sample_size_diagnostic_too_few_trades():
+    from backtest.metrics import TradeRecord
+    from backtest.mission_validator import _compute_effective_sample_size_diagnostic
+
+    trades = [TradeRecord(trade_id="t1", symbol="EURUSD", direction="BUY", entry_time="t", exit_time="t",
+                           entry_price=1.0, exit_price=1.01, stop_loss=0.99, take_profit=1.02,
+                           position_size=1.0, rr_actual=1.0, is_win=True, pnl_usd=10.0)] * 3
+    result = _compute_effective_sample_size_diagnostic(trades)
+    assert result["n_trades"] == 3
+    assert result["effective_sample_size"] is None
+    assert result["nominal_p_value"] is None
+    assert "Too few" in result["note"]
+
+
+def test_compute_effective_sample_size_diagnostic_never_reaches_a_criterion():
+    # Structural pin: _compute_effective_sample_size_diagnostic() output is
+    # never consumed by VALIDATION_CRITERIA/criteria_breakdown — a source
+    # scan proving the two never share a call chain in _evaluate_symbol.
+    import inspect
+
+    source = inspect.getsource(mission_validator._evaluate_symbol)
+    # The significance result is assigned once and only ever placed into
+    # the returned dict's own "significance" key — never fed into
+    # `breakdown`.
+    assert "significance_result = _compute_effective_sample_size_diagnostic" in source
+    assert '"significance": json_safe(significance_result)' in source
+    breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
+    assert "significance_result" not in breakdown_block
+
+
 # ── Reproducibility fingerprint / candidate lock + date overlap ────────────
 # (Diagnostic Infrastructure Phase 1, 2026-08-02) — both informational
 # only, never a VALIDATION_CRITERIA entry, never blocking.
@@ -377,7 +436,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "feature_mining": None, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [
@@ -420,7 +479,7 @@ def _fake_eval_all(symbol, point, vc, *, passing_symbols):
     return {
         "symbol": symbol, "passed": passed,
         "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-        "criteria_breakdown": {}, "feature_mining": None, "started_at": "t", "finished_at": "t",
+        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "started_at": "t", "finished_at": "t",
     }
 
 

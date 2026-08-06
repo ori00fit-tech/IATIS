@@ -280,9 +280,24 @@ export interface ValidationResultRow {
   walk_forward_json: string | null
   robustness_json: string | null
   criteria_breakdown_json: string
+  significance_json: string | null
   error: string | null
   started_at: string
   finished_at: string
+}
+
+// Mission Center Research Rigor Phase 2 — autocorrelation-adjusted
+// (effective sample size) significance check on a validation symbol's own
+// closed-trade R-multiple sequence. Diagnostic only, never a criterion —
+// see backtest/mission_validator.py's _compute_effective_sample_size_
+// diagnostic() docstring for the full reasoning.
+export interface SignificanceDiagnostic {
+  n_trades: number
+  effective_sample_size: number | null
+  autocorrelation_ratio: number | null
+  nominal_p_value: number | null
+  ess_adjusted_p_value: number | null
+  note: string
 }
 
 export interface ValidationDetailResponse {

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS research_mission_validation_results (
     robustness_json          TEXT,
     criteria_breakdown_json  TEXT NOT NULL,       -- {criterion: {actual, threshold, passed}} — every one, always
     feature_mining_json      TEXT,                -- Feature Mining Phase 1 (2026-07-30) — diagnostic only, never a criterion
+    significance_json        TEXT,                -- Mission Center Research Rigor Phase 2 (2026-08-XX) — autocorrelation-adjusted (effective sample size) significance check. Diagnostic only, never a criterion.
     error                    TEXT,
     started_at               TEXT NOT NULL,
     finished_at              TEXT NOT NULL,
@@ -203,19 +204,21 @@ def record_validation_result(
     started_at: str,
     finished_at: str,
     feature_mining: dict | None = None,
+    significance: dict | None = None,
 ) -> None:
     """Always INSERT — one row per (validation_id, symbol), written
     exactly once as backtest/mission_validator.py finishes that symbol.
-    feature_mining (Phase 1, 2026-07-30) is diagnostic-only — it never
-    participates in `passed`/`criteria_breakdown`."""
+    feature_mining (Phase 1, 2026-07-30) and significance (Research Rigor
+    Phase 2) are both diagnostic-only — neither ever participates in
+    `passed`/`criteria_breakdown`."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
             """INSERT INTO research_mission_validation_results
                (validation_id, symbol, passed, metrics_json, monte_carlo_json,
                 walk_forward_json, robustness_json, criteria_breakdown_json,
-                feature_mining_json, error, started_at, finished_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                feature_mining_json, significance_json, error, started_at, finished_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (validation_id, symbol, 1 if passed else 0,
              json.dumps(metrics) if metrics is not None else None,
              json.dumps(monte_carlo) if monte_carlo is not None else None,
@@ -223,6 +226,7 @@ def record_validation_result(
              json.dumps(robustness) if robustness is not None else None,
              json.dumps(criteria_breakdown),
              json.dumps(feature_mining) if feature_mining is not None else None,
+             json.dumps(significance) if significance is not None else None,
              error, started_at, finished_at),
         )
 

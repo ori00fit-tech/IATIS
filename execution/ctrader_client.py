@@ -340,6 +340,12 @@ class CTraderClient:
         self._intentional_disconnect = False
         self._reconnecting = False
         self._reconnect_attempt = 0
+        # Set by _on_error_res() on a ProtoOAErrorRes — empty for a
+        # transient TCP-level failure (no ProtoOAErrorRes was ever
+        # received), a specific code for a deterministic server rejection.
+        # connect() consults this to decide whether a token refresh could
+        # help (see _attempt_token_refresh_and_reconnect).
+        self._last_error_code: str = ""
 
         # Guards shared state touched by both the reactor thread and callers.
         self._lock = threading.RLock()
@@ -905,6 +911,8 @@ class CTraderClient:
                 self._send_reconcile_req(client)
             return
         logger.error(f"❌ Server error (ProtoOAErrorRes): {code} — {desc}")
+        with self._lock:
+            self._last_error_code = str(code)
         self._set_state(ConnectionState.ERROR)
 
     def _on_disconnect(self, client: Any, reason: Any) -> None:
@@ -970,6 +978,44 @@ class CTraderClient:
         """
         stale, self._client = self._client, None
         self._stop_client(stale)
+
+    # Deterministic codes cTrader returns when the access token ITSELF is
+    # the problem — as opposed to a transient TCP_TIMEOUT/CONNECTION_LOST,
+    # which leaves _last_error_code empty (no ProtoOAErrorRes was ever
+    # received for this attempt). Differentiating these two classes is the
+    # whole point of this fix — previously both fell into the same blind-
+    # retry-with-the-same-stale-token path (scripts/
+    # ctrader_refresh_access_token.py's own docstring already names
+    # CH_ACCESS_TOKEN_INVALID as the live symptom).
+    _TOKEN_INVALID_ERROR_CODES = frozenset({"CH_ACCESS_TOKEN_INVALID"})
+
+    def _attempt_token_refresh_and_reconnect(self, timeout: float) -> bool | None:
+        """Called from connect() only when THIS attempt's failure was a
+        deterministic token-invalid rejection. Returns None if refresh
+        isn't applicable/available (caller falls through to its normal
+        False return); otherwise returns the result of one retried
+        connect() call."""
+        try:
+            from integrations.ctrader.token_manager import refresh_access_token_sync
+        except ImportError:
+            return None
+        logger.warning(
+            "🔑 CH_ACCESS_TOKEN_INVALID — attempting one automatic token "
+            "refresh before giving up."
+        )
+        try:
+            new_token = refresh_access_token_sync()
+        except Exception as exc:
+            logger.error(
+                f"❌ Automatic token refresh failed: {exc}. Manual "
+                f"re-authorization required — visit /ctrader/authorize."
+            )
+            return None
+        self.access_token = new_token
+        with self._lock:
+            self._last_error_code = ""
+        logger.info("✅ Token refreshed — retrying connect() once.")
+        return self.connect(timeout=timeout, _retried_after_refresh=True)
 
     def _schedule_reconnect(self) -> None:
         """Retry connect() with bounded exponential backoff.
@@ -1076,11 +1122,31 @@ class CTraderClient:
 
     # ─── Connection ──────────────────────────────────────────────────────────
 
-    def connect(self, timeout: float = 30.0) -> bool:
-        """Establish an authenticated, READY connection to the cTrader API."""
+    def connect(self, timeout: float = 30.0, _retried_after_refresh: bool = False) -> bool:
+        """Establish an authenticated, READY connection to the cTrader API.
+
+        _retried_after_refresh: internal only (leading underscore — not
+        part of the public API). Set by _attempt_token_refresh_and_reconnect
+        on the one retry it makes after a successful token refresh, so that
+        retry can never itself trigger a second refresh-and-retry even if
+        the "refreshed" token also turns out to be invalid (no infinite
+        loop; the failure just falls through to False, same as today).
+        """
         # A caller-initiated (re)connect always re-arms auto-reconnect for
         # any future unplanned drop of *this* connection.
         self._intentional_disconnect = False
+        # Pick up the freshest token before authenticating. self.access_token
+        # was set once at __init__ from os.environ; a long-lived singleton
+        # (core/data_providers.py::get_shared_ctrader_client()) is
+        # constructed only once, so without this re-read a proactive
+        # refresh elsewhere in this process (scheduler.py's periodic
+        # integrations.ctrader.token_manager.get_valid_access_token() call,
+        # which updates os.environ but has no reference to this instance)
+        # would silently never reach this client's own next reconnect.
+        # Cheap: a dict read, no network call.
+        env_token = os.environ.get("CTRADER_ACCESS_TOKEN", "")
+        if env_token:
+            self.access_token = env_token
         try:
             if not self._read_only:
                 _acquire_process_lock()
@@ -1150,6 +1216,10 @@ class CTraderClient:
             if error_holder[0]:
                 logger.error(f"❌ Connection error: {error_holder[0]}")
                 self._abandon_incomplete_connection()
+                if not _retried_after_refresh and self._last_error_code in self._TOKEN_INVALID_ERROR_CODES:
+                    result = self._attempt_token_refresh_and_reconnect(timeout)
+                    if result is not None:
+                        return result
                 return False
 
             if self._state == ConnectionState.READY:
@@ -1163,6 +1233,10 @@ class CTraderClient:
 
             logger.error(f"❌ Connection incomplete. State: {self._state.value}")
             self._abandon_incomplete_connection()
+            if not _retried_after_refresh and self._last_error_code in self._TOKEN_INVALID_ERROR_CODES:
+                result = self._attempt_token_refresh_and_reconnect(timeout)
+                if result is not None:
+                    return result
             return False
 
         except Exception as exc:

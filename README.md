@@ -362,7 +362,7 @@ Secrets live in `.env` only — never in config, chat, issues, or commits.
 | `API_SERVER_KEY` | **Yes (prod)** | FastAPI/dashboard auth |
 | `TWELVE_DATA_API_KEY` | Recommended | Primary FX/metals/indices data |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Optional | Outbound alerts |
-| `CTRADER_*` | Optional | Broker (client id/secret, account, token, environment) |
+| `CTRADER_*` | Optional | Broker — OAuth 2.0 web flow (see `.env.example`'s full block + the "cTrader Connection" dashboard tab / `integrations/ctrader/`) |
 | `OANDA_API_KEY`, `OANDA_ACCOUNT_ID`, `OANDA_ENVIRONMENT` | Optional | Fallback broker |
 | `ALPACA_API_KEY/_SECRET`, `FCS_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `FINNHUB_API_KEY`, `FRED_API_KEY` | Optional | Failover / macro data |
 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Optional | AI layer (only the selected provider's key) |

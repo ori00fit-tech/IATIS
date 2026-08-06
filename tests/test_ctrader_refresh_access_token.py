@@ -6,6 +6,13 @@ operator-run fix for CH_ACCESS_TOKEN_INVALID / "Access token expired"
 network call is ever made in these tests; requests.get is mocked, matching
 tests/test_download_deep_history.py's own established convention for this
 class of manual, credential-requiring script.
+
+The script is now a thin CLI wrapper over integrations/ctrader/oauth.py
+(cTrader OAuth web-flow rebuild) — refresh()/write_env_var()'s actual
+implementations, and the requests.get mock target, live there now. These
+tests import through the script's own re-exported names (`refresh` is
+`integrations.ctrader.oauth.refresh_tokens` under an alias) to keep
+pinning the script's own public CLI contract, not just the shared module.
 """
 from __future__ import annotations
 
@@ -33,7 +40,7 @@ def _fake_response(status_code=200, json_data=None, text=""):
 
 
 def test_refresh_calls_the_documented_endpoint_with_correct_params():
-    with patch("ctrader_refresh_access_token.requests.get") as mock_get:
+    with patch("integrations.ctrader.oauth.requests.get") as mock_get:
         mock_get.return_value = _fake_response(
             json_data={"accessToken": "new-access", "refreshToken": "new-refresh",
                        "expiresIn": 2628000, "tokenType": "bearer"},
@@ -53,28 +60,28 @@ def test_refresh_calls_the_documented_endpoint_with_correct_params():
 
 
 def test_refresh_raises_readable_error_on_non_200():
-    with patch("ctrader_refresh_access_token.requests.get") as mock_get:
+    with patch("integrations.ctrader.oauth.requests.get") as mock_get:
         mock_get.return_value = _fake_response(status_code=401, text="invalid_grant")
         with pytest.raises(RuntimeError, match="401"):
             refresh("cid", "csecret", "bad-token")
 
 
 def test_refresh_raises_readable_error_on_non_json_response():
-    with patch("ctrader_refresh_access_token.requests.get") as mock_get:
+    with patch("integrations.ctrader.oauth.requests.get") as mock_get:
         mock_get.return_value = _fake_response(status_code=200, json_data=None, text="<html>err</html>")
         with pytest.raises(RuntimeError, match="Non-JSON"):
             refresh("cid", "csecret", "rtoken")
 
 
 def test_refresh_raises_readable_error_when_access_token_missing():
-    with patch("ctrader_refresh_access_token.requests.get") as mock_get:
+    with patch("integrations.ctrader.oauth.requests.get") as mock_get:
         mock_get.return_value = _fake_response(json_data={"error": "invalid_grant"})
         with pytest.raises(RuntimeError, match="missing accessToken"):
             refresh("cid", "csecret", "rtoken")
 
 
 def test_refresh_raises_readable_error_on_request_exception():
-    with patch("ctrader_refresh_access_token.requests.get",
+    with patch("integrations.ctrader.oauth.requests.get",
               side_effect=requests.ConnectionError("network down")):
         with pytest.raises(RuntimeError, match="Request failed"):
             refresh("cid", "csecret", "rtoken")

@@ -365,3 +365,33 @@ def test_main_allows_live_mode_with_real_source(monkeypatch):
     monkeypatch.setattr(sched_module, "run_once", lambda *a, **kw: [])
 
     sched_module.main()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# cTrader OAuth: proactive token refresh (run_once's per-tick check)
+# ---------------------------------------------------------------------------
+
+def test_run_once_calls_proactive_token_refresh_check(synthetic_config):
+    from scheduler import run_once
+
+    with patch("scheduler.send_raw"), patch("scheduler.send_signal"), patch(
+        "integrations.ctrader.token_manager.get_valid_access_token"
+    ) as mock_refresh:
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_refresh.assert_called_once_with(margin_seconds=86400)
+
+
+def test_run_once_survives_a_proactive_refresh_failure(synthetic_config):
+    """A token-refresh check failure (network down, missing credentials,
+    etc.) must never abort the whole scheduler tick — it's logged and the
+    run continues exactly as if cTrader weren't configured at all."""
+    from scheduler import run_once
+
+    with patch("scheduler.send_raw"), patch("scheduler.send_signal"), patch(
+        "integrations.ctrader.token_manager.get_valid_access_token",
+        side_effect=RuntimeError("token endpoint unreachable"),
+    ):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert len(reports) == 1

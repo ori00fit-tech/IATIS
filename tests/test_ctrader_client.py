@@ -2,11 +2,12 @@
 from __future__ import annotations
 import threading
 import time
+import types
 import pytest
 from execution.ctrader_client import (
     IATIS_TO_CTRADER, CTRADER_TO_IATIS, ASSET_CLASS,
     RECOMMENDED_LEVERAGE, CTraderClient, CTraderOrder, CTraderResult,
-    _trendbar_window,
+    ConnectionState, _trendbar_window,
 )
 from execution.trade_executor import TradeExecutor
 
@@ -494,6 +495,195 @@ def test_connect_success_does_not_tear_down_the_live_client(monkeypatch):
     assert len(_FakeCtraderOpenApiClient.instances) == 1
     assert _FakeCtraderOpenApiClient.instances[0].stop_calls == 0
     assert c._client is _FakeCtraderOpenApiClient.instances[0]
+
+
+# ─── Token-invalid self-heal (cTrader OAuth rebuild) ────────────────────────
+# _on_error_res() records the server's error code; connect() consults it on
+# failure to decide whether a token refresh could help. A deterministic
+# CH_ACCESS_TOKEN_INVALID rejection must trigger exactly one immediate
+# refresh-and-retry; a transient timeout (no ProtoOAErrorRes ever received,
+# _last_error_code stays "") must NOT — that differentiation is the whole
+# point of this fix (the user's own explicit ask: don't blindly retry a
+# deterministic auth error the same way as a transient network drop).
+
+def test_on_error_res_records_the_error_code():
+    c = _mk_client()
+    msg = types.SimpleNamespace(errorCode="CH_ACCESS_TOKEN_INVALID", description="Access token expired")
+    c._on_error_res(msg)
+    assert c._last_error_code == "CH_ACCESS_TOKEN_INVALID"
+    assert c._state == ConnectionState.ERROR
+
+
+def test_on_error_res_already_logged_in_does_not_record_an_error_code():
+    c = _mk_client()
+    c._client = object()  # non-None so the ALREADY_LOGGED_IN branch's client checks pass through harmlessly
+    msg = types.SimpleNamespace(errorCode="ALREADY_LOGGED_IN", description="already authorized")
+    c._on_error_res(msg)
+    assert c._last_error_code == ""  # early-return branch never reaches the recording line
+
+
+def test_connect_timeout_does_not_attempt_token_refresh(monkeypatch):
+    """Transient failure (no ProtoOAErrorRes ever received) — _last_error_code
+    stays empty, so the token-refresh branch must never even be considered."""
+    import execution.ctrader_client as m
+    from unittest.mock import patch
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    counter = {"t": 0.0}
+
+    def _fake_time():
+        counter["t"] += 100.0
+        return counter["t"]
+
+    monkeypatch.setattr(m.time, "time", _fake_time)
+
+    with patch("integrations.ctrader.token_manager.refresh_access_token_sync") as mock_refresh:
+        result = c.connect(timeout=0)
+
+    assert result is False
+    assert c._last_error_code == ""
+    mock_refresh.assert_not_called()
+
+
+def test_connect_retries_once_after_token_refresh_on_deterministic_invalid_error(monkeypatch):
+    import sys
+    from unittest.mock import patch
+
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    monkeypatch.setattr(m.time, "time", lambda: 0.0)
+
+    attempt = {"n": 0}
+
+    class _FakeSelfHealClient(_FakeCtraderOpenApiClient):
+        def startService(self):
+            attempt["n"] += 1
+            if attempt["n"] == 1:
+                c._last_error_code = "CH_ACCESS_TOKEN_INVALID"
+                c._state = m.ConnectionState.ERROR
+            else:
+                c._state = m.ConnectionState.READY
+
+    monkeypatch.setattr(sys.modules["ctrader_open_api"], "Client", _FakeSelfHealClient)
+    _FakeCtraderOpenApiClient.instances = []
+
+    with patch(
+        "integrations.ctrader.token_manager.refresh_access_token_sync", return_value="fresh-token",
+    ) as mock_refresh:
+        result = c.connect(timeout=1)
+
+    assert result is True
+    assert c.access_token == "fresh-token"
+    mock_refresh.assert_called_once()
+    assert attempt["n"] == 2
+    assert len(_FakeCtraderOpenApiClient.instances) == 2
+
+
+def test_connect_falls_back_to_false_when_token_refresh_itself_fails(monkeypatch):
+    import sys
+    from unittest.mock import patch
+
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    monkeypatch.setattr(m.time, "time", lambda: 0.0)
+
+    class _FakeInvalidTokenClient(_FakeCtraderOpenApiClient):
+        def startService(self):
+            c._last_error_code = "CH_ACCESS_TOKEN_INVALID"
+            c._state = m.ConnectionState.ERROR
+
+    monkeypatch.setattr(sys.modules["ctrader_open_api"], "Client", _FakeInvalidTokenClient)
+    _FakeCtraderOpenApiClient.instances = []
+
+    with patch(
+        "integrations.ctrader.token_manager.refresh_access_token_sync",
+        side_effect=RuntimeError("refresh_token also dead"),
+    ) as mock_refresh:
+        result = c.connect(timeout=1)
+
+    assert result is False
+    mock_refresh.assert_called_once()
+    # Exactly one Client was ever created — no retry attempted since the
+    # refresh itself failed (falls straight through to False, no infinite loop).
+    assert len(_FakeCtraderOpenApiClient.instances) == 1
+
+
+def test_connect_never_retries_more_than_once_even_if_the_retry_is_also_invalid(monkeypatch):
+    """Pathological case: the 'refreshed' token is ALSO rejected as invalid.
+    _retried_after_refresh must cap this at exactly one retry — no infinite
+    loop chasing a refresh that keeps producing bad tokens."""
+    import sys
+    from unittest.mock import patch
+
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    monkeypatch.setattr(m.time, "time", lambda: 0.0)
+
+    class _FakeAlwaysInvalidClient(_FakeCtraderOpenApiClient):
+        def startService(self):
+            c._last_error_code = "CH_ACCESS_TOKEN_INVALID"
+            c._state = m.ConnectionState.ERROR
+
+    monkeypatch.setattr(sys.modules["ctrader_open_api"], "Client", _FakeAlwaysInvalidClient)
+    _FakeCtraderOpenApiClient.instances = []
+
+    with patch(
+        "integrations.ctrader.token_manager.refresh_access_token_sync", return_value="still-bad-token",
+    ) as mock_refresh:
+        result = c.connect(timeout=1)
+
+    assert result is False
+    mock_refresh.assert_called_once()  # not called again on the retried attempt
+    assert len(_FakeCtraderOpenApiClient.instances) == 2  # original + exactly one retry, then stop
+
+
+def test_connect_ignores_a_non_token_error_code_for_refresh(monkeypatch):
+    """A deterministic-but-unrelated server rejection (not in
+    _TOKEN_INVALID_ERROR_CODES) must not trigger a refresh attempt either —
+    only the specific known token-expiry code does."""
+    import sys
+    from unittest.mock import patch
+
+    import execution.ctrader_client as m
+
+    c = _mk_client()
+    _install_fake_ctrader_reactor(monkeypatch)
+    monkeypatch.setattr(m.time, "time", lambda: 0.0)
+
+    class _FakeOtherErrorClient(_FakeCtraderOpenApiClient):
+        def startService(self):
+            c._last_error_code = "SOME_OTHER_SERVER_ERROR"
+            c._state = m.ConnectionState.ERROR
+
+    monkeypatch.setattr(sys.modules["ctrader_open_api"], "Client", _FakeOtherErrorClient)
+    _FakeCtraderOpenApiClient.instances = []
+
+    with patch("integrations.ctrader.token_manager.refresh_access_token_sync") as mock_refresh:
+        result = c.connect(timeout=1)
+
+    assert result is False
+    mock_refresh.assert_not_called()
+
+
+def test_connect_picks_up_a_refreshed_env_token_before_authenticating(monkeypatch):
+    """Closes the proactive-refresh gap: a long-lived client's self.access_token
+    was set once at __init__; scheduler.py's periodic token_manager refresh
+    updates os.environ but has no reference to this instance, so connect()
+    must re-read os.environ itself before each attempt."""
+    c = _mk_client()
+    assert c.access_token == "test"
+    monkeypatch.setenv("CTRADER_ACCESS_TOKEN", "proactively-refreshed-token")
+    # connect() will still fail past this point (no real reactor) — only the
+    # env re-read at the top of connect() is asserted.
+    c.connect(timeout=0.1)
+    assert c.access_token == "proactively-refreshed-token"
 
 
 # ─── Cross-process session lock (audit P0-3) ───────────────────────────────

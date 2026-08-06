@@ -218,6 +218,93 @@ def test_run_validation_reconstructs_hypothesis_bundle_mode_trial_correctly(tmp_
         assert r["error"] is None
 
 
+# ── confluence_overrides end-to-end audit (2026-08-XX) ──────────────────────
+# Confirms the full chain a validated candidate's confluence_overrides must
+# survive: MissionSearchSpace -> search_space_json -> search_space_from_dict
+# (resume) -> resolve_point() -> _evaluate_symbol()'s WalkForwardConfig/
+# RobustnessConfig construction (NOT just evaluate_point()'s own direct
+# re-evaluation, which already threaded this through since Phase 1). This
+# pins the regression: a single-engine mission (confluence_overrides=
+# {"min_engines_agreeing": 1}) must validate at the SAME lowered quorum, not
+# silently fall back to the production default of 2, which one engine can
+# never satisfy.
+
+def test_resolve_point_always_carries_confluence_overrides(tmp_path):
+    from backtest.optimizer import resolve_point
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("smc",),),
+        indicator_set_choices=((),), confluence_overrides={"min_engines_agreeing": 1},
+    )
+    point = resolve_point(space, {_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0})
+    assert point["confluence_overrides"] == {"min_engines_agreeing": 1}
+
+
+def test_run_validation_threads_confluence_overrides_into_walk_forward_and_robustness_configs(tmp_path, monkeypatch):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("smc",),),
+        indicator_set_choices=((),), confluence_overrides={"min_engines_agreeing": 1},
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    research_missions.upsert_mission(
+        mission_id="val-confluence", name="single-engine-mission", sampler="random",
+        objective_metric="profit_factor", symbols=["EURUSD"], n_trials_per_symbol=1, min_trades=1,
+        seed=42, search_space=mission_runner._search_space_dict(space), config={}, status="finished",
+    )
+    research_missions.record_trial(
+        mission_id="val-confluence", trial_number=0, symbol="EURUSD", state="COMPLETE",
+        objective_value=1.2, params={_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0},
+        metrics={"profit_factor": 1.2}, trades=50, error=None, started_at="t", finished_at="t",
+    )
+
+    seen_wf_configs = []
+    seen_rb_configs = []
+    real_run_walk_forward = mission_validator.run_walk_forward
+    real_run_robustness = mission_validator.run_robustness
+
+    def _spy_wf(symbol, df, config):
+        seen_wf_configs.append(config)
+        return real_run_walk_forward(symbol, df, config)
+
+    def _spy_rb(symbol, df, config):
+        seen_rb_configs.append(config)
+        return real_run_robustness(symbol, df, config)
+
+    monkeypatch.setattr(mission_validator, "run_walk_forward", _spy_wf)
+    monkeypatch.setattr(mission_validator, "run_robustness", _spy_rb)
+
+    vc = _small_vc(tmp_path, "v-confluence", "val-confluence", validation_symbols=("EURUSD",))
+    run_validation(vc)
+
+    assert len(seen_wf_configs) == 1
+    assert seen_wf_configs[0].confluence_overrides == {"min_engines_agreeing": 1}
+    assert len(seen_rb_configs) == 1
+    assert seen_rb_configs[0].confluence_overrides == {"min_engines_agreeing": 1}
+
+
+def test_run_validation_omits_confluence_overrides_when_mission_never_set_any(tmp_path, monkeypatch):
+    _write_dataset(tmp_path, "EURUSD")
+    _seed_mission_and_trial("val-no-confluence-override")
+
+    seen_wf_configs = []
+    real_run_walk_forward = mission_validator.run_walk_forward
+
+    def _spy_wf(symbol, df, config):
+        seen_wf_configs.append(config)
+        return real_run_walk_forward(symbol, df, config)
+
+    monkeypatch.setattr(mission_validator, "run_walk_forward", _spy_wf)
+
+    vc = _small_vc(tmp_path, "v-no-confluence-override", "val-no-confluence-override", validation_symbols=("EURUSD",))
+    run_validation(vc)
+
+    assert len(seen_wf_configs) == 1
+    assert seen_wf_configs[0].confluence_overrides is None
+
+
 # ── Effective sample size / significance diagnostic ────────────────────────
 # (Mission Center Research Rigor Phase 2, 2026-08-XX) — informational only,
 # never a VALIDATION_CRITERIA entry, never blocking.

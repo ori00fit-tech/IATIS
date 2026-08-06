@@ -17,6 +17,7 @@ from backtest.meta_analysis import (
     MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS,
     compute_effective_configuration_summary,
     compute_meta_analysis,
+    compute_research_accounting,
     sampler_caveat,
 )
 from backtest.optimizer import (
@@ -208,13 +209,14 @@ def _hypothesis_space(**kwargs) -> MissionSearchSpace:
 
 def _hypothesis_row(
     trial_number: int, hypothesis_idx: int, objective_value: float = 1.0,
-    sl_atr_multiplier: float = 2.0, trades: int = 50,
+    sl_atr_multiplier: float = 2.0, trades: int = 50, metrics: dict | None = None,
 ) -> dict:
     params = {"__hypothesis_idx": hypothesis_idx, "sl_atr_multiplier": sl_atr_multiplier}
     return {
         "mission_id": "m1", "trial_number": trial_number, "symbol": "EURUSD", "state": "COMPLETE",
         "objective_value": objective_value, "params_json": json.dumps(params),
-        "metrics_json": None, "trades": trades, "error": None,
+        "metrics_json": json.dumps(metrics) if metrics is not None else None,
+        "trades": trades, "error": None,
         "started_at": "t", "finished_at": "t",
     }
 
@@ -635,4 +637,140 @@ def test_effective_config_summary_to_dict_shape():
     space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
     trials = [_hypothesis_row(0, hypothesis_idx=0)]
     d = compute_effective_configuration_summary(space, trials).to_dict()
-    assert set(d.keys()) == {"total_complete_trials", "unique_effective_configurations", "duplicate_trials"}
+    assert set(d.keys()) == {
+        "total_complete_trials", "unique_effective_configurations", "duplicate_trials",
+        "unique_trade_streams", "trade_stream_duplicate_trials", "distinct_configs_sharing_a_trade_stream",
+    }
+
+
+# ── Trade Stream Fingerprint (Mission Center Research Rigor, item 2, 2026-08-06) ──
+# A deeper check than the config-fingerprint dedup above: two DIFFERENT
+# effective configurations can still fire the exact same realized trade
+# sequence, meaning the differing knob (e.g. an indicator that never
+# actually vetoed/confirmed anything) never changed the outcome.
+
+def test_effective_config_summary_none_when_no_trial_carries_a_trade_stream_fingerprint():
+    # Every existing test above (and every trial recorded before this
+    # field existed) has metrics_json=None or a metrics dict without the
+    # key — must degrade to None (never a fabricated 0), matching the
+    # dataclass docstring's own contract.
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(0, hypothesis_idx=0, metrics={"total_trades": 50})]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_trade_streams is None
+    assert summary.trade_stream_duplicate_trials is None
+    assert summary.distinct_configs_sharing_a_trade_stream is None
+
+
+def test_effective_config_summary_two_distinct_configs_same_trade_stream_is_flagged():
+    # The exact operator-cited scenario: "SMC + H1" (bundle 0) vs
+    # "NNFX + Wyckoff + H4" (bundle 1) are two different effective
+    # configurations, but if they happened to fire the identical realized
+    # trade sequence, that's not independent evidence.
+    space = _hypothesis_space()  # SMC/H1 and NNFX+Wyckoff/H4, distinct bundles
+    trials = [
+        _hypothesis_row(0, hypothesis_idx=0, metrics={"trade_stream_fingerprint": "SAME_STREAM"}),
+        _hypothesis_row(1, hypothesis_idx=1, metrics={"trade_stream_fingerprint": "SAME_STREAM"}),
+    ]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_effective_configurations == 2
+    assert summary.unique_trade_streams == 1
+    assert summary.trade_stream_duplicate_trials == 1
+    assert summary.distinct_configs_sharing_a_trade_stream == 2
+
+
+def test_effective_config_summary_distinct_configs_distinct_streams_not_flagged():
+    space = _hypothesis_space()
+    trials = [
+        _hypothesis_row(0, hypothesis_idx=0, metrics={"trade_stream_fingerprint": "STREAM_A"}),
+        _hypothesis_row(1, hypothesis_idx=1, metrics={"trade_stream_fingerprint": "STREAM_B"}),
+    ]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_trade_streams == 2
+    assert summary.trade_stream_duplicate_trials == 0
+    assert summary.distinct_configs_sharing_a_trade_stream == 0
+
+
+def test_effective_config_summary_tolerates_malformed_metrics_json():
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [{**_hypothesis_row(0, hypothesis_idx=0), "metrics_json": "not valid json{{"}]
+    summary = compute_effective_configuration_summary(space, trials)  # must not raise
+    assert summary.unique_trade_streams is None
+
+
+# ── Research Accounting (Mission Center Research Rigor, item 3, 2026-08-06) ──
+# "150 trials != 150 pieces of evidence" — composes progress/abandoned/
+# effective-config numbers (each already tested above/elsewhere) into one
+# answer. Pure function, no D1 access.
+
+def test_research_accounting_basic_state_counts_and_requested_trials():
+    progress = {"EURUSD": {"COMPLETE": 40, "PRUNED": 5, "FAIL": 2, "DUPLICATE": 3}}
+    summary = compute_research_accounting(
+        n_trials_per_symbol=50, n_symbols=1, progress_by_symbol=progress,
+        abandoned_attempts=0, effective_config_summary=None,
+    )
+    assert summary.requested_trials == 50
+    assert summary.recorded_attempts == 50
+    assert summary.completed == 40
+    assert summary.pruned == 5
+    assert summary.failed == 2
+    assert summary.duplicate == 3
+
+
+def test_research_accounting_sums_across_multiple_symbols():
+    progress = {
+        "EURUSD": {"COMPLETE": 10}, "GBPUSD": {"COMPLETE": 8, "PRUNED": 2},
+    }
+    summary = compute_research_accounting(
+        n_trials_per_symbol=10, n_symbols=2, progress_by_symbol=progress,
+        abandoned_attempts=1, effective_config_summary=None,
+    )
+    assert summary.requested_trials == 20
+    assert summary.completed == 18
+    assert summary.pruned == 2
+    assert summary.abandoned_attempts == 1
+
+
+def test_research_accounting_prefers_trade_stream_over_config_count():
+    effective = {
+        "unique_effective_configurations": 5, "unique_trade_streams": 2,
+    }
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={"EURUSD": {"COMPLETE": 5}},
+        abandoned_attempts=0, effective_config_summary=effective,
+    )
+    assert summary.effective_evidence_count == 2
+    assert summary.effective_evidence_source == "trade_stream"
+    assert summary.unique_effective_configurations == 5
+    assert summary.unique_trade_streams == 2
+
+
+def test_research_accounting_falls_back_to_config_count_when_no_trade_stream_data():
+    effective = {"unique_effective_configurations": 5, "unique_trade_streams": None}
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={"EURUSD": {"COMPLETE": 5}},
+        abandoned_attempts=0, effective_config_summary=effective,
+    )
+    assert summary.effective_evidence_count == 5
+    assert summary.effective_evidence_source == "config"
+
+
+def test_research_accounting_unavailable_when_no_effective_config_summary_at_all():
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={},
+        abandoned_attempts=0, effective_config_summary=None,
+    )
+    assert summary.effective_evidence_count is None
+    assert summary.effective_evidence_source == "unavailable"
+
+
+def test_research_accounting_to_dict_shape():
+    d = compute_research_accounting(
+        n_trials_per_symbol=1, n_symbols=1, progress_by_symbol={}, abandoned_attempts=0,
+        effective_config_summary=None,
+    ).to_dict()
+    assert set(d.keys()) == {
+        "requested_trials", "recorded_attempts", "abandoned_attempts", "completed", "pruned",
+        "failed", "duplicate", "unique_effective_configurations", "unique_trade_streams",
+        "effective_evidence_count", "effective_evidence_source",
+    }

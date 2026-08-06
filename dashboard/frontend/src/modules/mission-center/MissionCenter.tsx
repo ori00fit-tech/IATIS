@@ -2005,6 +2005,40 @@ function MissionDetail({
             <KpiCard label="Sampler" value={status.mission?.sampler ?? '—'} />
             <KpiCard label="Objective" value={status.mission?.objective_metric ?? '—'} />
           </div>
+          {status.research_accounting && (
+            <div className="flex flex-col gap-1.5 bg-panel border border-panel-border rounded px-3 py-2.5">
+              <span className="text-muted uppercase tracking-[1px] text-[0.68em]">
+                Research Accounting — {status.research_accounting.requested_trials} requested, not
+                {' '}{status.research_accounting.requested_trials} pieces of evidence
+              </span>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.78em]">
+                <span>Recorded <b className="tabular-nums">{status.research_accounting.recorded_attempts}</b></span>
+                <span className="text-green">Complete {status.research_accounting.completed}</span>
+                <span className="text-amber">Pruned {status.research_accounting.pruned}</span>
+                <span className="text-red">Failed {status.research_accounting.failed}</span>
+                {status.research_accounting.duplicate > 0 && (
+                  <span className="text-muted">Duplicate {status.research_accounting.duplicate}</span>
+                )}
+                {status.research_accounting.abandoned_attempts > 0 && (
+                  <span className="text-amber">Abandoned {status.research_accounting.abandoned_attempts}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[0.78em]">
+                <span className="text-muted uppercase tracking-[1px] text-[0.68em]">Effective evidence</span>
+                {status.research_accounting.effective_evidence_count !== null ? (
+                  <Badge tone="good">
+                    {`${status.research_accounting.effective_evidence_count} independent trial(s)${
+                      status.research_accounting.effective_evidence_source === 'trade_stream'
+                        ? ' (by realized trade stream)'
+                        : ' (by configuration — no trade-stream data yet)'
+                    }`}
+                  </Badge>
+                ) : (
+                  <span className="text-muted">not yet available — no COMPLETE trials</span>
+                )}
+              </div>
+            </div>
+          )}
           {status.search_space_kind && (
             <div className="flex items-center gap-2 text-[0.78em]">
               <span className="text-muted uppercase tracking-[1px] text-[0.7em]">Search space</span>
@@ -2031,6 +2065,23 @@ function MissionDetail({
                     : ''
                 }`}
               </Badge>
+            </div>
+          )}
+          {status.effective_config_summary && status.effective_config_summary.unique_trade_streams !== null && (
+            <div className="flex items-center gap-2 text-[0.78em]">
+              <span className="text-muted uppercase tracking-[1px] text-[0.7em]">Trade streams</span>
+              <Badge tone={
+                (status.effective_config_summary.distinct_configs_sharing_a_trade_stream ?? 0) === 0 ? 'good' : 'marginal'
+              }>
+                {`${status.effective_config_summary.unique_trade_streams} unique realized trade sequence(s)`}
+              </Badge>
+              {(status.effective_config_summary.distinct_configs_sharing_a_trade_stream ?? 0) > 0 && (
+                <span className="text-amber text-[0.75em]">
+                  — {status.effective_config_summary.distinct_configs_sharing_a_trade_stream} distinct
+                  configuration(s) fired the exact same trades as another configuration; the differing
+                  knob never actually changed the outcome
+                </span>
+              )}
             </div>
           )}
           {status.abandoned_trials > 0 && (

@@ -389,6 +389,12 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         # both None on a PRUNED trial.
         metrics_payload["objective_raw"] = json_safe(result.objective_raw)
         metrics_payload["objective_value"] = json_safe(result.objective_value)
+        # Mission Center Research Rigor — Trade Stream Fingerprint (item 2,
+        # 2026-08-06): persisted inside the existing metrics_json blob
+        # (no new column) — same treatment as objective_raw/gate_rejections
+        # above. See backtest.optimizer.trade_stream_fingerprint()'s
+        # docstring for what this identifies.
+        metrics_payload["trade_stream_fingerprint"] = result.trade_stream_fingerprint
         if holdout_df is not None and len(holdout_df) > 0 and not result.insufficient:
             try:
                 holdout_result = evaluate_point(symbol, holdout_df, point, 1, mc.objective_metric)

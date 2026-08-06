@@ -554,6 +554,15 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
+        # Wiring-gap fix (Mission Center Research Rigor Phase 8, audit
+        # 2026-08-XX): without this, a candidate validated after being
+        # found with a lowered confluence quorum (e.g. a single-engine
+        # research mission, min_engines_agreeing=1) would silently
+        # re-run Walk-Forward at the PRODUCTION quorum of 2 — mathe-
+        # matically unreachable with one engine — making a real
+        # candidate look entirely broken during validation. Same class
+        # of gap already fixed once for context_filters/indicators here.
+        confluence_overrides=point["confluence_overrides"] or None,
     ))
 
     rb_result = run_robustness(symbol, df, RobustnessConfig(
@@ -563,6 +572,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
+        confluence_overrides=point["confluence_overrides"] or None,
     ))
     stability_score_result = _compute_stability_score_diagnostic(rb_result.sweeps)
     discovery_score_result = _compute_discovery_score_diagnostic(

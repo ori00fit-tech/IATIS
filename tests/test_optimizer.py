@@ -14,6 +14,7 @@ import optuna
 import pandas as pd
 import pytest
 
+from backtest.metrics import TradeRecord
 from backtest.optimizer import (
     EvalResult,
     MissionSearchSpace,
@@ -27,6 +28,7 @@ from backtest.optimizer import (
     search_space_from_dict,
     search_space_has_signal_variation,
     suggest_point,
+    trade_stream_fingerprint,
 )
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -328,6 +330,95 @@ def test_reliability_adjusted_objective_only_caps_profit_factor():
 def test_reliability_adjusted_objective_never_exceeds_finite_objective_cap_on_negative_inf():
     value = _reliability_adjusted_objective(float("-inf"), trades=30, metric="profit_factor")
     assert value == pytest.approx(-5.0)
+
+
+# ── trade_stream_fingerprint (Mission Center Research Rigor, item 2) ────────
+
+def _tr(trade_id: str, entry_time: str, direction: str, exit_time: str | None) -> TradeRecord:
+    return TradeRecord(
+        trade_id=trade_id, symbol="EURUSD", direction=direction,
+        entry_time=pd.Timestamp(entry_time, tz="UTC"),
+        exit_time=pd.Timestamp(exit_time, tz="UTC") if exit_time else None,
+        entry_price=1.1, exit_price=1.11, stop_loss=1.09, take_profit=1.12,
+        position_size=1000.0,
+    )
+
+
+def test_trade_stream_fingerprint_empty_list_is_canonical_and_stable():
+    assert trade_stream_fingerprint([]) == trade_stream_fingerprint([])
+
+
+def test_trade_stream_fingerprint_deterministic_for_identical_records():
+    a = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")]
+    b = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")]
+    assert trade_stream_fingerprint(a) == trade_stream_fingerprint(b)
+
+
+def test_trade_stream_fingerprint_order_independent():
+    t1 = _tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")
+    t2 = _tr("2", "2024-01-03T00:00", "SELL", "2024-01-04T00:00")
+    assert trade_stream_fingerprint([t1, t2]) == trade_stream_fingerprint([t2, t1])
+
+
+def test_trade_stream_fingerprint_differs_on_different_exit_time():
+    # A risk override that genuinely moves SL/TP and changes WHEN a trade
+    # exits must produce a DIFFERENT fingerprint — a real, distinct stream.
+    a = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")]
+    b = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-03T00:00")]
+    assert trade_stream_fingerprint(a) != trade_stream_fingerprint(b)
+
+
+def test_trade_stream_fingerprint_differs_on_different_direction():
+    a = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")]
+    b = [_tr("1", "2024-01-01T00:00", "SELL", "2024-01-02T00:00")]
+    assert trade_stream_fingerprint(a) != trade_stream_fingerprint(b)
+
+
+def test_trade_stream_fingerprint_ignores_pnl_and_cost_derived_fields():
+    # Two records with the identical entry/direction/exit but different
+    # pnl_usd (e.g. only commission/slippage differed) must fingerprint
+    # identically — same realized trade stream, different cost applied.
+    a = TradeRecord(
+        trade_id="1", symbol="EURUSD", direction="BUY",
+        entry_time=pd.Timestamp("2024-01-01T00:00", tz="UTC"),
+        exit_time=pd.Timestamp("2024-01-02T00:00", tz="UTC"),
+        entry_price=1.1, exit_price=1.11, stop_loss=1.09, take_profit=1.12,
+        position_size=1000.0, pnl_usd=42.0,
+    )
+    b = TradeRecord(
+        trade_id="1", symbol="EURUSD", direction="BUY",
+        entry_time=pd.Timestamp("2024-01-01T00:00", tz="UTC"),
+        exit_time=pd.Timestamp("2024-01-02T00:00", tz="UTC"),
+        entry_price=1.1, exit_price=1.11, stop_loss=1.09, take_profit=1.12,
+        position_size=1000.0, pnl_usd=-3.0,
+    )
+    assert trade_stream_fingerprint([a]) == trade_stream_fingerprint([b])
+
+
+def test_evaluate_point_always_populates_trade_stream_fingerprint(monkeypatch):
+    """Computed unconditionally inside evaluate_point() regardless of
+    return_trades — zero extra cost, no need to keep full trade objects
+    to get this (see EvalResult.trade_stream_fingerprint's docstring)."""
+    import backtest.optimizer as optimizer_module
+
+    fake_records = [_tr("1", "2024-01-01T00:00", "BUY", "2024-01-02T00:00")]
+
+    class _FakeBacktestResult:
+        trades: list = [object()]
+        gate_rejections: dict = {}
+        context_rejections: dict = {}
+        indicator_rejections: dict = {}
+
+    monkeypatch.setattr(optimizer_module, "run_backtest", lambda df, cfg, engine_config=None: _FakeBacktestResult())
+    monkeypatch.setattr(optimizer_module, "trade_to_record", lambda t, symbol: fake_records[0])
+
+    df = _ohlcv(50)
+    point = {"timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {}}
+    result = evaluate_point("EURUSD", df, point, min_trades=0, objective_metric="profit_factor", return_trades=False)
+
+    assert result.trade_records is None  # unaffected by return_trades=False
+    assert result.trade_stream_fingerprint == trade_stream_fingerprint(fake_records)
+    assert result.trade_stream_fingerprint != ""
 
 
 def test_evaluate_point_populates_objective_raw_distinct_from_capped_objective_value(monkeypatch):

@@ -282,6 +282,7 @@ export interface ValidationResultRow {
   criteria_breakdown_json: string
   significance_json: string | null
   regime_robustness_json: string | null
+  stability_json: string | null
   error: string | null
   started_at: string
   finished_at: string
@@ -299,6 +300,21 @@ export interface RegimeRobustnessDiagnostic {
   regime_robustness_score: number | null
   dominant_regime: string | null
   dominant_regime_share: number | null
+  note: string
+}
+
+// Mission Center Research Rigor Phase 4 — a fractional companion to
+// criteria_breakdown's all-or-nothing "robustness_all_stable": what share
+// of the candidate's own swept risk params are STABLE. Diagnostic only,
+// never a criterion — see backtest/mission_validator.py's
+// _compute_stability_score_diagnostic() docstring for the full reasoning.
+export interface StabilityDiagnostic {
+  params_swept: number
+  params_measurable: number
+  params_stable: number
+  params_sensitive: number
+  params_insufficient: number
+  stability_score: number | null
   note: string
 }
 

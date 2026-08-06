@@ -335,6 +335,50 @@ def _compute_regime_robustness_diagnostic(by_regime: dict, min_trades_per_regime
     }
 
 
+def _compute_stability_score_diagnostic(rb_sweeps: list) -> dict:
+    """Mission Center Research Rigor Phase 4 (2026-08-XX) — a fractional
+    companion to VALIDATION_CRITERIA's all-or-nothing "robustness_all_
+    stable" boolean: what fraction of the candidate's own swept risk
+    parameters are STABLE, not just whether ALL of them are. Reuses
+    backtest.robustness.run_robustness()'s already-computed per-parameter
+    verdicts (STABLE/SENSITIVE/INSUFFICIENT, backtest/robustness.py's own
+    ParamSweepResult) — no new sweep, no new computation.
+
+    INSUFFICIENT-verdict parameters (too few trades at some swept point to
+    judge) are excluded from both numerator and denominator — an
+    unmeasurable parameter should not silently count as either stable or
+    unstable, the same "don't fabricate a number for missing data"
+    principle every diagnostic in this file already follows.
+
+    Diagnostic only, never itself a VALIDATION_CRITERIA entry — the
+    existing binary "robustness_all_stable" criterion is unchanged.
+    """
+    measurable = [s for s in rb_sweeps if s.verdict != "INSUFFICIENT"]
+    stable = [s for s in measurable if s.verdict == "STABLE"]
+    sensitive = [s for s in measurable if s.verdict == "SENSITIVE"]
+    insufficient = [s for s in rb_sweeps if s.verdict == "INSUFFICIENT"]
+    if not measurable:
+        return {
+            "params_swept": len(rb_sweeps), "params_measurable": 0, "params_stable": 0,
+            "params_sensitive": 0, "params_insufficient": len(insufficient),
+            "stability_score": None,
+            "note": "No swept parameter had enough trades to judge stability.",
+        }
+    score = len(stable) / len(measurable)
+    return {
+        "params_swept": len(rb_sweeps), "params_measurable": len(measurable),
+        "params_stable": len(stable), "params_sensitive": len(sensitive),
+        "params_insufficient": len(insufficient),
+        "stability_score": round(score, 3),
+        "note": (
+            f"{len(stable)} of {len(measurable)} measurable swept parameter(s) are STABLE "
+            f"(profit factor stays within +/-30% of baseline across the sweep). Diagnostic "
+            f"only — never a VALIDATION_CRITERIA entry; the existing 'robustness_all_stable' "
+            f"criterion still requires ALL measurable parameters to be STABLE to pass."
+        ),
+    }
+
+
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     """Returns the full per-symbol result dict recorded into
     research_mission_validation_results — always populated, pass or
@@ -379,6 +423,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
     ))
+    stability_score_result = _compute_stability_score_diagnostic(rb_result.sweeps)
 
     breakdown = {
         "profit_factor": _criterion(metrics.profit_factor, VALIDATION_CRITERIA["min_profit_factor"],
@@ -415,6 +460,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "feature_mining": json_safe(feature_mining_result.to_dict()),
         "significance": json_safe(significance_result),
         "regime_robustness": json_safe(regime_robustness_result),
+        "stability": json_safe(stability_score_result),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -472,7 +518,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 walk_forward=result["walk_forward"], robustness=result["robustness"],
                 criteria_breakdown=result["criteria_breakdown"],
                 feature_mining=result["feature_mining"], significance=result["significance"],
-                regime_robustness=result["regime_robustness"], error=None,
+                regime_robustness=result["regime_robustness"], stability=result["stability"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -482,7 +528,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
                 criteria_breakdown={}, feature_mining=None, significance=None, regime_robustness=None,
-                error=str(exc), started_at=now, finished_at=now,
+                stability=None, error=str(exc), started_at=now, finished_at=now,
             )
 
     total = len(vc.validation_symbols)

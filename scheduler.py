@@ -138,6 +138,18 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         max_per_group = config.get("portfolio", {}).get("max_per_group", MAX_PER_GROUP)
         correlation_filter_enabled = config.get("features", {}).get("correlation_filter", True)
 
+        # cTrader OAuth: proactive token refresh, well ahead of real expiry —
+        # cheap no-op (one env read + one float compare) unless within
+        # margin_seconds of expiry. This is what keeps a long-lived
+        # connected session from ever reaching a live CH_ACCESS_TOKEN_INVALID
+        # rejection in practice; execution/ctrader_client.py's connect()
+        # also self-heals reactively on that exact rejection as a backstop.
+        try:
+            from integrations.ctrader.token_manager import get_valid_access_token
+            get_valid_access_token(margin_seconds=86400)
+        except Exception as exc:
+            logger.debug(f"cTrader proactive token refresh check failed (non-fatal): {exc}")
+
         for sym in active_symbols:
             sym_config = dict(config)
             sym_config["data"] = dict(config["data"])

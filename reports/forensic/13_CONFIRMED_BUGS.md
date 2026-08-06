@@ -2204,3 +2204,174 @@ investigating the operator's incomplete-150-trial-mission report. No
 operator action required for the code fix itself; confirming whether
 this was the actual cause of that specific mission would need its real
 job log/status from the VPS, which this sandboxed session cannot access.
+
+---
+
+## BUG-018
+
+**Severity:** P0 (live connection integrity — deterministic auth failure
+handling, the exact class of bug the operator asked to have fixed via a
+real OAuth token lifecycle rather than "increasing reconnect attempts").
+
+**Category:** cTrader connection lifecycle (`execution/ctrader_client.py`
+`_on_error_res()`/`_schedule_reconnect()`) — found while designing the
+cTrader OAuth 2.0 web-flow rebuild (`integrations/ctrader/`), auditing how
+the existing reconnect machinery would interact with a real, automatic
+token refresh.
+
+**Claim:** A `CH_ACCESS_TOKEN_INVALID` rejection (the access token itself
+is expired/revoked) and a transient TCP-level disconnect (network blip,
+broker-side timeout) were handled by the exact same code path, with no
+differentiation — both simply set `ConnectionState.ERROR` and, if the
+underlying socket happened to also drop, entered `_schedule_reconnect()`'s
+bounded exponential-backoff loop (2s → 60s, up to 10 attempts).
+
+**Observed (confirmed by direct code read before the fix):**
+`_on_error_res()` (`execution/ctrader_client.py`) special-cased only the
+string `"ALREADY_LOGGED_IN"` as non-fatal; every other `ProtoOAErrorRes`
+code, including `CH_ACCESS_TOKEN_INVALID`, fell through to
+`self._set_state(ConnectionState.ERROR)` with no record of *which* code
+caused it. `_schedule_reconnect()`'s `_attempt()` loop retried by calling
+`self.connect(timeout=30.0)` again — and since nothing anywhere in the
+class ever mutated `self.access_token` after `__init__`, a reconnect
+after a token-invalid rejection resent the identical, still-expired
+token, guaranteeing every one of the (up to 10) backoff attempts would
+fail identically before the connection gave up with "Manual intervention
+required." A deterministic, permanently-unrecoverable-without-a-new-
+token failure was being treated exactly like a transient, self-resolving
+network hiccup.
+
+**Expected:** a deterministic token-expiry rejection should trigger an
+immediate refresh-and-retry (the token can actually be fixed, unlike a
+network blip) rather than silently exhausting the same backoff budget a
+transient failure gets, with the same stale credential on every attempt.
+
+**File/Line:** `execution/ctrader_client.py` — `_on_error_res()` (now
+records `self._last_error_code`), `connect()` (two failure exits: the
+`error_holder[0]` branch and the post-wait incomplete-state fallback),
+new `_attempt_token_refresh_and_reconnect()` method.
+
+**Execution path:** any live scheduler tick (`get_shared_ctrader_client()`
+→ `CTraderClient.connect()`) or reconnect attempt
+(`_schedule_reconnect()` → `connect()`) that receives a
+`CH_ACCESS_TOKEN_INVALID` `ProtoOAErrorRes` from the broker — i.e. every
+real occurrence of the `CH_ACCESS_TOKEN_INVALID — Access token expired`
+symptom `scripts/ctrader_refresh_access_token.py`'s own docstring already
+names as the live, recurring pain point this session investigated
+earlier.
+
+**Reproduction:** `tests/test_ctrader_client.py` (+8 new tests, reusing
+the existing `_install_fake_ctrader_reactor`/`_FakeCtraderOpenApiClient`
+harness — no live network, no real Twisted reactor):
+`test_on_error_res_records_the_error_code` /
+`test_on_error_res_already_logged_in_does_not_record_an_error_code`
+(unit-level proof of the new recording); **the literal differentiation
+regression test**, `test_connect_timeout_does_not_attempt_token_refresh`
+(a transient timeout — no `ProtoOAErrorRes` ever received — must never
+even consider a refresh, asserted via a mock that fails the test if
+called) alongside
+`test_connect_retries_once_after_token_refresh_on_deterministic_invalid_error`
+(a fake client that fails with `CH_ACCESS_TOKEN_INVALID` on its first
+`startService()` and succeeds (`READY`) on the retried one, with
+`integrations.ctrader.token_manager.refresh_access_token_sync` mocked to
+return a fresh token — asserts `connect()` returns `True`, the fresh
+token is what got sent, and exactly one retry — i.e. exactly 2 `Client`
+instances — occurred); `test_connect_falls_back_to_false_when_token_refresh_itself_fails`
+and `test_connect_never_retries_more_than_once_even_if_the_retry_is_also_invalid`
+(bounds: a dead `refresh_token`, or a "refreshed" token that's also
+rejected, must fall straight through to `False` — no infinite loop, no
+silent extra retries beyond the one `_retried_after_refresh` guard
+allows); `test_connect_ignores_a_non_token_error_code_for_refresh` (only
+the specific known code triggers this path — an unrelated deterministic
+rejection must not); `test_connect_picks_up_a_refreshed_env_token_before_authenticating`
+(the companion fix — see Root cause below).
+
+**Root cause:** two related gaps. (1) No mechanism existed anywhere in
+this codebase to actually refresh a cTrader access token from within a
+running process — `scripts/ctrader_refresh_access_token.py` was a
+manual, operator-run CLI only, never imported by `execution/
+ctrader_client.py` or `scheduler.py`. (2) Even with a refresh mechanism
+available, `connect()`'s reconnect path had no way to know *why* the
+previous attempt failed, so it could not distinguish "this token is
+actually dead, refreshing would help" from "this was a network blip,
+refreshing changes nothing."
+
+A second, closely related gap found and fixed in the same pass: even a
+*successful* proactive refresh (this session's new
+`scheduler.py`→`integrations.ctrader.token_manager.get_valid_access_token()`
+periodic check, run ahead of real expiry) would silently never reach an
+already-constructed, long-lived `CTraderClient` singleton
+(`core/data_providers.py::get_shared_ctrader_client()` constructs the
+client exactly once) — `self.access_token` was read from `os.environ`
+only at `__init__`, so a later env update from a sibling code path had
+no way to reach that instance's own attribute before its *next*
+`connect()`/reconnect call. Fixed by having `connect()` re-read
+`os.environ["CTRADER_ACCESS_TOKEN"]` into `self.access_token` at the top
+of every call (cheap — a dict read, no network) — proven by
+`test_connect_picks_up_a_refreshed_env_token_before_authenticating`.
+
+**Impact:** Live cTrader trading/data-fetch connectivity only — no
+research/evidence/backtest code path is affected. Before this fix, a
+real token expiry (documented as occurring roughly every ~30 days per
+cTrader's own docs) would predictably exhaust the scheduler's entire
+10-attempt reconnect budget and then require full manual intervention
+(operator running the CLI script or hand-editing `.env`) every time,
+even though the fix (a refresh call) was one HTTP round-trip away and
+already automatable.
+
+**Fix (CONFIRMED, applied same phase, part of the cTrader OAuth 2.0
+rebuild):** new `integrations/ctrader/` package (`oauth.py` — the
+authorization-code/refresh HTTP exchanges, absorbing
+`scripts/ctrader_refresh_access_token.py`'s prior logic;
+`token_manager.py` — `get_valid_access_token()`/`refresh_access_token_sync()`,
+expiry-margin-aware, `.env`-persisted, in-memory-cached; `account.py` —
+account discovery, unrelated to this bug but part of the same rebuild).
+`_on_error_res()` now records `self._last_error_code`.
+`_attempt_token_refresh_and_reconnect()` (new method) is called from
+`connect()`'s two failure exits only when the just-failed attempt's code
+was `CH_ACCESS_TOKEN_INVALID`; it refreshes once via `token_manager` and
+retries `connect()` exactly once (`_retried_after_refresh` guard — no
+infinite loop), falling through to the existing, completely unmodified
+bounded-backoff `_schedule_reconnect()` loop if the refresh itself fails.
+`scheduler.py::run_once()` also gained a cheap, wrapped, non-fatal
+proactive refresh check (`get_valid_access_token(margin_seconds=86400)`)
+so a token is refreshed hours ahead of real expiry in the common case,
+making the reactive path a backstop rather than the primary defense.
+`_acquire_process_lock()`, `_abandon_incomplete_connection()`, and every
+other existing safeguard in `execution/ctrader_client.py` are completely
+untouched (confirmed: `execution/trade_executor.py`,
+`execution/reconciliation.py`, and `core/data_providers.py` all show an
+empty `git diff` against this change).
+
+**Regression tests:** `tests/test_ctrader_client.py` (+8, see
+Reproduction above; 48/48 passing in the file), plus new
+`tests/test_ctrader_oauth.py` (7), `tests/test_ctrader_token_manager.py`
+(13), `tests/test_ctrader_auth_routes.py` (12, including a hard-block
+AST-based test proving `execution/routes/ctrader_auth.py` and every
+`integrations/ctrader/*.py` module never references
+`get_shared_ctrader_client`/`_acquire_process_lock`/`TradeExecutor`), and
+2 new tests in `tests/test_scheduler.py` for the proactive-refresh call.
+`tests/test_ctrader_refresh_access_token.py`'s existing 8 tests were
+retargeted (unchanged assertions, `requests.get` mock target moved to
+`integrations.ctrader.oauth`, since that script became a thin wrapper)
+and still pass. Full project suite re-run with zero regressions outside
+these files.
+
+**Status:** FIXED, tested, regression-pinned. Named, honest **non-goal**
+kept explicitly out of this fix's scope (documented in the code and the
+implementation plan, not silently dropped): a token-invalid rejection
+arriving on an already-`READY` connection (e.g. expiry occurring
+mid-session on a routine trendbar/reconcile request, not during
+`connect()`) still does not itself trigger a reconnect —
+`scheduler.py`'s new proactive refresh makes this practically
+unreachable (the token is refreshed well ahead of real expiry) but does
+not close the gap structurally. Recommended as a small, separate future
+follow-up (`_on_error_res`, when `self._state == ConnectionState.READY`
+and the code is token-invalid, call `self._schedule_reconnect()`
+directly) rather than bundled into this diff. The real, live browser
+OAuth round trip and a genuine expired-token scenario on the real VPS
+were NOT verified from this sandbox (no cTrader app credentials, no
+network egress to `id.ctrader.com`/`openapi.ctrader.com`) — same
+disclosed limitation as every other external-API feature built this
+session; the operator's own post-deploy verification checklist is in
+the implementation plan.

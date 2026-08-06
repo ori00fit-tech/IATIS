@@ -94,6 +94,7 @@ from execution.routes import (
     alerts,
     analyze,
     auth,
+    ctrader_auth,
     data_providers,
     dashboard_legacy,
     diagnostics,
@@ -125,6 +126,7 @@ from execution.routes import (
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(auth.router)
+app.include_router(ctrader_auth.router)
 app.include_router(dashboard_legacy.router)
 app.include_router(experience.router)
 app.include_router(missions.router)

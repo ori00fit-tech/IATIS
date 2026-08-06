@@ -6,19 +6,14 @@ Exchange a saved CTRADER_REFRESH_TOKEN for a fresh CTRADER_ACCESS_TOKEN.
 
 cTrader Open API access tokens expire (~30 days per cTrader's own docs) —
 this is the live symptom `execution/ctrader_client.py` surfaces as
-`CH_ACCESS_TOKEN_INVALID — Access token expired` on account auth, distinct
-from the (already-fixed) ALREADY_LOGGED_IN/reconnect-storm class. No code
-path in this repo refreshes the token automatically; this script is the
-operator-run fix.
-
-Uses cTrader/Spotware's own documented refresh flow (help.ctrader.com/
-open-api/account-authentication/): a GET to https://openapi.ctrader.com/
-apps/token with grant_type=refresh_token, refresh_token, client_id,
-client_secret as query params, returning a fresh JSON payload
-({accessToken, refreshToken, tokenType, expiresIn}). Per the same docs the
-refresh token itself never expires on its own, but each refresh issues a
-NEW one — the old refresh token should be treated as consumed, so this
-script always prints (and, with --write, saves) BOTH new tokens.
+`CH_ACCESS_TOKEN_INVALID — Access token expired` on account auth. As of
+the cTrader OAuth web-flow rebuild, `execution/ctrader_client.py` also
+refreshes automatically on that exact rejection, and `scheduler.py`
+refreshes proactively before expiry — this script remains the manual,
+operator-run alternative (e.g. to force a refresh outside those paths, or
+when running the CLI is more convenient than the browser flow at
+`/ctrader/authorize`). Thin wrapper over integrations/ctrader/oauth.py,
+which both this script and the automatic paths share.
 
 Run from the IATIS project root:
     python scripts/ctrader_refresh_access_token.py            # print only, changes nothing
@@ -31,8 +26,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -46,61 +41,16 @@ try:
 except Exception:
     pass
 
-import requests
-
-TOKEN_URL = "https://openapi.ctrader.com/apps/token"
-
-
-def write_env_var(env_path: Path, key: str, value: str) -> None:
-    """In-place update of one KEY=value line in a .env file, preserving
-    every other line verbatim (including comments/ordering). Appends the
-    key at the end if it wasn't already present."""
-    lines = env_path.read_text().splitlines(keepends=True)
-    pattern = re.compile(rf"^{re.escape(key)}=")
-    for i, line in enumerate(lines):
-        if pattern.match(line):
-            lines[i] = f"{key}={value}\n"
-            break
-    else:
-        lines.append(f"{key}={value}\n")
-    env_path.write_text("".join(lines))
-
-
-def refresh(client_id: str, client_secret: str, refresh_token: str) -> dict:
-    """Calls cTrader's token endpoint and returns the parsed JSON payload.
-    Raises RuntimeError with a readable message on any failure — never a
-    bare requests/JSON exception, since this is meant to be run and read
-    directly by an operator."""
-    try:
-        resp = requests.get(
-            TOKEN_URL,
-            params={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Request failed: {exc}") from exc
-    if resp.status_code != 200:
-        raise RuntimeError(f"Token endpoint returned {resp.status_code}: {resp.text[:500]}")
-    try:
-        data = resp.json()
-    except ValueError as exc:
-        raise RuntimeError(f"Non-JSON response: {resp.text[:500]}") from exc
-    if not data.get("accessToken"):
-        raise RuntimeError(f"Response missing accessToken: {data}")
-    return data
+from integrations.ctrader.oauth import CTraderOAuthError, TOKEN_URL, refresh_tokens as refresh, write_env_var
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--write", action="store_true",
-        help="Update CTRADER_ACCESS_TOKEN/CTRADER_REFRESH_TOKEN in .env in "
-             "place (default: print only, change nothing on disk).",
+        help="Update CTRADER_ACCESS_TOKEN/CTRADER_REFRESH_TOKEN/"
+             "CTRADER_ACCESS_TOKEN_EXPIRY in .env in place "
+             "(default: print only, change nothing on disk).",
     )
     args = ap.parse_args()
 
@@ -114,7 +64,7 @@ def main() -> int:
     print("🔄 Exchanging CTRADER_REFRESH_TOKEN for a fresh access token...")
     try:
         data = refresh(client_id, client_secret, refresh_token)
-    except RuntimeError as exc:
+    except CTraderOAuthError as exc:
         print(f"❌ {exc}")
         return 1
 
@@ -134,6 +84,8 @@ def main() -> int:
         write_env_var(env_path, "CTRADER_ACCESS_TOKEN", new_access)
         if new_refresh:
             write_env_var(env_path, "CTRADER_REFRESH_TOKEN", new_refresh)
+        if expires_in:
+            write_env_var(env_path, "CTRADER_ACCESS_TOKEN_EXPIRY", str(time.time() + float(expires_in)))
         print(f"\n💾 Wrote new token(s) to {env_path}")
         print("   Restart the services for it to take effect (as two separate commands):")
         print("   sudo systemctl restart iatis-scheduler")

@@ -31,6 +31,7 @@ cheap wins first.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -523,6 +524,18 @@ class EvalResult:
     # this field exists purely so a trial's leaderboard/report row can
     # show both side by side. None whenever objective_value is (PRUNED).
     objective_raw: float | None = None
+    # Mission Center Research Rigor — Trade Stream Fingerprint (item 2,
+    # 2026-08-06): a stable hash of the REALIZED sequence of trades this
+    # configuration actually produced. Two trials whose resolved
+    # configuration differs (a different indicator/engine/context was
+    # "on") but whose trade stream fingerprint is IDENTICAL are not
+    # independent evidence — the differing knob never actually changed
+    # which trades fired (e.g. "SMC+H1" vs "SMC+H1+RSI(confirmation)"
+    # producing the exact same entries/exits). Always computed from
+    # `records`, which evaluate_point() builds unconditionally regardless
+    # of return_trades — zero extra cost, no need to keep full trade
+    # objects around to get this.
+    trade_stream_fingerprint: str = ""
 
 
 # Finite sentinel used ONLY to feed the sampler's acquisition function —
@@ -571,6 +584,30 @@ def _reliability_adjusted_objective(raw_value: float, trades: int, metric: str) 
     return capped * (_RELIABILITY_FLOOR + (1 - _RELIABILITY_FLOOR) * confidence)
 
 
+# Mission Center Research Rigor — Trade Stream Fingerprint (item 2,
+# 2026-08-06). Deliberately keyed on entry_time + direction + exit_time
+# only — NOT pnl/score/exit_reason/anything cost-derived — so two trials
+# that fired the identical set of entries/exits but differ in realized
+# outcome (e.g. a commission/slippage-only override) still fingerprint
+# identically (same trade stream, different cost applied to it), while a
+# risk override that genuinely moves SL/TP and changes WHEN a trade exits
+# correctly produces a different fingerprint (a real, distinct stream).
+_EMPTY_TRADE_STREAM_FINGERPRINT = hashlib.sha256(b"EMPTY_TRADE_STREAM").hexdigest()[:16]
+
+
+def trade_stream_fingerprint(records: list[TradeRecord]) -> str:
+    """A stable hash of the realized sequence of trades — see EvalResult.
+    trade_stream_fingerprint's docstring for why this exists and exactly
+    what it deliberately does/doesn't include."""
+    if not records:
+        return _EMPTY_TRADE_STREAM_FINGERPRINT
+    key = "|".join(
+        f"{r.entry_time}:{r.direction}:{r.exit_time}"
+        for r in sorted(records, key=lambda r: (str(r.entry_time), r.direction))
+    )
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
 def evaluate_point(
     symbol: str,
     df: pd.DataFrame,
@@ -608,6 +645,7 @@ def evaluate_point(
     gate_rejections = dict(bt.gate_rejections)
     context_rejections = dict(bt.context_rejections)
     indicator_rejections = dict(bt.indicator_rejections)
+    stream_fp = trade_stream_fingerprint(records)
 
     trades = metrics.total_trades
     if trades < min_trades:
@@ -617,6 +655,7 @@ def evaluate_point(
             gate_rejections=gate_rejections,
             context_rejections=context_rejections,
             indicator_rejections=indicator_rejections,
+            trade_stream_fingerprint=stream_fp,
         )
 
     raw_value = getattr(metrics, objective_metric)
@@ -630,4 +669,5 @@ def evaluate_point(
         gate_rejections=gate_rejections,
         context_rejections=context_rejections,
         indicator_rejections=indicator_rejections,
+        trade_stream_fingerprint=stream_fp,
     )

@@ -111,6 +111,12 @@ export interface EffectiveConfigSummary {
   total_complete_trials: number
   unique_effective_configurations: number
   duplicate_trials: number
+  // Trade Stream Fingerprint (Mission Center Research Rigor, item 2,
+  // 2026-08-06): null (not 0) whenever no COMPLETE trial in this mission
+  // carries a trade_stream_fingerprint yet — never fabricated.
+  unique_trade_streams: number | null
+  trade_stream_duplicate_trials: number | null
+  distinct_configs_sharing_a_trade_stream: number | null
 }
 
 export interface MissionStatusResponse {

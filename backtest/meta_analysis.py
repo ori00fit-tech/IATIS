@@ -121,12 +121,29 @@ class EffectiveConfigSummary:
     total_complete_trials: int
     unique_effective_configurations: int
     duplicate_trials: int
+    # Trade Stream Fingerprint (Mission Center Research Rigor, item 2,
+    # 2026-08-06) — a deeper check than the config-fingerprint dedup
+    # above: two DIFFERENT effective configurations (e.g. "SMC+H1" vs
+    # "SMC+H1+RSI(confirmation)") can still fire the exact same realized
+    # sequence of trades, meaning the differing knob never actually
+    # changed which trades executed and the two configs are NOT
+    # independent evidence, even though they count as 2 "unique
+    # configurations" above. All three fields are None (not 0 — never
+    # fabricated) when no COMPLETE trial in this mission carries a
+    # trade_stream_fingerprint yet (trials recorded before this field
+    # existed omit it from their metrics_json).
+    unique_trade_streams: int | None
+    trade_stream_duplicate_trials: int | None
+    distinct_configs_sharing_a_trade_stream: int | None
 
     def to_dict(self) -> dict:
         return {
             "total_complete_trials": self.total_complete_trials,
             "unique_effective_configurations": self.unique_effective_configurations,
             "duplicate_trials": self.duplicate_trials,
+            "unique_trade_streams": self.unique_trade_streams,
+            "trade_stream_duplicate_trials": self.trade_stream_duplicate_trials,
+            "distinct_configs_sharing_a_trade_stream": self.distinct_configs_sharing_a_trade_stream,
         }
 
 
@@ -168,19 +185,58 @@ def compute_effective_configuration_summary(
     silently skipped rather than raising."""
     complete = [t for t in trials if t.get("state") == "COMPLETE"]
     fingerprints: set[str] = set()
+    # config fingerprint -> trade stream fingerprint, first occurrence
+    # only. Post-dedup (see mission_runner.py's live duplicate-
+    # configuration detection), a given config fingerprint should appear
+    # at most once among COMPLETE trials going forward; tolerate stale
+    # data (pre-dedup resumes) by keeping only the first.
+    stream_by_config: dict[str, str] = {}
+    trade_streams_seen: set[str] = set()
+    trials_with_stream = 0
     for t in complete:
         try:
             raw_params = json.loads(t["params_json"])
             resolved = resolve_point(space, raw_params)
         except (TypeError, ValueError, KeyError):
             continue
-        fingerprints.add(_effective_config_fingerprint(t.get("symbol"), resolved))
+        cfp = _effective_config_fingerprint(t.get("symbol"), resolved)
+        fingerprints.add(cfp)
+
+        stream_fp = None
+        metrics_raw = t.get("metrics_json")
+        if metrics_raw:
+            try:
+                stream_fp = json.loads(metrics_raw).get("trade_stream_fingerprint")
+            except (TypeError, ValueError):
+                stream_fp = None
+        if stream_fp:
+            trials_with_stream += 1
+            trade_streams_seen.add(stream_fp)
+            stream_by_config.setdefault(cfp, stream_fp)
+
     total = len(complete)
     unique = len(fingerprints)
+
+    unique_trade_streams = None
+    trade_stream_duplicate_trials = None
+    distinct_configs_sharing_a_trade_stream = None
+    if trials_with_stream > 0:
+        unique_trade_streams = len(trade_streams_seen)
+        trade_stream_duplicate_trials = max(0, trials_with_stream - unique_trade_streams)
+        stream_config_counts: dict[str, int] = {}
+        for s in stream_by_config.values():
+            stream_config_counts[s] = stream_config_counts.get(s, 0) + 1
+        distinct_configs_sharing_a_trade_stream = sum(
+            n for n in stream_config_counts.values() if n > 1
+        )
+
     return EffectiveConfigSummary(
         total_complete_trials=total,
         unique_effective_configurations=unique,
         duplicate_trials=max(0, total - unique),
+        unique_trade_streams=unique_trade_streams,
+        trade_stream_duplicate_trials=trade_stream_duplicate_trials,
+        distinct_configs_sharing_a_trade_stream=distinct_configs_sharing_a_trade_stream,
     )
 
 

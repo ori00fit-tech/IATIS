@@ -208,13 +208,14 @@ def _hypothesis_space(**kwargs) -> MissionSearchSpace:
 
 def _hypothesis_row(
     trial_number: int, hypothesis_idx: int, objective_value: float = 1.0,
-    sl_atr_multiplier: float = 2.0, trades: int = 50,
+    sl_atr_multiplier: float = 2.0, trades: int = 50, metrics: dict | None = None,
 ) -> dict:
     params = {"__hypothesis_idx": hypothesis_idx, "sl_atr_multiplier": sl_atr_multiplier}
     return {
         "mission_id": "m1", "trial_number": trial_number, "symbol": "EURUSD", "state": "COMPLETE",
         "objective_value": objective_value, "params_json": json.dumps(params),
-        "metrics_json": None, "trades": trades, "error": None,
+        "metrics_json": json.dumps(metrics) if metrics is not None else None,
+        "trades": trades, "error": None,
         "started_at": "t", "finished_at": "t",
     }
 
@@ -635,4 +636,62 @@ def test_effective_config_summary_to_dict_shape():
     space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
     trials = [_hypothesis_row(0, hypothesis_idx=0)]
     d = compute_effective_configuration_summary(space, trials).to_dict()
-    assert set(d.keys()) == {"total_complete_trials", "unique_effective_configurations", "duplicate_trials"}
+    assert set(d.keys()) == {
+        "total_complete_trials", "unique_effective_configurations", "duplicate_trials",
+        "unique_trade_streams", "trade_stream_duplicate_trials", "distinct_configs_sharing_a_trade_stream",
+    }
+
+
+# ── Trade Stream Fingerprint (Mission Center Research Rigor, item 2, 2026-08-06) ──
+# A deeper check than the config-fingerprint dedup above: two DIFFERENT
+# effective configurations can still fire the exact same realized trade
+# sequence, meaning the differing knob (e.g. an indicator that never
+# actually vetoed/confirmed anything) never changed the outcome.
+
+def test_effective_config_summary_none_when_no_trial_carries_a_trade_stream_fingerprint():
+    # Every existing test above (and every trial recorded before this
+    # field existed) has metrics_json=None or a metrics dict without the
+    # key — must degrade to None (never a fabricated 0), matching the
+    # dataclass docstring's own contract.
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [_hypothesis_row(0, hypothesis_idx=0, metrics={"total_trades": 50})]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_trade_streams is None
+    assert summary.trade_stream_duplicate_trials is None
+    assert summary.distinct_configs_sharing_a_trade_stream is None
+
+
+def test_effective_config_summary_two_distinct_configs_same_trade_stream_is_flagged():
+    # The exact operator-cited scenario: "SMC + H1" (bundle 0) vs
+    # "NNFX + Wyckoff + H4" (bundle 1) are two different effective
+    # configurations, but if they happened to fire the identical realized
+    # trade sequence, that's not independent evidence.
+    space = _hypothesis_space()  # SMC/H1 and NNFX+Wyckoff/H4, distinct bundles
+    trials = [
+        _hypothesis_row(0, hypothesis_idx=0, metrics={"trade_stream_fingerprint": "SAME_STREAM"}),
+        _hypothesis_row(1, hypothesis_idx=1, metrics={"trade_stream_fingerprint": "SAME_STREAM"}),
+    ]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_effective_configurations == 2
+    assert summary.unique_trade_streams == 1
+    assert summary.trade_stream_duplicate_trials == 1
+    assert summary.distinct_configs_sharing_a_trade_stream == 2
+
+
+def test_effective_config_summary_distinct_configs_distinct_streams_not_flagged():
+    space = _hypothesis_space()
+    trials = [
+        _hypothesis_row(0, hypothesis_idx=0, metrics={"trade_stream_fingerprint": "STREAM_A"}),
+        _hypothesis_row(1, hypothesis_idx=1, metrics={"trade_stream_fingerprint": "STREAM_B"}),
+    ]
+    summary = compute_effective_configuration_summary(space, trials)
+    assert summary.unique_trade_streams == 2
+    assert summary.trade_stream_duplicate_trials == 0
+    assert summary.distinct_configs_sharing_a_trade_stream == 0
+
+
+def test_effective_config_summary_tolerates_malformed_metrics_json():
+    space = _hypothesis_space(hypothesis_bundle_choices=(_BUNDLE_SMC_H1,))
+    trials = [{**_hypothesis_row(0, hypothesis_idx=0), "metrics_json": "not valid json{{"}]
+    summary = compute_effective_configuration_summary(space, trials)  # must not raise
+    assert summary.unique_trade_streams is None

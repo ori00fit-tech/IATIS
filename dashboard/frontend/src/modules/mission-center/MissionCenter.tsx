@@ -2033,6 +2033,23 @@ function MissionDetail({
               </Badge>
             </div>
           )}
+          {status.effective_config_summary && status.effective_config_summary.unique_trade_streams !== null && (
+            <div className="flex items-center gap-2 text-[0.78em]">
+              <span className="text-muted uppercase tracking-[1px] text-[0.7em]">Trade streams</span>
+              <Badge tone={
+                (status.effective_config_summary.distinct_configs_sharing_a_trade_stream ?? 0) === 0 ? 'good' : 'marginal'
+              }>
+                {`${status.effective_config_summary.unique_trade_streams} unique realized trade sequence(s)`}
+              </Badge>
+              {(status.effective_config_summary.distinct_configs_sharing_a_trade_stream ?? 0) > 0 && (
+                <span className="text-amber text-[0.75em]">
+                  — {status.effective_config_summary.distinct_configs_sharing_a_trade_stream} distinct
+                  configuration(s) fired the exact same trades as another configuration; the differing
+                  knob never actually changed the outcome
+                </span>
+              )}
+            </div>
+          )}
           {status.abandoned_trials > 0 && (
             <div className="text-[0.75em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
               {status.abandoned_trials} trial(s) lost to a process interruption mid-run — compute wasted, not

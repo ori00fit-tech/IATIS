@@ -281,9 +281,25 @@ export interface ValidationResultRow {
   robustness_json: string | null
   criteria_breakdown_json: string
   significance_json: string | null
+  regime_robustness_json: string | null
   error: string | null
   started_at: string
   finished_at: string
+}
+
+// Mission Center Research Rigor Phase 3 — does this validation symbol's
+// edge hold across the market regimes it actually traded in, or is it
+// concentrated entirely in one? Diagnostic only, never a criterion — see
+// backtest/mission_validator.py's _compute_regime_robustness_diagnostic()
+// docstring for the full reasoning.
+export interface RegimeRobustnessDiagnostic {
+  regimes_traded: number
+  regimes_material: number
+  regimes_profitable: number
+  regime_robustness_score: number | null
+  dominant_regime: string | null
+  dominant_regime_share: number | null
+  note: string
 }
 
 // Mission Center Research Rigor Phase 2 — autocorrelation-adjusted

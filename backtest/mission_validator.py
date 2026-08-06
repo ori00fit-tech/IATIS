@@ -278,6 +278,63 @@ def _compute_effective_sample_size_diagnostic(trades: list[TradeRecord]) -> dict
     }
 
 
+MIN_TRADES_PER_REGIME_FOR_ROBUSTNESS = 10
+
+
+def _compute_regime_robustness_diagnostic(by_regime: dict, min_trades_per_regime: int = MIN_TRADES_PER_REGIME_FOR_ROBUSTNESS) -> dict:
+    """Mission Center Research Rigor Phase 3 (2026-08-XX) — does this
+    symbol's edge hold across the market regimes it actually traded in,
+    or is it concentrated entirely in one regime? The same "if it only
+    works on one X it's probably curve-fitting" principle
+    MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD already enforces for symbols,
+    applied here to regimes. Reuses BacktestMetrics.by_regime (already
+    computed by calculate_metrics() from each trade's TradeRecord.regime)
+    — no new trade-level access needed, unlike the ESS diagnostic above.
+
+    "Unknown" (the fallback label calculate_metrics() assigns when a
+    trade's regime gate was off — backtest/metrics.py:432) is excluded
+    from the material/profitable counts, matching Edge Discovery's own
+    established precedent (_rank_opportunities() excludes "Unknown"
+    dimension values) — it isn't a real regime, just an absence of data.
+
+    Diagnostic only, never a VALIDATION_CRITERIA entry.
+    """
+    real_regimes = {r: b for r, b in by_regime.items() if r != "Unknown"}
+    total_trades = sum(b.get("trades", 0) for b in real_regimes.values())
+    if total_trades == 0:
+        return {
+            "regimes_traded": 0, "regimes_material": 0, "regimes_profitable": 0,
+            "regime_robustness_score": None, "dominant_regime": None,
+            "dominant_regime_share": None,
+            "note": "No closed trades with a known regime to assess regime robustness.",
+        }
+    dominant_regime, dominant_bucket = max(real_regimes.items(), key=lambda kv: kv[1].get("trades", 0))
+    dominant_share = dominant_bucket.get("trades", 0) / total_trades
+    material = {r: b for r, b in real_regimes.items() if b.get("trades", 0) >= min_trades_per_regime}
+    if not material:
+        return {
+            "regimes_traded": len(real_regimes), "regimes_material": 0, "regimes_profitable": 0,
+            "regime_robustness_score": None, "dominant_regime": dominant_regime,
+            "dominant_regime_share": round(dominant_share, 3),
+            "note": f"No regime reached the {min_trades_per_regime}-trade floor — too few trades per regime to assess.",
+        }
+    profitable = {r: b for r, b in material.items() if b.get("profit_factor", 0.0) >= 1.0}
+    score = len(profitable) / len(material)
+    return {
+        "regimes_traded": len(real_regimes), "regimes_material": len(material),
+        "regimes_profitable": len(profitable),
+        "regime_robustness_score": round(score, 3),
+        "dominant_regime": dominant_regime, "dominant_regime_share": round(dominant_share, 3),
+        "note": (
+            f"{len(profitable)} of {len(material)} regime(s) with >= {min_trades_per_regime} "
+            f"trades were profitable (PF >= 1.0). Diagnostic only — never a VALIDATION_CRITERIA "
+            f"entry. An edge concentrated in a single regime "
+            f"(dominant share {dominant_share:.0%}) carries the same curve-fitting risk a "
+            f"single-symbol result does."
+        ),
+    }
+
+
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     """Returns the full per-symbol result dict recorded into
     research_mission_validation_results — always populated, pass or
@@ -300,6 +357,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     # is deliberately non-ML (not the same technique family as H033).
     feature_mining_result = compute_feature_mining(eval_result.trade_records or [])
     significance_result = _compute_effective_sample_size_diagnostic(eval_result.trade_records or [])
+    regime_robustness_result = _compute_regime_robustness_diagnostic(metrics.by_regime)
 
     wf_result = run_walk_forward(symbol, df, WalkForwardConfig(
         n_windows=vc.wf_windows,
@@ -356,6 +414,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "criteria_breakdown": json_safe(breakdown),
         "feature_mining": json_safe(feature_mining_result.to_dict()),
         "significance": json_safe(significance_result),
+        "regime_robustness": json_safe(regime_robustness_result),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -412,7 +471,8 @@ def run_validation(vc: ValidationConfig) -> None:
                 metrics=result["metrics"], monte_carlo=result["monte_carlo"],
                 walk_forward=result["walk_forward"], robustness=result["robustness"],
                 criteria_breakdown=result["criteria_breakdown"],
-                feature_mining=result["feature_mining"], significance=result["significance"], error=None,
+                feature_mining=result["feature_mining"], significance=result["significance"],
+                regime_robustness=result["regime_robustness"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -421,8 +481,8 @@ def run_validation(vc: ValidationConfig) -> None:
             research_mission_validations.record_validation_result(
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
-                criteria_breakdown={}, feature_mining=None, significance=None, error=str(exc),
-                started_at=now, finished_at=now,
+                criteria_breakdown={}, feature_mining=None, significance=None, regime_robustness=None,
+                error=str(exc), started_at=now, finished_at=now,
             )
 
     total = len(vc.validation_symbols)

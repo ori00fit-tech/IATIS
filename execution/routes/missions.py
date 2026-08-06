@@ -332,6 +332,24 @@ async def missions_status(
         for sym in json.loads(mission["symbols_json"]):
             abandoned_trials += research_missions.count_orphaned_attempts(mission_id, sym)
 
+    # Mission Center Research Rigor — item 3, 2026-08-06: "150 trials !=
+    # 150 pieces of evidence." Composes progress/abandoned/
+    # effective_config_summary (all already computed above, zero new D1
+    # queries) into one answer instead of leaving an operator to mentally
+    # combine three separate widgets.
+    research_accounting = None
+    if mission:
+        from backtest.meta_analysis import compute_research_accounting
+
+        n_symbols = len(json.loads(mission["symbols_json"])) if mission.get("symbols_json") else 0
+        research_accounting = compute_research_accounting(
+            n_trials_per_symbol=mission.get("n_trials_per_symbol", 0),
+            n_symbols=n_symbols,
+            progress_by_symbol=progress.get("by_symbol", {}),
+            abandoned_attempts=abandoned_trials,
+            effective_config_summary=effective_config_summary,
+        ).to_dict()
+
     return {
         "mission_id": mission_id,
         "mission": mission,
@@ -340,6 +358,7 @@ async def missions_status(
         "search_space_kind": search_space_kind,
         "effective_config_summary": effective_config_summary,
         "abandoned_trials": abandoned_trials,
+        "research_accounting": research_accounting,
     }
 
 

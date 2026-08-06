@@ -240,6 +240,89 @@ def compute_effective_configuration_summary(
     )
 
 
+# ── Research Accounting (Mission Center Research Rigor, item 3, 2026-08-06) ──
+# "150 trials != 150 pieces of evidence" — composes numbers already computed
+# elsewhere (mission_progress's per-state counts, count_orphaned_attempts's
+# lost-attempt count, EffectiveConfigSummary's config/trade-stream dedup)
+# into one answer, instead of leaving an operator to mentally combine three
+# separate widgets. Pure function — no D1 access, mirrors this module's own
+# "route validates, module computes" split.
+
+@dataclass(frozen=True)
+class ResearchAccountingSummary:
+    requested_trials: int
+    recorded_attempts: int
+    abandoned_attempts: int
+    completed: int
+    pruned: int
+    failed: int
+    duplicate: int
+    unique_effective_configurations: int | None
+    unique_trade_streams: int | None
+    # The best available "how much independent evidence do we actually
+    # have" number — unique_trade_streams when available (the deepest,
+    # most honest count), falling back to unique_effective_configurations
+    # (config-level dedup only) for missions that predate trade-stream
+    # fingerprinting, and None (never fabricated) when neither is
+    # available yet (e.g. zero COMPLETE trials so far).
+    effective_evidence_count: int | None
+    effective_evidence_source: str  # "trade_stream" | "config" | "unavailable"
+
+    def to_dict(self) -> dict:
+        return {
+            "requested_trials": self.requested_trials,
+            "recorded_attempts": self.recorded_attempts,
+            "abandoned_attempts": self.abandoned_attempts,
+            "completed": self.completed, "pruned": self.pruned,
+            "failed": self.failed, "duplicate": self.duplicate,
+            "unique_effective_configurations": self.unique_effective_configurations,
+            "unique_trade_streams": self.unique_trade_streams,
+            "effective_evidence_count": self.effective_evidence_count,
+            "effective_evidence_source": self.effective_evidence_source,
+        }
+
+
+def compute_research_accounting(
+    n_trials_per_symbol: int,
+    n_symbols: int,
+    progress_by_symbol: dict[str, dict[str, int]],
+    abandoned_attempts: int,
+    effective_config_summary: dict[str, Any] | None,
+) -> ResearchAccountingSummary:
+    state_counts: dict[str, int] = {}
+    for sym_counts in progress_by_symbol.values():
+        for state, n in sym_counts.items():
+            state_counts[state] = state_counts.get(state, 0) + n
+    completed = state_counts.get("COMPLETE", 0)
+    pruned = state_counts.get("PRUNED", 0)
+    failed = state_counts.get("FAIL", 0)
+    duplicate = state_counts.get("DUPLICATE", 0)
+
+    unique_configs = None
+    unique_streams = None
+    if effective_config_summary is not None:
+        unique_configs = effective_config_summary.get("unique_effective_configurations")
+        unique_streams = effective_config_summary.get("unique_trade_streams")
+
+    if unique_streams is not None:
+        effective_evidence_count, effective_evidence_source = unique_streams, "trade_stream"
+    elif unique_configs is not None:
+        effective_evidence_count, effective_evidence_source = unique_configs, "config"
+    else:
+        effective_evidence_count, effective_evidence_source = None, "unavailable"
+
+    return ResearchAccountingSummary(
+        requested_trials=n_trials_per_symbol * n_symbols,
+        recorded_attempts=completed + pruned + failed + duplicate,
+        abandoned_attempts=abandoned_attempts,
+        completed=completed, pruned=pruned, failed=failed, duplicate=duplicate,
+        unique_effective_configurations=unique_configs,
+        unique_trade_streams=unique_streams,
+        effective_evidence_count=effective_evidence_count,
+        effective_evidence_source=effective_evidence_source,
+    )
+
+
 @dataclass(frozen=True)
 class DimensionFrequency:
     dimension: str  # "engine" | "timeframe"

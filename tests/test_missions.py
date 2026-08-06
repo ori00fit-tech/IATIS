@@ -600,6 +600,57 @@ def test_missions_status_reports_effective_config_summary_for_single_hypothesis(
     assert summary["duplicate_trials"] == 4
 
 
+# ── research_accounting (Mission Center Research Rigor, item 3, 2026-08-06) ─
+# "150 trials != 150 pieces of evidence" — GET /research/missions/{id} must
+# surface a consolidated accounting: requested vs recorded, per-state
+# counts, and the effective (independent) evidence count.
+
+def test_missions_status_reports_research_accounting(client):
+    from storage import research_missions
+
+    research_missions.upsert_mission(
+        mission_id="mission-accounting-test",
+        name="accounting test", sampler="tpe", objective_metric="profit_factor",
+        symbols=["EURUSD"], n_trials_per_symbol=5, min_trades=10, seed=1,
+        search_space={
+            "timeframes_choices": [["H1"]], "engine_set_choices": [["nnfx"]],
+            "indicator_set_choices": [[]], "context_filter_set_choices": [[]],
+            "engine_variant_choices": [{}],
+            "hypothesis_bundle_choices": [
+                {"name": "H02", "timeframes": ["H1"], "engines": ["smc", "ict", "nnfx"], "indicators": [], "context_filters": []},
+            ],
+            "risk_param_ranges": {}, "risk_param_grid": {},
+        },
+        config={}, status="finished",
+    )
+    for i in range(3):
+        research_missions.record_trial(
+            mission_id="mission-accounting-test", trial_number=i, symbol="EURUSD",
+            state="COMPLETE", objective_value=0.81, params={"__hypothesis_idx": 0},
+            metrics=None, trades=402, error=None, started_at="t", finished_at="t",
+        )
+    research_missions.record_trial(
+        mission_id="mission-accounting-test", trial_number=3, symbol="EURUSD",
+        state="PRUNED", objective_value=None, params={"__hypothesis_idx": 0},
+        metrics=None, trades=2, error=None, started_at="t", finished_at="t",
+    )
+
+    r = client.get("/research/missions/mission-accounting-test", headers=HDR)
+    assert r.status_code == 200
+    accounting = r.json()["research_accounting"]
+    assert accounting["requested_trials"] == 5  # n_trials_per_symbol(5) * 1 symbol
+    assert accounting["recorded_attempts"] == 4
+    assert accounting["completed"] == 3
+    assert accounting["pruned"] == 1
+    assert accounting["failed"] == 0
+    assert accounting["abandoned_attempts"] == 0
+    # 3 COMPLETE trials, same effective config (single hypothesis bundle) ->
+    # unique_effective_configurations=1 is the fallback source here (no
+    # trade_stream_fingerprint on these hand-inserted rows).
+    assert accounting["effective_evidence_count"] == 1
+    assert accounting["effective_evidence_source"] == "config"
+
+
 def test_missions_leaderboard_returns_empty_for_unknown_mission(client):
     r = client.get("/research/missions/does-not-exist-at-all/leaderboard", headers=HDR)
     assert r.status_code == 200

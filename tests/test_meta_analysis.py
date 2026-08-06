@@ -17,6 +17,7 @@ from backtest.meta_analysis import (
     MIN_COMPLETE_TRIALS_FOR_META_ANALYSIS,
     compute_effective_configuration_summary,
     compute_meta_analysis,
+    compute_research_accounting,
     sampler_caveat,
 )
 from backtest.optimizer import (
@@ -695,3 +696,81 @@ def test_effective_config_summary_tolerates_malformed_metrics_json():
     trials = [{**_hypothesis_row(0, hypothesis_idx=0), "metrics_json": "not valid json{{"}]
     summary = compute_effective_configuration_summary(space, trials)  # must not raise
     assert summary.unique_trade_streams is None
+
+
+# ── Research Accounting (Mission Center Research Rigor, item 3, 2026-08-06) ──
+# "150 trials != 150 pieces of evidence" — composes progress/abandoned/
+# effective-config numbers (each already tested above/elsewhere) into one
+# answer. Pure function, no D1 access.
+
+def test_research_accounting_basic_state_counts_and_requested_trials():
+    progress = {"EURUSD": {"COMPLETE": 40, "PRUNED": 5, "FAIL": 2, "DUPLICATE": 3}}
+    summary = compute_research_accounting(
+        n_trials_per_symbol=50, n_symbols=1, progress_by_symbol=progress,
+        abandoned_attempts=0, effective_config_summary=None,
+    )
+    assert summary.requested_trials == 50
+    assert summary.recorded_attempts == 50
+    assert summary.completed == 40
+    assert summary.pruned == 5
+    assert summary.failed == 2
+    assert summary.duplicate == 3
+
+
+def test_research_accounting_sums_across_multiple_symbols():
+    progress = {
+        "EURUSD": {"COMPLETE": 10}, "GBPUSD": {"COMPLETE": 8, "PRUNED": 2},
+    }
+    summary = compute_research_accounting(
+        n_trials_per_symbol=10, n_symbols=2, progress_by_symbol=progress,
+        abandoned_attempts=1, effective_config_summary=None,
+    )
+    assert summary.requested_trials == 20
+    assert summary.completed == 18
+    assert summary.pruned == 2
+    assert summary.abandoned_attempts == 1
+
+
+def test_research_accounting_prefers_trade_stream_over_config_count():
+    effective = {
+        "unique_effective_configurations": 5, "unique_trade_streams": 2,
+    }
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={"EURUSD": {"COMPLETE": 5}},
+        abandoned_attempts=0, effective_config_summary=effective,
+    )
+    assert summary.effective_evidence_count == 2
+    assert summary.effective_evidence_source == "trade_stream"
+    assert summary.unique_effective_configurations == 5
+    assert summary.unique_trade_streams == 2
+
+
+def test_research_accounting_falls_back_to_config_count_when_no_trade_stream_data():
+    effective = {"unique_effective_configurations": 5, "unique_trade_streams": None}
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={"EURUSD": {"COMPLETE": 5}},
+        abandoned_attempts=0, effective_config_summary=effective,
+    )
+    assert summary.effective_evidence_count == 5
+    assert summary.effective_evidence_source == "config"
+
+
+def test_research_accounting_unavailable_when_no_effective_config_summary_at_all():
+    summary = compute_research_accounting(
+        n_trials_per_symbol=5, n_symbols=1, progress_by_symbol={},
+        abandoned_attempts=0, effective_config_summary=None,
+    )
+    assert summary.effective_evidence_count is None
+    assert summary.effective_evidence_source == "unavailable"
+
+
+def test_research_accounting_to_dict_shape():
+    d = compute_research_accounting(
+        n_trials_per_symbol=1, n_symbols=1, progress_by_symbol={}, abandoned_attempts=0,
+        effective_config_summary=None,
+    ).to_dict()
+    assert set(d.keys()) == {
+        "requested_trials", "recorded_attempts", "abandoned_attempts", "completed", "pruned",
+        "failed", "duplicate", "unique_effective_configurations", "unique_trade_streams",
+        "effective_evidence_count", "effective_evidence_source",
+    }

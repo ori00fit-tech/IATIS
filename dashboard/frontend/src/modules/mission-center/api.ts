@@ -119,6 +119,20 @@ export interface EffectiveConfigSummary {
   distinct_configs_sharing_a_trade_stream: number | null
 }
 
+export interface ResearchAccountingSummary {
+  requested_trials: number
+  recorded_attempts: number
+  abandoned_attempts: number
+  completed: number
+  pruned: number
+  failed: number
+  duplicate: number
+  unique_effective_configurations: number | null
+  unique_trade_streams: number | null
+  effective_evidence_count: number | null
+  effective_evidence_source: 'trade_stream' | 'config' | 'unavailable'
+}
+
 export interface MissionStatusResponse {
   mission_id: string
   mission: MissionRow | null
@@ -139,6 +153,10 @@ export interface MissionStatusResponse {
   // crash lost their compute). Purely informational — the mission still
   // reaches its target trial count via a fresh draw on resume.
   abandoned_trials: number
+  // Mission Center Research Rigor — item 3 (2026-08-06): "150 trials !=
+  // 150 pieces of evidence." null only when the mission record isn't
+  // loaded yet (same guard as effective_config_summary).
+  research_accounting: ResearchAccountingSummary | null
 }
 
 export interface MissionTrial {

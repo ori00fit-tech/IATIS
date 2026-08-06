@@ -388,6 +388,39 @@ def test_ai_save_hypothesis_draft_degrades_gracefully_when_new_fields_absent(cli
     assert "(none provided)" in content
 
 
+def test_ai_save_hypothesis_draft_includes_lead_id_when_present(client, tmp_path, monkeypatch):
+    import execution.routes.ai as m
+
+    monkeypatch.setattr(m, "_DRAFTS_DIR", tmp_path)
+    r = client.post(
+        "/ai/save-hypothesis-draft",
+        json={
+            "title": "Mission trial candidate",
+            "statement": "s", "falsification_criteria": "f", "distinct_from_prior_kill": "d",
+            "lead_id": "LEAD-abcdef12-3-EURUSD",
+        },
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    written = tmp_path / r.json()["file"].split("/")[-1]
+    content = written.read_text()
+    assert "**Lead ID:** LEAD-abcdef12-3-EURUSD" in content
+
+
+def test_ai_save_hypothesis_draft_omits_lead_id_line_when_absent(client, tmp_path, monkeypatch):
+    import execution.routes.ai as m
+
+    monkeypatch.setattr(m, "_DRAFTS_DIR", tmp_path)
+    r = client.post(
+        "/ai/save-hypothesis-draft",
+        json={"title": "No lead id", "statement": "s", "falsification_criteria": "f", "distinct_from_prior_kill": "d"},
+        headers=HDR,
+    )
+    assert r.status_code == 200
+    written = tmp_path / r.json()["file"].split("/")[-1]
+    assert "Lead ID" not in written.read_text()
+
+
 def test_build_copilot_context_includes_real_registry_and_dead_list():
     from execution.routes.ai import _build_copilot_context
 

@@ -258,6 +258,45 @@ def test_stability_json_absent_when_not_provided():
     assert results[0]["stability_json"] is None
 
 
+def test_cost_stress_json_round_trips():
+    rmv.upsert_validation(
+        validation_id="v-cost-stress", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    cost_stress_blob = {
+        "baseline_commission_pips": 1.2, "baseline_slippage_pips": 0.5,
+        "levels": [
+            {"multiplier": 1.5, "commission_pips": 1.8, "slippage_pips": 0.75, "trades": 40, "profit_factor": 1.3, "edge_survives": True},
+            {"multiplier": 2.0, "commission_pips": 2.4, "slippage_pips": 1.0, "trades": 40, "profit_factor": 1.1, "edge_survives": True},
+            {"multiplier": 3.0, "commission_pips": 3.6, "slippage_pips": 1.5, "trades": 40, "profit_factor": 0.9, "edge_survives": False},
+        ],
+        "survives_all_stress_levels": False, "note": "diagnostic only",
+    }
+    rmv.record_validation_result(
+        validation_id="v-cost-stress", symbol="EURUSD", passed=True,
+        metrics={"profit_factor": 1.3}, monte_carlo={}, walk_forward={}, robustness={},
+        criteria_breakdown={}, cost_stress=cost_stress_blob, error=None, started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-cost-stress")
+    assert len(results) == 1
+    import json
+    assert json.loads(results[0]["cost_stress_json"]) == cost_stress_blob
+
+
+def test_cost_stress_json_absent_when_not_provided():
+    rmv.upsert_validation(
+        validation_id="v-cost-stress-none", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    rmv.record_validation_result(
+        validation_id="v-cost-stress-none", symbol="EURUSD", passed=False,
+        metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
+        criteria_breakdown={}, error="no data", started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-cost-stress-none")
+    assert results[0]["cost_stress_json"] is None
+
+
 def test_list_recent_finished_validations_newest_first_and_status_filtered():
     rmv.upsert_validation(
         validation_id="v-recent-a", mission_id="m-recent", trial_number=0, trial_symbol="EURUSD",

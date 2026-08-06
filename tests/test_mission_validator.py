@@ -394,6 +394,99 @@ def test_regime_robustness_never_reaches_a_criterion():
     assert "regime_robustness_result" not in breakdown_block
 
 
+# ── Stability score diagnostic ──────────────────────────────────────────────
+# (Mission Center Research Rigor Phase 4, 2026-08-XX) — informational only,
+# never a VALIDATION_CRITERIA entry, never blocking.
+
+def _sweep(param: str, verdict: str):
+    from backtest.robustness import ParamSweepResult
+    return ParamSweepResult(param=param, baseline_value=2.0, baseline_pf=1.5, points=[], verdict=verdict)
+
+
+def test_stability_score_no_sweeps():
+    from backtest.mission_validator import _compute_stability_score_diagnostic
+
+    result = _compute_stability_score_diagnostic([])
+    assert result["params_swept"] == 0
+    assert result["stability_score"] is None
+    assert "No swept parameter" in result["note"]
+
+
+def test_stability_score_all_insufficient():
+    from backtest.mission_validator import _compute_stability_score_diagnostic
+
+    sweeps = [_sweep("sl_atr_multiplier", "INSUFFICIENT"), _sweep("min_rr", "INSUFFICIENT")]
+    result = _compute_stability_score_diagnostic(sweeps)
+    assert result["params_swept"] == 2
+    assert result["params_measurable"] == 0
+    assert result["params_insufficient"] == 2
+    assert result["stability_score"] is None
+
+
+def test_stability_score_all_stable():
+    from backtest.mission_validator import _compute_stability_score_diagnostic
+
+    sweeps = [_sweep("sl_atr_multiplier", "STABLE"), _sweep("min_rr", "STABLE")]
+    result = _compute_stability_score_diagnostic(sweeps)
+    assert result["params_measurable"] == 2
+    assert result["params_stable"] == 2
+    assert result["stability_score"] == pytest.approx(1.0)
+
+
+def test_stability_score_mixed_verdicts_excludes_insufficient_from_denominator():
+    from backtest.mission_validator import _compute_stability_score_diagnostic
+
+    sweeps = [
+        _sweep("sl_atr_multiplier", "STABLE"),
+        _sweep("min_rr", "SENSITIVE"),
+        _sweep("risk_per_trade", "INSUFFICIENT"),
+    ]
+    result = _compute_stability_score_diagnostic(sweeps)
+    assert result["params_swept"] == 3
+    assert result["params_measurable"] == 2  # INSUFFICIENT excluded
+    assert result["params_stable"] == 1
+    assert result["params_sensitive"] == 1
+    assert result["params_insufficient"] == 1
+    assert result["stability_score"] == pytest.approx(0.5)
+
+
+def test_stability_score_all_sensitive():
+    from backtest.mission_validator import _compute_stability_score_diagnostic
+
+    sweeps = [_sweep("sl_atr_multiplier", "SENSITIVE")]
+    result = _compute_stability_score_diagnostic(sweeps)
+    assert result["params_measurable"] == 1
+    assert result["params_stable"] == 0
+    assert result["stability_score"] == pytest.approx(0.0)
+
+
+def test_stability_score_never_reaches_a_criterion():
+    source = inspect.getsource(mission_validator._evaluate_symbol)
+    assert "stability_score_result = _compute_stability_score_diagnostic" in source
+    assert '"stability": json_safe(stability_score_result)' in source
+    breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
+    assert "stability_score_result" not in breakdown_block
+
+
+def test_run_validation_records_stability_diagnostic_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-stability")
+
+    vc = _small_vc(tmp_path, "v-stability", "val-stability")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-stability")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        assert r["stability_json"] is not None
+        st = json.loads(r["stability_json"])
+        assert set(st) == {
+            "params_swept", "params_measurable", "params_stable",
+            "params_sensitive", "params_insufficient", "stability_score", "note",
+        }
+
+
 # ── Reproducibility fingerprint / candidate lock + date overlap ────────────
 # (Diagnostic Infrastructure Phase 1, 2026-08-02) — both informational
 # only, never a VALIDATION_CRITERIA entry, never blocking.
@@ -554,7 +647,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [
@@ -597,7 +690,7 @@ def _fake_eval_all(symbol, point, vc, *, passing_symbols):
     return {
         "symbol": symbol, "passed": passed,
         "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "started_at": "t", "finished_at": "t",
+        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "started_at": "t", "finished_at": "t",
     }
 
 

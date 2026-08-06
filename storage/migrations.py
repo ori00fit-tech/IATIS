@@ -188,6 +188,18 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN regime_robustness_json TEXT",
         ],
     ),
+    (
+        11,
+        "validation_stability_column",
+        # Mission Center Research Rigor Phase 4 (2026-08-XX): a fractional
+        # companion to the existing all-or-nothing "robustness_all_stable"
+        # criterion — what share of the candidate's own swept risk params
+        # are STABLE, reusing backtest.robustness.run_robustness()'s
+        # already-computed per-parameter verdicts. Diagnostic only.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN stability_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

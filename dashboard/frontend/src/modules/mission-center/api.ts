@@ -284,6 +284,7 @@ export interface ValidationResultRow {
   regime_robustness_json: string | null
   stability_json: string | null
   cost_stress_json: string | null
+  discovery_score_json: string | null
   error: string | null
   started_at: string
   finished_at: string
@@ -307,6 +308,22 @@ export interface CostStressDiagnostic {
   baseline_slippage_pips: number
   levels: CostStressLevel[]
   survives_all_stress_levels: boolean | null
+  note: string
+}
+
+// Mission Center Research Rigor Phase 6 — a transparent, equally-weighted
+// average of the significance/regime_robustness/stability/cost_stress
+// diagnostics above, for at-a-glance triage only. Diagnostic only, never a
+// criterion, never used to rank/select a candidate — see backtest/
+// mission_validator.py's _compute_discovery_score_diagnostic() docstring.
+export interface DiscoveryScoreDiagnostic {
+  significance_component: number | null
+  regime_robustness_component: number | null
+  stability_component: number | null
+  cost_stress_component: number | null
+  components_used: number
+  components_total: number
+  discovery_score: number | null
   note: string
 }
 

@@ -297,6 +297,42 @@ def test_cost_stress_json_absent_when_not_provided():
     assert results[0]["cost_stress_json"] is None
 
 
+def test_discovery_score_json_round_trips():
+    rmv.upsert_validation(
+        validation_id="v-discovery-score", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    discovery_score_blob = {
+        "significance_component": 1.0, "regime_robustness_component": 1.0,
+        "stability_component": 0.5, "cost_stress_component": 0.667,
+        "components_used": 4, "components_total": 4,
+        "discovery_score": 0.792, "note": "diagnostic only",
+    }
+    rmv.record_validation_result(
+        validation_id="v-discovery-score", symbol="EURUSD", passed=True,
+        metrics={"profit_factor": 1.3}, monte_carlo={}, walk_forward={}, robustness={},
+        criteria_breakdown={}, discovery_score=discovery_score_blob, error=None, started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-discovery-score")
+    assert len(results) == 1
+    import json
+    assert json.loads(results[0]["discovery_score_json"]) == discovery_score_blob
+
+
+def test_discovery_score_json_absent_when_not_provided():
+    rmv.upsert_validation(
+        validation_id="v-discovery-score-none", mission_id="m1", trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=["EURUSD"], objective_metric="profit_factor", criteria={},
+    )
+    rmv.record_validation_result(
+        validation_id="v-discovery-score-none", symbol="EURUSD", passed=False,
+        metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
+        criteria_breakdown={}, error="no data", started_at="t1", finished_at="t2",
+    )
+    results = rmv.validation_results("v-discovery-score-none")
+    assert results[0]["discovery_score_json"] is None
+
+
 def test_list_recent_finished_validations_newest_first_and_status_filtered():
     rmv.upsert_validation(
         validation_id="v-recent-a", mission_id="m-recent", trial_number=0, trial_symbol="EURUSD",

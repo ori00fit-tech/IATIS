@@ -213,6 +213,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN cost_stress_json TEXT",
         ],
     ),
+    (
+        13,
+        "validation_discovery_score_column",
+        # Mission Center Research Rigor Phase 6 (2026-08-XX): an equally-
+        # weighted average of the significance/regime_robustness/stability/
+        # cost_stress diagnostics above, for at-a-glance triage. Every
+        # component is read verbatim from an already-computed diagnostic —
+        # no new backtest evaluation, no invented weighting. Diagnostic
+        # only, never a criterion, never used to rank/select a candidate.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN discovery_score_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

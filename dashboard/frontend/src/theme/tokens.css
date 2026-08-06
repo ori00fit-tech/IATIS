@@ -32,4 +32,10 @@
   --bottom-panel-h-default: 280px;
   --bottom-panel-h-min: 120px;
   --bottom-panel-h-max: 70vh;
+
+  /* Mobile-First Restructuring Phase 1 (2026-08-06) — height of the fixed
+   * MobileBottomNav shown below the desktop breakpoint. Set to 0px above
+   * 1024px in index.css so <main>'s bottom-padding class resolves
+   * correctly in both render paths without a JS branch. */
+  --bottom-nav-h: 56px;
 }

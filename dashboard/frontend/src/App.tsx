@@ -9,6 +9,9 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { CommandPalette } from './components/CommandPalette'
 import { Sidebar } from './components/Sidebar'
 import { BottomPanel } from './components/BottomPanel'
+import { MobileBottomNav } from './components/navigation/MobileBottomNav'
+import { MoreNavDrawer } from './components/navigation/MoreNavDrawer'
+import { useIsDesktopNav } from './lib/useMediaQuery'
 
 // Route-level code splitting (Phase 5 institutional redesign, 2026-07-26) —
 // each tab is its own dynamic import instead of one ~957KB shared bundle.
@@ -77,6 +80,28 @@ function TabLoading({ label }: { label: string }) {
   )
 }
 
+/**
+ * Mobile-First Restructuring Phase 1 (2026-08-06) — a pure lift-and-extract
+ * of the <main> block that used to live inline in Shell(). JSX is
+ * byte-identical to before except the appended bottom-padding class, which
+ * resolves to 0px on desktop (index.css's @media (min-width:1024px) rule),
+ * so this component is referenced once from both the desktop
+ * (Sidebar+BottomPanel) and mobile (MobileBottomNav) render branches
+ * without duplicating MODULES/ErrorBoundary/Suspense wiring.
+ */
+function ModuleOutlet({ tab, activeLabel }: { tab: TabId; activeLabel: string }) {
+  const ActiveModule = MODULES[tab]
+  return (
+    <main className="px-6 py-5 max-w-[1400px] mx-auto pb-[calc(var(--bottom-nav-h)+env(safe-area-inset-bottom))]">
+      <ErrorBoundary key={tab} moduleName={activeLabel}>
+        <Suspense fallback={<TabLoading label={activeLabel} />}>
+          <ActiveModule />
+        </Suspense>
+      </ErrorBoundary>
+    </main>
+  )
+}
+
 function Clock() {
   const [now, setNow] = useState(new Date())
   useEffect(() => {
@@ -116,6 +141,8 @@ function Shell() {
   const { logout } = useAuth()
   const [tab, setTab] = useHashTab()
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const isDesktopNav = useIsDesktopNav()
 
   // Global ⌘K / Ctrl-K to open the jump-to-module palette.
   useEffect(() => {
@@ -129,7 +156,6 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const ActiveModule = MODULES[tab]
   const activeLabel = TABS.find((t) => t.id === tab)?.label ?? tab
 
   return (
@@ -162,17 +188,22 @@ function Shell() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        <Sidebar tab={tab} setTab={setTab} />
-        <BottomPanel>
-          <main className="px-6 py-5 max-w-[1400px] mx-auto">
-            <ErrorBoundary key={tab} moduleName={activeLabel}>
-              <Suspense fallback={<TabLoading label={activeLabel} />}>
-                <ActiveModule />
-              </Suspense>
-            </ErrorBoundary>
-          </main>
-        </BottomPanel>
+        {isDesktopNav && <Sidebar tab={tab} setTab={setTab} />}
+        {isDesktopNav ? (
+          <BottomPanel>
+            <ModuleOutlet tab={tab} activeLabel={activeLabel} />
+          </BottomPanel>
+        ) : (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <ModuleOutlet tab={tab} activeLabel={activeLabel} />
+          </div>
+        )}
       </div>
+
+      {!isDesktopNav && (
+        <MobileBottomNav tab={tab} setTab={setTab} onMoreClick={() => setMoreOpen(true)} />
+      )}
+      <MoreNavDrawer open={moreOpen} onOpenChange={setMoreOpen} tab={tab} setTab={setTab} />
 
       <CommandPalette open={paletteOpen} activeTab={tab} onSelect={setTab} onClose={() => setPaletteOpen(false)} />
     </div>

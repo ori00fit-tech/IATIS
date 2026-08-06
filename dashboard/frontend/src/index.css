@@ -24,6 +24,7 @@
   --shadow-lg: var(--shadow-lg-raw);
   --spacing-sidebar-expanded: var(--sidebar-w-expanded);
   --spacing-sidebar-collapsed: var(--sidebar-w-collapsed);
+  --spacing-bottom-nav: var(--bottom-nav-h);
 }
 
 body {
@@ -36,4 +37,12 @@ body {
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* Mobile-First Restructuring Phase 1 (2026-08-06) — the app's first
+ * @media query. Zeroes out the MobileBottomNav height reservation on
+ * desktop so <main>'s bottom-padding class (App.tsx's ModuleOutlet)
+ * resolves to 0px automatically, unconditionally, in both render paths. */
+@media (min-width: 1024px) {
+  :root { --bottom-nav-h: 0px; }
 }

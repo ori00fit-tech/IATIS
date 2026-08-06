@@ -25,7 +25,7 @@ import {
   type ValidationRow, type ConsensusClaim, type PooledBreakdownRow, type OpportunityCandidate,
   type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
   getDirectionSymmetryAudit, type DirectionSymmetryResponse, type SymmetryFinding,
-  type SignificanceDiagnostic,
+  type SignificanceDiagnostic, type RegimeRobustnessDiagnostic,
 } from './api'
 
 const POLL_MS = 4000
@@ -1248,6 +1248,8 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
               ? JSON.parse(r.criteria_breakdown_json) : {}
             let significance: SignificanceDiagnostic | null = null
             try { significance = r.significance_json ? JSON.parse(r.significance_json) : null } catch { /* malformed row */ }
+            let regimeRobustness: RegimeRobustnessDiagnostic | null = null
+            try { regimeRobustness = r.regime_robustness_json ? JSON.parse(r.regime_robustness_json) : null } catch { /* malformed row */ }
             return (
               <details key={r.symbol} className="border border-border rounded px-3 py-2">
                 <summary className="cursor-pointer text-[0.8em] flex items-center gap-2">
@@ -1280,6 +1282,27 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
                       {' '}→ ESS-adjusted p={significance.ess_adjusted_p_value != null ? significance.ess_adjusted_p_value.toFixed(4) : '—'}
                     </span>
                     <span>{significance.note}</span>
+                  </div>
+                )}
+                {regimeRobustness && regimeRobustness.regime_robustness_score != null && (
+                  <div className="mt-2 pt-2 border-t border-border text-[0.75em] text-muted flex flex-col gap-1">
+                    <span className="uppercase tracking-[1px] text-[0.85em]">Regime Robustness (diagnostic only)</span>
+                    <span className="font-mono">
+                      {regimeRobustness.regimes_profitable} of {regimeRobustness.regimes_material} regime(s) profitable
+                      {' '}(score {regimeRobustness.regime_robustness_score.toFixed(2)})
+                    </span>
+                    {regimeRobustness.dominant_regime && regimeRobustness.dominant_regime_share != null && (
+                      <span className="font-mono">
+                        dominant regime: {regimeRobustness.dominant_regime}
+                        {' '}({(regimeRobustness.dominant_regime_share * 100).toFixed(0)}% of trades)
+                      </span>
+                    )}
+                    <span>{regimeRobustness.note}</span>
+                  </div>
+                )}
+                {regimeRobustness && regimeRobustness.regime_robustness_score == null && regimeRobustness.regimes_traded > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border text-[0.75em] text-muted">
+                    Regime Robustness: {regimeRobustness.note}
                   </div>
                 )}
               </details>

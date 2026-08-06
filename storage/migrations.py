@@ -175,6 +175,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN significance_json TEXT",
         ],
     ),
+    (
+        10,
+        "validation_regime_robustness_column",
+        # Mission Center Research Rigor Phase 3 (2026-08-XX): does the
+        # candidate's edge hold across regimes it actually traded in, or
+        # is it concentrated entirely in one (the same curve-fitting risk
+        # MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD already guards for
+        # symbols)? Reuses BacktestMetrics.by_regime, already computed —
+        # no new trade-level access needed. Diagnostic only.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN regime_robustness_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

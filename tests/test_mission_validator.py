@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backtest import mission_runner, mission_validator
 from backtest.mission_validator import (
@@ -246,6 +247,25 @@ def test_run_validation_records_significance_diagnostic_per_symbol(tmp_path):
                 assert sig["ess_adjusted_p_value"] >= sig["nominal_p_value"]
 
 
+def test_run_validation_records_regime_robustness_diagnostic_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-regime-robustness")
+
+    vc = _small_vc(tmp_path, "v-regime-robustness", "val-regime-robustness")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-regime-robustness")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        assert r["regime_robustness_json"] is not None
+        rr = json.loads(r["regime_robustness_json"])
+        assert set(rr) == {
+            "regimes_traded", "regimes_material", "regimes_profitable",
+            "regime_robustness_score", "dominant_regime", "dominant_regime_share", "note",
+        }
+
+
 def test_compute_effective_sample_size_diagnostic_too_few_trades():
     from backtest.metrics import TradeRecord
     from backtest.mission_validator import _compute_effective_sample_size_diagnostic
@@ -274,6 +294,104 @@ def test_compute_effective_sample_size_diagnostic_never_reaches_a_criterion():
     assert '"significance": json_safe(significance_result)' in source
     breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
     assert "significance_result" not in breakdown_block
+
+
+# ── Regime robustness diagnostic ────────────────────────────────────────────
+# (Mission Center Research Rigor Phase 3, 2026-08-XX) — informational only,
+# never a VALIDATION_CRITERIA entry, never blocking.
+
+def test_regime_robustness_no_trades():
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    result = _compute_regime_robustness_diagnostic({})
+    assert result["regimes_traded"] == 0
+    assert result["regime_robustness_score"] is None
+    assert "No closed trades" in result["note"]
+
+
+def test_regime_robustness_only_unknown_regime_is_treated_as_no_trades():
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    by_regime = {"Unknown": {"trades": 40, "wins": 20, "profit_factor": 1.5}}
+    result = _compute_regime_robustness_diagnostic(by_regime)
+    assert result["regimes_traded"] == 0
+    assert result["regime_robustness_score"] is None
+
+
+def test_regime_robustness_no_regime_reaches_material_floor():
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    by_regime = {
+        "TRENDING": {"trades": 3, "wins": 2, "profit_factor": 2.0},
+        "RANGING": {"trades": 2, "wins": 1, "profit_factor": 0.5},
+    }
+    result = _compute_regime_robustness_diagnostic(by_regime, min_trades_per_regime=10)
+    assert result["regimes_traded"] == 2
+    assert result["regimes_material"] == 0
+    assert result["regime_robustness_score"] is None
+    assert result["dominant_regime"] == "TRENDING"
+    assert "too few trades" in result["note"]
+
+
+def test_regime_robustness_concentrated_in_one_regime():
+    by_regime = {
+        "TRENDING": {"trades": 95, "wins": 60, "profit_factor": 1.8},
+        "RANGING": {"trades": 5, "wins": 2, "profit_factor": 0.6},
+    }
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+    result = _compute_regime_robustness_diagnostic(by_regime, min_trades_per_regime=10)
+    assert result["regimes_material"] == 1  # only TRENDING clears the floor
+    assert result["regimes_profitable"] == 1
+    assert result["regime_robustness_score"] == pytest.approx(1.0)
+    assert result["dominant_regime"] == "TRENDING"
+    assert result["dominant_regime_share"] == pytest.approx(0.95)
+
+
+def test_regime_robustness_profitable_in_both_regimes():
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    by_regime = {
+        "TRENDING": {"trades": 60, "wins": 35, "profit_factor": 1.4},
+        "RANGING": {"trades": 40, "wins": 22, "profit_factor": 1.1},
+    }
+    result = _compute_regime_robustness_diagnostic(by_regime, min_trades_per_regime=10)
+    assert result["regimes_material"] == 2
+    assert result["regimes_profitable"] == 2
+    assert result["regime_robustness_score"] == pytest.approx(1.0)
+    assert result["dominant_regime_share"] < 0.7  # neither regime dominates
+
+
+def test_regime_robustness_profitable_in_only_one_of_two_material_regimes():
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    by_regime = {
+        "TRENDING": {"trades": 50, "wins": 35, "profit_factor": 1.6},
+        "RANGING": {"trades": 50, "wins": 15, "profit_factor": 0.4},
+    }
+    result = _compute_regime_robustness_diagnostic(by_regime, min_trades_per_regime=10)
+    assert result["regimes_material"] == 2
+    assert result["regimes_profitable"] == 1
+    assert result["regime_robustness_score"] == pytest.approx(0.5)
+
+
+def test_regime_robustness_infinite_profit_factor_counts_as_profitable():
+    # A regime with zero losing trades gets profit_factor=inf (metrics.py's
+    # own convention) — must be treated as profitable, not crash the >= 1.0
+    # comparison.
+    from backtest.mission_validator import _compute_regime_robustness_diagnostic
+
+    by_regime = {"TRENDING": {"trades": 20, "wins": 20, "profit_factor": float("inf")}}
+    result = _compute_regime_robustness_diagnostic(by_regime, min_trades_per_regime=10)
+    assert result["regimes_profitable"] == 1
+    assert result["regime_robustness_score"] == pytest.approx(1.0)
+
+
+def test_regime_robustness_never_reaches_a_criterion():
+    source = inspect.getsource(mission_validator._evaluate_symbol)
+    assert "regime_robustness_result = _compute_regime_robustness_diagnostic" in source
+    assert '"regime_robustness": json_safe(regime_robustness_result)' in source
+    breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
+    assert "regime_robustness_result" not in breakdown_block
 
 
 # ── Reproducibility fingerprint / candidate lock + date overlap ────────────
@@ -436,7 +554,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [
@@ -479,7 +597,7 @@ def _fake_eval_all(symbol, point, vc, *, passing_symbols):
     return {
         "symbol": symbol, "passed": passed,
         "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "started_at": "t", "finished_at": "t",
+        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "started_at": "t", "finished_at": "t",
     }
 
 

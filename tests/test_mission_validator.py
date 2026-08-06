@@ -487,6 +487,165 @@ def test_run_validation_records_stability_diagnostic_per_symbol(tmp_path):
         }
 
 
+# ── Cost stress diagnostic ──────────────────────────────────────────────────
+# (Mission Center Research Rigor Phase 5, 2026-08-XX) — informational only,
+# never a VALIDATION_CRITERIA entry, never blocking.
+
+def _cost_stress_point(risk_overrides: dict | None = None) -> dict:
+    return {
+        "timeframes": ["H1"], "engines": ["nnfx", "price_action"],
+        "indicators": [], "context_filters": [], "engine_variants": {},
+        "risk_overrides": dict(risk_overrides or {}),
+    }
+
+
+def _fake_eval_result(pf: float, trades: int):
+    from backtest.metrics import BacktestMetrics
+    from backtest.optimizer import EvalResult
+
+    return EvalResult(
+        metrics=BacktestMetrics(profit_factor=pf), objective_value=pf,
+        insufficient=trades < 1, trades=trades,
+    )
+
+
+def test_cost_stress_diagnostic_resolves_real_baseline_and_scales_each_level(monkeypatch):
+    from backtest.mission_validator import COST_STRESS_MULTIPLIERS, _compute_cost_stress_diagnostic
+
+    calls: list[dict] = []
+
+    def _fake_evaluate_point(symbol, df, point, min_trades, objective_metric):
+        calls.append(point)
+        return _fake_eval_result(pf=1.5, trades=100)
+
+    monkeypatch.setattr(mission_validator, "evaluate_point", _fake_evaluate_point)
+
+    result = _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point())
+
+    assert len(calls) == len(COST_STRESS_MULTIPLIERS) == 3
+    assert result["baseline_commission_pips"] > 0  # a real, measured per-symbol default, not fabricated
+    for multiplier, call, level in zip(COST_STRESS_MULTIPLIERS, calls, result["levels"]):
+        ro = call["risk_overrides"]
+        assert ro["commission_pips"] == pytest.approx(result["baseline_commission_pips"] * multiplier)
+        assert ro["slippage_pips"] == pytest.approx(result["baseline_slippage_pips"] * multiplier)
+        assert level["multiplier"] == multiplier
+        assert level["commission_pips"] == pytest.approx(ro["commission_pips"], abs=1e-3)
+        assert level["trades"] == 100
+        assert level["profit_factor"] == 1.5
+        assert level["edge_survives"] is True
+    assert result["survives_all_stress_levels"] is True
+    assert "1.5x" in result["note"] and "VALIDATION_CRITERIA" in result["note"]
+
+
+def test_cost_stress_diagnostic_preserves_existing_risk_overrides(monkeypatch):
+    from backtest.mission_validator import _compute_cost_stress_diagnostic
+
+    calls: list[dict] = []
+
+    def _fake_evaluate_point(symbol, df, point, min_trades, objective_metric):
+        calls.append(point)
+        return _fake_eval_result(pf=1.2, trades=50)
+
+    monkeypatch.setattr(mission_validator, "evaluate_point", _fake_evaluate_point)
+    _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point({"sl_atr_multiplier": 2.0}))
+
+    for call in calls:
+        assert call["risk_overrides"]["sl_atr_multiplier"] == 2.0
+        assert call["timeframes"] == ["H1"]
+        assert call["engines"] == ["nnfx", "price_action"]
+
+
+def test_cost_stress_diagnostic_edge_fails_when_pf_below_one(monkeypatch):
+    from backtest.mission_validator import _compute_cost_stress_diagnostic
+
+    monkeypatch.setattr(
+        mission_validator, "evaluate_point",
+        lambda symbol, df, point, min_trades, objective_metric: _fake_eval_result(pf=0.8, trades=40),
+    )
+    result = _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point())
+
+    assert all(lv["edge_survives"] is False for lv in result["levels"])
+    assert result["survives_all_stress_levels"] is False
+
+
+def test_cost_stress_diagnostic_edge_survives_none_when_no_trades(monkeypatch):
+    from backtest.mission_validator import _compute_cost_stress_diagnostic
+
+    monkeypatch.setattr(
+        mission_validator, "evaluate_point",
+        lambda symbol, df, point, min_trades, objective_metric: _fake_eval_result(pf=0.0, trades=0),
+    )
+    result = _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point())
+
+    assert all(lv["edge_survives"] is None for lv in result["levels"])
+    assert result["survives_all_stress_levels"] is None  # no measurable levels -> None, never fabricated
+
+
+def test_cost_stress_diagnostic_mixed_measurability_survives_all_ignores_unmeasurable(monkeypatch):
+    from backtest.mission_validator import _compute_cost_stress_diagnostic
+
+    responses = [_fake_eval_result(pf=1.4, trades=30), _fake_eval_result(pf=0.0, trades=0), _fake_eval_result(pf=1.1, trades=20)]
+    calls = iter(responses)
+    monkeypatch.setattr(
+        mission_validator, "evaluate_point",
+        lambda symbol, df, point, min_trades, objective_metric: next(calls),
+    )
+    result = _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point())
+
+    assert [lv["edge_survives"] for lv in result["levels"]] == [True, None, True]
+    assert result["survives_all_stress_levels"] is True
+
+
+def test_cost_stress_diagnostic_infinite_profit_factor_is_json_safe(monkeypatch):
+    from backtest.metrics import json_safe
+    from backtest.mission_validator import _compute_cost_stress_diagnostic
+
+    monkeypatch.setattr(
+        mission_validator, "evaluate_point",
+        lambda symbol, df, point, min_trades, objective_metric: _fake_eval_result(pf=float("inf"), trades=10),
+    )
+    result = _compute_cost_stress_diagnostic("EURUSD", None, _cost_stress_point())
+    assert all(lv["profit_factor"] == float("inf") for lv in result["levels"])
+
+    safe = json_safe(result)
+    dumped = json.dumps(safe)  # must not raise — bare inf is invalid JSON
+    reloaded = json.loads(dumped)
+    assert reloaded["levels"][0]["profit_factor"] == "Infinity"
+
+
+def test_cost_stress_never_reaches_a_criterion():
+    source = inspect.getsource(mission_validator._evaluate_symbol)
+    assert "cost_stress_result = _compute_cost_stress_diagnostic" in source
+    assert '"cost_stress": json_safe(cost_stress_result)' in source
+    breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
+    assert "cost_stress_result" not in breakdown_block
+
+
+def test_run_validation_records_cost_stress_diagnostic_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-cost-stress")
+
+    vc = _small_vc(tmp_path, "v-cost-stress", "val-cost-stress")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-cost-stress")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        assert r["cost_stress_json"] is not None
+        cs = json.loads(r["cost_stress_json"])
+        assert set(cs) == {
+            "baseline_commission_pips", "baseline_slippage_pips",
+            "levels", "survives_all_stress_levels", "note",
+        }
+        assert len(cs["levels"]) == 3
+        for level in cs["levels"]:
+            assert set(level) == {
+                "multiplier", "commission_pips", "slippage_pips",
+                "trades", "profit_factor", "edge_survives",
+            }
+
+
 # ── Reproducibility fingerprint / candidate lock + date overlap ────────────
 # (Diagnostic Infrastructure Phase 1, 2026-08-02) — both informational
 # only, never a VALIDATION_CRITERIA entry, never blocking.
@@ -647,7 +806,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [
@@ -690,7 +849,7 @@ def _fake_eval_all(symbol, point, vc, *, passing_symbols):
     return {
         "symbol": symbol, "passed": passed,
         "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "started_at": "t", "finished_at": "t",
+        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "started_at": "t", "finished_at": "t",
     }
 
 

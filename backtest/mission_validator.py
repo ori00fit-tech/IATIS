@@ -379,6 +379,75 @@ def _compute_stability_score_diagnostic(rb_sweeps: list) -> dict:
     }
 
 
+# Mission Center Research Rigor Phase 5 (2026-08-XX) — "spread widens 50%/
+# doubles/triples", the same order-of-magnitude stress framing this
+# codebase already uses for risk assessment (backtest.monte_carlo's fixed
+# risk-of-ruin threshold). Not an opinion-based composite — three
+# deterministic multipliers applied to the candidate's own REAL, measured
+# baseline cost values (BacktestConfig.from_profile's REAL_SPREAD_PIPS-
+# derived defaults, not a guess).
+COST_STRESS_MULTIPLIERS: tuple[float, ...] = (1.5, 2.0, 3.0)
+
+
+def _compute_cost_stress_diagnostic(symbol: str, df, point: dict) -> dict:
+    """Mission Center Research Rigor Phase 5 (2026-08-XX) — does the
+    candidate's edge survive a broker's real-world execution costs
+    (spread/commission, slippage, overnight swap) getting materially
+    worse than what was measured, rather than only being validated at
+    the exact cost level it happened to backtest well on? Re-runs
+    backtest.optimizer.evaluate_point() — the exact same primitive every
+    other evaluation in this pipeline uses, never a separate, parallel
+    backtest implementation — with the candidate's own resolved baseline
+    commission_pips/slippage_pips/swap_pips_per_night (via
+    BacktestConfig.from_profile(), the same real per-symbol defaults the
+    baseline evaluation itself used) scaled by COST_STRESS_MULTIPLIERS.
+
+    Diagnostic only, never a VALIDATION_CRITERIA entry.
+    """
+    from backtesting.backtest_engine import BacktestConfig
+
+    baseline_cfg = BacktestConfig.from_profile(symbol, **point["risk_overrides"])
+    baseline_commission = baseline_cfg.commission_pips
+    baseline_slippage = baseline_cfg.slippage_pips
+    baseline_swap = baseline_cfg.swap_pips_per_night
+
+    levels = []
+    for multiplier in COST_STRESS_MULTIPLIERS:
+        stressed_overrides = {
+            **point["risk_overrides"],
+            "commission_pips": baseline_commission * multiplier,
+            "slippage_pips": baseline_slippage * multiplier,
+            "swap_pips_per_night": baseline_swap * multiplier,
+        }
+        stressed_point = {**point, "risk_overrides": stressed_overrides}
+        result = evaluate_point(symbol, df, stressed_point, min_trades=1, objective_metric="profit_factor")
+        pf = result.metrics.profit_factor
+        levels.append({
+            "multiplier": multiplier,
+            "commission_pips": round(stressed_overrides["commission_pips"], 3),
+            "slippage_pips": round(stressed_overrides["slippage_pips"], 3),
+            "trades": result.trades,
+            "profit_factor": pf,
+            "edge_survives": bool(pf >= 1.0) if result.trades > 0 else None,
+        })
+
+    measurable = [lv for lv in levels if lv["edge_survives"] is not None]
+    survives_all = all(lv["edge_survives"] for lv in measurable) if measurable else None
+    return {
+        "baseline_commission_pips": round(baseline_commission, 3),
+        "baseline_slippage_pips": round(baseline_slippage, 3),
+        "levels": levels,
+        "survives_all_stress_levels": survives_all,
+        "note": (
+            "Re-evaluates the candidate with execution costs (commission, "
+            "slippage, swap) multiplied "
+            + ", ".join(f"{m}x" for m in COST_STRESS_MULTIPLIERS)
+            + " to simulate a broker's costs getting worse than measured. "
+            "Diagnostic only — never a VALIDATION_CRITERIA entry."
+        ),
+    }
+
+
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     """Returns the full per-symbol result dict recorded into
     research_mission_validation_results — always populated, pass or
@@ -402,6 +471,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     feature_mining_result = compute_feature_mining(eval_result.trade_records or [])
     significance_result = _compute_effective_sample_size_diagnostic(eval_result.trade_records or [])
     regime_robustness_result = _compute_regime_robustness_diagnostic(metrics.by_regime)
+    cost_stress_result = _compute_cost_stress_diagnostic(symbol, df, point)
 
     wf_result = run_walk_forward(symbol, df, WalkForwardConfig(
         n_windows=vc.wf_windows,
@@ -461,6 +531,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "significance": json_safe(significance_result),
         "regime_robustness": json_safe(regime_robustness_result),
         "stability": json_safe(stability_score_result),
+        "cost_stress": json_safe(cost_stress_result),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -518,7 +589,8 @@ def run_validation(vc: ValidationConfig) -> None:
                 walk_forward=result["walk_forward"], robustness=result["robustness"],
                 criteria_breakdown=result["criteria_breakdown"],
                 feature_mining=result["feature_mining"], significance=result["significance"],
-                regime_robustness=result["regime_robustness"], stability=result["stability"], error=None,
+                regime_robustness=result["regime_robustness"], stability=result["stability"],
+                cost_stress=result["cost_stress"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -528,7 +600,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
                 criteria_breakdown={}, feature_mining=None, significance=None, regime_robustness=None,
-                stability=None, error=str(exc), started_at=now, finished_at=now,
+                stability=None, cost_stress=None, error=str(exc), started_at=now, finished_at=now,
             )
 
     total = len(vc.validation_symbols)

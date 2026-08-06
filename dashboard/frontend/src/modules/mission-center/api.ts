@@ -283,9 +283,31 @@ export interface ValidationResultRow {
   significance_json: string | null
   regime_robustness_json: string | null
   stability_json: string | null
+  cost_stress_json: string | null
   error: string | null
   started_at: string
   finished_at: string
+}
+
+// Mission Center Research Rigor Phase 5 — does the candidate's edge
+// survive execution costs (commission/slippage/swap) scaled 1.5x/2x/3x
+// above the candidate's own real, measured baseline values? Diagnostic
+// only, never a criterion — see backtest/mission_validator.py's
+// _compute_cost_stress_diagnostic() docstring for the full reasoning.
+export interface CostStressLevel {
+  multiplier: number
+  commission_pips: number
+  slippage_pips: number
+  trades: number
+  profit_factor: PossiblyInfinite
+  edge_survives: boolean | null
+}
+export interface CostStressDiagnostic {
+  baseline_commission_pips: number
+  baseline_slippage_pips: number
+  levels: CostStressLevel[]
+  survives_all_stress_levels: boolean | null
+  note: string
 }
 
 // Mission Center Research Rigor Phase 3 — does this validation symbol's

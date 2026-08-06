@@ -26,6 +26,7 @@ import {
   type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
   getDirectionSymmetryAudit, type DirectionSymmetryResponse, type SymmetryFinding,
   type SignificanceDiagnostic, type RegimeRobustnessDiagnostic, type StabilityDiagnostic,
+  type CostStressDiagnostic,
 } from './api'
 
 const POLL_MS = 4000
@@ -1252,6 +1253,8 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
             try { regimeRobustness = r.regime_robustness_json ? JSON.parse(r.regime_robustness_json) : null } catch { /* malformed row */ }
             let stability: StabilityDiagnostic | null = null
             try { stability = r.stability_json ? JSON.parse(r.stability_json) : null } catch { /* malformed row */ }
+            let costStress: CostStressDiagnostic | null = null
+            try { costStress = r.cost_stress_json ? JSON.parse(r.cost_stress_json) : null } catch { /* malformed row */ }
             return (
               <details key={r.symbol} className="border border-border rounded px-3 py-2">
                 <summary className="cursor-pointer text-[0.8em] flex items-center gap-2">
@@ -1321,6 +1324,29 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
                 {stability && stability.stability_score == null && stability.params_swept > 0 && (
                   <div className="mt-2 pt-2 border-t border-border text-[0.75em] text-muted">
                     Stability Score: {stability.note}
+                  </div>
+                )}
+                {costStress && costStress.levels.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border text-[0.75em] text-muted flex flex-col gap-1">
+                    <span className="uppercase tracking-[1px] text-[0.85em]">Cost Stress Test (diagnostic only)</span>
+                    <span className="font-mono">
+                      baseline commission {costStress.baseline_commission_pips} pips / slippage {costStress.baseline_slippage_pips} pips
+                    </span>
+                    <div className="flex flex-col gap-0.5">
+                      {costStress.levels.map((lv) => (
+                        <span key={lv.multiplier} className="font-mono">
+                          {lv.multiplier}x costs ({lv.commission_pips}/{lv.slippage_pips} pips) — {lv.trades} trade(s),
+                          {' '}PF {formatPossiblyInfinite(lv.profit_factor, 2)}
+                          {' '}— {lv.edge_survives == null ? 'not measurable' : lv.edge_survives ? 'edge survives' : 'edge fails'}
+                        </span>
+                      ))}
+                    </div>
+                    {costStress.survives_all_stress_levels != null && (
+                      <span className="font-mono">
+                        {costStress.survives_all_stress_levels ? 'Survives all stress levels' : 'Does NOT survive all stress levels'}
+                      </span>
+                    )}
+                    <span>{costStress.note}</span>
                   </div>
                 )}
               </details>

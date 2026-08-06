@@ -200,6 +200,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN stability_json TEXT",
         ],
     ),
+    (
+        12,
+        "validation_cost_stress_column",
+        # Mission Center Research Rigor Phase 5 (2026-08-XX): does the
+        # candidate's edge survive commission/slippage/swap costs scaled
+        # 1.5x/2x/3x above the candidate's own real, measured baseline
+        # values? Re-runs backtest.optimizer.evaluate_point() at each
+        # stress level — the same primitive every other evaluation in
+        # this pipeline uses. Diagnostic only.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN cost_stress_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

@@ -224,6 +224,24 @@ def test_missions_create_rejects_engine_with_no_variants(client):
     assert r.status_code == 400
 
 
+def test_missions_create_rejects_unknown_confluence_overrides_key(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "confluence_overrides": {"not_a_real_key": 1}},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
+def test_missions_create_rejects_out_of_bounds_min_engines_agreeing(client):
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "confluence_overrides": {"min_engines_agreeing": 0}},
+        headers=HDR,
+    )
+    assert r.status_code == 400
+
+
 def test_missions_create_rejects_risk_param_out_of_bounds(client):
     r = client.post(
         "/research/missions",
@@ -299,6 +317,34 @@ def test_missions_create_builds_expected_argv_with_context_filters(client, monke
     import json as _json
 
     assert _json.loads(argv[idx + 1]) == body["context_filter_set_choices"]
+
+
+def test_missions_create_builds_expected_argv_with_confluence_overrides(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    body = {**_VALID_BODY, "confluence_overrides": {"min_engines_agreeing": 1}}
+    r = client.post("/research/missions", json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    argv = _FakeProc.captured_argv
+    assert "--confluence-overrides-json" in argv
+    idx = argv.index("--confluence-overrides-json")
+    import json as _json
+
+    assert _json.loads(argv[idx + 1]) == {"min_engines_agreeing": 1}
+
+
+def test_missions_create_builds_expected_argv_omits_confluence_overrides_when_absent(client, monkeypatch):
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post("/research/missions", json=_VALID_BODY, headers=HDR)
+    assert r.status_code == 200, r.text
+    mission_id = r.json()["mission_id"]
+
+    _wait_for_terminal(client, mission_id)
+    assert "--confluence-overrides-json" not in _FakeProc.captured_argv
 
 
 def test_missions_create_builds_expected_argv_with_engine_variants(client, monkeypatch):

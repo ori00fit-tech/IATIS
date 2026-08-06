@@ -145,6 +145,23 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validations ADD COLUMN validation_mode TEXT DEFAULT 'CROSS_SYMBOL'",
         ],
     ),
+    (
+        8,
+        "mission_trial_attempts",
+        # Mission Center Research Rigor Phase 1 (2026-08-06): an append-only
+        # "attempt started" marker, written right before a trial's backtest
+        # evaluation runs (mission_runner.py), so a resumed mission can
+        # report how many trials were lost to a mid-flight process crash
+        # (never recorded to research_mission_trials_v2 because the process
+        # died before that INSERT). Purely informational — never blocks a
+        # trial or a resume, never a criterion.
+        [
+            """CREATE TABLE IF NOT EXISTS research_mission_trial_attempts (
+                mission_id TEXT NOT NULL, symbol TEXT NOT NULL, trial_number INTEGER NOT NULL,
+                started_at TEXT NOT NULL, PRIMARY KEY (mission_id, symbol, trial_number)
+            )""",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

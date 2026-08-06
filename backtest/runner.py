@@ -88,6 +88,14 @@ class RunnerConfig:
             phase's behavior. Indicators can only filter/confirm/weight
             a decision the engine vote already produced — see
             confluence/indicator_filters.py's module docstring.
+        confluence_overrides: Mission Center Research Rigor Phase 1
+            (2026-08-06) — ad-hoc {"min_engines_agreeing",
+            "min_informative_weight_share"} override. None = production
+            config.yaml confluence block, unchanged. Exists so a
+            single-engine run (e.g. testing "SMC alone") can lower the
+            quorum below the production default of 2, which would
+            otherwise make agree_count>=2 mathematically unreachable and
+            every trial would PRUNE with zero trades.
     """
 
     symbols: tuple[str, ...]
@@ -101,6 +109,7 @@ class RunnerConfig:
     timeframes: tuple[str, ...] | None = None
     engines: tuple[str, ...] | None = None
     indicators: tuple[dict, ...] | None = None
+    confluence_overrides: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -379,6 +388,7 @@ def run_symbol(
             {e: (e in runner_config.engines) for e in ENGINE_KEYS} if runner_config.engines else None
         ),
         indicators=list(runner_config.indicators) if runner_config.indicators else None,
+        confluence_overrides=runner_config.confluence_overrides,
     )
     result = run_backtest(df, engine_cfg, engine_config=engine_config)
 
@@ -531,6 +541,11 @@ def main() -> None:
     # confluence.indicator_filters.IndicatorSpec-shaped dicts) — structured
     # data doesn't fit the nargs="+" pattern the flags above use.
     parser.add_argument("--indicators-json", type=str, default=None)
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — ad-hoc per-run
+    # confluence.min_engines_agreeing/min_informative_weight_share
+    # override, structured (2-key dict), same JSON-transport idiom as
+    # --indicators-json above.
+    parser.add_argument("--confluence-overrides-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -545,6 +560,14 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
 
+    confluence_overrides = None
+    if args.confluence_overrides_json:
+        import json
+        try:
+            confluence_overrides = json.loads(args.confluence_overrides_json)
+        except ValueError as exc:
+            parser.error(f"--confluence-overrides-json: invalid JSON: {exc}")
+
     config = RunnerConfig(
         symbols=tuple(args.symbols),
         data_dir=args.data_dir,
@@ -557,6 +580,7 @@ def main() -> None:
         timeframes=tuple(args.timeframes) if args.timeframes else None,
         engines=tuple(args.engines) if args.engines else None,
         indicators=indicators,
+        confluence_overrides=confluence_overrides,
     )
     results = run_all(config)
     if not results:

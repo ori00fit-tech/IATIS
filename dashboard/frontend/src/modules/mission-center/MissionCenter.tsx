@@ -476,6 +476,11 @@ function MissionBuilder({
   const [contextFilters, setContextFilters] = useState<ContextFilterRowState[]>([])
   const [indicatorFilters, setIndicatorFilters] = useState<IndicatorFilterState[]>([])
   const [engineVariants, setEngineVariants] = useState<Record<string, string>>({})
+  // Mission Center Research Rigor Phase 1 (2026-08-06) — mission-wide,
+  // applies regardless of flat/hypothesis mode. '' means "no override"
+  // (production quorum, currently 2 in config.yaml, applies unchanged).
+  const [quorumOverride, setQuorumOverride] = useState<number | ''>('')
+  const [infoShareOverride, setInfoShareOverride] = useState<number | ''>('')
   const [hypothesisMode, setHypothesisMode] = useState(false)
   const [bundles, setBundles] = useState<HypothesisBundleRowState[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -592,6 +597,13 @@ function MissionBuilder({
               engine_variants: b.engineVariants,
             }))
           : undefined,
+        confluence_overrides:
+          quorumOverride === '' && infoShareOverride === ''
+            ? undefined
+            : {
+                ...(quorumOverride === '' ? {} : { min_engines_agreeing: quorumOverride }),
+                ...(infoShareOverride === '' ? {} : { min_informative_weight_share: infoShareOverride }),
+              },
         risk_param_ranges: riskRanges,
         risk_param_grid: {},
         max_wall_clock_seconds: maxWallClock === '' ? undefined : maxWallClock,
@@ -654,6 +666,32 @@ function MissionBuilder({
             enable "Search across named hypotheses" below and define 2+ bundles.
           </div>
         )}
+
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.7em] text-muted uppercase">Confluence quorum override (optional)</span>
+            <input
+              type="number" min={1} max={9} placeholder="production default (2)"
+              value={quorumOverride}
+              onChange={(e) => setQuorumOverride(e.target.value === '' ? '' : Number(e.target.value))}
+              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.7em] text-muted uppercase">Min informative weight share (optional)</span>
+            <input
+              type="number" min={0} max={1} step={0.05} placeholder="production default (0.6)"
+              value={infoShareOverride}
+              onChange={(e) => setInfoShareOverride(e.target.value === '' ? '' : Number(e.target.value))}
+              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
+            />
+          </div>
+        </div>
+        <span className="text-[0.72em] text-muted -mt-2">
+          Lowering quorum below the enabled-engine count is required to test a single engine in isolation —
+          production quorum (2) can never pass with fewer than 2 enabled engines. Applies mission-wide, to
+          every trial regardless of which hypothesis/engine set it draws.
+        </span>
 
         <label className="flex items-center gap-2 text-[0.78em] text-text cursor-pointer">
           <input type="checkbox" checked={hypothesisMode} onChange={(e) => setHypothesisMode(e.target.checked)} />
@@ -1868,6 +1906,12 @@ function MissionDetail({
                     : ''
                 }`}
               </Badge>
+            </div>
+          )}
+          {status.abandoned_trials > 0 && (
+            <div className="text-[0.75em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+              {status.abandoned_trials} trial(s) lost to a process interruption mid-run — compute wasted, not
+              corrupted. The mission still reaches its target trial count via a fresh draw on resume.
             </div>
           )}
           <div className="flex flex-col gap-1">

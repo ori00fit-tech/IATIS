@@ -49,6 +49,12 @@ export interface MissionRequest {
   // engines.yaml's live default.
   engine_variant_choices: Record<string, string>[]
   hypothesis_bundle_choices?: HypothesisBundleSpec[]
+  // Mission Center Research Rigor Phase 1 (2026-08-06) — mission-wide,
+  // applies to every trial regardless of bundle/choice. Unblocks a
+  // single-engine research hypothesis (e.g. "does SMC alone have edge?"),
+  // which otherwise PRUNEs every trial — production min_engines_agreeing
+  // (2) is mathematically unreachable with only one engine enabled.
+  confluence_overrides?: { min_engines_agreeing?: number; min_informative_weight_share?: number }
   risk_param_ranges: Record<string, [number, number]>
   risk_param_grid: Record<string, number[]>
   oos_holdout_fraction?: number
@@ -122,13 +128,22 @@ export interface MissionStatusResponse {
   // how many trial rows exist. null when the mission record isn't
   // loaded yet (same guard as search_space_kind).
   effective_config_summary: EffectiveConfigSummary | null
+  // Mission Center Research Rigor Phase 1 (2026-08-06) — trials that
+  // started evaluating but never got recorded (a mid-flight process
+  // crash lost their compute). Purely informational — the mission still
+  // reaches its target trial count via a fresh draw on resume.
+  abandoned_trials: number
 }
 
 export interface MissionTrial {
   mission_id: string
   trial_number: number
   symbol: string
-  state: 'COMPLETE' | 'PRUNED' | 'FAIL'
+  // 'DUPLICATE' (Mission Center Research Rigor Phase 1, 2026-08-06) — a
+  // repeat of an already-evaluated resolved configuration, skipped
+  // without re-running the backtest; objective_value/trades are copied
+  // from the original matching trial.
+  state: 'COMPLETE' | 'PRUNED' | 'FAIL' | 'DUPLICATE'
   objective_value: number | null
   params_json: string
   metrics_json: string | null

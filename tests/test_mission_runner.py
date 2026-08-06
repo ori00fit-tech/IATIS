@@ -234,6 +234,123 @@ def test_end_to_end_mission_run_with_engine_variant_choices(tmp_path):
     assert mission["status"] == "finished"
 
 
+def test_confluence_overrides_end_to_end_unblocks_a_single_engine_mission(tmp_path):
+    """Mission Center Research Rigor Phase 1 — the operator-reported bug:
+    a real mission with only ONE engine enabled produces real, non-PRUNED
+    trades when confluence_overrides lowers the quorum, wired all the way
+    through MissionConfig -> MissionSearchSpace -> resolve_point ->
+    evaluate_point -> build_engine_config_override."""
+    _write_dataset(tmp_path)
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),),
+        engine_set_choices=(("nnfx",),),
+        indicator_set_choices=((),),
+        confluence_overrides={"min_engines_agreeing": 1},
+    )
+    mc = MissionConfig(
+        mission_id="mission-confluence-override-e2e", name="test-mission", symbols=("EURUSD",),
+        data_dir=tmp_path, start=None, end=None, sampler="random",
+        n_trials_per_symbol=1, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-confluence-override-e2e", "EURUSD")
+    assert len(trials) == 1
+    assert trials[0]["state"] == "COMPLETE"
+    assert trials[0]["trades"] > 0
+
+
+def test_duplicate_configuration_detection_skips_reevaluation(tmp_path, monkeypatch):
+    """Every trial in this space resolves to the IDENTICAL effective
+    configuration (a single timeframe/engine choice, and 3 indicator_set_
+    choices that are all the same empty tuple, so which index gets
+    sampled makes no difference) — the 2nd and 3rd trials must be
+    detected as duplicates and never call evaluate_point() again."""
+    _write_dataset(tmp_path)
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),),
+        engine_set_choices=(("nnfx", "price_action", "smc", "wyckoff"),),
+        indicator_set_choices=((), (), ()),
+    )
+    mc = MissionConfig(
+        mission_id="mission-duplicate-check", name="test-mission", symbols=("EURUSD",),
+        data_dir=tmp_path, start=None, end=None, sampler="random",
+        n_trials_per_symbol=3, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+
+    real_evaluate_point = mission_runner.evaluate_point
+    call_count = {"n": 0}
+
+    def _counting_evaluate_point(*args, **kwargs):
+        call_count["n"] += 1
+        return real_evaluate_point(*args, **kwargs)
+
+    monkeypatch.setattr(mission_runner, "evaluate_point", _counting_evaluate_point)
+    run_mission(mc)
+
+    assert call_count["n"] == 1  # the 2nd and 3rd trials' configs were duplicates — never re-evaluated
+
+    trials = research_missions.existing_trials("mission-duplicate-check", "EURUSD")
+    assert len(trials) == 3
+    states = [t["state"] for t in trials]
+    assert states.count("DUPLICATE") == 2
+    original = next(t for t in trials if t["state"] != "DUPLICATE")
+    for dup in (t for t in trials if t["state"] == "DUPLICATE"):
+        assert dup["objective_value"] == original["objective_value"]
+        assert dup["trades"] == original["trades"]
+
+
+def test_duplicate_replay_on_resume_never_keyerrors(tmp_path):
+    """A DUPLICATE row has no Optuna TrialState of its own — replaying it
+    on resume must map to the underlying COMPLETE/PRUNED outcome its
+    cached value implies, not KeyError on optuna.trial.TrialState['DUPLICATE']."""
+    _write_dataset(tmp_path)
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),),
+        engine_set_choices=(("nnfx", "price_action", "smc", "wyckoff"),),
+        indicator_set_choices=((), (), ()),
+    )
+    mc = MissionConfig(
+        mission_id="mission-duplicate-resume", name="test-mission", symbols=("EURUSD",),
+        data_dir=tmp_path, start=None, end=None, sampler="random",
+        n_trials_per_symbol=3, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+    assert any(t["state"] == "DUPLICATE" for t in research_missions.existing_trials("mission-duplicate-resume", "EURUSD"))
+
+    # Resume with a higher target — must not raise, must reach the new target.
+    mc_resumed = MissionConfig(**{**mc.__dict__, "n_trials_per_symbol": 4})
+    run_mission(mc_resumed)  # would raise KeyError inside create_trial() before the fix
+    assert len(research_missions.existing_trials("mission-duplicate-resume", "EURUSD")) == 4
+
+
+def test_abandoned_trial_attempt_is_recorded_and_counted(tmp_path, monkeypatch):
+    """A trial that starts evaluating but crashes before record_trial()
+    leaves an orphaned attempt marker — count_orphaned_attempts() must
+    see it, mirroring test_transient_record_trial_write_failure_does_not_
+    abort_the_mission's own crash-simulation shape."""
+    _write_dataset(tmp_path)
+    mission_id = "mission-abandoned-attempt-check"
+    mc = _small_config(tmp_path, mission_id, n_trials=1)
+
+    real_record_trial = research_missions.record_trial
+    monkeypatch.setattr(
+        research_missions, "record_trial",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated crash before D1 write")),
+    )
+    run_mission(mc)  # non-fatal — the mission must still finish
+    monkeypatch.setattr(research_missions, "record_trial", real_record_trial)
+
+    assert research_missions.count_orphaned_attempts(mission_id, "EURUSD") == 1
+    assert research_missions.existing_trials(mission_id, "EURUSD") == []
+
+
 # ── Graceful stop / isolation ─────────────────────────────────────────────
 
 def test_max_wall_clock_seconds_stops_gracefully_and_marks_finished(tmp_path):

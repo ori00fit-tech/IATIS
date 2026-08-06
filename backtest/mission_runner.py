@@ -50,6 +50,7 @@ from pathlib import Path
 
 import optuna
 
+from backtest import meta_analysis
 from backtest.metrics import json_safe
 from backtest.multiple_testing import mission_significance_summary
 from backtest.optimizer import (
@@ -116,6 +117,7 @@ def _search_space_dict(space: MissionSearchSpace) -> dict:
         "hypothesis_bundle_choices": (
             [dict(b) for b in space.hypothesis_bundle_choices] if space.hypothesis_bundle_choices else None
         ),
+        "confluence_overrides": dict(space.confluence_overrides) if space.confluence_overrides else None,
         "risk_param_ranges": space.risk_param_ranges,
         "risk_param_grid": space.risk_param_grid,
     }
@@ -250,6 +252,17 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
 
     dists = distributions_for(mc.search_space, grid_mode)
     existing = research_missions.existing_trials(mc.mission_id, symbol)
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — live duplicate-
+    # configuration detection, seeded from replayed trials on resume and
+    # updated as new trials complete below. Reuses meta_analysis.py's own
+    # _effective_config_fingerprint() (previously only computed
+    # retrospectively, after a mission finished) so a repeat of an
+    # already-evaluated resolved configuration never re-runs a full
+    # backtest — IATIS's evaluation is deterministic given identical
+    # inputs, so this is provably lossless, not an approximation. Only
+    # COMPLETE/PRUNED rows seed it — a FAILED trial's config is simply
+    # re-attempted if it recurs (no cached "known-failing" concept).
+    seen: dict[str, tuple[float | None, int]] = {}
     for row in existing:
         row_params = json.loads(row["params_json"])
         # Context Filters (2026-07-30) — a trial recorded before this
@@ -266,14 +279,29 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         # __engine_variants_idx key; index 0 is always the all-v1 entry
         # MissionSearchSpace.engine_variant_choices defaults to.
         row_params.setdefault(_ENGINE_VARIANTS_IDX_KEY, 0)
+        # A "DUPLICATE" row was never itself told to Optuna as a real
+        # trial (see the live check below) — Optuna has no such
+        # TrialState. Replay it as the underlying outcome its cached
+        # value implies (COMPLETE when it has one, PRUNED when it
+        # doesn't) so the TrialState enum lookup below never KeyErrors.
+        replay_state = row["state"]
+        if replay_state == "DUPLICATE":
+            replay_state = "COMPLETE" if row["objective_value"] is not None else "PRUNED"
         study.add_trial(
             optuna.trial.create_trial(
-                state=optuna.trial.TrialState[row["state"]],
+                state=optuna.trial.TrialState[replay_state],
                 value=row["objective_value"],
                 params=row_params,
                 distributions=dists,
             )
         )
+        if row["state"] in ("COMPLETE", "PRUNED"):
+            try:
+                resolved = resolve_point(mc.search_space, row_params)
+                fp = meta_analysis._effective_config_fingerprint(symbol, resolved)
+                seen.setdefault(fp, (row["objective_value"], row.get("trades") or 0))
+            except (TypeError, ValueError, KeyError):
+                pass  # malformed/stale stored row — same-as-live tolerance, never fatal
 
     remaining = n_target - len(existing)
     for _ in range(max(0, remaining)):
@@ -288,6 +316,41 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         raw_params = suggest_point(trial, mc.search_space, grid_mode)
         point = resolve_point(mc.search_space, raw_params)
         started_at = _now_iso()
+
+        fp = meta_analysis._effective_config_fingerprint(symbol, point)
+        if fp in seen:
+            # Skip the backtest entirely — a repeat of an already-
+            # evaluated resolved configuration is provably identical
+            # (deterministic evaluation given identical inputs), so
+            # re-running it would only waste compute for zero new
+            # information.
+            cached_value, cached_trades = seen[fp]
+            if cached_value is None:
+                _tell_safely(study, trial, state=optuna.trial.TrialState.PRUNED)
+            else:
+                _tell_safely(study, trial, values=cached_value)
+            try:
+                research_missions.record_trial(
+                    mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
+                    state="DUPLICATE", objective_value=cached_value, params=raw_params,
+                    metrics=None, trades=cached_trades,
+                    error="duplicate configuration (same as an earlier trial)",
+                    started_at=started_at, finished_at=_now_iso(), fingerprint=fingerprint,
+                )
+            except Exception as exc:  # noqa: BLE001 — see the PRUNED branch's comment below
+                logger.warning(f"{symbol} trial {trial.number}: record_trial (DUPLICATE) failed — {exc}")
+            continue
+
+        # Mission Center Research Rigor Phase 1 (2026-08-06) — recorded
+        # BEFORE evaluate_point() runs, i.e. before record_trial() below
+        # has anything to write. If the whole process crashes during
+        # evaluation, this is the only surviving evidence trial.number
+        # was attempted — see count_orphaned_attempts(). Non-fatal: a D1
+        # hiccup here must never abort the mission either.
+        try:
+            research_missions.record_trial_attempt_start(mc.mission_id, symbol, trial.number, started_at)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"{symbol} trial {trial.number}: record_trial_attempt_start failed — {exc}")
 
         try:
             result = evaluate_point(symbol, train_df, point, mc.min_trades, mc.objective_metric)
@@ -318,12 +381,24 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         metrics_payload["gate_rejections"] = json_safe(result.gate_rejections)
         metrics_payload["context_rejections"] = json_safe(result.context_rejections)
         metrics_payload["indicator_rejections"] = json_safe(result.indicator_rejections)
+        # Mission Center Research Rigor Phase 1 (2026-08-06) — both already
+        # computed by evaluate_point(); persisted so the leaderboard/report
+        # can show "what the sampler saw" (objective_value, capped +
+        # reliability-discounted) next to "the real metric" (objective_raw,
+        # still a real inf when that's the true value) — never fabricated,
+        # both None on a PRUNED trial.
+        metrics_payload["objective_raw"] = json_safe(result.objective_raw)
+        metrics_payload["objective_value"] = json_safe(result.objective_value)
         if holdout_df is not None and len(holdout_df) > 0 and not result.insufficient:
             try:
                 holdout_result = evaluate_point(symbol, holdout_df, point, 1, mc.objective_metric)
                 metrics_payload["holdout"] = json_safe(holdout_result.metrics.to_dict())
             except Exception as exc:  # noqa: BLE001 — holdout eval is reporting-only, never fatal
                 logger.debug(f"{symbol} trial {trial.number}: holdout evaluation skipped — {exc}")
+
+        # Feed the live dedup cache — a LATER duplicate within this same
+        # run must be caught too, not just ones already in D1 from resume.
+        seen[fp] = (None if result.insufficient else result.objective_value, result.trades)
 
         if result.insufficient:
             _tell_safely(study, trial, state=optuna.trial.TrialState.PRUNED)
@@ -379,10 +454,20 @@ def _write_report(mc: MissionConfig) -> None:
             for t in trials if t["state"] == "COMPLETE"
         ]
         all_trials_for_significance.extend(significance_input)
+        # Mission Center Research Rigor Phase 1 (2026-08-06) — how many
+        # trials started evaluating but never got recorded (a mid-flight
+        # process crash lost their compute). Purely informational — the
+        # mission still reached its target trial count via a fresh draw
+        # on resume; this only tells the operator the true cost of any
+        # crashes that happened along the way.
+        abandoned = research_missions.count_orphaned_attempts(mc.mission_id, symbol)
         per_symbol[symbol] = {
             "trials": trials,
             "significance": mission_significance_summary(significance_input),
+            "abandoned_trials": abandoned,
         }
+        if abandoned:
+            logger.info(f"{symbol}: {abandoned} trial(s) lost to a process interruption mid-run.")
 
     payload = {
         "mission_id": mc.mission_id, "name": mc.name, "generated_utc": stamp,
@@ -436,6 +521,10 @@ def main() -> None:
                              '--timeframes-choices/--engine-set-choices/--indicator-set-choices/'
                              '--context-filter-set-choices/--engine-variant-choices with one shared index over '
                              'complete bundles.')
+    parser.add_argument("--confluence-overrides-json", type=str, default=None,
+                        help='JSON, e.g. \'{"min_engines_agreeing":1}\' — mission-wide, applies to every '
+                             'trial. Needed for a single-engine research hypothesis, which otherwise PRUNEs '
+                             'every trial (production quorum of 2 is mathematically unreachable with 1 engine).')
     parser.add_argument("--risk-param-ranges", type=str, default="{}",
                         help='JSON, e.g. \'{"sl_atr_multiplier":[1.0,4.0]}\' (random/tpe/nsga2)')
     parser.add_argument("--risk-param-grid", type=str, default="{}",
@@ -461,6 +550,9 @@ def main() -> None:
             hypothesis_bundle_choices=(
                 tuple(dict(b) for b in json.loads(args.hypothesis_bundle_choices))
                 if args.hypothesis_bundle_choices else None
+            ),
+            confluence_overrides=(
+                json.loads(args.confluence_overrides_json) if args.confluence_overrides_json else None
             ),
             risk_param_ranges={k: tuple(v) for k, v in json.loads(args.risk_param_ranges).items()},
             risk_param_grid={k: tuple(v) for k, v in json.loads(args.risk_param_grid).items()},

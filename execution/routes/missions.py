@@ -89,6 +89,16 @@ class _MissionRequest(BaseModel):
     # separate field rather than giving the existing fields multiple
     # choices each.
     hypothesis_bundle_choices: list[dict] | None = None
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — mission-wide
+    # {"min_engines_agreeing", "min_informative_weight_share"} override,
+    # applied to every trial. None = production config.yaml confluence
+    # block, unchanged. Unblocks a single-engine research hypothesis
+    # (e.g. "does SMC alone have edge?"), which otherwise PRUNEs every
+    # trial: production min_engines_agreeing=2 is mathematically
+    # unreachable with only one engine enabled. Validated inside
+    # MissionSearchSpace.__post_init__ (see backtest/optimizer.py's
+    # _validate_confluence_overrides), not duplicated here.
+    confluence_overrides: dict[str, float] | None = None
     risk_param_ranges: dict[str, tuple[float, float]] = {}
     risk_param_grid: dict[str, tuple[float, ...]] = {}
     oos_holdout_fraction: float | None = None
@@ -170,6 +180,7 @@ async def missions_create(
                 tuple(dict(b) for b in body.hypothesis_bundle_choices)
                 if body.hypothesis_bundle_choices else None
             ),
+            confluence_overrides=body.confluence_overrides,
             risk_param_ranges=body.risk_param_ranges,
             risk_param_grid=body.risk_param_grid,
         )
@@ -233,6 +244,8 @@ async def missions_create(
         argv += ["--risk-param-grid", json.dumps(body.risk_param_grid)]
     if body.hypothesis_bundle_choices:
         argv += ["--hypothesis-bundle-choices", json.dumps(body.hypothesis_bundle_choices)]
+    if body.confluence_overrides:
+        argv += ["--confluence-overrides-json", json.dumps(body.confluence_overrides)]
     if body.oos_holdout_fraction is not None:
         argv += ["--oos-holdout-fraction", str(body.oos_holdout_fraction)]
     if body.max_wall_clock_seconds is not None:
@@ -311,6 +324,14 @@ async def missions_status(
         trials = research_missions.leaderboard(mission_id)
         effective_config_summary = compute_effective_configuration_summary(space, trials).to_dict()
 
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — trials that
+    # started evaluating but never got recorded (a mid-flight process
+    # crash lost their compute). Purely informational.
+    abandoned_trials = 0
+    if mission and mission.get("symbols_json"):
+        for sym in json.loads(mission["symbols_json"]):
+            abandoned_trials += research_missions.count_orphaned_attempts(mission_id, sym)
+
     return {
         "mission_id": mission_id,
         "mission": mission,
@@ -318,6 +339,7 @@ async def missions_status(
         "job_status": job.status if job else None,
         "search_space_kind": search_space_kind,
         "effective_config_summary": effective_config_summary,
+        "abandoned_trials": abandoned_trials,
     }
 
 

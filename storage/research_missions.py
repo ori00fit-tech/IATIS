@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS research_mission_trials_v2 (
     mission_id      TEXT NOT NULL,
     trial_number    INTEGER NOT NULL,
     symbol          TEXT NOT NULL,
-    state           TEXT NOT NULL,      -- COMPLETE|PRUNED|FAIL
+    state           TEXT NOT NULL,      -- COMPLETE|PRUNED|FAIL|DUPLICATE
     objective_value REAL,
     params_json     TEXT NOT NULL,
     metrics_json    TEXT,
@@ -83,6 +83,22 @@ CREATE TABLE IF NOT EXISTS research_mission_trials_v2 (
     started_at      TEXT NOT NULL,
     finished_at     TEXT NOT NULL,
     fingerprint_json TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): git+dataset reproducibility fingerprint, see research/manifest.py
+    PRIMARY KEY (mission_id, symbol, trial_number)
+)
+"""
+
+# Mission Center Research Rigor Phase 1 (2026-08-06) — append-only
+# "attempt started" marker, written right before a trial's backtest
+# evaluation runs. Lets a resumed mission report how many trials were
+# lost to a mid-flight process crash (never recorded to
+# research_mission_trials_v2 because the process died before that
+# INSERT). See storage/migrations.py version 8 for existing deployments.
+_DDL_ATTEMPTS = """
+CREATE TABLE IF NOT EXISTS research_mission_trial_attempts (
+    mission_id      TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    trial_number    INTEGER NOT NULL,
+    started_at      TEXT NOT NULL,
     PRIMARY KEY (mission_id, symbol, trial_number)
 )
 """
@@ -96,6 +112,7 @@ _INDEXES = [
 def _init(con) -> None:
     con.execute(_DDL_MISSIONS)
     con.execute(_DDL_TRIALS)
+    con.execute(_DDL_ATTEMPTS)
     for idx in _INDEXES:
         con.execute(idx)
 
@@ -230,6 +247,47 @@ def record_trial(
              trades, error, started_at, finished_at,
              json.dumps(fingerprint) if fingerprint is not None else None),
         )
+
+
+def record_trial_attempt_start(mission_id: str, symbol: str, trial_number: int, started_at: str) -> None:
+    """Mission Center Research Rigor Phase 1 (2026-08-06) — an append-only
+    "this trial started evaluating" marker, written by mission_runner.py
+    right before evaluate_point() runs, i.e. BEFORE record_trial() has
+    anything to write. If the whole process crashes mid-evaluation, this
+    row is the only surviving evidence that trial_number was ever
+    attempted — see count_orphaned_attempts(). INSERT OR IGNORE: never
+    UPDATE, and a duplicate call (should not happen — trial_number is
+    unique per symbol per mission) is harmless, not an error."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        con.execute(
+            """INSERT OR IGNORE INTO research_mission_trial_attempts
+               (mission_id, symbol, trial_number, started_at) VALUES (?,?,?,?)""",
+            (mission_id, symbol, trial_number, started_at),
+        )
+
+
+def count_orphaned_attempts(mission_id: str, symbol: str) -> int:
+    """Attempts with no matching finished row in research_mission_trials_v2
+    — i.e. trials that started evaluating but never got as far as being
+    recorded (a mid-flight process crash). Purely informational: the
+    resume loop's own remaining = n_target - len(existing) logic already
+    naturally re-earns the lost trial via a fresh draw; this count only
+    tells the operator how much compute a crash actually cost, not
+    something mission_runner.py needs to act on."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        row = con.execute(
+            """SELECT COUNT(*) AS n FROM research_mission_trial_attempts a
+               WHERE a.mission_id=? AND a.symbol=?
+               AND NOT EXISTS (
+                   SELECT 1 FROM research_mission_trials_v2 t
+                   WHERE t.mission_id=a.mission_id AND t.symbol=a.symbol
+                   AND t.trial_number=a.trial_number
+               )""",
+            (mission_id, symbol),
+        ).fetchone()
+    return int(row["n"]) if row and row["n"] is not None else 0
 
 
 def existing_trials(mission_id: str, symbol: str) -> list[dict[str, Any]]:

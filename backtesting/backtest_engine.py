@@ -399,12 +399,26 @@ ENGINE_VARIANT_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Mission Center Research Rigor Phase 1 (2026-08-06) — the only two keys
+# an ad-hoc confluence_overrides dict may set, and their valid ranges.
+# min_engines_agreeing is bounded by how many engines actually exist
+# (config.yaml's live default is 2, frozen per CLAUDE.md — this override
+# exists so a single-engine ablation, e.g. "does SMC alone have edge?",
+# can lower it to 1 for that one ad-hoc run without ever touching the
+# live config).
+_CONFLUENCE_OVERRIDE_BOUNDS: dict[str, tuple[float, float]] = {
+    "min_engines_agreeing": (1, len(ENGINE_KEYS)),
+    "min_informative_weight_share": (0.0, 1.0),
+}
+
+
 def build_engine_config_override(
     timeframes: list[str] | None = None,
     engines_enabled: dict[str, bool] | None = None,
     indicators: list[dict] | None = None,
     context_filters: list[dict] | None = None,
     engine_variants: dict[str, str] | None = None,
+    confluence_overrides: dict[str, float] | None = None,
 ) -> dict | None:
     """Backtesting Lab Pro Phase B/C/D (2026-07-27) — ad-hoc per-run
     overrides, merged over a real load_config() snapshot so every other
@@ -444,9 +458,19 @@ def build_engine_config_override(
     surfacing a confusing error deep inside run_backtest's instantiation
     loop). This NEVER touches config/engines.yaml's live default — v1
     keeps loading unconditionally unless a caller explicitly passes this.
+
+    confluence_overrides (Mission Center Research Rigor Phase 1,
+    2026-08-06): an explicit {"min_engines_agreeing": int,
+    "min_informative_weight_share": float} override, merged over
+    config.yaml's confluence block. Restricted to exactly the two keys in
+    _CONFLUENCE_OVERRIDE_BOUNDS above — any other key or an out-of-bounds
+    value raises ValueError at build time. Ephemeral — never written to
+    config.yaml; run_backtest's live default path (this whole function
+    returning None) is unaffected when this is omitted.
     """
     if (timeframes is None and engines_enabled is None and indicators is None
-            and context_filters is None and engine_variants is None):
+            and context_filters is None and engine_variants is None
+            and confluence_overrides is None):
         return None
     from utils.helpers import load_config
     base = load_config()
@@ -476,6 +500,19 @@ def build_engine_config_override(
         merged["indicators"] = {"filters": list(indicators)}
     if context_filters is not None:
         merged["context_filters"] = {"filters": list(context_filters)}
+
+    if confluence_overrides is not None:
+        unknown_keys = set(confluence_overrides) - set(_CONFLUENCE_OVERRIDE_BOUNDS)
+        if unknown_keys:
+            raise ValueError(
+                f"unknown confluence_overrides key(s): {sorted(unknown_keys)} — "
+                f"choose from {sorted(_CONFLUENCE_OVERRIDE_BOUNDS)}"
+            )
+        for key, value in confluence_overrides.items():
+            lo, hi = _CONFLUENCE_OVERRIDE_BOUNDS[key]
+            if not (lo <= value <= hi):
+                raise ValueError(f"confluence_overrides.{key} must be between {lo} and {hi}, got {value}")
+        merged["confluence"] = {**base.get("confluence", {}), **confluence_overrides}
     return merged
 
 

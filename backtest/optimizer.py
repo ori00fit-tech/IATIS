@@ -46,6 +46,7 @@ from backtesting.backtest_engine import (
     build_engine_config_override,
     run_backtest,
 )
+from backtesting.backtest_engine import _CONFLUENCE_OVERRIDE_BOUNDS
 from confluence.context_filters import CONTEXT_KEYS
 from confluence.indicator_filters import FILTER_MODES, INDICATOR_KEYS
 from core.timeframe_sync import SUPPORTED_TIMEFRAMES
@@ -107,6 +108,24 @@ def _validate_engine_variant_map(variant_map: dict) -> None:
             raise ValueError(f"engine {eng_key!r} has no variant {variant!r} — choose from {allowed}")
 
 
+def _validate_confluence_overrides(overrides: dict) -> None:
+    """Mission Center Research Rigor Phase 1 (2026-08-06) — same two-key
+    bounds table build_engine_config_override() itself validates against,
+    reused here so a bad confluence_overrides payload fails at
+    MissionSearchSpace construction time, not deep inside a trial's
+    evaluate_point() call."""
+    unknown_keys = set(overrides) - set(_CONFLUENCE_OVERRIDE_BOUNDS)
+    if unknown_keys:
+        raise ValueError(
+            f"unknown confluence_overrides key(s): {sorted(unknown_keys)} — "
+            f"choose from {sorted(_CONFLUENCE_OVERRIDE_BOUNDS)}"
+        )
+    for key, value in overrides.items():
+        lo, hi = _CONFLUENCE_OVERRIDE_BOUNDS[key]
+        if not (lo <= value <= hi):
+            raise ValueError(f"confluence_overrides.{key} must be between {lo} and {hi}, got {value}")
+
+
 def _validate_hypothesis_bundle(bundle: dict) -> None:
     name = bundle.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -160,6 +179,22 @@ class MissionSearchSpace:
     # search_space_json (missions created before this shipped) constructs
     # and behaves byte-identically.
     engine_variant_choices: tuple[dict[str, str], ...] = ({},)
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — a single,
+    # MISSION-WIDE {"min_engines_agreeing", "min_informative_weight_share"}
+    # override, applied to every trial regardless of which bundle/choice
+    # it draws. Deliberately NOT a per-trial searched dimension (searching
+    # quorum independently of which engines got enabled would draw
+    # nonsensical combinations — e.g. quorum=2 with a single-engine choice
+    # can never pass) and NOT per-hypothesis-bundle in this phase (every
+    # bundle in a mission shares this one override; a mission mixing
+    # single- and multi-engine bundles that each want a different quorum
+    # is a real, deliberately deferred v2 refinement). None = production
+    # config.yaml confluence block, unchanged — the fix that unblocks a
+    # single-engine research hypothesis (e.g. "does SMC alone have edge?"),
+    # which otherwise PRUNEs every trial: config.yaml's live
+    # min_engines_agreeing=2 makes agree_count>=2 mathematically
+    # unreachable with only one engine enabled.
+    confluence_overrides: dict[str, float] | None = None
     risk_param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     risk_param_grid: dict[str, tuple[float, ...]] = field(default_factory=dict)
 
@@ -193,6 +228,8 @@ class MissionSearchSpace:
                 _validate_context_spec(spec)
         for variant_map in self.engine_variant_choices:
             _validate_engine_variant_map(variant_map)
+        if self.confluence_overrides:
+            _validate_confluence_overrides(self.confluence_overrides)
 
         if self.hypothesis_bundle_choices is not None:
             if not self.hypothesis_bundle_choices:
@@ -267,6 +304,10 @@ def search_space_from_dict(raw: dict[str, Any]) -> MissionSearchSpace:
             tuple(dict(b) for b in raw["hypothesis_bundle_choices"])
             if raw.get("hypothesis_bundle_choices") else None
         ),
+        # Mission Center Research Rigor Phase 1 — .get() with a
+        # backward-compatible default of None: a mission created before
+        # this shipped has no such key in its stored search_space_json.
+        confluence_overrides=raw.get("confluence_overrides"),
         risk_param_ranges={k: tuple(v) for k, v in raw.get("risk_param_ranges", {}).items()},
         risk_param_grid={k: tuple(v) for k, v in raw.get("risk_param_grid", {}).items()},
     )
@@ -337,6 +378,10 @@ def resolve_point(space: MissionSearchSpace, raw_params: dict[str, Any]) -> dict
         "timeframes": timeframes, "engines": engines,
         "indicators": indicators, "context_filters": context_filters,
         "engine_variants": engine_variants, "risk_overrides": risk_overrides,
+        # Mission-wide, not per-trial-sampled (see MissionSearchSpace.
+        # confluence_overrides' own docstring) — identical for every
+        # trial regardless of which branch above produced the rest.
+        "confluence_overrides": dict(space.confluence_overrides) if space.confluence_overrides else {},
     }
 
 
@@ -471,6 +516,13 @@ class EvalResult:
     gate_rejections: dict = field(default_factory=dict)
     context_rejections: dict = field(default_factory=dict)
     indicator_rejections: dict = field(default_factory=dict)
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — the metric
+    # value BEFORE capping/reliability-discount, i.e. exactly what
+    # metrics.<objective_metric> holds (still a real inf when that's the
+    # true value). objective_value is what the sampler actually sees;
+    # this field exists purely so a trial's leaderboard/report row can
+    # show both side by side. None whenever objective_value is (PRUNED).
+    objective_raw: float | None = None
 
 
 # Finite sentinel used ONLY to feed the sampler's acquisition function —
@@ -488,6 +540,35 @@ def _finite_objective(raw_value: float) -> float:
     if raw_value == float("-inf"):
         return -_OBJECTIVE_INF_SENTINEL
     return float(raw_value)
+
+
+# Mission Center Research Rigor Phase 1 (2026-08-06) — an unclipped,
+# unbounded metric fed straight to a sampler's acquisition function lets
+# a handful of lucky/unlucky trades dominate: PF=inf (or a huge-but-finite
+# PF) from 11 trades would otherwise look "better" than PF=2.4 from 120
+# trades, dragging TPE/NSGA-II toward tiny-sample configurations. Only
+# profit_factor gets a cap today — it's the one OPTIMIZABLE_METRICS entry
+# genuinely prone to an inf/huge-from-few-trades blowup (sharpe/sortino/
+# calmar/expectancy_r/sqn/recovery_factor/win_rate are already naturally
+# bounded). This NEVER touches EvalResult.metrics/the real report value —
+# only what the sampler sees.
+_OBJECTIVE_CAP_BY_METRIC: dict[str, float] = {"profit_factor": 5.0}
+# Trades at/above this get zero reliability discount; below it, the
+# capped value is scaled down toward a small floor fraction of its
+# magnitude as trades -> 0, so a lucky few-trade outlier can never
+# outrank a well-sampled trial (e.g. PF=inf@11 trades must score below
+# PF=2.4@120 trades — verified as a regression test, not just asserted).
+_RELIABILITY_FULL_TRADES = 30
+_RELIABILITY_FLOOR = 0.1
+
+
+def _reliability_adjusted_objective(raw_value: float, trades: int, metric: str) -> float:
+    capped = _finite_objective(raw_value)
+    cap = _OBJECTIVE_CAP_BY_METRIC.get(metric)
+    if cap is not None:
+        capped = max(-cap, min(cap, capped))
+    confidence = min(1.0, trades / _RELIABILITY_FULL_TRADES)
+    return capped * (_RELIABILITY_FLOOR + (1 - _RELIABILITY_FLOOR) * confidence)
 
 
 def evaluate_point(
@@ -517,6 +598,7 @@ def evaluate_point(
         indicators=point["indicators"] or None,
         context_filters=point.get("context_filters") or None,
         engine_variants=point.get("engine_variants") or None,
+        confluence_overrides=point.get("confluence_overrides") or None,
     )
     cfg = BacktestConfig.from_profile(symbol, **point["risk_overrides"])
     bt = run_backtest(df, cfg, engine_config=engine_config)
@@ -540,7 +622,8 @@ def evaluate_point(
     raw_value = getattr(metrics, objective_metric)
     return EvalResult(
         metrics=metrics,
-        objective_value=_finite_objective(raw_value),
+        objective_value=_reliability_adjusted_objective(raw_value, trades, objective_metric),
+        objective_raw=raw_value,
         insufficient=False,
         trades=trades,
         trade_records=trade_records,

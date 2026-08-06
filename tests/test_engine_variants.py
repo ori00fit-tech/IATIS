@@ -193,6 +193,59 @@ def test_engine_variant_keys_only_lists_price_action_and_wyckoff():
     assert ENGINE_VARIANT_KEYS["wyckoff"] == ("v1", "v2")
 
 
+# ── confluence_overrides (Mission Center Research Rigor Phase 1, 2026-08-06) ─
+
+def test_confluence_overrides_unblocks_single_engine_and_config_files_stay_byte_identical():
+    """The operator-reported bug's live proof, same hard-block discipline
+    as engine_variants' own byte-identical test above: a single-engine
+    run PRUNEs with zero trades at the production quorum, but with
+    confluence_overrides lowering it to 1, real trades execute — and
+    both config files are still byte-identical afterward."""
+    before_config = CONFIG_YAML_PATH.read_bytes()
+    before_config_mtime = CONFIG_YAML_PATH.stat().st_mtime
+    before_engines = ENGINES_YAML_PATH.read_bytes()
+    before_engines_mtime = ENGINES_YAML_PATH.stat().st_mtime
+
+    df = _ohlcv(2000)
+    cfg = BacktestConfig.from_profile("EURUSD")
+    single_engine = {"nnfx": True, "price_action": False, "smc": False, "wyckoff": False}
+
+    no_override_config = build_engine_config_override(engines_enabled=single_engine)
+    no_override_result = run_backtest(df, cfg, no_override_config)
+    assert len(no_override_result.trades) == 0
+
+    override_config = build_engine_config_override(
+        engines_enabled=single_engine, confluence_overrides={"min_engines_agreeing": 1},
+    )
+    override_result = run_backtest(df, cfg, override_config)
+    assert len(override_result.trades) > 0
+
+    assert CONFIG_YAML_PATH.read_bytes() == before_config
+    assert CONFIG_YAML_PATH.stat().st_mtime == before_config_mtime
+    assert ENGINES_YAML_PATH.read_bytes() == before_engines
+    assert ENGINES_YAML_PATH.stat().st_mtime == before_engines_mtime
+
+
+def test_build_engine_config_override_rejects_unknown_confluence_overrides_key():
+    with pytest.raises(ValueError, match="confluence_overrides"):
+        build_engine_config_override(confluence_overrides={"not_a_real_key": 1})
+
+
+def test_build_engine_config_override_rejects_out_of_bounds_min_engines_agreeing():
+    with pytest.raises(ValueError, match="min_engines_agreeing"):
+        build_engine_config_override(confluence_overrides={"min_engines_agreeing": 0})
+
+
+def test_build_engine_config_override_rejects_out_of_bounds_min_informative_weight_share():
+    with pytest.raises(ValueError, match="min_informative_weight_share"):
+        build_engine_config_override(confluence_overrides={"min_informative_weight_share": -0.1})
+
+
+def test_v1_default_unaffected_when_confluence_overrides_omitted():
+    assert build_engine_config_override() is None
+    assert build_engine_config_override(confluence_overrides=None) is None
+
+
 def test_v2_engine_confluence_weight_resolves_to_base_engine_key():
     """Regression pin for the GAP #3 fix found during this phase's design
     pass: PriceActionV2/WyckoffV2 must resolve to their base engine's

@@ -18,11 +18,13 @@ from backtest.optimizer import (
     EvalResult,
     MissionSearchSpace,
     _finite_objective,
+    _reliability_adjusted_objective,
     classify_search_space_variation,
     distributions_for,
     evaluate_point,
     make_sampler,
     resolve_point,
+    search_space_from_dict,
     search_space_has_signal_variation,
     suggest_point,
 )
@@ -94,6 +96,30 @@ def test_search_space_engine_variant_choices_defaults_to_all_v1():
     assert space.engine_variant_choices == ({},)
 
 
+def test_search_space_rejects_unknown_confluence_overrides_key():
+    with pytest.raises(ValueError, match="confluence_overrides"):
+        _small_space(confluence_overrides={"not_a_real_key": 1})
+
+
+def test_search_space_rejects_out_of_bounds_min_engines_agreeing():
+    with pytest.raises(ValueError, match="min_engines_agreeing"):
+        _small_space(confluence_overrides={"min_engines_agreeing": 0})
+
+
+def test_search_space_rejects_out_of_bounds_min_informative_weight_share():
+    with pytest.raises(ValueError, match="min_informative_weight_share"):
+        _small_space(confluence_overrides={"min_informative_weight_share": 1.5})
+
+
+def test_search_space_confluence_overrides_defaults_to_none():
+    assert _small_space().confluence_overrides is None
+
+
+def test_search_space_accepts_valid_confluence_overrides():
+    space = _small_space(confluence_overrides={"min_engines_agreeing": 1})
+    assert space.confluence_overrides == {"min_engines_agreeing": 1}
+
+
 def test_search_space_rejects_unknown_risk_param():
     with pytest.raises(ValueError, match="risk param"):
         _small_space(risk_param_ranges={"not_a_real_param": (1.0, 2.0)})
@@ -133,6 +159,41 @@ def test_resolve_point_picks_correct_engine_variant_by_index():
     raw = {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "__engine_variants_idx": 1}
     resolved = resolve_point(space, raw)
     assert resolved["engine_variants"] == {"price_action": "v2"}
+
+
+def test_resolve_point_includes_mission_wide_confluence_overrides():
+    space = _small_space(confluence_overrides={"min_engines_agreeing": 1})
+    raw = {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "sl_atr_multiplier": 2.0}
+    resolved = resolve_point(space, raw)
+    assert resolved["confluence_overrides"] == {"min_engines_agreeing": 1}
+
+
+def test_resolve_point_confluence_overrides_defaults_to_empty_dict_when_unset():
+    space = _small_space()
+    raw = {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "sl_atr_multiplier": 2.0}
+    resolved = resolve_point(space, raw)
+    assert resolved["confluence_overrides"] == {}
+
+
+def test_search_space_from_dict_round_trips_confluence_overrides():
+    raw = {
+        "timeframes_choices": [["H1"]], "engine_set_choices": [["nnfx"]],
+        "indicator_set_choices": [[]], "confluence_overrides": {"min_engines_agreeing": 1},
+    }
+    space = search_space_from_dict(raw)
+    assert space.confluence_overrides == {"min_engines_agreeing": 1}
+
+
+def test_search_space_from_dict_backward_compatible_without_confluence_overrides():
+    """A mission created before this shipped has no confluence_overrides
+    key in its stored search_space_json — must default to None, not
+    KeyError."""
+    raw = {
+        "timeframes_choices": [["H1"]], "engine_set_choices": [["nnfx"]],
+        "indicator_set_choices": [[]],
+    }
+    space = search_space_from_dict(raw)
+    assert space.confluence_overrides is None
 
 
 def test_resolve_point_defaults_engine_variants_to_index_0_when_key_missing():
@@ -230,6 +291,94 @@ def test_finite_objective_clips_inf_but_preserves_real_metrics_value():
     assert _finite_objective(float("inf")) == pytest.approx(1e6)
     assert _finite_objective(float("-inf")) == pytest.approx(-1e6)
     assert _finite_objective(1.75) == pytest.approx(1.75)
+
+
+# ── _reliability_adjusted_objective (Mission Center Research Rigor Phase 1) ─
+
+def test_reliability_adjusted_objective_caps_pf_regardless_of_inf_sentinel():
+    # Without the cap, inf -> 1e6 -> full confidence at 30+ trades would
+    # stay 1e6, dwarfing any real PF. With the cap it must land at exactly
+    # the 5.0 ceiling (full confidence, 30 trades).
+    value = _reliability_adjusted_objective(float("inf"), trades=30, metric="profit_factor")
+    assert value == pytest.approx(5.0)
+
+
+def test_reliability_adjusted_objective_discounts_low_trade_count():
+    high_trades = _reliability_adjusted_objective(2.0, trades=30, metric="profit_factor")
+    low_trades = _reliability_adjusted_objective(2.0, trades=3, metric="profit_factor")
+    assert low_trades < high_trades
+    assert high_trades == pytest.approx(2.0)  # full confidence -> uncapped-by-discount raw value
+
+
+def test_reliability_adjusted_objective_a_lucky_few_trade_pf_never_beats_a_well_sampled_moderate_pf():
+    """The exact regression this fix targets: PF=inf from 11 trades must
+    NOT look better to the sampler than PF=2.4 from 120 trades."""
+    lucky_few_trades = _reliability_adjusted_objective(float("inf"), trades=11, metric="profit_factor")
+    well_sampled = _reliability_adjusted_objective(2.4, trades=120, metric="profit_factor")
+    assert lucky_few_trades < well_sampled
+
+
+def test_reliability_adjusted_objective_only_caps_profit_factor():
+    # sharpe_ratio has no cap in _OBJECTIVE_CAP_BY_METRIC — a large-but-
+    # finite value passes through uncapped, only trade-count-discounted.
+    value = _reliability_adjusted_objective(12.0, trades=30, metric="sharpe_ratio")
+    assert value == pytest.approx(12.0)
+
+
+def test_reliability_adjusted_objective_never_exceeds_finite_objective_cap_on_negative_inf():
+    value = _reliability_adjusted_objective(float("-inf"), trades=30, metric="profit_factor")
+    assert value == pytest.approx(-5.0)
+
+
+def test_evaluate_point_populates_objective_raw_distinct_from_capped_objective_value(monkeypatch):
+    """objective_raw must preserve the TRUE metric value (even a real inf)
+    while objective_value is what the sampler actually sees — never
+    fabricated, never silently identical when they should differ."""
+    import backtest.optimizer as optimizer_module
+
+    class _FakeMetrics:
+        total_trades = 5
+        profit_factor = float("inf")
+
+    class _FakeBacktestResult:
+        trades: list = []
+        gate_rejections: dict = {}
+        context_rejections: dict = {}
+        indicator_rejections: dict = {}
+
+    monkeypatch.setattr(optimizer_module, "run_backtest", lambda df, cfg, engine_config=None: _FakeBacktestResult())
+    monkeypatch.setattr(optimizer_module, "calculate_metrics", lambda records, initial_capital: _FakeMetrics())
+
+    df = _ohlcv(50)
+    point = {"timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {}}
+    result = evaluate_point("EURUSD", df, point, min_trades=1, objective_metric="profit_factor")
+
+    assert result.objective_raw == float("inf")  # the real value, never touched
+    assert result.objective_value is not None
+    assert result.objective_value < 1e6  # capped+discounted, not the raw sentinel-clipped value
+
+
+# ── Confluence quorum override (Mission Center Research Rigor Phase 1) ──────
+
+def test_confluence_overrides_unblocks_a_single_engine_hypothesis():
+    """The exact operator-reported bug: a mission with only ONE engine
+    enabled PRUNEs every trial (production min_engines_agreeing=2 is
+    mathematically unreachable with agree_count<=1) unless
+    confluence_overrides lowers the quorum for that one ad-hoc run."""
+    df = _ohlcv(2400)
+    point_no_override = {
+        "timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {},
+        "confluence_overrides": {},
+    }
+    without_override = evaluate_point("EURUSD", df, point_no_override, min_trades=1, objective_metric="profit_factor")
+    assert without_override.trades == 0
+
+    point_with_override = {
+        "timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "risk_overrides": {},
+        "confluence_overrides": {"min_engines_agreeing": 1},
+    }
+    with_override = evaluate_point("EURUSD", df, point_with_override, min_trades=1, objective_metric="profit_factor")
+    assert with_override.trades > 0
 
 
 # ── Sampler behavior (required property tests) ────────────────────────────
@@ -428,7 +577,8 @@ def test_resolve_point_output_shape_identical_in_both_modes():
     bundle_point = resolve_point(_bundle_space(), {"__hypothesis_idx": 0, "sl_atr_multiplier": 2.0})
     flat_point = resolve_point(_small_space(), {"__timeframes_idx": 0, "__engines_idx": 0, "__indicators_idx": 0, "sl_atr_multiplier": 2.0})
     assert set(bundle_point.keys()) == set(flat_point.keys()) == {
-        "timeframes", "engines", "indicators", "context_filters", "engine_variants", "risk_overrides",
+        "timeframes", "engines", "indicators", "context_filters", "engine_variants",
+        "risk_overrides", "confluence_overrides",
     }
 
 

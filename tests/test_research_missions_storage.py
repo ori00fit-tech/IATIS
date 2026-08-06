@@ -40,3 +40,35 @@ def test_list_recent_missions_filters_by_status():
     _seed("m-failed", status="failed")
     finished = research_missions.list_recent_missions(limit=10, status="finished")
     assert {r["id"] for r in finished} == {"m-finished"}
+
+
+# ── Trial-attempt observability (Mission Center Research Rigor Phase 1) ────
+
+def test_count_orphaned_attempts_zero_by_default():
+    assert research_missions.count_orphaned_attempts("mission-x", "EURUSD") == 0
+
+
+def test_orphaned_attempt_counted_when_no_matching_trial_row():
+    research_missions.record_trial_attempt_start("mission-x", "EURUSD", 0, "2026-01-01T00:00:00")
+    assert research_missions.count_orphaned_attempts("mission-x", "EURUSD") == 1
+
+
+def test_attempt_not_orphaned_once_the_matching_trial_is_recorded():
+    research_missions.record_trial_attempt_start("mission-x", "EURUSD", 0, "2026-01-01T00:00:00")
+    research_missions.record_trial(
+        mission_id="mission-x", trial_number=0, symbol="EURUSD", state="COMPLETE",
+        objective_value=1.5, params={}, metrics=None, trades=10, error=None,
+        started_at="2026-01-01T00:00:00", finished_at="2026-01-01T00:00:01",
+    )
+    assert research_missions.count_orphaned_attempts("mission-x", "EURUSD") == 0
+
+
+def test_orphaned_attempts_scoped_per_symbol():
+    research_missions.record_trial_attempt_start("mission-x", "EURUSD", 0, "2026-01-01T00:00:00")
+    assert research_missions.count_orphaned_attempts("mission-x", "GBPUSD") == 0
+
+
+def test_record_trial_attempt_start_is_idempotent():
+    research_missions.record_trial_attempt_start("mission-x", "EURUSD", 0, "2026-01-01T00:00:00")
+    research_missions.record_trial_attempt_start("mission-x", "EURUSD", 0, "2026-01-01T00:00:00")  # duplicate call
+    assert research_missions.count_orphaned_attempts("mission-x", "EURUSD") == 1

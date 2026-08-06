@@ -892,6 +892,21 @@ class CTraderClient:
         second and starving the indices/energy feed. Continue the bootstrap
         chain instead; if the session is genuinely unusable the NEXT step
         fails with a real error and normal handling applies.
+
+        A token-invalid rejection arriving on an already-READY session (the
+        token expired mid-session on a routine request, not during connect())
+        is a second, distinct gap from the one connect()/_schedule_reconnect
+        already self-heal: this handler only ever set ConnectionState.ERROR
+        and returned, with nothing calling _on_disconnect()/_schedule_
+        reconnect() to actually repair it — the client would silently wedge
+        in ERROR until something called connect() again from outside (named,
+        not fixed, in the cTrader OAuth rebuild plan). Fixed here: a token-
+        invalid rejection while READY explicitly kicks off the same bounded
+        reconnect loop a TCP-level drop already triggers — connect()'s own
+        first line always asks token_manager for a fresh token, and its
+        failure path already retries once via _attempt_token_refresh_and_
+        reconnect, so this is the existing self-heal machinery, not new
+        retry logic.
         """
         code = getattr(message, "errorCode", "")
         desc = getattr(message, "description", "")
@@ -911,9 +926,21 @@ class CTraderClient:
                 self._send_reconcile_req(client)
             return
         logger.error(f"❌ Server error (ProtoOAErrorRes): {code} — {desc}")
+        was_ready = self._state == ConnectionState.READY
         with self._lock:
             self._last_error_code = str(code)
         self._set_state(ConnectionState.ERROR)
+        if (
+            was_ready
+            and str(code) in self._TOKEN_INVALID_ERROR_CODES
+            and not self._intentional_disconnect
+        ):
+            logger.warning(
+                f"🔑 {code} on an already-READY session — token expired "
+                f"mid-session. Kicking off the reconnect loop instead of "
+                f"silently wedging in ERROR."
+            )
+            self._schedule_reconnect()
 
     def _on_disconnect(self, client: Any, reason: Any) -> None:
         # Ignore callbacks from a superseded client. A stale connection torn

@@ -101,6 +101,13 @@ class WalkForwardConfig:
             direction filter/confirmation/score-weight specs. None = no
             context filter layer, unchanged from every prior phase's
             behavior.
+        confluence_overrides: Mission Center Research Rigor Phase 1
+            (2026-08-06) — ad-hoc {"min_engines_agreeing",
+            "min_informative_weight_share"} override. None = production
+            config.yaml confluence block, unchanged. Needed so a
+            single-engine candidate (quorum lowered below production 2)
+            can be walk-forward validated without every window PRUNING
+            with zero trades.
     """
 
     n_windows: int = 3
@@ -112,6 +119,7 @@ class WalkForwardConfig:
     engines: tuple[str, ...] | None = None
     indicators: tuple[dict, ...] | None = None
     context_filters: tuple[dict, ...] | None = None
+    confluence_overrides: dict | None = None
 
     def __post_init__(self) -> None:
         if self.n_windows < 2:
@@ -219,6 +227,7 @@ def run_walk_forward(
         engines_enabled={e: (e in wf_config.engines) for e in ENGINE_KEYS} if wf_config.engines else None,
         indicators=list(wf_config.indicators) if wf_config.indicators else None,
         context_filters=list(wf_config.context_filters) if wf_config.context_filters else None,
+        confluence_overrides=wf_config.confluence_overrides,
     )
 
     for k, (frame, test_start, test_end) in enumerate(windows):
@@ -367,6 +376,10 @@ def main() -> None:
     # Backtesting Lab Pro Phase D (2026-07-27) — ad-hoc per-run indicator
     # filter/confirmation/score-weight specs (JSON-encoded).
     parser.add_argument("--indicators-json", type=str, default=None)
+    # Mission Center Research Rigor Phase 1 (2026-08-06) — ad-hoc
+    # confluence.min_engines_agreeing/min_informative_weight_share
+    # override (JSON-encoded 2-key dict).
+    parser.add_argument("--confluence-overrides-json", type=str, default=None)
     args = parser.parse_args()
 
     engine_overrides = {
@@ -381,6 +394,14 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
 
+    confluence_overrides = None
+    if args.confluence_overrides_json:
+        import json
+        try:
+            confluence_overrides = json.loads(args.confluence_overrides_json)
+        except ValueError as exc:
+            parser.error(f"--confluence-overrides-json: invalid JSON: {exc}")
+
     results = run_walk_forward_suite(
         symbols=args.symbols,
         data_dir=args.data_dir,
@@ -393,6 +414,7 @@ def main() -> None:
             timeframes=tuple(args.timeframes) if args.timeframes else None,
             engines=tuple(args.engines) if args.engines else None,
             indicators=indicators,
+            confluence_overrides=confluence_overrides,
         ),
         start=args.start, end=args.end,
     )

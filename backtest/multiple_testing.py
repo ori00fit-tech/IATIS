@@ -57,6 +57,67 @@ def trial_p_value(mean_r: float, std_r: float, n: int) -> float | None:
     return 2 * (1 - normal_cdf(abs(z)))
 
 
+def _sample_autocorrelation(values: list[float], lag: int) -> float:
+    """Sample autocorrelation of `values` at the given lag (Pearson-style,
+    using the whole-series mean/variance — the standard time-series
+    estimator). Returns 0.0 if the lag is out of range or the series has
+    zero variance (nothing to correlate)."""
+    n = len(values)
+    if lag <= 0 or lag >= n:
+        return 0.0
+    mean = sum(values) / n
+    denom = sum((v - mean) ** 2 for v in values)
+    if denom == 0:
+        return 0.0
+    numer = sum((values[i] - mean) * (values[i + lag] - mean) for i in range(n - lag))
+    return numer / denom
+
+
+def effective_sample_size(values: list[float], max_lag: int | None = None) -> float | None:
+    """Effective sample size under serial correlation — Geyer's (1992)
+    'initial positive sequence' (IPS) estimator, the standard robust
+    method for effective-N under autocorrelation (MCMC/time-series
+    diagnostics): consecutive autocorrelation pairs (rho_{2m+1} + rho_{2m+2})
+    are summed and the running total stops the FIRST time a pair sum goes
+    negative, which guarantees a non-negative variance-inflation estimate.
+    ESS = N / (1 + 2*sum(rho)).
+
+    Mission Center Research Rigor Phase 2 (2026-08-XX): a mission trial's
+    R-multiple sequence is NOT i.i.d. — consecutive trades on one symbol
+    share regime/volatility conditions, so treating raw trade count as
+    the sample size (as every trial_p_value() caller does today)
+    understates the true standard error and can make a lucky,
+    autocorrelated run look more significant than it is. ESS is always
+    <= N (equality only when the series shows no detectable serial
+    correlation), so using it in place of raw N is strictly more
+    conservative, never more permissive — it can only make a result look
+    LESS significant than the naive count.
+
+    Returns None (never a fabricated number) for n<5 — too few points to
+    estimate autocorrelation reliably. Result is clamped to [1, N].
+    """
+    n = len(values)
+    if n < 5:
+        return None
+    cap = min(max_lag, n - 1) if max_lag is not None else n - 1
+    total_rho = 0.0
+    m = 0
+    while True:
+        k1 = 2 * m + 1
+        if k1 > cap:
+            break
+        k2 = k1 + 1
+        rho1 = _sample_autocorrelation(values, k1)
+        rho2 = _sample_autocorrelation(values, k2) if k2 <= cap else 0.0
+        pair_sum = rho1 + rho2
+        if pair_sum < 0:
+            break
+        total_rho += pair_sum
+        m += 1
+    ess = n / (1.0 + 2.0 * total_rho)
+    return max(1.0, min(float(n), ess))
+
+
 def binomial_sign_test_p_value(k: int, n: int, p: float = 0.5) -> float | None:
     """Exact two-tailed binomial (sign) test p-value for observing k
     'successes' out of n independent trials under a null hypothesis of

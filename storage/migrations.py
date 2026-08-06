@@ -162,6 +162,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             )""",
         ],
     ),
+    (
+        9,
+        "validation_significance_column",
+        # Mission Center Research Rigor Phase 2 (2026-08-XX): each
+        # validation result now also records an autocorrelation-adjusted
+        # (effective sample size) significance check alongside the
+        # existing feature_mining blob — same insertion point (raw trade
+        # records are only available at validation time). Diagnostic
+        # only — never a VALIDATION_CRITERIA entry.
+        [
+            "ALTER TABLE research_mission_validation_results ADD COLUMN significance_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

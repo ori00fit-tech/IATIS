@@ -58,14 +58,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from backtest.feature_mining import compute_feature_mining
-from backtest.metrics import json_safe
+from backtest.metrics import TradeRecord, json_safe
 from backtest.monte_carlo import run_monte_carlo
+from backtest.multiple_testing import effective_sample_size, trial_p_value
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
 from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS, RobustnessConfig, run_robustness
 from backtest.runner import find_symbol_csv, load_symbol_data
@@ -227,6 +229,55 @@ def _compute_date_overlap(mission: dict, vc: "ValidationConfig") -> dict:
     }
 
 
+def _compute_effective_sample_size_diagnostic(trades: list[TradeRecord]) -> dict:
+    """Mission Center Research Rigor Phase 2 (2026-08-XX) — an
+    autocorrelation-adjusted significance check on this symbol's own
+    closed-trade R-multiple sequence, computed alongside feature_mining
+    above (same insertion point: raw eval_result.trade_records are only
+    ever available here, at validation time, never persisted at
+    mission-trial scale — see backtest/feature_mining.py's own docstring
+    for why retrofitting mission_runner.py to keep trade-level detail for
+    every trial would be an unbounded new storage cost).
+
+    Diagnostic only, never a VALIDATION_CRITERIA entry: trial_p_value()'s
+    nominal p-value (used nowhere in this codebase's gating logic either)
+    assumes i.i.d. trades, which consecutive backtest trades on one
+    symbol structurally are not (shared regime/volatility conditions).
+    effective_sample_size() is always <= n_trades, so ess_adjusted_p_value
+    is always >= nominal_p_value — this can only ever make a result look
+    LESS significant than the naive trade count, never more. A second,
+    honest check against exactly the false-confidence failure mode this
+    whole research-rigor arc exists to catch.
+    """
+    r_multiples = [t.rr_actual for t in trades if t.rr_actual is not None]
+    n = len(r_multiples)
+    if n < 5:
+        return {
+            "n_trades": n, "effective_sample_size": None, "autocorrelation_ratio": None,
+            "nominal_p_value": None, "ess_adjusted_p_value": None,
+            "note": "Too few closed trades (<5) to estimate serial correlation.",
+        }
+    mean_r = statistics.fmean(r_multiples)
+    std_r = statistics.stdev(r_multiples) if n >= 2 else 0.0
+    ess = effective_sample_size(r_multiples)
+    nominal_p = trial_p_value(mean_r, std_r, n)
+    ess_p = trial_p_value(mean_r, std_r, int(ess)) if ess is not None else None
+    return {
+        "n_trades": n,
+        "effective_sample_size": round(ess, 1) if ess is not None else None,
+        "autocorrelation_ratio": round(ess / n, 3) if ess is not None else None,
+        "nominal_p_value": nominal_p,
+        "ess_adjusted_p_value": ess_p,
+        "note": (
+            "Autocorrelation-adjusted significance of this symbol's mean "
+            "R-multiple vs. 0 — diagnostic only, never a VALIDATION_CRITERIA "
+            "entry. ess_adjusted_p_value is always >= nominal_p_value "
+            "(more conservative), reflecting that consecutive backtest "
+            "trades are not independent samples."
+        ),
+    }
+
+
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     """Returns the full per-symbol result dict recorded into
     research_mission_validation_results — always populated, pass or
@@ -248,6 +299,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     # below. See backtest/feature_mining.py's module docstring for why this
     # is deliberately non-ML (not the same technique family as H033).
     feature_mining_result = compute_feature_mining(eval_result.trade_records or [])
+    significance_result = _compute_effective_sample_size_diagnostic(eval_result.trade_records or [])
 
     wf_result = run_walk_forward(symbol, df, WalkForwardConfig(
         n_windows=vc.wf_windows,
@@ -303,6 +355,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "robustness": json_safe(rb_result.to_dict()),
         "criteria_breakdown": json_safe(breakdown),
         "feature_mining": json_safe(feature_mining_result.to_dict()),
+        "significance": json_safe(significance_result),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -359,7 +412,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 metrics=result["metrics"], monte_carlo=result["monte_carlo"],
                 walk_forward=result["walk_forward"], robustness=result["robustness"],
                 criteria_breakdown=result["criteria_breakdown"],
-                feature_mining=result["feature_mining"], error=None,
+                feature_mining=result["feature_mining"], significance=result["significance"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -368,7 +421,7 @@ def run_validation(vc: ValidationConfig) -> None:
             research_mission_validations.record_validation_result(
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
-                criteria_breakdown={}, feature_mining=None, error=str(exc),
+                criteria_breakdown={}, feature_mining=None, significance=None, error=str(exc),
                 started_at=now, finished_at=now,
             )
 

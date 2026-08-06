@@ -13,10 +13,13 @@ import math
 
 import pytest
 
+import random
+
 from backtest.multiple_testing import (
     binomial_sign_test_p_value,
     bonferroni_alpha,
     classify_significance,
+    effective_sample_size,
     expected_false_positives,
     mission_significance_summary,
     normal_cdf,
@@ -133,3 +136,93 @@ def test_binomial_sign_test_p_value_none_when_undefined():
     assert binomial_sign_test_p_value(0, 0) is None
     assert binomial_sign_test_p_value(-1, 10) is None
     assert binomial_sign_test_p_value(11, 10) is None
+
+
+# ── Mission Center Research Rigor Phase 2 (2026-08-XX) — effective_sample_size ──
+# Geyer's initial positive sequence (IPS) estimator: ESS accounts for serial
+# correlation in a mission trial's own R-multiple sequence, so a trial's
+# significance can no longer be overstated just because raw trade count
+# ignores that consecutive backtest trades are not independent samples.
+
+def test_effective_sample_size_none_below_minimum():
+    assert effective_sample_size([1.0, 2.0, 3.0]) is None
+    assert effective_sample_size([]) is None
+
+
+def test_effective_sample_size_never_exceeds_n():
+    rng = random.Random(42)
+    values = [rng.gauss(0, 1) for _ in range(200)]
+    ess = effective_sample_size(values)
+    assert ess is not None
+    assert 1.0 <= ess <= 200.0
+
+
+def test_effective_sample_size_close_to_n_for_iid_noise():
+    # Pure i.i.d. noise has no detectable serial correlation on average —
+    # the IPS estimator should stop almost immediately (first pair sum
+    # negative) and report ESS very close to the raw N.
+    rng = random.Random(7)
+    values = [rng.gauss(0, 1) for _ in range(500)]
+    ess = effective_sample_size(values)
+    assert ess is not None
+    assert ess > 400.0  # comfortably close to 500, allowing for sampling noise
+
+
+def test_effective_sample_size_much_smaller_for_strongly_autocorrelated_series():
+    # A slowly-varying, strongly autocorrelated series (a random walk of
+    # small steps, which has near-1 lag-1 autocorrelation by construction)
+    # must produce a materially smaller ESS than its raw length.
+    rng = random.Random(3)
+    values = []
+    x = 0.0
+    for _ in range(300):
+        x += rng.gauss(0, 0.05)
+        values.append(x)
+    ess = effective_sample_size(values)
+    assert ess is not None
+    assert ess < 300.0 * 0.5  # strongly correlated -> well below half the raw N
+
+
+def test_effective_sample_size_constant_series_degrades_to_n():
+    # Zero variance -> _sample_autocorrelation returns 0.0 at every lag
+    # (nothing to correlate), so the IPS sum stays 0 and ESS == N exactly.
+    # (trial_p_value's own std_r==0 guard is what actually prevents this
+    # degenerate case from ever producing a p-value — effective_sample_size
+    # itself must simply not crash or misbehave on it.)
+    ess = effective_sample_size([5.0] * 20)
+    assert ess == pytest.approx(20.0)
+
+
+def test_effective_sample_size_respects_max_lag_cap():
+    rng = random.Random(11)
+    values = [rng.gauss(0, 1) for _ in range(100)]
+    ess_uncapped = effective_sample_size(values)
+    ess_capped = effective_sample_size(values, max_lag=1)
+    assert ess_uncapped is not None and ess_capped is not None
+    # Capping at lag 1 can only ever consider one autocorrelation pair
+    # (or zero), never diverging in a way that produces a LARGER estimate
+    # than the uncapped run would for the same data in the typical case —
+    # both must still be valid, in-range values.
+    assert 1.0 <= ess_capped <= 100.0
+
+
+def test_effective_sample_size_makes_p_value_more_conservative():
+    # The whole point: feeding ESS (instead of raw N) into trial_p_value
+    # for an autocorrelated series must never produce a SMALLER p-value
+    # than the naive raw-N calculation — autocorrelation-adjustment can
+    # only make a result look less significant, never more.
+    rng = random.Random(3)
+    values = []
+    x = 0.0
+    for _ in range(300):
+        x += rng.gauss(0, 0.05) + 0.001  # slight positive drift so mean != 0
+        values.append(x)
+    n = len(values)
+    mean_r = sum(values) / n
+    std_r = (sum((v - mean_r) ** 2 for v in values) / (n - 1)) ** 0.5
+    ess = effective_sample_size(values)
+    assert ess is not None
+    nominal_p = trial_p_value(mean_r, std_r, n)
+    ess_p = trial_p_value(mean_r, std_r, int(ess))
+    assert nominal_p is not None and ess_p is not None
+    assert ess_p >= nominal_p

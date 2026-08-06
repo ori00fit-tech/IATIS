@@ -646,6 +646,114 @@ def test_run_validation_records_cost_stress_diagnostic_per_symbol(tmp_path):
             }
 
 
+# ── Discovery score diagnostic ───────────────────────────────────────────────
+# (Mission Center Research Rigor Phase 6, 2026-08-XX) — informational only,
+# never a VALIDATION_CRITERIA entry, never blocking, never used to rank or
+# auto-select a candidate. A transparent average of the four diagnostics
+# already computed above — no new backtest evaluation.
+
+def _cost_stress_dict(*edge_survives: bool | None) -> dict:
+    return {
+        "baseline_commission_pips": 1.0, "baseline_slippage_pips": 0.5,
+        "levels": [
+            {"multiplier": m, "commission_pips": 1.0 * m, "slippage_pips": 0.5 * m,
+             "trades": 10, "profit_factor": 1.2, "edge_survives": es}
+            for m, es in zip((1.5, 2.0, 3.0), edge_survives)
+        ],
+        "survives_all_stress_levels": None, "note": "x",
+    }
+
+
+def test_discovery_score_all_four_components_available():
+    from backtest.mission_validator import _compute_discovery_score_diagnostic
+
+    result = _compute_discovery_score_diagnostic(
+        significance={"ess_adjusted_p_value": 0.01},
+        regime_robustness={"regime_robustness_score": 1.0},
+        stability={"stability_score": 0.5},
+        cost_stress=_cost_stress_dict(True, True, False),
+    )
+    assert result["significance_component"] == 1.0
+    assert result["regime_robustness_component"] == 1.0
+    assert result["stability_component"] == 0.5
+    assert result["cost_stress_component"] == pytest.approx(2 / 3)
+    assert result["components_used"] == 4
+    assert result["components_total"] == 4
+    assert result["discovery_score"] == pytest.approx((1.0 + 1.0 + 0.5 + 2 / 3) / 4, abs=1e-3)
+
+
+def test_discovery_score_significance_component_buckets():
+    from backtest.mission_validator import _significance_component
+
+    assert _significance_component({"ess_adjusted_p_value": 0.01}) == 1.0
+    assert _significance_component({"ess_adjusted_p_value": 0.07}) == 0.5
+    assert _significance_component({"ess_adjusted_p_value": 0.5}) == 0.0
+    assert _significance_component({"ess_adjusted_p_value": None}) is None
+
+
+def test_discovery_score_cost_stress_component_none_when_unmeasurable():
+    from backtest.mission_validator import _cost_stress_component
+
+    assert _cost_stress_component(_cost_stress_dict(None, None, None)) is None
+    assert _cost_stress_component(_cost_stress_dict(True, False, None)) == pytest.approx(0.5)
+    assert _cost_stress_component(_cost_stress_dict(True, True, True)) == 1.0
+
+
+def test_discovery_score_excludes_missing_components_from_average_not_as_zero():
+    from backtest.mission_validator import _compute_discovery_score_diagnostic
+
+    result = _compute_discovery_score_diagnostic(
+        significance={"ess_adjusted_p_value": None},
+        regime_robustness={"regime_robustness_score": None},
+        stability={"stability_score": 1.0},
+        cost_stress=_cost_stress_dict(None, None, None),
+    )
+    assert result["components_used"] == 1
+    assert result["components_total"] == 4
+    assert result["discovery_score"] == 1.0  # average of just the one available component, not diluted by zeros
+
+
+def test_discovery_score_none_when_no_components_available():
+    from backtest.mission_validator import _compute_discovery_score_diagnostic
+
+    result = _compute_discovery_score_diagnostic(
+        significance={"ess_adjusted_p_value": None},
+        regime_robustness={"regime_robustness_score": None},
+        stability={"stability_score": None},
+        cost_stress=_cost_stress_dict(None, None, None),
+    )
+    assert result["components_used"] == 0
+    assert result["discovery_score"] is None
+
+
+def test_discovery_score_never_reaches_a_criterion():
+    source = inspect.getsource(mission_validator._evaluate_symbol)
+    assert "discovery_score_result = _compute_discovery_score_diagnostic" in source
+    assert '"discovery_score": json_safe(discovery_score_result)' in source
+    breakdown_block = source[source.index("breakdown = {"):source.index("passed = all")]
+    assert "discovery_score_result" not in breakdown_block
+
+
+def test_run_validation_records_discovery_score_diagnostic_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-discovery-score")
+
+    vc = _small_vc(tmp_path, "v-discovery-score", "val-discovery-score")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-discovery-score")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        assert r["discovery_score_json"] is not None
+        ds = json.loads(r["discovery_score_json"])
+        assert set(ds) == {
+            "significance_component", "regime_robustness_component",
+            "stability_component", "cost_stress_component",
+            "components_used", "components_total", "discovery_score", "note",
+        }
+
+
 # ── Reproducibility fingerprint / candidate lock + date overlap ────────────
 # (Diagnostic Infrastructure Phase 1, 2026-08-02) — both informational
 # only, never a VALIDATION_CRITERIA entry, never blocking.
@@ -806,7 +914,7 @@ def test_verdict_boundaries(monkeypatch):
         return {
             "symbol": symbol, "passed": passed,
             "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "started_at": "t", "finished_at": "t",
+            "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "discovery_score": None, "started_at": "t", "finished_at": "t",
         }
 
     cases = [
@@ -849,7 +957,7 @@ def _fake_eval_all(symbol, point, vc, *, passing_symbols):
     return {
         "symbol": symbol, "passed": passed,
         "metrics": {}, "monte_carlo": {}, "walk_forward": {}, "robustness": {},
-        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "started_at": "t", "finished_at": "t",
+        "criteria_breakdown": {}, "feature_mining": None, "significance": None, "regime_robustness": None, "stability": None, "cost_stress": None, "discovery_score": None, "started_at": "t", "finished_at": "t",
     }
 
 

@@ -26,7 +26,7 @@ import {
   type PrefillRequest, type PossiblyInfinite, type CandidateLock, type DateOverlap,
   getDirectionSymmetryAudit, type DirectionSymmetryResponse, type SymmetryFinding,
   type SignificanceDiagnostic, type RegimeRobustnessDiagnostic, type StabilityDiagnostic,
-  type CostStressDiagnostic,
+  type CostStressDiagnostic, type DiscoveryScoreDiagnostic,
 } from './api'
 
 const POLL_MS = 4000
@@ -1255,6 +1255,8 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
             try { stability = r.stability_json ? JSON.parse(r.stability_json) : null } catch { /* malformed row */ }
             let costStress: CostStressDiagnostic | null = null
             try { costStress = r.cost_stress_json ? JSON.parse(r.cost_stress_json) : null } catch { /* malformed row */ }
+            let discoveryScore: DiscoveryScoreDiagnostic | null = null
+            try { discoveryScore = r.discovery_score_json ? JSON.parse(r.discovery_score_json) : null } catch { /* malformed row */ }
             return (
               <details key={r.symbol} className="border border-border rounded px-3 py-2">
                 <summary className="cursor-pointer text-[0.8em] flex items-center gap-2">
@@ -1347,6 +1349,23 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
                       </span>
                     )}
                     <span>{costStress.note}</span>
+                  </div>
+                )}
+                {discoveryScore && (
+                  <div className="mt-2 pt-2 border-t border-border text-[0.75em] text-muted flex flex-col gap-1">
+                    <span className="uppercase tracking-[1px] text-[0.85em]">Discovery Score (diagnostic only)</span>
+                    <span className="font-mono">
+                      {discoveryScore.discovery_score != null
+                        ? `${discoveryScore.discovery_score.toFixed(2)} (${discoveryScore.components_used} of ${discoveryScore.components_total} components)`
+                        : `not computable (${discoveryScore.components_used} of ${discoveryScore.components_total} components available)`}
+                    </span>
+                    <span className="font-mono">
+                      significance {discoveryScore.significance_component ?? '—'}
+                      {' '}| regime robustness {discoveryScore.regime_robustness_component ?? '—'}
+                      {' '}| stability {discoveryScore.stability_component ?? '—'}
+                      {' '}| cost stress {discoveryScore.cost_stress_component != null ? discoveryScore.cost_stress_component.toFixed(2) : '—'}
+                    </span>
+                    <span>{discoveryScore.note}</span>
                   </div>
                 )}
               </details>

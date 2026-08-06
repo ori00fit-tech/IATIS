@@ -448,6 +448,77 @@ def _compute_cost_stress_diagnostic(symbol: str, df, point: dict) -> dict:
     }
 
 
+# Mission Center Research Rigor Phase 6 (2026-08-XX) — a single, transparent
+# at-a-glance triage number over the four diagnostics already computed above
+# (significance, regime robustness, stability, cost stress). Deliberately
+# NOT a new statistic and NOT an opinion-based weighting: every component is
+# either read verbatim from a diagnostic that's already a 0.0-1.0 fraction
+# (regime_robustness_score, stability_score), a plain fraction derived the
+# same way (cost-stress survival rate), or a standard, textbook significance
+# bucket (p<0.05 / p<0.10 / else) — no invented thresholds beyond those
+# already used elsewhere in this codebase's own statistics. A missing
+# component (insufficient data for that one diagnostic) is EXCLUDED from
+# the average, never treated as a 0 — mirrors _compute_stability_score_
+# diagnostic()'s own "exclude insufficient from denominator" convention.
+#
+# NEVER a VALIDATION_CRITERIA entry, NEVER used to rank/select/auto-promote
+# a candidate — every symbol's full diagnostic detail is still reported
+# regardless of this score, exactly like every other diagnostic in this
+# module. This is a summary VIEW of already-real numbers, not a new verdict.
+DISCOVERY_SCORE_SIGNIFICANT_P = 0.05
+DISCOVERY_SCORE_MARGINAL_P = 0.10
+
+
+def _significance_component(significance: dict) -> float | None:
+    p = significance.get("ess_adjusted_p_value")
+    if p is None:
+        return None
+    if p < DISCOVERY_SCORE_SIGNIFICANT_P:
+        return 1.0
+    if p < DISCOVERY_SCORE_MARGINAL_P:
+        return 0.5
+    return 0.0
+
+
+def _cost_stress_component(cost_stress: dict) -> float | None:
+    measurable = [lv for lv in cost_stress.get("levels", []) if lv.get("edge_survives") is not None]
+    if not measurable:
+        return None
+    survives = sum(1 for lv in measurable if lv["edge_survives"])
+    return survives / len(measurable)
+
+
+def _compute_discovery_score_diagnostic(
+    significance: dict, regime_robustness: dict, stability: dict, cost_stress: dict,
+) -> dict:
+    """Mission Center Research Rigor Phase 6 (2026-08-XX) — see the module-
+    level comment above this function for the full design rationale.
+    Diagnostic only, never a VALIDATION_CRITERIA entry."""
+    components = {
+        "significance_component": _significance_component(significance),
+        "regime_robustness_component": regime_robustness.get("regime_robustness_score"),
+        "stability_component": stability.get("stability_score"),
+        "cost_stress_component": _cost_stress_component(cost_stress),
+    }
+    available = {k: v for k, v in components.items() if v is not None}
+    discovery_score = round(statistics.fmean(available.values()), 3) if available else None
+    return {
+        **components,
+        "components_used": len(available),
+        "components_total": len(components),
+        "discovery_score": discovery_score,
+        "note": (
+            f"Equally-weighted average of {len(available)} of {len(components)} "
+            "already-computed Research Rigor diagnostics (significance, regime "
+            "robustness, stability, cost stress) for this symbol — a summary "
+            "view for at-a-glance triage, not a new statistic. Missing "
+            "components are excluded from the average, never treated as zero. "
+            "Diagnostic only — never a VALIDATION_CRITERIA entry, never used "
+            "to rank/select/auto-promote a candidate."
+        ),
+    }
+
+
 def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     """Returns the full per-symbol result dict recorded into
     research_mission_validation_results — always populated, pass or
@@ -494,6 +565,9 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
     ))
     stability_score_result = _compute_stability_score_diagnostic(rb_result.sweeps)
+    discovery_score_result = _compute_discovery_score_diagnostic(
+        significance_result, regime_robustness_result, stability_score_result, cost_stress_result,
+    )
 
     breakdown = {
         "profit_factor": _criterion(metrics.profit_factor, VALIDATION_CRITERIA["min_profit_factor"],
@@ -532,6 +606,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "regime_robustness": json_safe(regime_robustness_result),
         "stability": json_safe(stability_score_result),
         "cost_stress": json_safe(cost_stress_result),
+        "discovery_score": json_safe(discovery_score_result),
         "started_at": started_at,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -590,7 +665,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 criteria_breakdown=result["criteria_breakdown"],
                 feature_mining=result["feature_mining"], significance=result["significance"],
                 regime_robustness=result["regime_robustness"], stability=result["stability"],
-                cost_stress=result["cost_stress"], error=None,
+                cost_stress=result["cost_stress"], discovery_score=result["discovery_score"], error=None,
                 started_at=result["started_at"], finished_at=result["finished_at"],
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
@@ -600,7 +675,7 @@ def run_validation(vc: ValidationConfig) -> None:
                 validation_id=vc.validation_id, symbol=symbol, passed=False,
                 metrics=None, monte_carlo=None, walk_forward=None, robustness=None,
                 criteria_breakdown={}, feature_mining=None, significance=None, regime_robustness=None,
-                stability=None, cost_stress=None, error=str(exc), started_at=now, finished_at=now,
+                stability=None, cost_stress=None, discovery_score=None, error=str(exc), started_at=now, finished_at=now,
             )
 
     total = len(vc.validation_symbols)

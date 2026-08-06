@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS research_mission_validation_results (
     regime_robustness_json   TEXT,                -- Mission Center Research Rigor Phase 3 (2026-08-XX) — does the edge hold across regimes (not just one)? Diagnostic only, never a criterion.
     stability_json           TEXT,                -- Mission Center Research Rigor Phase 4 (2026-08-XX) — fraction of swept risk params that are STABLE. Diagnostic only, never a criterion.
     cost_stress_json         TEXT,                -- Mission Center Research Rigor Phase 5 (2026-08-XX) — does the edge survive commission/slippage/swap costs scaled 1.5x/2x/3x? Diagnostic only, never a criterion.
+    discovery_score_json     TEXT,                -- Mission Center Research Rigor Phase 6 (2026-08-XX) — equally-weighted average of the significance/regime_robustness/stability/cost_stress diagnostics above, for at-a-glance triage. Diagnostic only, never a criterion.
     error                    TEXT,
     started_at               TEXT NOT NULL,
     finished_at              TEXT NOT NULL,
@@ -211,14 +212,15 @@ def record_validation_result(
     regime_robustness: dict | None = None,
     stability: dict | None = None,
     cost_stress: dict | None = None,
+    discovery_score: dict | None = None,
 ) -> None:
     """Always INSERT — one row per (validation_id, symbol), written
     exactly once as backtest/mission_validator.py finishes that symbol.
     feature_mining (Phase 1, 2026-07-30), significance (Research Rigor
     Phase 2), regime_robustness (Research Rigor Phase 3), stability
-    (Research Rigor Phase 4), and cost_stress (Research Rigor Phase 5)
-    are all diagnostic-only — none ever participates in
-    `passed`/`criteria_breakdown`."""
+    (Research Rigor Phase 4), cost_stress (Research Rigor Phase 5), and
+    discovery_score (Research Rigor Phase 6) are all diagnostic-only —
+    none ever participates in `passed`/`criteria_breakdown`."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
@@ -226,8 +228,9 @@ def record_validation_result(
                (validation_id, symbol, passed, metrics_json, monte_carlo_json,
                 walk_forward_json, robustness_json, criteria_breakdown_json,
                 feature_mining_json, significance_json, regime_robustness_json,
-                stability_json, cost_stress_json, error, started_at, finished_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                stability_json, cost_stress_json, discovery_score_json,
+                error, started_at, finished_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (validation_id, symbol, 1 if passed else 0,
              json.dumps(metrics) if metrics is not None else None,
              json.dumps(monte_carlo) if monte_carlo is not None else None,
@@ -239,6 +242,7 @@ def record_validation_result(
              json.dumps(regime_robustness) if regime_robustness is not None else None,
              json.dumps(stability) if stability is not None else None,
              json.dumps(cost_stress) if cost_stress is not None else None,
+             json.dumps(discovery_score) if discovery_score is not None else None,
              error, started_at, finished_at),
         )
 

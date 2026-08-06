@@ -562,6 +562,12 @@ def _render_draft_markdown(body: dict[str, Any], timestamp: str) -> str:
 
     data_required = body.get("data_required") or {}
 
+    # Mission Center Research Rigor Phase 7 (2026-08-XX) — an optional,
+    # purely cosmetic traceability ID (backtest/lead_id.py), NOT a
+    # registry ID. Absent when this draft wasn't generated from a Mission
+    # Center trial (e.g. the Research & Backtests Copilot panel).
+    lead_id_line = f"**Lead ID:** {_s('lead_id')}\n" if _s("lead_id") else ""
+
     # Edge Discovery (2026-07-31) — Observation/Effect Size/Confidence/
     # Possible explanation/Suggested experiments/Priority are a newer,
     # optional "Hypothesis Candidate" report shape (see
@@ -577,6 +583,7 @@ def _render_draft_markdown(body: dict[str, Any], timestamp: str) -> str:
 
 **Status:** DRAFT (AI-suggested, unreviewed)
 **Generated:** {timestamp}
+{lead_id_line}
 
 ## Statement
 {_s("statement")}

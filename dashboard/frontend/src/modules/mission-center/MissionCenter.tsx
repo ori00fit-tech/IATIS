@@ -1197,6 +1197,11 @@ function ValidationDetail({ missionId, validationId }: { missionId: string; vali
 
   return (
     <div className="border-t border-border pt-3 mt-1 flex flex-col gap-3">
+      {v && (
+        <span className="text-[0.72em] text-muted font-mono">
+          Lead ID: {leadId(v.mission_id, v.trial_number, v.trial_symbol)}
+        </span>
+      )}
       <div className="flex items-center gap-2 flex-wrap">
         <StatusBadge status={data.job_status ?? v?.status ?? 'unknown'} />
         {v && <Badge tone={v.validation_mode === 'SAME_SYMBOL' ? 'marginal' : 'neutral'}>{v.validation_mode}</Badge>}
@@ -1477,6 +1482,16 @@ function hypothesisNameFor(mission: MissionRow | null | undefined, trial: Missio
   }
 }
 
+// Mission Center Research Rigor Phase 7 (2026-08-XX) — a purely cosmetic,
+// deterministic traceability ID for one (mission, trial, symbol) triple.
+// Mirrors backtest/lead_id.py's formula exactly — NOT a registry.json ID,
+// never carries evidence status. Computed on the fly from data already
+// fetched, no new backend field.
+function leadId(missionId: string, trialNumber: number, symbol: string): string {
+  const shortMission = (missionId || '').slice(0, 8) || 'unknown'
+  return `LEAD-${shortMission}-${trialNumber}-${symbol.toUpperCase()}`
+}
+
 // Trial identity (2026-08-02) — an operator correctly pointed out that
 // outside hypothesis-bundle mode, "Hypothesis" always shows "—" and
 // nothing in the leaderboard reveals which engines/timeframes/indicators/
@@ -1696,6 +1711,7 @@ function TrialBreakdownPanel({
         observation: ai.data.observation ?? '', effect_size: ai.data.effect_size ?? '',
         confidence: ai.data.confidence ?? '', possible_explanation: ai.data.possible_explanation ?? '',
         suggested_experiments: ai.data.suggested_experiments ?? [], priority: ai.data.priority ?? '',
+        lead_id: leadId(missionId, trial.trial_number, trial.symbol),
       })
       setDraftFile(result.file)
     } catch (e) {
@@ -1709,6 +1725,10 @@ function TrialBreakdownPanel({
       right={<button onClick={onClose} className="text-[0.75em] text-muted hover:text-accent">Close</button>}
     >
       <div className="p-4 flex flex-col gap-4">
+        <span className="text-[0.72em] text-muted font-mono">
+          Lead ID: {leadId(missionId, trial.trial_number, trial.symbol)}
+          <span className="text-muted/60"> (traceability only — not a registry ID)</span>
+        </span>
         <TrialConfigSummary config={resolvedConfig} />
         {!hasBreakdown && !hasGateRejections ? (
           <Empty>No regime/direction/session/gate-rejection breakdown available for this trial (0 closed trades, or an older mission run predating this data).</Empty>
@@ -1873,6 +1893,7 @@ function MissionDetail({
           'single-run sampler result with no out-of-sample or Monte Carlo check at all. Strongly consider ' +
           'clicking "Validate…" on this trial before writing falsification criteria.'
       const hypothesisLabel = hypothesisName ? ` — Hypothesis "${hypothesisName}"` : ''
+      const lead = leadId(missionId, t.trial_number, t.symbol)
       const result = await saveHypothesisDraft({
         title: `Mission ${missionId} trial ${t.trial_number}${hypothesisLabel} (${t.symbol})`,
         statement: `A candidate configuration found by mission ${missionId} (sampler-driven search, ` +
@@ -1885,6 +1906,7 @@ function MissionDetail({
         distinct_from_prior_kill: 'Not yet reviewed — check against CLAUDE.md\'s dead list before registering.',
         notes: `Auto-generated from Mission Center. mission_id=${missionId}, trial_number=${t.trial_number}.` +
           (validation ? ` validation_id=${validation.id}.` : ''),
+        lead_id: lead,
       })
       setDraftStatus((s) => ({ ...s, [t.trial_number]: result.file }))
     } catch (e) {

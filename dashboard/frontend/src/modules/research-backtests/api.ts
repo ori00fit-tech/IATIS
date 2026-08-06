@@ -311,6 +311,11 @@ export interface HypothesisSuggestion {
   possible_explanation?: string
   suggested_experiments?: string[]
   priority?: string
+  // Mission Center Research Rigor Phase 7 (2026-08-XX) — a purely
+  // cosmetic traceability ID (backtest/lead_id.py), NOT a registry.json
+  // ID. Optional: only Mission Center's own draft call sites populate
+  // this; the Research & Backtests Copilot panel never does.
+  lead_id?: string
 }
 
 export interface SuggestHypothesisResponse extends Partial<HypothesisSuggestion> {

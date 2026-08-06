@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Panel, Empty } from '../../components/Panel'
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../../components/ui/Collapsible'
 import { Badge } from '../../components/Badge'
 import { KpiCard } from '../../components/KpiCard'
 import { DataTable, type Column } from '../../components/DataTable'
@@ -454,6 +455,44 @@ function HypothesisBundleBuilder({
   )
 }
 
+// Mobile-First Restructuring Phase 2 (2026-08-06) — collapses New Mission's
+// heaviest sections (Timeframes/Engines/Indicator Filters/Context Filters/
+// Risk Params/Hypotheses) behind an accordion showing an "N active" count
+// when closed, matching the operator's own original ask: "Timeframes/
+// Engines/Indicators/Context/Risk sections should be collapsed accordions
+// by default... expanding only on demand." Sections that already ship with
+// a non-empty, sensible default (Timeframes/Engines) start open; sections
+// that start empty (Indicator/Context filters, Risk params) start closed —
+// defaultOpen is left to each call site rather than hardcoded here.
+function CollapsibleSection({
+  title, activeCount, defaultOpen = false, children,
+}: {
+  title: string
+  activeCount?: number
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="border border-border rounded">
+      <CollapsibleTrigger className="w-full flex items-center justify-between px-3 py-2.5 min-h-11 text-[0.78em] font-bold text-text hover:text-accent">
+        <span className="flex items-center gap-2">
+          <span>{title}</span>
+          {activeCount != null && (
+            <span className={activeCount > 0 ? 'text-accent font-normal' : 'text-muted font-normal'}>
+              — {activeCount} active
+            </span>
+          )}
+        </span>
+        <span className="text-muted">{open ? '▾' : '▸'}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-3 pb-3 flex flex-col gap-2 border-t border-border">
+        <div className="pt-2">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 function MissionBuilder({
   onCreated, prefillRequest, onPrefillConsumed,
 }: {
@@ -669,33 +708,39 @@ function MissionBuilder({
           </div>
         )}
 
-        <div className="flex flex-wrap gap-3 items-end">
-          <div className="flex flex-col gap-1">
-            <span className="text-[0.7em] text-muted uppercase">Confluence quorum override (optional)</span>
-            <input
-              type="number" min={1} max={9} placeholder="production default (2)"
-              value={quorumOverride}
-              onChange={(e) => setQuorumOverride(e.target.value === '' ? '' : Number(e.target.value))}
-              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
-            />
+        <CollapsibleSection
+          title="Confluence overrides (optional)"
+          activeCount={(quorumOverride === '' ? 0 : 1) + (infoShareOverride === '' ? 0 : 1)}
+          defaultOpen={false}
+        >
+          <div className="flex flex-wrap gap-3 items-end">
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Confluence quorum override</span>
+              <input
+                type="number" min={1} max={9} placeholder="production default (2)"
+                value={quorumOverride}
+                onChange={(e) => setQuorumOverride(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[0.7em] text-muted uppercase">Min informative weight share</span>
+              <input
+                type="number" min={0} max={1} step={0.05} placeholder="production default (0.6)"
+                value={infoShareOverride}
+                onChange={(e) => setInfoShareOverride(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
+              />
+            </div>
           </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-[0.7em] text-muted uppercase">Min informative weight share (optional)</span>
-            <input
-              type="number" min={0} max={1} step={0.05} placeholder="production default (0.6)"
-              value={infoShareOverride}
-              onChange={(e) => setInfoShareOverride(e.target.value === '' ? '' : Number(e.target.value))}
-              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-56"
-            />
-          </div>
-        </div>
-        <span className="text-[0.72em] text-muted -mt-2">
-          Lowering quorum below the enabled-engine count is required to test a single engine in isolation —
-          production quorum (2) can never pass with fewer than 2 enabled engines. Applies mission-wide, to
-          every trial regardless of which hypothesis/engine set it draws.
-        </span>
+          <span className="text-[0.72em] text-muted">
+            Lowering quorum below the enabled-engine count is required to test a single engine in isolation —
+            production quorum (2) can never pass with fewer than 2 enabled engines. Applies mission-wide, to
+            every trial regardless of which hypothesis/engine set it draws.
+          </span>
+        </CollapsibleSection>
 
-        <label className="flex items-center gap-2 text-[0.78em] text-text cursor-pointer">
+        <label className="flex items-center gap-2 text-[0.78em] text-text cursor-pointer min-h-11">
           <input type="checkbox" checked={hypothesisMode} onChange={(e) => setHypothesisMode(e.target.checked)} />
           <span className="font-bold">Search across named hypotheses</span>
           <span className="text-muted">
@@ -711,37 +756,35 @@ function MissionBuilder({
         )}
 
         {hypothesisMode ? (
-          <div className="flex flex-col gap-1">
-            <span className="text-[0.7em] text-muted uppercase">Hypotheses</span>
+          <CollapsibleSection title="Hypotheses" activeCount={bundles.length} defaultOpen>
             <HypothesisBundleBuilder bundles={bundles} setBundles={setBundles} />
-          </div>
+          </CollapsibleSection>
         ) : (
           <>
-            <div className="flex flex-col gap-1">
-              <span className="text-[0.7em] text-muted uppercase">Timeframes (this run only)</span>
+            <CollapsibleSection title="Timeframes" activeCount={timeframes.length} defaultOpen={timeframes.length > 0}>
               <MultiCheckbox options={SUPPORTED_TIMEFRAMES} value={timeframes} onToggle={toggleTimeframe} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[0.7em] text-muted uppercase">Engine set (this run only)</span>
+            </CollapsibleSection>
+            <CollapsibleSection title="Engines" activeCount={engines.length} defaultOpen={engines.length > 0}>
               <MultiCheckbox options={ENGINE_KEYS} value={engines} onToggle={toggleEngine} />
               <EngineVariantPicker engines={engines} value={engineVariants} onChange={setEngineVariants} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[0.7em] text-muted uppercase">Indicator filters (this run only)</span>
+            </CollapsibleSection>
+            <CollapsibleSection title="Indicator filters" activeCount={indicatorFilters.length} defaultOpen={false}>
               <IndicatorFiltersBuilder rows={indicatorFilters} setRows={setIndicatorFilters} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[0.7em] text-muted uppercase">Context filters (this run only)</span>
+            </CollapsibleSection>
+            <CollapsibleSection title="Context filters" activeCount={contextFilters.length} defaultOpen={false}>
               <ContextFiltersBuilder rows={contextFilters} setRows={setContextFilters} />
-            </div>
+            </CollapsibleSection>
           </>
         )}
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase">Risk params to search (ranges)</span>
+        <CollapsibleSection
+          title="Risk params to search (ranges)"
+          activeCount={Object.keys(riskRanges).length}
+          defaultOpen={Object.keys(riskRanges).length > 0}
+        >
           <div className="flex flex-wrap gap-3">
             {DEFAULT_RISK_RANGE_FIELDS.map((field) => (
-              <label key={field} className="flex items-center gap-2 text-[0.78em]">
+              <label key={field} className="flex items-center gap-2 text-[0.78em] min-h-11">
                 <input type="checkbox" checked={field in riskRanges} onChange={() => toggleRiskField(field)} />
                 <span className="w-32">{field}</span>
                 {field in riskRanges && (
@@ -758,12 +801,12 @@ function MissionBuilder({
               </label>
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
 
         {error && <div className="text-red text-[0.8em]">{error}</div>}
         <div>
           <button onClick={submit} disabled={submitting}
-            className="px-4 py-2 rounded bg-accent text-bg font-bold text-[0.82em] disabled:opacity-50">
+            className="px-4 py-2 min-h-11 rounded bg-accent text-bg font-bold text-[0.82em] disabled:opacity-50">
             {submitting ? 'Launching…' : 'Launch Mission'}
           </button>
         </div>

@@ -522,6 +522,83 @@ def test_on_error_res_already_logged_in_does_not_record_an_error_code():
     assert c._last_error_code == ""  # early-return branch never reaches the recording line
 
 
+# ─── Mid-session token-invalid self-heal (cTrader OAuth rebuild follow-up) ──
+# A token-invalid rejection arriving on an already-READY session (the token
+# expired mid-session on a routine request, not during connect()) is a
+# distinct gap from the connect()-time self-heal above: _on_error_res()
+# previously only set ConnectionState.ERROR and returned, with nothing ever
+# calling _schedule_reconnect() to repair it — the client would silently
+# wedge in ERROR until something called connect() again from outside. Fixed:
+# a token-invalid rejection while READY now explicitly kicks off the same
+# bounded reconnect loop a TCP-level drop already triggers.
+
+def test_on_error_res_token_invalid_while_ready_triggers_reconnect():
+    c = _mk_client()
+    c._state = ConnectionState.READY
+    c._intentional_disconnect = False
+    scheduled = {"n": 0}
+    c._schedule_reconnect = lambda: scheduled.__setitem__("n", scheduled["n"] + 1)
+    msg = types.SimpleNamespace(errorCode="CH_ACCESS_TOKEN_INVALID", description="Access token expired")
+
+    c._on_error_res(msg)
+
+    assert scheduled["n"] == 1
+    assert c._state == ConnectionState.ERROR
+
+
+def test_on_error_res_token_invalid_while_not_ready_does_not_double_trigger_reconnect():
+    """When the rejection arrives DURING connect() (state never reached
+    READY), that failure path's own _attempt_token_refresh_and_reconnect
+    retry already handles it — _on_error_res must not ALSO schedule a
+    second, independent reconnect loop for the same failure."""
+    c = _mk_client()
+    c._state = ConnectionState.TCP_CONNECTED
+    c._intentional_disconnect = False
+    scheduled = {"n": 0}
+    c._schedule_reconnect = lambda: scheduled.__setitem__("n", scheduled["n"] + 1)
+    msg = types.SimpleNamespace(errorCode="CH_ACCESS_TOKEN_INVALID", description="Access token expired")
+
+    c._on_error_res(msg)
+
+    assert scheduled["n"] == 0
+    assert c._state == ConnectionState.ERROR
+
+
+def test_on_error_res_non_token_error_while_ready_does_not_trigger_reconnect():
+    """A READY-session rejection that ISN'T a deterministic token-invalid
+    code (e.g. a rate limit or a one-off server error) must not trigger
+    this new self-heal path — only the specific, known-recoverable-by-
+    refresh error codes do."""
+    c = _mk_client()
+    c._state = ConnectionState.READY
+    c._intentional_disconnect = False
+    scheduled = {"n": 0}
+    c._schedule_reconnect = lambda: scheduled.__setitem__("n", scheduled["n"] + 1)
+    msg = types.SimpleNamespace(errorCode="SOME_OTHER_ERROR", description="unrelated rejection")
+
+    c._on_error_res(msg)
+
+    assert scheduled["n"] == 0
+    assert c._state == ConnectionState.ERROR
+
+
+def test_on_error_res_token_invalid_while_ready_respects_intentional_disconnect():
+    """A token-invalid rejection racing an in-flight disconnect() call must
+    not start a fresh reconnect loop — mirrors _schedule_reconnect()'s own
+    _intentional_disconnect check for a TCP-level drop."""
+    c = _mk_client()
+    c._state = ConnectionState.READY
+    c._intentional_disconnect = True
+    scheduled = {"n": 0}
+    c._schedule_reconnect = lambda: scheduled.__setitem__("n", scheduled["n"] + 1)
+    msg = types.SimpleNamespace(errorCode="CH_ACCESS_TOKEN_INVALID", description="Access token expired")
+
+    c._on_error_res(msg)
+
+    assert scheduled["n"] == 0
+    assert c._state == ConnectionState.ERROR
+
+
 def test_connect_timeout_does_not_attempt_token_refresh(monkeypatch):
     """Transient failure (no ProtoOAErrorRes ever received) — _last_error_code
     stays empty, so the token-refresh branch must never even be considered."""

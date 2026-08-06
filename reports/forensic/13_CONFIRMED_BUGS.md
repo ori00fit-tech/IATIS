@@ -2375,3 +2375,90 @@ network egress to `id.ctrader.com`/`openapi.ctrader.com`) — same
 disclosed limitation as every other external-API feature built this
 session; the operator's own post-deploy verification checklist is in
 the implementation plan.
+
+---
+
+## BUG-019
+
+**Severity:** P2 (closes a named, honest gap explicitly deferred out of
+BUG-018's own fix — practically unreachable after that fix's proactive
+refresh, but structurally still present).
+
+**Category:** cTrader connection lifecycle (`execution/ctrader_client.py`
+`_on_error_res()`) — follow-up to BUG-018's cTrader OAuth 2.0 rebuild.
+
+**Claim:** A `CH_ACCESS_TOKEN_INVALID` rejection arriving on an
+already-`READY` session (the token expires mid-session on a routine
+request — a trendbar fetch, a reconcile call — not during `connect()`)
+set `ConnectionState.ERROR` and returned, with nothing calling
+`_schedule_reconnect()` to actually repair it. The client would silently
+wedge in `ERROR` until something called `connect()` again from outside.
+
+**Observed (confirmed by direct code read before the fix):**
+`_on_error_res()`'s only two branches were the `ALREADY_LOGGED_IN`
+early-return and the fallthrough
+`logger.error(...); self._last_error_code = str(code);
+self._set_state(ConnectionState.ERROR)` — no branch ever called
+`_on_disconnect()`/`_schedule_reconnect()`. Only an actual TCP-level
+socket drop (`_on_disconnect`) entered the reconnect loop.
+
+**Expected:** a deterministic, self-healable failure (the token can be
+refreshed) arriving mid-session should trigger the same repair path a
+network-level drop already gets, not leave the client wedged pending an
+external `connect()` call.
+
+**File/Line:** `execution/ctrader_client.py`, `_on_error_res()`.
+
+**Execution path:** any live scheduler tick issuing a request (trendbar
+fetch, reconcile, symbol details) on an already-authenticated session
+whose token has since expired without a fresh proactive refresh having
+landed yet.
+
+**Reproduction:** `tests/test_ctrader_client.py` (+4 new tests, no live
+network — synchronous calls into `_on_error_res()` with a mocked
+`_schedule_reconnect`): `test_on_error_res_token_invalid_while_ready_triggers_reconnect`
+(state=`READY` + `CH_ACCESS_TOKEN_INVALID` → `_schedule_reconnect()`
+called exactly once); `test_on_error_res_token_invalid_while_not_ready_does_not_double_trigger_reconnect`
+(the rejection arriving *during* `connect()`, state never reached
+`READY` — that failure path's own `_attempt_token_refresh_and_reconnect`
+already handles it, so this new branch must not fire a second,
+independent reconnect for the same failure);
+`test_on_error_res_non_token_error_while_ready_does_not_trigger_reconnect`
+(an unrelated deterministic rejection while `READY` must not trigger
+this path — only the known-recoverable-by-refresh code does);
+`test_on_error_res_token_invalid_while_ready_respects_intentional_disconnect`
+(a rejection racing an in-flight `disconnect()` call must not start a
+fresh reconnect loop, mirroring `_schedule_reconnect()`'s own guard).
+
+**Root cause:** `_on_error_res()` was written to *report* a rejection,
+not to *repair* the connection — repair was assumed to always come from
+`_on_disconnect()`, which only ever fires on a real socket-level event,
+not an in-band protocol-level rejection on an otherwise-healthy socket.
+
+**Impact:** Live cTrader connectivity only, and narrow in practice:
+BUG-018's proactive refresh (`scheduler.py::run_once()`,
+`get_valid_access_token(margin_seconds=86400)`) already refreshes the
+token hours ahead of real expiry on every scheduler tick, so this
+specific mid-session-expiry race is very unlikely to actually occur —
+this fix removes a structural gap, not an observed live failure.
+
+**Fix (CONFIRMED, applied same phase):** `_on_error_res()` now records
+whether the session was `READY` immediately before setting
+`ConnectionState.ERROR`; if it was, the code is in
+`_TOKEN_INVALID_ERROR_CODES`, and no `disconnect()` is in flight, it
+calls `self._schedule_reconnect()` directly — reusing the existing,
+completely unmodified bounded-backoff reconnect loop (which itself calls
+`connect()`, whose own first line always asks `token_manager` for a
+fresh token). No new retry machinery was introduced; this only wires an
+existing repair path into a previously-silent failure branch.
+
+**Regression tests:** `tests/test_ctrader_client.py` (+4, all passing;
+56/56 in the file). Full project suite re-run with zero regressions
+outside this file.
+
+**Status:** FIXED, tested, regression-pinned. Closes the "named, honest
+non-goal" flagged at the end of BUG-018. Real live verification (a
+genuine mid-session token-expiry event on the real VPS) was NOT possible
+from this sandbox (no cTrader credentials, no network egress) — same
+disclosed limitation as BUG-018 and every other external-API feature
+built this session.

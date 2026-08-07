@@ -659,8 +659,8 @@ function MissionBuilder({
   }
 
   return (
-    <Panel title="New Mission" right="EXPLORATORY — every trial is a lead, never evidence">
-      <div className="p-4 flex flex-col gap-3">
+    <Panel title="New Mission" right="EXPLORATORY — every trial is a lead, never evidence" clipContent={false}>
+      <div className="p-4 pb-16 flex flex-col gap-3">
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1">
             <span className="text-[0.7em] text-muted uppercase">Name (optional)</span>
@@ -803,6 +803,18 @@ function MissionBuilder({
           </div>
         </CollapsibleSection>
 
+      </div>
+
+      {/* Sticky Launch bar (Mobile-First Restructuring Phase 2 follow-up,
+       * 2026-08-06) — a sibling of the padded content div above, not
+       * nested inside it, so it isn't subject to that div's own layout;
+       * relies on the Panel above being rendered with clipContent={false}
+       * (see Panel.tsx's own doc comment for why that's required). The
+       * bottom offset reuses --bottom-nav-h (0px on desktop via index.
+       * css's existing @media rule, 56px on mobile) so this sticks flush
+       * above MobileBottomNav rather than hiding behind it, on both
+       * breakpoints, with the same token Phase 1 already established. */}
+      <div className="sticky bottom-[calc(var(--bottom-nav-h)+env(safe-area-inset-bottom))] z-10 bg-panel/95 backdrop-blur-sm border-t border-border rounded-b-[10px] px-4 py-3 flex flex-col gap-2">
         {error && <div className="text-red text-[0.8em]">{error}</div>}
         <div>
           <button onClick={submit} disabled={submitting}
@@ -2316,7 +2328,7 @@ export function MissionCenter() {
           onPrefillConsumed={() => setPrefillRequest(null)}
         />
       </div>
-      <div className="grid gap-4 grid-cols-[280px_1fr] items-start">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-[280px_1fr] items-start">
         <Panel title="Missions">
           <MissionsList selected={selectedMission} onSelect={setSelectedMission} />
         </Panel>

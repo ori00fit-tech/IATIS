@@ -1,5 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useReactTable, getCoreRowModel, getSortedRowModel, flexRender, type ColumnDef, type SortingState } from '@tanstack/react-table'
+import { useMediaQuery } from '../lib/useMediaQuery'
+import { MQ_MOBILE } from '../lib/breakpoints'
 
 export interface Column<T> {
   header: string
@@ -16,7 +18,41 @@ export interface Column<T> {
   sortingFn?: 'alphanumeric' | 'basic'
 }
 
+/**
+ * Mobile-First Restructuring Phase 3 (2026-08-06) — one card per row below
+ * the mobile breakpoint (<640px), replacing DataTable's <table> entirely
+ * for that tier so a horizontally-scrolled, column-crushed table never
+ * ships on a phone. Fully generic (all 30+ DataTable call sites benefit
+ * automatically, no per-consumer opt-in): the first column renders as the
+ * card's bold, unlabeled title (in practice always the row's primary
+ * identifier — symbol, mission ID, engine name, ...), every other column
+ * renders as a label:value row below it. No sort affordance in card mode
+ * — tapping a tiny sort arrow isn't a natural mobile pattern, and every
+ * accessorFn-bearing column already degrades gracefully to "no sort UI"
+ * for any consumer that doesn't opt in, so this mirrors that existing
+ * convention rather than inventing a new one.
+ */
+function DataTableCard<T>({ columns, row }: { columns: Column<T>[]; row: T }) {
+  const [first, ...rest] = columns
+  return (
+    <div className="bg-card border border-border rounded-[10px] px-3.5 py-3 flex flex-col gap-2">
+      <div className="text-[0.9em] font-bold text-text break-words">{first.render(row)}</div>
+      {rest.length > 0 && (
+        <div className="flex flex-col gap-1.5 pt-1.5 border-t border-border">
+          {rest.map((col, i) => (
+            <div key={i} className="flex items-center justify-between gap-3">
+              <span className="text-[0.65em] text-muted uppercase tracking-[0.8px] shrink-0">{col.header}</span>
+              <span className="text-[0.8em] text-text text-right break-words">{col.render(row)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function DataTable<T>({ columns, rows, rowKey }: { columns: Column<T>[]; rows: T[]; rowKey: (row: T) => string }) {
+  const isMobile = useMediaQuery(MQ_MOBILE)
   const tableColumns = useMemo<ColumnDef<T>[]>(
     () =>
       columns.map((col, i) =>
@@ -47,6 +83,16 @@ export function DataTable<T>({ columns, rows, rowKey }: { columns: Column<T>[]; 
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   })
+
+  if (isMobile) {
+    return (
+      <div className="flex flex-col gap-2 p-2">
+        {rows.map((row) => (
+          <DataTableCard key={rowKey(row)} columns={columns} row={row} />
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="overflow-x-auto">

@@ -371,10 +371,14 @@ def test_fetch_dukascopy_jforex_raises_when_bridge_url_unset(monkeypatch):
 
 
 def test_fetch_dukascopy_jforex_parses_bridge_response(monkeypatch):
+    # Real bridge contract, verified live on the operator's VPS 2026-08-07
+    # against the actual HistDataController.java source: instID is
+    # slash-separated, there is no `count` param (only a required `from`
+    # epoch-ms), and each candle's field is "timestamp" in MILLISECONDS.
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
 
     real_dt = pd.Timestamp("2026-08-08 12:00:00", tz="UTC")
-    ts_seconds = int(real_dt.timestamp())
+    ts_ms = int(real_dt.timestamp() * 1000)
 
     class _FakeResp:
         def raise_for_status(self):
@@ -382,14 +386,15 @@ def test_fetch_dukascopy_jforex_parses_bridge_response(monkeypatch):
 
         def json(self):
             return [{
-                "symbol": "EURUSD", "time": ts_seconds, "open": 1.1, "high": 1.11,
-                "low": 1.09, "close": 1.1, "volume": 250.0, "ticks": 4, "period": "1HOUR",
+                "timestamp": ts_ms, "open": 1.1, "high": 1.11,
+                "low": 1.09, "close": 1.1, "volume": 250.0, "spread": 0.5,
             }]
 
     def _fake_get(url, params=None, timeout=None):
         assert url.endswith("/api/v1/history")
-        assert params["instID"] == "EURUSD"
+        assert params["instID"] == "EUR/USD"
         assert params["timeFrame"] == "1HOUR"
+        assert "from" in params and "count" not in params
         return _FakeResp()
 
     import requests as _requests
@@ -404,20 +409,31 @@ def test_fetch_dukascopy_jforex_parses_bridge_response(monkeypatch):
 
 def test_fetch_dukascopy_jforex_defaults_missing_volume_to_zero(monkeypatch):
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
-    ts_seconds = int(pd.Timestamp("2026-08-08 12:00:00", tz="UTC").timestamp())
+    ts_ms = int(pd.Timestamp("2026-08-08 12:00:00", tz="UTC").timestamp() * 1000)
 
     class _FakeResp:
         def raise_for_status(self):
             pass
 
         def json(self):
-            return [{"time": ts_seconds, "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.1}]
+            return [{"timestamp": ts_ms, "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.1}]
 
     import requests as _requests
     monkeypatch.setattr(_requests, "get", lambda url, params=None, timeout=None: _FakeResp())
 
     df = dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
     assert float(df["volume"].iloc[0]) == 0.0
+
+
+def test_dukascopy_jforex_inst_id_converts_to_slash_format():
+    assert dp._dukascopy_jforex_inst_id("EURUSD") == "EUR/USD"
+    assert dp._dukascopy_jforex_inst_id("XAUUSD") == "XAU/USD"
+    assert dp._dukascopy_jforex_inst_id("BTCUSD") == "BTC/USD"
+
+
+def test_dukascopy_jforex_inst_id_raises_on_non_6_char_symbol():
+    with pytest.raises(dp.DataFetchError, match="cannot derive instID"):
+        dp._dukascopy_jforex_inst_id("EURUSDX")
 
 
 def test_fetch_dukascopy_jforex_raises_on_unmapped_timeframe(monkeypatch):

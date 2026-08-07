@@ -1077,7 +1077,10 @@ def _fetch_mt5(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
 # provider'" scope boundary.
 # ---------------------------------------------------------------------------
 
-# dukas-api's documented timeFrame enum (verified against its README):
+# dukas-api's REAL timeFrame enum, verified 2026-08-07 against the real
+# HistDataController.java source on the operator's VPS (the README's
+# documented contract was wrong on two other points — see below — so this
+# was re-confirmed from source, not re-trusted from docs):
 # 1SEC | 10SEC | 1MIN | 5MIN | 10MIN | 15MIN | 1HOUR | DAILY. No native
 # 4-hour candle — H4 falls through to resampling from H1 elsewhere in the
 # pipeline, same as every other provider without a native H4 (see
@@ -1085,6 +1088,15 @@ def _fetch_mt5(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
 # counterpart and are simply never requested here.
 _DUKASCOPY_JFOREX_TF: dict[str, str] = {
     "M1": "1MIN", "M5": "5MIN", "M15": "15MIN", "H1": "1HOUR", "D1": "DAILY",
+}
+
+# Bar duration in milliseconds per timeframe — used to compute a real
+# `from` timestamp (see _fetch_dukascopy_jforex: the bridge has no
+# "give me N bars" mode, only a from/to time range; `from` is a REQUIRED
+# param on the real endpoint).
+_DUKASCOPY_JFOREX_TF_MS: dict[str, int] = {
+    "M1": 60_000, "M5": 5 * 60_000, "M15": 15 * 60_000,
+    "H1": 60 * 60_000, "D1": 24 * 60 * 60_000,
 }
 
 
@@ -1095,6 +1107,24 @@ def _dukascopy_jforex_bridge_url() -> str:
     return url.rstrip("/")
 
 
+def _dukascopy_jforex_inst_id(internal_symbol: str) -> str:
+    """The bridge's /api/v1/history calls Instrument.valueOf(instID)
+    directly against the real JForex SDK enum, whose constant names are
+    slash-separated ("EUR/USD", not IATIS's internal "EURUSD") — confirmed
+    live 2026-08-07 both by the bridge's own subscription log
+    ("instruments=[BTC/USD, EUR/USD, ...]") and by a real
+    instID=EUR%2FUSD request returning real bars. Every symbol currently
+    mapped through this provider is a clean 3+3 split (FX majors/minors,
+    metals, and BTC/ETH crosses are all 6 chars), so inserting the slash
+    at position 3 recovers the SDK's own format without a lookup table."""
+    if len(internal_symbol) != 6:
+        raise DataFetchError(
+            f"Dukascopy JForex bridge: cannot derive instID for {internal_symbol!r} "
+            f"(expected a 6-char XXXYYY symbol)"
+        )
+    return f"{internal_symbol[:3]}/{internal_symbol[3:]}"
+
+
 def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     """Bars via the locally-run dukas-api bridge (see this section's header
     comment) fronting the official JForex SDK.
@@ -1103,18 +1133,38 @@ def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.D
     failure (unreachable, timeout, unmapped timeframe, HTTP error) raises
     DataFetchError so the provider chain falls through cleanly, exactly
     like a missing MT5/cTrader credential does today.
+
+    Verified live against a real, connected bridge on the operator's VPS
+    (2026-08-07) — the dukas-api README's documented contract was wrong on
+    three points, all fixed here from the real HistDataController.java
+    source rather than re-guessed from docs: (1) there is no `count` param
+    at all, only a required `from` (epoch-ms) + optional `to`; (2) instID
+    must be slash-separated (see _dukascopy_jforex_inst_id); (3) each
+    candle's timestamp field is named "timestamp" (not "time") and is in
+    MILLISECONDS (not seconds).
     """
+    import time as _time
+
     import requests
 
     internal = _internal_symbol(symbol)
     tf = _DUKASCOPY_JFOREX_TF.get(interval)
     if tf is None:
         raise DataFetchError(f"Dukascopy JForex bridge: no native timeframe mapping for {interval!r}")
+    inst_id = _dukascopy_jforex_inst_id(internal)
+    bar_ms = _DUKASCOPY_JFOREX_TF_MS[interval]
+    now_ms = int(_time.time() * 1000)
+    # Generously wide window (2.5x the naive span + a 7-day pad) since the
+    # bridge has no bar-count mode — weekend/holiday gaps (especially on
+    # D1) mean a naive outputsize*bar_ms span would come up short. Trimmed
+    # back down to outputsize via .tail() below, same as every other
+    # provider here.
+    from_ms = now_ms - int(bar_ms * outputsize * 2.5) - 7 * 24 * 60 * 60_000
     try:
         resp = requests.get(
             f"{_dukascopy_jforex_bridge_url()}/api/v1/history",
-            params={"instID": internal, "timeFrame": tf, "count": outputsize},
-            timeout=10,
+            params={"instID": inst_id, "timeFrame": tf, "from": from_ms},
+            timeout=15,
         )
         resp.raise_for_status()
         rows = resp.json()
@@ -1125,14 +1175,7 @@ def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.D
     if not rows:
         raise DataFetchError(f"Dukascopy JForex bridge: no bars for {internal} @ {interval}")
     df = pd.DataFrame(rows)
-    # Bridge's documented response includes a unix "time" field per candle
-    # (dukas-api README) — assumed seconds, matching every other bridge
-    # integration here (_fetch_mt5) rather than repeating the ms/s unit
-    # mistake found and fixed in _fetch_ctrader above. NOT independently
-    # verified against a live bridge from this sandbox (network policy
-    # blocks reaching a real Dukascopy-backed instance) — flagged for the
-    # operator's own live check per docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md.
-    df.index = pd.to_datetime(df.pop("time"), unit="s", utc=True)
+    df.index = pd.to_datetime(df.pop("timestamp"), unit="ms", utc=True)
     if "volume" not in df.columns:
         df["volume"] = 0.0
     return df[["open", "high", "low", "close", "volume"]].tail(outputsize)

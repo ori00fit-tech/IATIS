@@ -344,7 +344,7 @@ function SymbolsStep({ state, setState }: { state: WizardState; setState: (s: Wi
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-accent/10 border border-accent/30 text-accent text-[0.78em] font-mono"
                   >
                     {sym}
-                    <button onClick={() => toggle(sym)} className="hover:text-red">
+                    <button onClick={() => toggle(sym)} className="hover:text-red px-1.5 py-1.5">
                       ✕
                     </button>
                   </motion.span>

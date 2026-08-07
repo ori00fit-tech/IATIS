@@ -443,7 +443,7 @@ export function Journal() {
         {pages > 1 && (
           <div className="flex items-center gap-2 p-3 border-t border-border text-[0.8em]">
             <button
-              className="border border-border rounded px-2 py-1 disabled:opacity-40 hover:border-accent/50"
+              className="border border-border rounded px-2 py-1.5 disabled:opacity-40 hover:border-accent/50"
               disabled={page === 0}
               onClick={() => setPage((p) => p - 1)}
             >
@@ -453,7 +453,7 @@ export function Journal() {
               page {page + 1} / {pages}
             </span>
             <button
-              className="border border-border rounded px-2 py-1 disabled:opacity-40 hover:border-accent/50"
+              className="border border-border rounded px-2 py-1.5 disabled:opacity-40 hover:border-accent/50"
               disabled={page + 1 >= pages}
               onClick={() => setPage((p) => p + 1)}
             >

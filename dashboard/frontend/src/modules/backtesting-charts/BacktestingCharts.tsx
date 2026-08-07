@@ -533,7 +533,7 @@ export function TradeDecisionPanel({ trade, onClose }: { trade: ChartTrade; onCl
   return (
     <Panel
       title={`Decision — ${trade.trade_id}`}
-      right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}
+      right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}
     >
       <div className="p-4 flex flex-col gap-3 text-[0.85em]">
         <div className="flex items-center gap-3 flex-wrap">

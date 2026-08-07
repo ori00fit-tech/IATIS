@@ -79,7 +79,7 @@ function SymbolMultiSelect({
           />
           <div className="flex flex-col gap-0.5">
             {filtered.map((s) => (
-              <label key={s.internal} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-surface cursor-pointer text-[0.78em]">
+              <label key={s.internal} className="flex items-center gap-2 px-2 py-2 rounded hover:bg-surface cursor-pointer text-[0.78em]">
                 <input type="checkbox" checked={value.includes(s.internal)} onChange={() => toggle(s.internal)} />
                 <span className="font-mono">{s.internal}</span>
               </label>
@@ -96,7 +96,7 @@ function MultiCheckbox({ options, value, onToggle }: { options: readonly string[
   return (
     <div className="flex flex-wrap gap-2">
       {options.map((opt) => (
-        <label key={opt} className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[0.75em] cursor-pointer ${
+        <label key={opt} className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded border text-[0.75em] cursor-pointer ${
           value.includes(opt) ? 'border-accent text-accent bg-accent/10' : 'border-border text-muted'
         }`}>
           <input type="checkbox" checked={value.includes(opt)} onChange={() => onToggle(opt)} className="hidden" />
@@ -249,7 +249,7 @@ function ContextFiltersBuilder({ rows, setRows }: { rows: ContextFilterRowState[
                   return (
                     <label
                       key={String(opt.value)}
-                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[0.72em] cursor-pointer ${
+                      className={`flex items-center gap-1 px-2 py-1.5 rounded border text-[0.72em] cursor-pointer ${
                         checked ? 'border-accent text-accent bg-accent/10' : 'border-border text-muted'
                       }`}
                     >
@@ -420,8 +420,8 @@ function HypothesisBundleBuilder({
               placeholder={`Hypothesis ${idx + 1} name, e.g. "SMC + London + Trending"`}
               className="flex-1 min-w-[220px] bg-bg border border-border rounded px-2 py-1.5 text-[0.82em] text-text font-bold"
             />
-            <button onClick={() => duplicateAt(idx)} className="text-[0.72em] text-muted hover:text-accent">Duplicate</button>
-            <button onClick={() => removeAt(idx)} className="text-[0.72em] text-red hover:underline">Remove</button>
+            <button onClick={() => duplicateAt(idx)} className="text-[0.72em] text-muted hover:text-accent px-2 py-1.5">Duplicate</button>
+            <button onClick={() => removeAt(idx)} className="text-[0.72em] text-red hover:underline px-2 py-1.5">Remove</button>
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-[0.68em] text-muted uppercase">Timeframes</span>
@@ -751,7 +751,7 @@ function MissionBuilder({
         {prefillNotice && (
           <div className="flex items-center gap-2 text-[0.75em] text-accent bg-accent/10 border border-accent/30 rounded px-3 py-2">
             <span>Pre-filled from Top Unexplored Opportunities — pick engines/timeframes, then Launch Mission when ready.</span>
-            <button onClick={() => setPrefillNotice(false)} className="ml-auto text-muted hover:text-accent">Dismiss</button>
+            <button onClick={() => setPrefillNotice(false)} className="ml-auto text-muted hover:text-accent px-2 py-1.5">Dismiss</button>
           </div>
         )}
 
@@ -922,7 +922,7 @@ function ValidateAction({
           <div className="flex gap-1">
             {(['SAME_SYMBOL', 'CROSS_SYMBOL'] as const).map((m) => (
               <button key={m} onClick={() => setModeChecked(m)}
-                className={`px-2 py-1 rounded text-[0.72em] border ${mode === m ? 'border-accent text-accent' : 'border-border text-muted'}`}>
+                className={`px-2 py-1.5 rounded text-[0.72em] border ${mode === m ? 'border-accent text-accent' : 'border-border text-muted'}`}>
                 {m}
               </button>
             ))}
@@ -1777,7 +1777,7 @@ function TrialBreakdownPanel({
   return (
     <Panel
       title={`Trial ${trial.trial_number} breakdown — ${trial.symbol}${hypothesisName ? ` — "${hypothesisName}"` : ''}`}
-      right={<button onClick={onClose} className="text-[0.75em] text-muted hover:text-accent">Close</button>}
+      right={<button onClick={onClose} className="text-[0.75em] text-muted hover:text-accent px-2 py-1.5">Close</button>}
     >
       <div className="p-4 flex flex-col gap-4">
         <span className="text-[0.72em] text-muted font-mono">
@@ -1871,7 +1871,7 @@ function TrialBreakdownPanel({
                   <div className="text-muted"><span className="font-bold text-text">Distinct from prior kill:</span> {ai.data.distinct_from_prior_kill}</div>
                   {draftFile
                     ? <span className="text-[0.75em] text-muted">{draftFile}</span>
-                    : <button onClick={saveDraft} className="self-start text-[0.75em] text-accent hover:underline">Save as draft</button>}
+                    : <button onClick={saveDraft} className="self-start text-[0.75em] text-accent hover:underline px-2 py-1.5">Save as draft</button>}
                 </div>
               )}
             </AiStatusFrame>
@@ -2000,7 +2000,7 @@ function MissionDetail({
         header: 'Breakdown',
         render: (t) => (
           t.state === 'COMPLETE'
-            ? <button onClick={() => setBreakdownTrial(t)} className="text-[0.75em] text-accent hover:underline">View</button>
+            ? <button onClick={() => setBreakdownTrial(t)} className="text-[0.75em] text-accent hover:underline px-2 py-1.5">View</button>
             : <span className="text-muted text-[0.75em]">—</span>
         ),
       },
@@ -2013,7 +2013,7 @@ function MissionDetail({
               >
                 {draftStatus[t.trial_number]}
               </span>
-            : <button onClick={() => proposeAsDraft(t)} className="text-[0.75em] text-accent hover:underline">
+            : <button onClick={() => proposeAsDraft(t)} className="text-[0.75em] text-accent hover:underline px-2 py-1.5">
                 Propose as draft
               </button>
         ),
@@ -2172,12 +2172,12 @@ function MissionDetail({
           {symbols.length > 1 && (
             <div className="flex gap-2">
               <button onClick={() => setSelectedSymbol(null)}
-                className={`px-2 py-1 rounded text-[0.75em] border ${selectedSymbol === null ? 'border-accent text-accent' : 'border-border text-muted'}`}>
+                className={`px-2 py-1.5 rounded text-[0.75em] border ${selectedSymbol === null ? 'border-accent text-accent' : 'border-border text-muted'}`}>
                 All
               </button>
               {symbols.map((s) => (
                 <button key={s} onClick={() => setSelectedSymbol(s)}
-                  className={`px-2 py-1 rounded text-[0.75em] border ${selectedSymbol === s ? 'border-accent text-accent' : 'border-border text-muted'}`}>
+                  className={`px-2 py-1.5 rounded text-[0.75em] border ${selectedSymbol === s ? 'border-accent text-accent' : 'border-border text-muted'}`}>
                   {s}
                 </button>
               ))}

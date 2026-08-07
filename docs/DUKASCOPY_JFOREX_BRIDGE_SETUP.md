@@ -110,13 +110,24 @@ that binding as load-bearing, not optional.
 
 ## 5. Verify the bridge is really connected
 
+**The real contract, confirmed 2026-08-07 against the operator's own live
+bridge and `HistDataController.java` source — do NOT trust the
+`dukas-api` README here, it documents a `count` param that does not
+exist.** The real endpoint needs a slash-separated `instID` and a
+required `from` (epoch-milliseconds); `from=0` makes the bridge default
+to "last 5 days":
+
 ```bash
-curl -s "http://127.0.0.1:7080/api/v1/history?instID=EURUSD&timeFrame=15MIN&count=5" | python3 -m json.tool
+curl -s 'http://127.0.0.1:7080/api/v1/history?instID=EUR%2FUSD&timeFrame=15MIN&from=0&to=0' | python3 -m json.tool
 ```
 
-Expect 5 real, sane OHLC candles with recent, sequential timestamps —
-not an empty array or an error. If this fails, check the bridge's own
-logs before touching anything on the IATIS side.
+Expect real, sane OHLC candles (`open`/`high`/`low`/`close`/`volume`/
+`spread`/`timestamp`, with `timestamp` in **milliseconds**) with recent,
+sequential timestamps — not an empty array or an error. If you get a
+`500`, retry once (a transient 500 right after the bridge finishes its
+JForex session handshake has been observed to clear on retry). If this
+fails after a retry, check the bridge's own logs before touching
+anything on the IATIS side.
 
 ## 6. Point IATIS at the bridge — data confirmation BEFORE any opt-in
 

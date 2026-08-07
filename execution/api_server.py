@@ -106,6 +106,7 @@ from execution.routes import (
     journal,
     logs,
     missions,
+    news_benchmark,
     outcomes,
     provider_benchmark,
     research,
@@ -138,6 +139,10 @@ app.include_router(diagnostics.router)
 # otherwise be swallowed by research.py's own GET /research/{hypothesis_id}
 # catch-all if registered after it.
 app.include_router(provider_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — identical
+# collision reasoning: GET /research/news-benchmark must register before
+# research.router's catch-all.
+app.include_router(news_benchmark.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

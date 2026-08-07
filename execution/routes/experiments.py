@@ -104,6 +104,13 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # writes config.yaml's provider_chains. Full argv is built per-request
     # in execution/routes/provider_benchmark.py.
     "price_benchmark": [sys.executable, "-m", "backtest.price_benchmark"],
+    # Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — same
+    # one-job-slot-per-run model as price_benchmark, looping over every
+    # (symbol, provider) point in-process internally (backtest/
+    # news_benchmark.py). Two real providers (MarketAux, Finnhub),
+    # measurement/advisory only. Full argv is built per-request in
+    # execution/routes/news_benchmark.py.
+    "news_benchmark": [sys.executable, "-m", "backtest.news_benchmark"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -121,6 +128,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
     "mission_validate": "Multi-stage validation (backtest/mission_validator.py) of one operator-chosen mission trial across operator-chosen validation symbols: re-evaluation + Monte Carlo + walk-forward + robustness sweep per symbol. Launched via POST /research/missions/{id}/validate, not this endpoint directly — result is a LEAD (NO_EDGE/WEAK_LEAD/STRONG_LEAD), never a registry.json promotion.",
     "price_benchmark": "Provider Benchmark & Data Quality Lab (backtest/price_benchmark.py): scores every FX/metals/crypto/indices provider's fetched candles for completeness, per-field correctness vs. a median consensus, timestamp integrity, OHLC integrity, cross-provider agreement, freshness, and latency. Launched via POST /research/provider-benchmark, not this endpoint directly — measurement/advisory only, never auto-changes config.yaml's provider_chains.",
+    "news_benchmark": "Provider Benchmark & Data Quality Lab Phase 2 (backtest/news_benchmark.py): scores MarketAux and Finnhub news feeds per symbol for coverage, source diversity, duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider coverage agreement. Launched via POST /research/news-benchmark, not this endpoint directly — measurement/advisory only, never influences H021's own pre-registered process or config.yaml.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -142,6 +150,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "research_mission": "research",
     "mission_validate": "research",
     "price_benchmark": "research",
+    "news_benchmark": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -182,6 +191,11 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # (Phase 1 has no resume loop), so this is a starting point, not a
     # measurement — recalibrate after a real Deep run.
     "price_benchmark": 10_800,
+    # Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — a Deep
+    # profile is ~14 symbols x 2 providers = 28 HTTP calls, far cheaper
+    # than price_benchmark's Deep run (no per-timeframe multiplication) —
+    # a much smaller ceiling reflects the real, much lower cost class.
+    "news_benchmark": 900,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against

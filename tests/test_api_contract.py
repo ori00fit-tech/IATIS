@@ -916,12 +916,16 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # Lab Phase 1): one subprocess per whole benchmark run (see
     # execution/routes/provider_benchmark.py) — full argv built
     # per-request there, not user-shaped.
+    # news_benchmark added 2026-08-08 (Provider Benchmark & Data Quality
+    # Lab Phase 2): same one-subprocess-per-run model (see
+    # execution/routes/news_benchmark.py) — full argv built per-request
+    # there, not user-shaped.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
         "walk_forward", "robustness", "research_mission", "mission_validate",
-        "price_benchmark",
+        "price_benchmark", "news_benchmark",
     }
 
 

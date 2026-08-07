@@ -14,6 +14,10 @@ import { scoreProvidersFromResults, scoreProvidersByTimeframe, type PriceQuality
 import { deriveRoutingRecommendations, groupRoutingBySymbol } from './routing'
 import { buildEvidenceMatrix, classifyAllFailures } from './evidence'
 import { EvidenceChart } from './EvidenceChart'
+import {
+  createNewsBenchmark, getNewsBenchmark, getNewsBenchmarkResults, cancelNewsBenchmark,
+  type NewsBenchmarkProfile, type NewsBenchmarkResultRow,
+} from './newsBenchmarkApi'
 
 const POLL_MS = 60_000
 const BENCHMARK_POLL_MS = 2_000
@@ -395,6 +399,216 @@ function PriceBenchmarkPanel() {
   )
 }
 
+function NewsBenchmarkPanel() {
+  const [runId, setRunId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+  const [results, setResults] = useState<NewsBenchmarkResultRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => stopPolling, [])
+
+  const start = async (profile: NewsBenchmarkProfile) => {
+    setStarting(true)
+    setError(null)
+    setResults(null)
+    try {
+      const res = await createNewsBenchmark({ profile })
+      setRunId(res.run_id)
+      setJobStatus(res.status)
+      stopPolling()
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await getNewsBenchmark(res.run_id)
+          setJobStatus(status.job_status)
+          if (status.job_status && !['queued', 'running'].includes(status.job_status)) {
+            stopPolling()
+            const r = await getNewsBenchmarkResults(res.run_id)
+            setResults(r.results)
+          }
+        } catch (e) {
+          stopPolling()
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      }, BENCHMARK_POLL_MS)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const cancel = async () => {
+    if (!runId) return
+    try {
+      await cancelNewsBenchmark(runId)
+    } catch {
+      // best-effort — the poll loop above will surface the real terminal state
+    }
+  }
+
+  const running = jobStatus === 'queued' || jobStatus === 'running'
+  const providers = results ? [...new Set(results.map((r) => r.provider))].sort() : []
+  const symbols = results ? [...new Set(results.map((r) => r.symbol))].sort() : []
+
+  const rankingColumns: Column<string>[] = [
+    { header: 'Provider', render: (p) => <span className="font-bold text-accent">{p}</span> },
+    {
+      header: 'News Quality',
+      align: 'right',
+      accessorFn: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.composite_score !== null)
+        return rows.length ? rows.reduce((s, r) => s + (r.composite_score ?? 0), 0) / rows.length : -1
+      },
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.composite_score !== null)
+        const mean = rows.length ? Math.round((rows.reduce((s, r) => s + (r.composite_score ?? 0), 0) / rows.length) * 100) / 100 : null
+        return <span className={`font-extrabold ${qualityScoreColor(mean)}`}>{mean ?? '—'}</span>
+      },
+    },
+    {
+      header: 'Coverage',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.coverage_score !== null)
+        return rows.length ? `${rows.filter((r) => r.coverage_score === 100).length}/${rows.length}` : '—'
+      },
+    },
+    {
+      header: 'Sentiment Available',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.fetch_ok);
+        if (rows.length === 0) return '—'
+        return rows.some((r) => r.sentiment_availability_score !== null) ? 'yes' : 'no'
+      },
+    },
+    {
+      header: 'Fetches',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p)
+        const ok = rows.filter((r) => r.fetch_ok).length
+        return (
+          <span className={ok < rows.length ? 'text-amber' : 'text-muted'}>
+            {ok}/{rows.length} ok
+          </span>
+        )
+      },
+    },
+  ]
+
+  return (
+    <Panel title="News Quality Benchmark" right="advisory — measures the feed, never influences H021 or any live decision">
+      <div className="p-4 flex flex-col gap-4">
+        <p className="text-[0.78em] text-muted">
+          Tests MarketAux (real per-article, per-entity sentiment) and Finnhub (a category-wide feed, best-effort
+          keyword-matched to a symbol — no sentiment field on its free tier) for coverage, source diversity,
+          duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider COVERAGE agreement
+          (do both providers agree there was real news activity — the honest news-equivalent of a numeric consensus;
+          there is no ground-truth headline to score correctness against). Measurement layer only — never writes to{' '}
+          <code className="text-accent2">config.yaml</code> and never feeds H021's own pre-registered process.
+        </p>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => start('smoke')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.8em] font-bold hover:bg-accent/10 disabled:opacity-50"
+          >
+            Run Smoke
+          </button>
+          <button
+            onClick={() => start('standard')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Standard
+          </button>
+          <button
+            onClick={() => start('deep')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Deep
+          </button>
+          {running && (
+            <>
+              <span className="text-[0.78em] text-muted">
+                {jobStatus} — run {runId}
+              </span>
+              <button
+                onClick={cancel}
+                className="px-2.5 py-1 rounded border border-red/40 text-red text-[0.75em] hover:bg-red/10"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {!running && jobStatus && jobStatus !== 'queued' && jobStatus !== 'running' && (
+            <span className="text-[0.78em] text-muted">last run: {jobStatus}</span>
+          )}
+        </div>
+
+        {error && <div className="text-[0.8em] text-red">{error}</div>}
+
+        {results && results.length === 0 && <Empty>Run finished with zero results.</Empty>}
+
+        {providers.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Provider Ranking</div>
+              <DataTable columns={rankingColumns} rows={providers} rowKey={(p) => p} />
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Evidence Matrix</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[0.78em] border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">Symbol</th>
+                      {providers.map((p) => (
+                        <th key={p} className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">
+                          {p}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {symbols.map((symbol) => (
+                      <tr key={symbol} className="border-t border-border">
+                        <td className="px-2 py-1.5 font-bold text-accent">{symbol}</td>
+                        {providers.map((p) => {
+                          const row = (results ?? []).find((r) => r.symbol === symbol && r.provider === p)
+                          if (!row) return <td key={p} className="px-2 py-1.5 text-muted/60">—</td>
+                          return (
+                            <td key={p} className={`px-2 py-1.5 ${row.fetch_ok ? 'text-text' : 'text-red'}`}>
+                              {row.fetch_ok ? `${row.composite_score ?? '—'} (${row.article_count} articles)` : (row.error ?? 'FAIL')}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 export function ProviderEval() {
   const { markUnauthenticated } = useAuth()
   const chains = usePolling(getProviderChains, POLL_MS, markUnauthenticated)
@@ -477,6 +691,7 @@ export function ProviderEval() {
       </Panel>
 
       <PriceBenchmarkPanel />
+      <NewsBenchmarkPanel />
     </div>
   )
 }

@@ -351,6 +351,131 @@ def test_provider_chain_override_can_include_mt5():
     assert chain == ["ctrader", "mt5", "twelve_data"]
 
 
+# ── Dukascopy JForex bridge (2026-08-08) ────────────────────────────────
+
+def test_dukascopy_jforex_falls_through_cleanly_without_bridge_url(monkeypatch):
+    monkeypatch.delenv("DUKASCOPY_JFOREX_BRIDGE_URL", raising=False)
+    monkeypatch.setattr(dp, "_fetch_twelve_data",
+                        lambda s, i, o, c: _df(n=o, mark=9.0))
+    views = dp.fetch_multi_timeframe_with_failover(
+        "EUR/USD", ["H1"], outputsize=120,
+        providers=["dukascopy_jforex", "twelve_data"],
+    )
+    assert float(views["H1"]["volume"].iloc[0]) == 9.0  # next in chain won
+
+
+def test_fetch_dukascopy_jforex_raises_when_bridge_url_unset(monkeypatch):
+    monkeypatch.delenv("DUKASCOPY_JFOREX_BRIDGE_URL", raising=False)
+    with pytest.raises(dp.DataFetchError, match="not configured"):
+        dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
+
+
+def test_fetch_dukascopy_jforex_parses_bridge_response(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+
+    real_dt = pd.Timestamp("2026-08-08 12:00:00", tz="UTC")
+    ts_seconds = int(real_dt.timestamp())
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{
+                "symbol": "EURUSD", "time": ts_seconds, "open": 1.1, "high": 1.11,
+                "low": 1.09, "close": 1.1, "volume": 250.0, "ticks": 4, "period": "1HOUR",
+            }]
+
+    def _fake_get(url, params=None, timeout=None):
+        assert url.endswith("/api/v1/history")
+        assert params["instID"] == "EURUSD"
+        assert params["timeFrame"] == "1HOUR"
+        return _FakeResp()
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    df = dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
+    assert df.index[0] == real_dt
+    assert df.index[0].year == 2026
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert float(df["volume"].iloc[0]) == 250.0
+
+
+def test_fetch_dukascopy_jforex_defaults_missing_volume_to_zero(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+    ts_seconds = int(pd.Timestamp("2026-08-08 12:00:00", tz="UTC").timestamp())
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"time": ts_seconds, "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.1}]
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda url, params=None, timeout=None: _FakeResp())
+
+    df = dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
+    assert float(df["volume"].iloc[0]) == 0.0
+
+
+def test_fetch_dukascopy_jforex_raises_on_unmapped_timeframe(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+    with pytest.raises(dp.DataFetchError, match="no native timeframe mapping"):
+        dp._fetch_dukascopy_jforex("EUR/USD", "H4", 10)
+
+
+def test_fetch_dukascopy_jforex_raises_on_bridge_http_error(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+
+    import requests as _requests
+
+    def _fake_get(url, params=None, timeout=None):
+        raise _requests.exceptions.ConnectionError("connection refused")
+
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    with pytest.raises(dp.DataFetchError, match="Dukascopy JForex bridge"):
+        dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
+
+
+def test_fetch_dukascopy_jforex_raises_on_empty_result(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return []
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda url, params=None, timeout=None: _FakeResp())
+
+    with pytest.raises(dp.DataFetchError, match="no bars for"):
+        dp._fetch_dukascopy_jforex("EUR/USD", "H1", 10)
+
+
+def test_dukascopy_jforex_not_in_default_chains():
+    for cls, chain in dp.DEFAULT_CHAINS.items():
+        assert "dukascopy_jforex" not in chain, f"{cls}: {chain}"
+
+
+def test_provider_chain_override_can_include_dukascopy_jforex():
+    chain = dp.provider_chain_for("EUR/USD", {"fx": ["ctrader", "dukascopy_jforex", "twelve_data"]})
+    assert chain == ["ctrader", "dukascopy_jforex", "twelve_data"]
+
+
+def test_dukascopy_jforex_native_tf_has_no_m30_or_h4():
+    # Verified against dukas-api's own README enum — no 30-minute or
+    # 4-hour candle is natively available.
+    native = dp._NATIVE_TF["dukascopy_jforex"]
+    assert "M30" not in native
+    assert "H4" not in native
+    assert native == {"M1", "M5", "M15", "H1", "D1"}
+
+
 # ── get_shared_ctrader_client() thread-safety (Forensic Audit, 2026-08-04) ──
 # P0 cTrader lifecycle re-audit: the user's live logs showed overlapping
 # TCP_CONNECTED events ~5s apart. get_shared_ctrader_client()'s own

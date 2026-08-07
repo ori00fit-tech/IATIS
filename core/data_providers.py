@@ -633,6 +633,9 @@ _NATIVE_TF: dict[str, set] = {
     # MT5's standard TIMEFRAME_* constants cover all of these natively,
     # same as cTrader (see the MT5 section above _fetch_mt5).
     "mt5":           {"M1", "M5", "M15", "M30", "H1", "H4", "D1"},
+    # dukas-api's documented timeFrame enum has no 30-minute or 4-hour
+    # candle — see _DUKASCOPY_JFOREX_TF above _fetch_dukascopy_jforex.
+    "dukascopy_jforex": {"M1", "M5", "M15", "H1", "D1"},
 }
 
 # FCS API added 2026-07-14 (fx/metals/indices only — no crypto endpoint used
@@ -661,6 +664,12 @@ _NATIVE_TF: dict[str, set] = {
 # FX/metals decision onto sight-unseen. Opt in per asset class via
 # config.yaml's data.provider_chains override once docs/
 # MT5_BRIDGE_SETUP.md's verification steps pass on the real VPS.
+# "dukascopy_jforex" deliberately absent too (2026-08-08) — same reasoning,
+# stronger caveat: the bridge (see the Dukascopy JForex section above
+# _fetch_dukascopy_jforex) is unaudited, third-party code, not something to
+# default any live decision onto. Opt in per asset class via config.yaml's
+# data.provider_chains override once docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md's
+# verification steps pass on the real VPS.
 DEFAULT_CHAINS: dict[str, list[str]] = {
     "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub"],
     "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub"],
@@ -1030,6 +1039,105 @@ def _fetch_mt5(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
     return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
 
 
+# ---------------------------------------------------------------------------
+# Dukascopy JForex (2026-08-08, operator request) — live/near-live bridge,
+# opt-in only, DATA ONLY (no order execution — see this section's tail
+# comment).
+#
+# Dukascopy's official programmatic access is the JForex SDK: a Java library
+# (com.dukascopy.api.IClient) that runs headless (no Wine hack needed, unlike
+# MT5 — the SDK itself supports a plain JVM on Linux). Writing and
+# maintaining a bespoke Java bridge here isn't necessary: a real, existing
+# open-source project (ismailfer/dukascopy-api-websocket, aka "dukas-api",
+# https://github.com/ismailfer/dukascopy-api-websocket, also published as a
+# Docker image) already wraps the JForex SDK as a small local REST+WebSocket
+# service — verified directly against its README (not assumed): GET
+# /api/v1/history?instID=EURUSD&timeFrame=15MIN&from=... for historical
+# candles, plus position open/modify/close endpoints this integration does
+# NOT call (see below). This function talks to that bridge exactly like
+# _fetch_mt5 above talks to the Wine-hosted MT5 bridge — same "one more pull-
+# based HTTP provider" shape, no persistent-session machinery needed here.
+#
+# UNOFFICIAL, THIRD-PARTY BRIDGE — stronger caveat than MT5's Wine
+# fragility: this is unaudited, unaffiliated-with-Dukascopy code the
+# operator must review themselves before pointing any real (even demo)
+# credentials at it. See docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md.
+#
+# Deliberately NOT added to DEFAULT_CHAINS below — see that dict's own
+# comment, same opt-in-per-asset-class pattern as MT5.
+#
+# ORDER EXECUTION DELIBERATELY OUT OF SCOPE for this function/phase, even
+# though the bridge's own POST/PUT/DELETE /api/v1/position endpoints could
+# support it: wiring a brand-new, third-party, unofficial broker path into
+# execution/trade_executor.py is a separate, materially higher-stakes
+# decision (real/demo money placed through unaudited code) that needs its
+# own dedicated safety design (dry_run gating, config.yaml provider
+# selection, extensive testing) — not rushed into a data-provider addition,
+# matching the MT5 bridge's own "the request was specifically 'data
+# provider'" scope boundary.
+# ---------------------------------------------------------------------------
+
+# dukas-api's documented timeFrame enum (verified against its README):
+# 1SEC | 10SEC | 1MIN | 5MIN | 10MIN | 15MIN | 1HOUR | DAILY. No native
+# 4-hour candle — H4 falls through to resampling from H1 elsewhere in the
+# pipeline, same as every other provider without a native H4 (see
+# _NATIVE_TF below). M30/10MIN/10SEC/1SEC have no IATIS-internal timeframe
+# counterpart and are simply never requested here.
+_DUKASCOPY_JFOREX_TF: dict[str, str] = {
+    "M1": "1MIN", "M5": "5MIN", "M15": "15MIN", "H1": "1HOUR", "D1": "DAILY",
+}
+
+
+def _dukascopy_jforex_bridge_url() -> str:
+    url = os.getenv("DUKASCOPY_JFOREX_BRIDGE_URL")
+    if not url:
+        raise DataFetchError("Dukascopy JForex bridge not configured (DUKASCOPY_JFOREX_BRIDGE_URL unset)")
+    return url.rstrip("/")
+
+
+def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
+    """Bars via the locally-run dukas-api bridge (see this section's header
+    comment) fronting the official JForex SDK.
+
+    Unofficial/unsupported path — see the header comment above. Any bridge
+    failure (unreachable, timeout, unmapped timeframe, HTTP error) raises
+    DataFetchError so the provider chain falls through cleanly, exactly
+    like a missing MT5/cTrader credential does today.
+    """
+    import requests
+
+    internal = _internal_symbol(symbol)
+    tf = _DUKASCOPY_JFOREX_TF.get(interval)
+    if tf is None:
+        raise DataFetchError(f"Dukascopy JForex bridge: no native timeframe mapping for {interval!r}")
+    try:
+        resp = requests.get(
+            f"{_dukascopy_jforex_bridge_url()}/api/v1/history",
+            params={"instID": internal, "timeFrame": tf, "count": outputsize},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+    except DataFetchError:
+        raise
+    except Exception as exc:
+        raise DataFetchError(f"Dukascopy JForex bridge: {exc}") from exc
+    if not rows:
+        raise DataFetchError(f"Dukascopy JForex bridge: no bars for {internal} @ {interval}")
+    df = pd.DataFrame(rows)
+    # Bridge's documented response includes a unix "time" field per candle
+    # (dukas-api README) — assumed seconds, matching every other bridge
+    # integration here (_fetch_mt5) rather than repeating the ms/s unit
+    # mistake found and fixed in _fetch_ctrader above. NOT independently
+    # verified against a live bridge from this sandbox (network policy
+    # blocks reaching a real Dukascopy-backed instance) — flagged for the
+    # operator's own live check per docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md.
+    df.index = pd.to_datetime(df.pop("time"), unit="s", utc=True)
+    if "volume" not in df.columns:
+        df["volume"] = 0.0
+    return df[["open", "high", "low", "close", "volume"]].tail(outputsize)
+
+
 # Forensic Audit follow-up (2026-08-04) — a provider's "latest N bars"
 # response can include the CURRENT, still-forming candle for whatever
 # timeframe bucket "now" falls into (a well-documented behavior of
@@ -1119,6 +1227,8 @@ def fetch_with_failover(
                 df = _fetch_ctrader(symbol, interval, outputsize)
             elif provider == "mt5":
                 df = _fetch_mt5(symbol, interval, outputsize)
+            elif provider == "dukascopy_jforex":
+                df = _fetch_dukascopy_jforex(symbol, interval, outputsize)
             else:
                 raise DataFetchError(f"Unknown provider: {provider}")
 

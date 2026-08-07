@@ -105,6 +105,7 @@ from execution.routes import (
     health,
     journal,
     logs,
+    macro_benchmark,
     missions,
     news_benchmark,
     outcomes,
@@ -143,6 +144,10 @@ app.include_router(provider_benchmark.router)
 # collision reasoning: GET /research/news-benchmark must register before
 # research.router's catch-all.
 app.include_router(news_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 3 (2026-08-XX) — identical
+# collision reasoning: GET /research/macro-benchmark must register before
+# research.router's catch-all.
+app.include_router(macro_benchmark.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

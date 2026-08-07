@@ -25,6 +25,10 @@ import {
   createNewsBenchmark, getNewsBenchmark, getNewsBenchmarkResults, cancelNewsBenchmark,
   type NewsBenchmarkProfile, type NewsBenchmarkResultRow,
 } from './newsBenchmarkApi'
+import {
+  createMacroBenchmark, getMacroBenchmark, getMacroBenchmarkResults, cancelMacroBenchmark,
+  type MacroBenchmarkProfile, type MacroBenchmarkResultRow,
+} from './macroBenchmarkApi'
 
 const POLL_MS = 60_000
 const BENCHMARK_POLL_MS = 2_000
@@ -643,6 +647,222 @@ function NewsBenchmarkPanel() {
   )
 }
 
+function MacroBenchmarkPanel() {
+  const [runId, setRunId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+  const [results, setResults] = useState<MacroBenchmarkResultRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => stopPolling, [])
+
+  const start = async (profile: MacroBenchmarkProfile) => {
+    setStarting(true)
+    setError(null)
+    setResults(null)
+    try {
+      const res = await createMacroBenchmark({ profile })
+      setRunId(res.run_id)
+      setJobStatus(res.status)
+      stopPolling()
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await getMacroBenchmark(res.run_id)
+          setJobStatus(status.job_status)
+          if (status.job_status && !['queued', 'running'].includes(status.job_status)) {
+            stopPolling()
+            const r = await getMacroBenchmarkResults(res.run_id)
+            setResults(r.results)
+          }
+        } catch (e) {
+          stopPolling()
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      }, BENCHMARK_POLL_MS)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const cancel = async () => {
+    if (!runId) return
+    try {
+      await cancelMacroBenchmark(runId)
+    } catch {
+      // best-effort — the poll loop above will surface the real terminal state
+    }
+  }
+
+  const running = jobStatus === 'queued' || jobStatus === 'running'
+  const providers = results ? [...new Set(results.map((r) => r.provider))].sort() : []
+  const series = results ? [...new Set(results.map((r) => r.series))].sort() : []
+
+  const rankingColumns: Column<string>[] = [
+    { header: 'Provider', render: (p) => <span className="font-bold text-accent">{p}</span> },
+    {
+      header: 'Macro Quality',
+      align: 'right',
+      accessorFn: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.composite_score !== null)
+        return rows.length ? rows.reduce((s, r) => s + (r.composite_score ?? 0), 0) / rows.length : -1
+      },
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.composite_score !== null)
+        const mean = rows.length ? Math.round((rows.reduce((s, r) => s + (r.composite_score ?? 0), 0) / rows.length) * 100) / 100 : null
+        return <span className={`font-extrabold ${qualityScoreColor(mean)}`}>{mean ?? '—'}</span>
+      },
+    },
+    {
+      header: 'Completeness',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.completeness_score !== null)
+        if (rows.length === 0) return '—'
+        const mean = Math.round((rows.reduce((s, r) => s + (r.completeness_score ?? 0), 0) / rows.length) * 100) / 100
+        return <span className={qualityScoreColor(mean)}>{mean}</span>
+      },
+    },
+    {
+      header: 'Cross-Provider Agreement',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p && r.cross_provider_agreement_score !== null)
+        if (rows.length === 0) return <span className="text-muted/60">n/a — single source</span>
+        const mean = Math.round((rows.reduce((s, r) => s + (r.cross_provider_agreement_score ?? 0), 0) / rows.length) * 100) / 100
+        return <span className={qualityScoreColor(mean)}>{mean}</span>
+      },
+    },
+    {
+      header: 'Fetches',
+      align: 'right',
+      render: (p) => {
+        const rows = (results ?? []).filter((r) => r.provider === p)
+        const ok = rows.filter((r) => r.fetch_ok).length
+        return (
+          <span className={ok < rows.length ? 'text-amber' : 'text-muted'}>
+            {ok}/{rows.length} ok
+          </span>
+        )
+      },
+    },
+  ]
+
+  return (
+    <Panel title="Macro Quality Benchmark" right="advisory — never touches the live Macro engine or config.yaml">
+      <div className="p-4 flex flex-col gap-4">
+        <p className="text-[0.78em] text-muted">
+          Tests FRED, CBOE, and Alpha Vantage against a fixed catalog of macro series (VIX, DXY, yields, credit
+          spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, and latency.
+          Almost every series has exactly one real provider (FRED) — cross-provider agreement is only ever populated
+          for the 3 series with a genuine second source: VIX (CBOE vs FRED) and US10Y/US02Y (FRED vs Alpha Vantage
+          Treasury Yield). Measurement layer only — never calls or influences{' '}
+          <code className="text-accent2">core.alt_data_loader.load_macro_snapshot()</code> (the live Macro engine's
+          own source) or <code className="text-accent2">config.yaml</code>.
+        </p>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => start('smoke')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.8em] font-bold hover:bg-accent/10 disabled:opacity-50"
+          >
+            Run Smoke
+          </button>
+          <button
+            onClick={() => start('standard')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Standard
+          </button>
+          <button
+            onClick={() => start('deep')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Deep
+          </button>
+          {running && (
+            <>
+              <span className="text-[0.78em] text-muted">
+                {jobStatus} — run {runId}
+              </span>
+              <button
+                onClick={cancel}
+                className="px-2.5 py-1 rounded border border-red/40 text-red text-[0.75em] hover:bg-red/10"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {!running && jobStatus && jobStatus !== 'queued' && jobStatus !== 'running' && (
+            <span className="text-[0.78em] text-muted">last run: {jobStatus}</span>
+          )}
+        </div>
+
+        {error && <div className="text-[0.8em] text-red">{error}</div>}
+
+        {results && results.length === 0 && <Empty>Run finished with zero results.</Empty>}
+
+        {providers.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Provider Ranking</div>
+              <DataTable columns={rankingColumns} rows={providers} rowKey={(p) => p} />
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Evidence Matrix</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[0.78em] border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">Series</th>
+                      {providers.map((p) => (
+                        <th key={p} className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">
+                          {p}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {series.map((s) => (
+                      <tr key={s} className="border-t border-border">
+                        <td className="px-2 py-1.5 font-bold text-accent">{s}</td>
+                        {providers.map((p) => {
+                          const row = (results ?? []).find((r) => r.series === s && r.provider === p)
+                          if (!row) return <td key={p} className="px-2 py-1.5 text-muted/60">—</td>
+                          return (
+                            <td key={p} className={`px-2 py-1.5 ${row.fetch_ok ? 'text-text' : 'text-red'}`}>
+                              {row.fetch_ok
+                                ? `${row.composite_score ?? '—'} (${row.latest_value ?? '—'} as of ${row.latest_date?.slice(0, 10) ?? '—'})`
+                                : (row.error ?? 'FAIL')}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 export function ProviderEval() {
   const { markUnauthenticated } = useAuth()
   const chains = usePolling(getProviderChains, POLL_MS, markUnauthenticated)
@@ -726,6 +946,7 @@ export function ProviderEval() {
 
       <PriceBenchmarkPanel />
       <NewsBenchmarkPanel />
+      <MacroBenchmarkPanel />
     </div>
   )
 }

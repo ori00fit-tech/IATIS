@@ -370,6 +370,123 @@ def load_macro_snapshot(symbols: list[str] | None = None) -> dict[str, pd.DataFr
     return snapshot
 
 
+# ---------------------------------------------------------------------------
+# Provider Benchmark & Data Quality Lab — Phase 3 (Macro Benchmark, 2026-08-XX)
+#
+# Alpha Vantage's Economic Indicators API — a SECOND, independent macro
+# source, used only for benchmarking (never wired into load_macro_snapshot()
+# above, which stays the Macro engine's own live-decision-path source,
+# completely unchanged by this addition). Two real jobs:
+#   1. A genuine cross-provider correctness check for US10Y/US02Y — the
+#      SAME internal keys as _FRED_SERIES above (they represent the same
+#      real-world quantity: US 10Y/2Y Treasury yield), fetched here via
+#      TREASURY_YIELD(maturity=10year/2year) instead of FRED's DGS10/DGS2.
+#   2. Net-new single-provider coverage for series FRED doesn't supply in
+#      this codebase at all: FED_FUNDS_RATE, CPI, REAL_GDP, UNEMPLOYMENT,
+#      NONFARM_PAYROLL — the revision-prone series a genuine "vintage/
+#      point-in-time correctness" capability would eventually need, but
+#      that capability is explicitly NOT built here (a separate, larger
+#      future phase) — this only adds the raw series.
+# Free tier: 25 requests/day TOTAL on ALPHA_VANTAGE_API_KEY, shared with
+# core/data_providers.py's existing FX-intraday-fallback usage of the same
+# key — callers (backtest/macro_benchmark.py) must keep usage sparse.
+#
+# Deliberately uses ALPHA_VANTAGE_API_KEY, NOT this file's own
+# load_from_alpha_vantage()'s ALPHA_VANTAGE_KEY a few hundred lines below:
+# that function is dead code (confirmed — grepped, nothing in the live
+# codebase ever calls core.alt_data_loader.load_from_alpha_vantage; the
+# real, live FX-intraday-fallback path is core/data_providers.py's own
+# separate Alpha Vantage functions, which use ALPHA_VANTAGE_API_KEY, the
+# same name .env.example/health checks/alerts.py already document). This
+# new function is real, live code — it uses the real, configured name.
+# ---------------------------------------------------------------------------
+
+_AV_ECONOMIC_SERIES: dict[str, dict[str, Any]] = {
+    "US10Y":           {"function": "TREASURY_YIELD", "params": {"interval": "daily", "maturity": "10year"}},
+    "US02Y":           {"function": "TREASURY_YIELD", "params": {"interval": "daily", "maturity": "2year"}},
+    "FED_FUNDS_RATE":  {"function": "FEDERAL_FUNDS_RATE", "params": {"interval": "daily"}},
+    "CPI":             {"function": "CPI", "params": {"interval": "monthly"}},
+    "REAL_GDP":        {"function": "REAL_GDP", "params": {"interval": "quarterly"}},
+    "UNEMPLOYMENT":    {"function": "UNEMPLOYMENT", "params": {}},
+    "NONFARM_PAYROLL": {"function": "NONFARM_PAYROLL", "params": {}},
+}
+
+# Per-series lookback in months — mirrors _FRED_LOOKBACK_MONTHS's own
+# per-cadence reasoning: monthly/quarterly series need a longer window to
+# return enough points for a meaningful trend read than the default 6.
+_AV_ECONOMIC_LOOKBACK_MONTHS: dict[str, int] = {
+    "CPI": 12,
+    "REAL_GDP": 36,
+    "UNEMPLOYMENT": 12,
+    "NONFARM_PAYROLL": 12,
+}
+
+
+def load_from_alpha_vantage_economic(series_key: str, months: int | None = None) -> pd.DataFrame:
+    """One of _AV_ECONOMIC_SERIES -> OHLCV-contract frame (o=h=l=c), same
+    _close_only_frame shape as load_from_fred()/load_vix_from_cboe(). Alpha
+    Vantage's own documented convention: a not-yet-reported observation is
+    the literal string "." (same marker FRED uses) — filtered, never
+    coerced to 0.0 or NaN-propagated silently.
+    """
+    import os
+
+    import requests as req
+
+    spec = _AV_ECONOMIC_SERIES.get(series_key)
+    if spec is None:
+        raise ValueError(f"No Alpha Vantage economic series mapped for {series_key!r}")
+    api_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+    if not api_key:
+        raise ValueError("Alpha Vantage API key not set. Add ALPHA_VANTAGE_API_KEY to .env.")
+
+    params = {"function": spec["function"], "apikey": api_key, **spec["params"]}
+    try:
+        resp = req.get("https://www.alphavantage.co/query", params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise ValueError(f"Alpha Vantage economic request failed for {series_key}: {exc}") from exc
+
+    if "Note" in data:
+        raise ValueError(f"Alpha Vantage rate limit: {data['Note']}")
+    if "Information" in data:
+        raise ValueError(f"Alpha Vantage error/info for {series_key}: {data['Information']}")
+    if "Error Message" in data:
+        raise ValueError(f"Alpha Vantage error for {series_key}: {data['Error Message']}")
+    rows = data.get("data")
+    if not rows:
+        raise ValueError(f"Alpha Vantage returned no data for {series_key}: {list(data.keys())}")
+
+    dates: list[str] = []
+    values: list[float] = []
+    for row in rows:
+        raw_value = row.get("value")
+        if raw_value in (None, ".", ""):
+            continue  # AV's documented "not reported" marker — never coerced to 0.0
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        date = row.get("date")
+        if not date:
+            continue
+        dates.append(date)
+        values.append(value)
+
+    if not dates:
+        raise ValueError(f"Alpha Vantage: no usable observations for {series_key}")
+
+    df = _close_only_frame(dates, values)
+    lookback = months if months is not None else _AV_ECONOMIC_LOOKBACK_MONTHS.get(series_key, 6)
+    cutoff = df.index.max() - pd.Timedelta(days=lookback * 31)
+    df = df[df.index >= cutoff]
+    if df.empty:
+        raise ValueError(f"Alpha Vantage: no usable observations for {series_key} within the lookback window")
+    logger.info(f"Alpha Vantage economic: {len(df)} bars for {series_key}")
+    return df
+
+
 def load_historical_for_research(
     symbol: str,
     interval: str = "D1",

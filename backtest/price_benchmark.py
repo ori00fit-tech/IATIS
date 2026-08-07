@@ -240,6 +240,45 @@ def correctness_vs_consensus(df: pd.DataFrame, consensus: pd.DataFrame, *, toler
     return {"score": score, "detail": {"bars_compared": int(len(common)), "per_field": per_field}}
 
 
+_MAX_EVIDENCE_POINTS = 100
+
+
+def build_evidence_series(
+    df: pd.DataFrame, consensus: pd.DataFrame, *, tolerance_pct: float = 0.05, max_points: int = _MAX_EVIDENCE_POINTS,
+) -> list[dict[str, Any]]:
+    """Phase 1b — the raw per-bar (close, consensus_close, diff_pct) tuples
+    an Evidence drill-down chart overlays: this provider's close price vs.
+    the same median consensus correctness_vs_consensus already computed,
+    capped to the most recent `max_points` bars (a drill-down evidence
+    view, not a full historical re-plot — Phase 1's tables already give
+    full aggregate evidence via completeness/correctness/timestamp_
+    integrity detail). Returns [] when there's nothing to align against
+    (empty df/consensus), matching every other dimension's "None/empty
+    when unmeasurable" convention."""
+    if df.empty or consensus.empty:
+        return []
+    idx = df.index.tz_convert("UTC") if df.index.tz else df.index.tz_localize("UTC")
+    a = df[["close"]].copy()
+    a.index = idx
+    common = a.index.intersection(consensus.index).sort_values()
+    if len(common) == 0:
+        return []
+    common = common[-max_points:]
+    out: list[dict[str, Any]] = []
+    for ts in common:
+        close = float(a.loc[ts, "close"])
+        cons_close = float(consensus.loc[ts, "close"])
+        diff_pct = abs(close - cons_close) / abs(cons_close) * 100 if cons_close != 0 else None
+        out.append({
+            "ts": ts.isoformat(),
+            "close": round(close, 6),
+            "consensus_close": round(cons_close, 6),
+            "diff_pct": round(diff_pct, 5) if diff_pct is not None else None,
+            "exceeds_tolerance": bool(diff_pct is not None and diff_pct > tolerance_pct),
+        })
+    return out
+
+
 def pairwise_agreement_score(provider: str, fetched: dict[str, pd.DataFrame], *, tolerance_pct: float = 0.05) -> float | None:
     """Direct reuse of scripts.cross_provider_diff.diff_bars, averaged
     against every OTHER provider that fetched successfully this run.
@@ -330,6 +369,7 @@ class BenchmarkResult:
     freshness_score: float | None = None
     latency_score: float | None = None
     composite_score: float | None = None
+    evidence_series: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -392,6 +432,7 @@ def score_symbol_timeframe(
         agree = pairwise_agreement_score(p, fetched, tolerance_pct=tolerance_pct)
         fresh = freshness_score(df, timeframe)
         lat = latency_score(latencies.get(p))
+        evidence_series = build_evidence_series(df, consensus, tolerance_pct=tolerance_pct)
         dims = {
             "completeness": comp_score, "correctness": corr["score"],
             "timestamp_integrity": ts_score, "ohlc_integrity": ohlc_score,
@@ -408,6 +449,7 @@ def score_symbol_timeframe(
             spread_quality_score=None, cross_provider_agreement_score=agree,
             freshness_score=fresh, latency_score=lat,
             composite_score=composite_score(dims),
+            evidence_series=evidence_series,
         ))
     return results
 

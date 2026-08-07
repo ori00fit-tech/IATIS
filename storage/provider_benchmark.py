@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS provider_benchmark_results (
     latency_score                   REAL,
     composite_score                 REAL,
     detail_json                     TEXT,   -- full-precision completeness/correctness/timestamp_integrity detail dicts
+    evidence_series_json            TEXT,   -- Phase 1b: capped (close, consensus_close, diff_pct) tuples for the Evidence drill-down chart
     created_at                      TEXT NOT NULL,
     PRIMARY KEY (run_id, provider, symbol, timeframe)
 )
@@ -164,6 +165,7 @@ def record_result(run_id: str, result: Any) -> None:
         "correctness_detail": result.correctness_detail,
         "timestamp_integrity_detail": result.timestamp_integrity_detail,
     }
+    evidence_series = getattr(result, "evidence_series", None)
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
@@ -172,14 +174,15 @@ def record_result(run_id: str, result: Any) -> None:
                 completeness_score, correctness_score, timestamp_integrity_score,
                 ohlc_integrity_score, ohlc_integrity_reason, spread_quality_score,
                 cross_provider_agreement_score, freshness_score, latency_score, composite_score,
-                detail_json, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                detail_json, evidence_series_json, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (run_id, result.provider, result.symbol, result.timeframe,
              1 if result.fetch_ok else 0, result.error, result.latency_ms, result.bars_fetched,
              result.completeness_score, result.correctness_score, result.timestamp_integrity_score,
              result.ohlc_integrity_score, result.ohlc_integrity_reason, result.spread_quality_score,
              result.cross_provider_agreement_score, result.freshness_score, result.latency_score,
-             result.composite_score, json.dumps(detail), _now()),
+             result.composite_score, json.dumps(detail),
+             json.dumps(evidence_series) if evidence_series else None, _now()),
         )
 
 

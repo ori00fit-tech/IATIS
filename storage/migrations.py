@@ -226,6 +226,18 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validation_results ADD COLUMN discovery_score_json TEXT",
         ],
     ),
+    (
+        14,
+        "provider_benchmark_evidence_series_column",
+        # Provider Benchmark & Data Quality Lab Phase 1b (2026-08-XX) — the
+        # capped (close, consensus_close, diff_pct) per-bar series an
+        # Evidence drill-down chart overlays, computed once per (provider,
+        # symbol, timeframe) point alongside the existing aggregate scores.
+        # Advisory/diagnostic only, same as every other column on this table.
+        [
+            "ALTER TABLE provider_benchmark_results ADD COLUMN evidence_series_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -289,6 +301,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE shadow_signals" in s for s in statements):
                 from storage import shadow_book
                 shadow_book._init_db()
+            if any("ALTER TABLE provider_benchmark_results" in s for s in statements):
+                from storage import provider_benchmark
+                provider_benchmark._init(con)
             for sql in statements:
                 try:
                     con.execute(sql)

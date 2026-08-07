@@ -70,6 +70,10 @@ export interface BenchmarkResultRow {
   latency_score: number | null
   composite_score: number | null
   detail_json: string | null
+  // Phase 1b: capped (close, consensus_close, diff_pct) tuples for the
+  // Evidence drill-down chart, JSON-encoded — null when the provider's
+  // bars never overlapped the run's consensus (see build_evidence_series).
+  evidence_series_json: string | null
   created_at: string
 }
 

@@ -37,6 +37,7 @@ class _FakeResult:
     freshness_score: float | None = 100.0
     latency_score: float | None = 100.0
     composite_score: float | None = 97.0
+    evidence_series: list = field(default_factory=list)
 
 
 def test_upsert_and_get_run_round_trip():
@@ -152,3 +153,26 @@ def test_run_progress_counts_ok_and_failed():
 def test_run_progress_empty_run():
     provider_benchmark.upsert_run("run-10", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
     assert provider_benchmark.run_progress("run-10") == {"total_results": 0, "fetch_ok": 0, "fetch_failed": 0}
+
+
+def test_record_result_persists_evidence_series_json():
+    import json as _json
+
+    provider_benchmark.upsert_run("run-11", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    series = [
+        {"ts": "2026-08-04T00:00:00+00:00", "close": 1.1000, "consensus_close": 1.1001,
+         "diff_pct": 0.009, "exceeds_tolerance": False},
+    ]
+    result = _FakeResult(provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True, evidence_series=series)
+    provider_benchmark.record_result("run-11", result)
+    rows = provider_benchmark.run_results("run-11")
+    assert rows[0]["evidence_series_json"] is not None
+    assert _json.loads(rows[0]["evidence_series_json"]) == series
+
+
+def test_record_result_evidence_series_null_when_empty():
+    provider_benchmark.upsert_run("run-12", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    result = _FakeResult(provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True, evidence_series=[])
+    provider_benchmark.record_result("run-12", result)
+    rows = provider_benchmark.run_results("run-12")
+    assert rows[0]["evidence_series_json"] is None

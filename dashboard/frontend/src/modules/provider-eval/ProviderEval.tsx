@@ -13,9 +13,15 @@ import {
 import { scoreProvidersFromResults, scoreProvidersByTimeframe, type PriceQualityScore } from './priceQualityScoring'
 import { deriveRoutingRecommendations, groupRoutingBySymbol } from './routing'
 import { buildEvidenceMatrix, classifyAllFailures } from './evidence'
+import { EvidenceChart } from './EvidenceChart'
 
 const POLL_MS = 60_000
 const BENCHMARK_POLL_MS = 2_000
+// Matches backend/routes/provider_benchmark.py's _BenchmarkRequest default
+// (tolerance_pct) — Run controls don't yet expose an override, so every
+// run today uses this value; used here only to classify deviation
+// severity for the Evidence drill-down chart.
+const DEFAULT_TOLERANCE_PCT = 0.05
 
 function scoreColor(s: number): string {
   if (s >= 75) return 'text-green'
@@ -104,6 +110,7 @@ function PriceBenchmarkPanel() {
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const [evidenceTarget, setEvidenceTarget] = useState<{ symbol: string; timeframe: string } | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const stopPolling = () => {
@@ -119,6 +126,7 @@ function PriceBenchmarkPanel() {
     setStarting(true)
     setError(null)
     setResults(null)
+    setEvidenceTarget(null)
     try {
       const res = await createPriceBenchmark({ profile })
       setRunId(res.run_id)
@@ -301,25 +309,65 @@ function PriceBenchmarkPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {evidenceRows.map((row) => (
-                      <tr key={row.symbol} className="border-t border-border">
-                        <td className="px-2 py-1.5 font-bold text-accent">{row.symbol}</td>
-                        {scores.map((s) => {
-                          const cells = row.providers[s.provider] ?? []
-                          if (cells.length === 0) return <td key={s.provider} className="px-2 py-1.5 text-muted/60">—</td>
-                          const anyFail = cells.some((c) => !c.fetch_ok)
-                          return (
-                            <td key={s.provider} className={`px-2 py-1.5 ${anyFail ? 'text-red' : 'text-text'}`}>
-                              {cells.map((c) => (c.fetch_ok ? (c.composite_score ?? '—') : 'FAIL')).join('/')}
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))}
+                    {evidenceRows.map((row) => {
+                      const timeframesForSymbol = [...new Set(
+                        (results ?? []).filter((r) => r.symbol === row.symbol).map((r) => r.timeframe),
+                      )].sort()
+                      return (
+                        <tr
+                          key={row.symbol}
+                          className="border-t border-border cursor-pointer hover:bg-accent/[0.04]"
+                          onClick={() => timeframesForSymbol[0] && setEvidenceTarget({ symbol: row.symbol, timeframe: timeframesForSymbol[0] })}
+                          title="Click to open the Evidence drill-down chart for this symbol"
+                        >
+                          <td className="px-2 py-1.5 font-bold text-accent">{row.symbol}</td>
+                          {scores.map((s) => {
+                            const cells = row.providers[s.provider] ?? []
+                            if (cells.length === 0) return <td key={s.provider} className="px-2 py-1.5 text-muted/60">—</td>
+                            const anyFail = cells.some((c) => !c.fetch_ok)
+                            return (
+                              <td key={s.provider} className={`px-2 py-1.5 ${anyFail ? 'text-red' : 'text-text'}`}>
+                                {cells.map((c) => (c.fetch_ok ? (c.composite_score ?? '—') : 'FAIL')).join('/')}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
+
+            {evidenceTarget && results && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-[0.78em]">
+                  <span className="text-muted">Evidence timeframe:</span>
+                  {[...new Set(results.filter((r) => r.symbol === evidenceTarget.symbol).map((r) => r.timeframe))]
+                    .sort()
+                    .map((tf) => (
+                      <button
+                        key={tf}
+                        onClick={() => setEvidenceTarget({ symbol: evidenceTarget.symbol, timeframe: tf })}
+                        className={`px-2 py-1 rounded border text-[0.9em] ${
+                          tf === evidenceTarget.timeframe ? 'border-accent text-accent bg-accent/10' : 'border-border text-muted hover:bg-surface'
+                        }`}
+                      >
+                        {tf}
+                      </button>
+                    ))}
+                  <button onClick={() => setEvidenceTarget(null)} className="ml-auto text-muted hover:text-text">
+                    ✕ close
+                  </button>
+                </div>
+                <EvidenceChart
+                  symbol={evidenceTarget.symbol}
+                  timeframe={evidenceTarget.timeframe}
+                  results={results}
+                  tolerancePct={DEFAULT_TOLERANCE_PCT}
+                />
+              </div>
+            )}
 
             <div>
               <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">

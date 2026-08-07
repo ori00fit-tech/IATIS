@@ -19,6 +19,7 @@ from backtest.price_benchmark import (
     _in_scope_symbols,
     _is_forex_week_closure,
     build_consensus,
+    build_evidence_series,
     classify_gaps,
     completeness_score,
     composite_score,
@@ -204,6 +205,57 @@ def test_pairwise_agreement_none_with_no_peers():
     idx = pd.date_range("2026-08-04", periods=3, freq="1h", tz="UTC")
     a = pd.DataFrame({"open": 1.1, "high": 1.1005, "low": 1.0995, "close": 1.1}, index=idx)
     assert pairwise_agreement_score("solo", {"solo": a}) is None
+
+
+# ── evidence series (Phase 1b drill-down) ─────────────────────────────
+
+def test_build_evidence_series_empty_when_no_overlap():
+    idx_a = pd.date_range("2026-08-04", periods=3, freq="1h", tz="UTC")
+    a = pd.DataFrame({"open": 1.1, "high": 1.1005, "low": 1.0995, "close": 1.1}, index=idx_a)
+    assert build_evidence_series(a, pd.DataFrame(columns=["open", "high", "low", "close"])) == []
+    assert build_evidence_series(pd.DataFrame(columns=["open", "high", "low", "close"]), a) == []
+
+
+def test_build_evidence_series_real_values_and_deviation_flag():
+    idx = pd.date_range("2026-08-04", periods=3, freq="1h", tz="UTC")
+    a = pd.DataFrame({"open": 1.2000, "high": 1.2005, "low": 1.1995, "close": 1.2000}, index=idx)
+    b = pd.DataFrame({"open": 1.1000, "high": 1.1005, "low": 1.0995, "close": 1.1000}, index=idx)
+    consensus = build_consensus({"a": a, "b": b}, min_providers=2)
+    series = build_evidence_series(a, consensus, tolerance_pct=0.05)
+    assert len(series) == 3
+    for point in series:
+        assert set(point) == {"ts", "close", "consensus_close", "diff_pct", "exceeds_tolerance"}
+        assert point["close"] == pytest.approx(1.2000)
+        assert point["consensus_close"] == pytest.approx(1.15)  # median of 1.2000/1.1000
+        assert point["diff_pct"] > 0.05
+        assert point["exceeds_tolerance"] is True
+
+
+def test_build_evidence_series_caps_to_max_points():
+    idx = pd.date_range("2026-08-04", periods=10, freq="1h", tz="UTC")
+    a = pd.DataFrame({"open": 1.1, "high": 1.1005, "low": 1.0995, "close": 1.1}, index=idx)
+    b = pd.DataFrame({"open": 1.1, "high": 1.1005, "low": 1.0995, "close": 1.1}, index=idx)
+    consensus = build_consensus({"a": a, "b": b}, min_providers=2)
+    series = build_evidence_series(a, consensus, max_points=4)
+    assert len(series) == 4
+    # keeps the MOST RECENT points, not the earliest
+    assert series[-1]["ts"] == idx[-1].isoformat()
+    assert series[0]["ts"] == idx[-4].isoformat()
+
+
+def test_score_symbol_timeframe_populates_evidence_series(monkeypatch):
+    import backtest.price_benchmark as pb
+
+    def _fake_fetch(fetch_symbol, interval, outputsize, providers):
+        return _bars("2026-08-04", 10), providers[0]
+
+    monkeypatch.setattr("core.data_providers.fetch_with_failover", _fake_fetch)
+    config = _fake_config([{"internal": "EURUSD", "asset_class": "fx_major", "status": "ACTIVE"}])
+    results = pb.score_symbol_timeframe("EURUSD", "H1", ["a", "b"], 10, config)
+    for r in results:
+        assert r.fetch_ok is True
+        assert len(r.evidence_series) > 0
+        assert r.evidence_series[0]["close"] == pytest.approx(1.1000)
 
 
 # ── freshness / latency ───────────────────────────────────────────────

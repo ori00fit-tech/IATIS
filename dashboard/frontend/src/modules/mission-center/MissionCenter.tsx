@@ -2328,7 +2328,7 @@ export function MissionCenter() {
           onPrefillConsumed={() => setPrefillRequest(null)}
         />
       </div>
-      <div className="grid gap-4 grid-cols-[280px_1fr] items-start">
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-[280px_1fr] items-start">
         <Panel title="Missions">
           <MissionsList selected={selectedMission} onSelect={setSelectedMission} />
         </Panel>

@@ -1160,6 +1160,14 @@ def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.D
     # back down to outputsize via .tail() below, same as every other
     # provider here.
     from_ms = now_ms - int(bar_ms * outputsize * 2.5) - 7 * 24 * 60 * 60_000
+    # The underlying JForex SDK's getHistData rejects a `from` that isn't
+    # aligned to a period boundary — confirmed live 2026-08-07 via a real
+    # ApiException from the bridge: "Interval from [2026.08.06 07:06:40]
+    # ... is not valid for period [Hourly]". HistDataController.java's own
+    # from=0 special case does exactly this alignment internally
+    # (`from = from - from % periodInMillis`) before calling getHistData;
+    # replicated here since we always pass a real, non-zero `from`.
+    from_ms -= from_ms % bar_ms
     try:
         resp = requests.get(
             f"{_dukascopy_jforex_bridge_url()}/api/v1/history",

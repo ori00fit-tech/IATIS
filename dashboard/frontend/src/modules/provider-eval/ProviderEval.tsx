@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
@@ -8,12 +8,19 @@ import { getProviderChains, getDataConfidence } from './api'
 import { evaluateProviders, reviewChains, RETIRED_PROVIDERS, type ProviderScore } from './scoring'
 import {
   createPriceBenchmark, getPriceBenchmark, getPriceBenchmarkResults, cancelPriceBenchmark,
-  type BenchmarkProfile, type BenchmarkResultRow,
+  getPriceBenchmarkHistory,
+  type BenchmarkProfile, type BenchmarkResultRow, type ScoreHistoryRow,
 } from './priceBenchmarkApi'
 import { scoreProvidersFromResults, scoreProvidersByTimeframe, type PriceQualityScore } from './priceQualityScoring'
 import { deriveRoutingRecommendations, groupRoutingBySymbol } from './routing'
 import { buildEvidenceMatrix, classifyAllFailures } from './evidence'
 import { EvidenceChart } from './EvidenceChart'
+
+// Phase 1c — echarts-backed, lazy-loaded like every other echarts consumer
+// in this app (BacktestingCharts.tsx's MonthlyReturnsHeatmap/RMultipleHistogram)
+// so echarts' JS only downloads when this panel's history section actually
+// renders, not on every Provider Eval page load.
+const ScoreHistoryChart = lazy(() => import('./ScoreHistoryChart').then((m) => ({ default: m.ScoreHistoryChart })))
 import {
   createNewsBenchmark, getNewsBenchmark, getNewsBenchmarkResults, cancelNewsBenchmark,
   type NewsBenchmarkProfile, type NewsBenchmarkResultRow,
@@ -115,6 +122,8 @@ function PriceBenchmarkPanel() {
   const [starting, setStarting] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [evidenceTarget, setEvidenceTarget] = useState<{ symbol: string; timeframe: string } | null>(null)
+  const [history, setHistory] = useState<ScoreHistoryRow[] | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const stopPolling = () => {
@@ -124,7 +133,19 @@ function PriceBenchmarkPanel() {
     }
   }
 
-  useEffect(() => stopPolling, [])
+  const loadHistory = () => {
+    getPriceBenchmarkHistory()
+      .then((r) => setHistory(r.history))
+      .catch((e) => setHistoryError(e instanceof Error ? e.message : String(e)))
+  }
+
+  // Phase 1c — loaded once on mount (independent of any specific run) and
+  // refreshed whenever a run this panel itself started reaches a terminal
+  // state, so a freshly-finished run's own point appears without a reload.
+  useEffect(() => {
+    loadHistory()
+    return stopPolling
+  }, [])
 
   const start = async (profile: BenchmarkProfile) => {
     setStarting(true)
@@ -144,6 +165,7 @@ function PriceBenchmarkPanel() {
             stopPolling()
             const r = await getPriceBenchmarkResults(res.run_id)
             setResults(r.results)
+            loadHistory()
           }
         } catch (e) {
           stopPolling()
@@ -259,6 +281,18 @@ function PriceBenchmarkPanel() {
         </div>
 
         {error && <div className="text-[0.8em] text-red">{error}</div>}
+
+        <div>
+          <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">
+            Score History <span className="normal-case text-muted/70">(across every finished run, real longitudinal trend)</span>
+          </div>
+          {historyError && <div className="text-[0.8em] text-red">{historyError}</div>}
+          {!historyError && history && (
+            <Suspense fallback={<Empty>Loading chart…</Empty>}>
+              <ScoreHistoryChart history={history} />
+            </Suspense>
+          )}
+        </div>
 
         {results && results.length === 0 && <Empty>Run finished with zero results.</Empty>}
 

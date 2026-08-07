@@ -263,6 +263,66 @@ def test_cancel_404_when_unknown(client):
     assert r.status_code == 404
 
 
+# ── history (Phase 1c) ──────────────────────────────────────────────
+
+def test_history_requires_auth(client):
+    assert client.get("/research/provider-benchmark/history").status_code == 401
+
+
+def test_history_rejects_bad_limit(client):
+    r = client.get("/research/provider-benchmark/history?limit=0", headers=HDR)
+    assert r.status_code == 400
+    r2 = client.get("/research/provider-benchmark/history?limit=999", headers=HDR)
+    assert r2.status_code == 400
+
+
+def test_history_empty_when_no_finished_runs(client):
+    r = client.get("/research/provider-benchmark/history", headers=HDR)
+    assert r.status_code == 200
+    assert r.json() == {"history": []}
+
+
+def test_history_reflects_a_real_finished_run(client, monkeypatch):
+    from storage import provider_benchmark as sb
+    from dataclasses import dataclass, field
+
+    @dataclass(frozen=True)
+    class _R:
+        provider: str = "ctrader"
+        symbol: str = "EURUSD"
+        timeframe: str = "H1"
+        fetch_ok: bool = True
+        error: str | None = None
+        latency_ms: int | None = 120
+        bars_fetched: int = 300
+        completeness_score: float | None = 100.0
+        completeness_detail: dict = field(default_factory=dict)
+        correctness_score: float | None = 95.0
+        correctness_detail: dict = field(default_factory=dict)
+        timestamp_integrity_score: float | None = 100.0
+        timestamp_integrity_detail: dict = field(default_factory=dict)
+        ohlc_integrity_score: float | None = 100.0
+        ohlc_integrity_reason: str | None = None
+        spread_quality_score: float | None = None
+        cross_provider_agreement_score: float | None = 90.0
+        freshness_score: float | None = 100.0
+        latency_score: float | None = 100.0
+        composite_score: float | None = 96.0
+        evidence_series: list = field(default_factory=list)
+
+    sb.upsert_run("hist-run-1", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    sb.record_result("hist-run-1", _R())
+    sb.set_run_status("hist-run-1", "finished", finished=True)
+
+    r = client.get("/research/provider-benchmark/history", headers=HDR)
+    assert r.status_code == 200
+    history = r.json()["history"]
+    assert len(history) == 1
+    assert history[0]["run_id"] == "hist-run-1"
+    assert history[0]["provider"] == "ctrader"
+    assert history[0]["mean_composite_score"] == 96.0
+
+
 def test_cancel_running_job(client, monkeypatch):
     monkeypatch.setattr("subprocess.Popen", _FakeBlockingProc)
 

@@ -93,3 +93,19 @@ export const getPriceBenchmarkResults = (runId: string, symbol?: string, provide
 
 export const cancelPriceBenchmark = (runId: string) =>
   apiPost<BenchmarkRunSummary>(`/research/provider-benchmark/${encodeURIComponent(runId)}/cancel`)
+
+// Phase 1c — one row per (finished run, provider), aggregated across every
+// (symbol, timeframe) point that run scored for that provider.
+export interface ScoreHistoryRow {
+  run_id: string
+  provider: string
+  profile: string
+  created_at: string
+  mean_composite_score: number | null
+  mean_latency_ms: number | null
+  fetch_ok_count: number
+  fetch_total_count: number
+}
+
+export const getPriceBenchmarkHistory = (limit?: number) =>
+  apiGet<{ history: ScoreHistoryRow[] }>('/research/provider-benchmark/history', { limit })

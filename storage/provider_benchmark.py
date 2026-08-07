@@ -210,3 +210,57 @@ def run_progress(run_id: str) -> dict[str, Any]:
     total = len(rows)
     ok = sum(1 for r in rows if r["fetch_ok"])
     return {"total_results": total, "fetch_ok": ok, "fetch_failed": total - ok}
+
+
+def score_history(limit_runs: int = 30) -> list[dict[str, Any]]:
+    """Phase 1c — one row per (finished run, provider), aggregated across
+    every (symbol, timeframe) point that run scored for that provider:
+    mean composite score, mean latency, and a real fetch-success ratio
+    (fetch_ok_count/fetch_total_count) — the exact three dimensions a
+    score-history chart plots (composite score trend, latency trend,
+    coverage trend). Scoped to the last `limit_runs` FINISHED runs (a
+    queued/running/cancelled run has no stable results yet), ordered
+    chronologically (oldest first) so a caller can plot it directly
+    without re-sorting. Returns [] when no finished run exists yet —
+    never fabricates a synthetic trend point."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        run_rows = con.execute(
+            "SELECT id, profile, created_at FROM provider_benchmark_runs "
+            "WHERE status='finished' ORDER BY created_at DESC LIMIT ?",
+            (limit_runs,),
+        ).fetchall()
+        run_ids = [r["id"] for r in run_rows]
+        if not run_ids:
+            return []
+        placeholders = ",".join("?" * len(run_ids))
+        agg_rows = con.execute(
+            f"""SELECT run_id, provider,
+                       AVG(composite_score) AS mean_composite_score,
+                       AVG(latency_ms) AS mean_latency_ms,
+                       SUM(fetch_ok) AS fetch_ok_count,
+                       COUNT(*) AS fetch_total_count
+                FROM provider_benchmark_results
+                WHERE run_id IN ({placeholders})
+                GROUP BY run_id, provider""",
+            tuple(run_ids),
+        ).fetchall()
+
+    run_meta = {r["id"]: {"profile": r["profile"], "created_at": r["created_at"]} for r in run_rows}
+    out: list[dict[str, Any]] = []
+    for row in agg_rows:
+        meta = run_meta[row["run_id"]]
+        mean_composite = row["mean_composite_score"]
+        mean_latency = row["mean_latency_ms"]
+        out.append({
+            "run_id": row["run_id"],
+            "provider": row["provider"],
+            "profile": meta["profile"],
+            "created_at": meta["created_at"],
+            "mean_composite_score": round(mean_composite, 2) if mean_composite is not None else None,
+            "mean_latency_ms": round(mean_latency, 1) if mean_latency is not None else None,
+            "fetch_ok_count": row["fetch_ok_count"],
+            "fetch_total_count": row["fetch_total_count"],
+        })
+    out.sort(key=lambda r: r["created_at"])
+    return out

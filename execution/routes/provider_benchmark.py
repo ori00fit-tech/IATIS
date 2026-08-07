@@ -151,6 +151,26 @@ async def provider_benchmark_list(
         return {"runs": [_job_summary(j) for j in runs]}
 
 
+@router.get("/research/provider-benchmark/history")
+async def provider_benchmark_history(
+    limit: int = 30,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 1c — score-history for every provider across the last `limit`
+    FINISHED runs, so the frontend can chart real composite-score/latency/
+    coverage trends over time. Registered before /research/provider-
+    benchmark/{run_id} (a literal path segment can't collide with that
+    route's own {run_id} path param under FastAPI's matching, but kept
+    here for readability — grouped with the other run-scoped GETs)."""
+    _check_auth(x_api_key, iatis_session)
+    if not (1 <= limit <= 200):
+        raise HTTPException(status_code=400, detail="limit must be 1-200.")
+    from storage import provider_benchmark
+
+    return {"history": provider_benchmark.score_history(limit_runs=limit)}
+
+
 @router.get("/research/provider-benchmark/{run_id}")
 async def provider_benchmark_status(
     run_id: str,

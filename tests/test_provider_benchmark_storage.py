@@ -176,3 +176,70 @@ def test_record_result_evidence_series_null_when_empty():
     provider_benchmark.record_result("run-12", result)
     rows = provider_benchmark.run_results("run-12")
     assert rows[0]["evidence_series_json"] is None
+
+
+# ── score_history (Phase 1c) ────────────────────────────────────────
+
+def test_score_history_empty_when_no_finished_runs():
+    provider_benchmark.upsert_run("run-13", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    provider_benchmark.record_result("run-13", _FakeResult(provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True))
+    # never marked finished
+    assert provider_benchmark.score_history() == []
+
+
+def test_score_history_aggregates_across_symbols_and_timeframes():
+    provider_benchmark.upsert_run("run-14", "smoke", ["EURUSD", "XAUUSD"], ["H1", "H4"], None, 300, 0.05)
+    provider_benchmark.record_result("run-14", _FakeResult(
+        provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True, composite_score=90.0, latency_ms=100,
+    ))
+    provider_benchmark.record_result("run-14", _FakeResult(
+        provider="ctrader", symbol="XAUUSD", timeframe="H4", fetch_ok=True, composite_score=80.0, latency_ms=200,
+    ))
+    provider_benchmark.record_result("run-14", _FakeResult(
+        provider="ctrader", symbol="EURUSD", timeframe="H4", fetch_ok=False, composite_score=None, latency_ms=None,
+    ))
+    provider_benchmark.set_run_status("run-14", "finished", finished=True)
+
+    history = provider_benchmark.score_history()
+    assert len(history) == 1
+    row = history[0]
+    assert row["run_id"] == "run-14"
+    assert row["provider"] == "ctrader"
+    assert row["mean_composite_score"] == 85.0  # mean of 90.0/80.0, None excluded by AVG
+    assert row["mean_latency_ms"] == 150.0
+    assert row["fetch_ok_count"] == 2
+    assert row["fetch_total_count"] == 3
+
+
+def test_score_history_excludes_non_finished_runs():
+    provider_benchmark.upsert_run("run-15", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    provider_benchmark.record_result("run-15", _FakeResult(provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True))
+    provider_benchmark.set_run_status("run-15", "running", started=True)
+    assert provider_benchmark.score_history() == []
+
+
+def test_score_history_orders_chronologically_and_respects_limit():
+    for i, rid in enumerate(["run-16", "run-17", "run-18"]):
+        provider_benchmark.upsert_run(rid, "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+        provider_benchmark.record_result(rid, _FakeResult(provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=True))
+        provider_benchmark.set_run_status(rid, "finished", finished=True)
+
+    history = provider_benchmark.score_history(limit_runs=2)
+    run_ids = [h["run_id"] for h in history]
+    assert len(run_ids) == 2
+    # chronological (oldest of the returned set first) — created_at ties are
+    # possible in a fast test run, so only assert the set/limit, not exact order.
+    assert set(run_ids) <= {"run-16", "run-17", "run-18"}
+
+
+def test_score_history_mean_composite_none_when_every_fetch_failed():
+    provider_benchmark.upsert_run("run-19", "smoke", ["EURUSD"], ["H1"], None, 300, 0.05)
+    provider_benchmark.record_result("run-19", _FakeResult(
+        provider="ctrader", symbol="EURUSD", timeframe="H1", fetch_ok=False, composite_score=None, latency_ms=None,
+    ))
+    provider_benchmark.set_run_status("run-19", "finished", finished=True)
+    history = provider_benchmark.score_history()
+    assert history[0]["mean_composite_score"] is None
+    assert history[0]["mean_latency_ms"] is None
+    assert history[0]["fetch_ok_count"] == 0
+    assert history[0]["fetch_total_count"] == 1

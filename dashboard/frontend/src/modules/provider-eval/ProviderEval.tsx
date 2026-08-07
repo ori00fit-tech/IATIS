@@ -1,10 +1,21 @@
+import { useEffect, useRef, useState } from 'react'
 import { usePolling } from '../../lib/usePolling'
 import { useAuth } from '../../lib/auth'
 import { Panel, Empty } from '../../components/Panel'
+import { DataTable, type Column } from '../../components/DataTable'
+import { Badge } from '../../components/Badge'
 import { getProviderChains, getDataConfidence } from './api'
 import { evaluateProviders, reviewChains, RETIRED_PROVIDERS, type ProviderScore } from './scoring'
+import {
+  createPriceBenchmark, getPriceBenchmark, getPriceBenchmarkResults, cancelPriceBenchmark,
+  type BenchmarkProfile, type BenchmarkResultRow,
+} from './priceBenchmarkApi'
+import { scoreProvidersFromResults, scoreProvidersByTimeframe, type PriceQualityScore } from './priceQualityScoring'
+import { deriveRoutingRecommendations, groupRoutingBySymbol } from './routing'
+import { buildEvidenceMatrix, classifyAllFailures } from './evidence'
 
 const POLL_MS = 60_000
+const BENCHMARK_POLL_MS = 2_000
 
 function scoreColor(s: number): string {
   if (s >= 75) return 'text-green'
@@ -76,6 +87,263 @@ function ProviderRow({ p, rank }: { p: ProviderScore; rank: number }) {
       </div>
       {p.note && <div className="pl-9 mt-1 text-[0.68em] text-muted/80 italic">{p.note}</div>}
     </div>
+  )
+}
+
+function qualityScoreColor(s: number | null): string {
+  if (s === null) return 'text-muted'
+  if (s >= 90) return 'text-green'
+  if (s >= 70) return 'text-amber'
+  return 'text-red'
+}
+
+function PriceBenchmarkPanel() {
+  const [runId, setRunId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+  const [results, setResults] = useState<BenchmarkResultRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => stopPolling, [])
+
+  const start = async (profile: BenchmarkProfile) => {
+    setStarting(true)
+    setError(null)
+    setResults(null)
+    try {
+      const res = await createPriceBenchmark({ profile })
+      setRunId(res.run_id)
+      setJobStatus(res.status)
+      stopPolling()
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await getPriceBenchmark(res.run_id)
+          setJobStatus(status.job_status)
+          if (status.job_status && !['queued', 'running'].includes(status.job_status)) {
+            stopPolling()
+            const r = await getPriceBenchmarkResults(res.run_id)
+            setResults(r.results)
+          }
+        } catch (e) {
+          stopPolling()
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      }, BENCHMARK_POLL_MS)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const cancel = async () => {
+    if (!runId) return
+    try {
+      await cancelPriceBenchmark(runId)
+    } catch {
+      // best-effort — the poll loop above will surface the real terminal state
+    }
+  }
+
+  const running = jobStatus === 'queued' || jobStatus === 'running'
+  const scores: PriceQualityScore[] = results ? scoreProvidersFromResults(results) : []
+  const byTf = results ? scoreProvidersByTimeframe(results) : []
+  const evidenceRows = results ? buildEvidenceMatrix(results) : []
+  const failures = results ? classifyAllFailures(results) : {}
+  const routingRecs = results ? deriveRoutingRecommendations(results) : []
+  const routingBySymbol = groupRoutingBySymbol(routingRecs)
+
+  const rankingColumns: Column<PriceQualityScore>[] = [
+    { header: 'Provider', render: (r) => <span className="font-bold text-accent">{r.provider}</span> },
+    {
+      header: 'Price Quality',
+      align: 'right',
+      accessorFn: (r) => r.meanComposite ?? -1,
+      render: (r) => (
+        <span className={`font-extrabold ${qualityScoreColor(r.meanComposite)}`}>
+          {r.meanComposite ?? '—'}
+        </span>
+      ),
+    },
+    { header: 'Completeness', align: 'right', render: (r) => r.meanCompleteness ?? '—' },
+    { header: 'Correctness', align: 'right', render: (r) => r.meanCorrectness ?? '—' },
+    { header: 'Timestamp Integrity', align: 'right', render: (r) => r.meanTimestampIntegrity ?? '—' },
+    { header: 'OHLC Integrity', align: 'right', render: (r) => r.meanOhlcIntegrity ?? '—' },
+    { header: 'Cross-Provider Agreement', align: 'right', render: (r) => r.meanCrossProviderAgreement ?? '—' },
+    { header: 'Freshness', align: 'right', render: (r) => r.meanFreshness ?? '—' },
+    { header: 'Latency', align: 'right', render: (r) => (r.meanLatencyMs !== null ? `${r.meanLatencyMs}ms` : '—') },
+    {
+      header: 'Fetches',
+      align: 'right',
+      render: (r) => (
+        <span className={r.nFetchFailed > 0 ? 'text-amber' : 'text-muted'}>
+          {r.nFetchOk}/{r.nPoints} ok
+        </span>
+      ),
+    },
+  ]
+
+  return (
+    <Panel title="Price Quality Benchmark" right="advisory — measures the feed, never changes a chain">
+      <div className="p-4 flex flex-col gap-4">
+        <p className="text-[0.78em] text-muted">
+          Tests every FX/metals/crypto/indices provider against the SAME symbol/timeframe window and scores real,
+          per-fetch data-quality dimensions (completeness, per-field correctness vs. a MEDIAN CONSENSUS across every
+          provider fetched this run, timestamp-boundary integrity, OHLC structural integrity, cross-provider
+          agreement, freshness, latency) — never blind trust of any single "ground truth" provider. Kept fully
+          separate from the capability score above. This is a measurement layer only: it never writes to{' '}
+          <code className="text-accent2">config.yaml</code>'s provider chains.
+        </p>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => start('smoke')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.8em] font-bold hover:bg-accent/10 disabled:opacity-50"
+          >
+            Run Smoke
+          </button>
+          <button
+            onClick={() => start('standard')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Standard
+          </button>
+          <button
+            onClick={() => start('deep')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Deep
+          </button>
+          {running && (
+            <>
+              <span className="text-[0.78em] text-muted">
+                {jobStatus} — run {runId}
+              </span>
+              <button
+                onClick={cancel}
+                className="px-2.5 py-1 rounded border border-red/40 text-red text-[0.75em] hover:bg-red/10"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {!running && jobStatus && jobStatus !== 'queued' && jobStatus !== 'running' && (
+            <span className="text-[0.78em] text-muted">
+              last run: {jobStatus}
+            </span>
+          )}
+        </div>
+
+        {error && <div className="text-[0.8em] text-red">{error}</div>}
+
+        {results && results.length === 0 && <Empty>Run finished with zero results.</Empty>}
+
+        {scores.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Provider Ranking</div>
+              <DataTable columns={rankingColumns} rows={scores} rowKey={(r) => r.provider} />
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Per-Timeframe Breakdown</div>
+              <div className="flex flex-col gap-1">
+                {scores.map((s) => {
+                  const rows = byTf.filter((t) => t.provider === s.provider)
+                  const failure = failures[s.provider]
+                  return (
+                    <div key={s.provider} className="border border-border rounded-md">
+                      <button
+                        onClick={() => setExpandedProvider(expandedProvider === s.provider ? null : s.provider)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-left text-[0.8em]"
+                      >
+                        <span className="font-bold text-accent">{s.provider}</span>
+                        <span className="text-muted">
+                          {rows.map((r) => `${r.timeframe} ${r.meanComposite ?? '—'}`).join(' / ')}
+                        </span>
+                      </button>
+                      {expandedProvider === s.provider && failure && (
+                        <div className="px-3 pb-2.5 text-[0.75em]">
+                          <Badge tone="marginal">{failure.category}</Badge>
+                          <div className="mt-1.5 text-muted">{failure.impact}</div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Evidence Matrix</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[0.78em] border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">Symbol</th>
+                      {scores.map((s) => (
+                        <th key={s.provider} className="text-left px-2 py-1.5 text-muted uppercase tracking-[0.5px] text-[0.85em]">
+                          {s.provider}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {evidenceRows.map((row) => (
+                      <tr key={row.symbol} className="border-t border-border">
+                        <td className="px-2 py-1.5 font-bold text-accent">{row.symbol}</td>
+                        {scores.map((s) => {
+                          const cells = row.providers[s.provider] ?? []
+                          if (cells.length === 0) return <td key={s.provider} className="px-2 py-1.5 text-muted/60">—</td>
+                          const anyFail = cells.some((c) => !c.fetch_ok)
+                          return (
+                            <td key={s.provider} className={`px-2 py-1.5 ${anyFail ? 'text-red' : 'text-text'}`}>
+                              {cells.map((c) => (c.fetch_ok ? (c.composite_score ?? '—') : 'FAIL')).join('/')}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">
+                Routing Recommendation <span className="normal-case text-muted/70">(advisory only — never auto-applied)</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {[...routingBySymbol.entries()].map(([symbol, recs]) => (
+                  <div key={symbol} className="flex items-center gap-2 flex-wrap text-[0.78em] border border-border rounded-md px-3 py-2">
+                    <span className="font-bold text-accent w-20 shrink-0">{symbol}</span>
+                    {recs.map((r) => (
+                      <span key={r.role} className="flex items-center gap-1">
+                        <Badge tone={r.role === 'PRIMARY' ? 'good' : r.role === 'BACKUP' ? 'marginal' : 'neutral'}>{r.role}</Badge>
+                        <span className="text-text">{r.provider}</span>
+                        <span className="text-muted/70">({r.compositeScore ?? '—'})</span>
+                      </span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
   )
 }
 
@@ -159,6 +427,8 @@ export function ProviderEval() {
           ))}
         </div>
       </Panel>
+
+      <PriceBenchmarkPanel />
     </div>
   )
 }

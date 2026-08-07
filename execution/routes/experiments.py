@@ -96,6 +96,14 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # trial. Same one-subprocess-per-job-slot model as research_mission.
     # Full argv is built per-request in execution/routes/missions.py.
     "mission_validate": [sys.executable, "-m", "backtest.mission_validator"],
+    # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — a whole
+    # benchmark run is ONE subprocess (same one-job-slot-per-run model as
+    # research_mission/mission_validate), looping over every
+    # (symbol, timeframe, provider) point in-process internally
+    # (backtest/price_benchmark.py). Measurement/advisory only — never
+    # writes config.yaml's provider_chains. Full argv is built per-request
+    # in execution/routes/provider_benchmark.py.
+    "price_benchmark": [sys.executable, "-m", "backtest.price_benchmark"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -112,6 +120,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
     "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
     "mission_validate": "Multi-stage validation (backtest/mission_validator.py) of one operator-chosen mission trial across operator-chosen validation symbols: re-evaluation + Monte Carlo + walk-forward + robustness sweep per symbol. Launched via POST /research/missions/{id}/validate, not this endpoint directly — result is a LEAD (NO_EDGE/WEAK_LEAD/STRONG_LEAD), never a registry.json promotion.",
+    "price_benchmark": "Provider Benchmark & Data Quality Lab (backtest/price_benchmark.py): scores every FX/metals/crypto/indices provider's fetched candles for completeness, per-field correctness vs. a median consensus, timestamp integrity, OHLC integrity, cross-provider agreement, freshness, and latency. Launched via POST /research/provider-benchmark, not this endpoint directly — measurement/advisory only, never auto-changes config.yaml's provider_chains.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -132,6 +141,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "robustness": "research",
     "research_mission": "research",
     "mission_validate": "research",
+    "price_benchmark": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -164,6 +174,14 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # is a starting point, not a measurement — revisit if real runs need
     # more headroom.
     "mission_validate": 3_600,
+    # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — last-
+    # resort net only, same framing as research_mission's own ceiling: a
+    # Deep-profile run (~50 in-scope symbols x 4 timeframes x ~4 avg
+    # providers) is several hundred independent network fetches; no
+    # internal wall-clock budget exists yet in backtest/price_benchmark.py
+    # (Phase 1 has no resume loop), so this is a starting point, not a
+    # measurement — recalibrate after a real Deep run.
+    "price_benchmark": 10_800,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against

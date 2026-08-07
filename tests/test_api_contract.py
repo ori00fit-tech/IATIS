@@ -912,11 +912,16 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # mission_validate added 2026-07-30 (AI Research Lab Phase 3): one
     # subprocess per validation of a single operator-chosen mission
     # trial — full argv also built per-request in missions.py.
+    # price_benchmark added 2026-08-08 (Provider Benchmark & Data Quality
+    # Lab Phase 1): one subprocess per whole benchmark run (see
+    # execution/routes/provider_benchmark.py) — full argv built
+    # per-request there, not user-shaped.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
         "walk_forward", "robustness", "research_mission", "mission_validate",
+        "price_benchmark",
     }
 
 

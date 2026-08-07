@@ -152,7 +152,7 @@ function DecisionFilterBar({
         <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Reason contains</span>
         <input className={input} placeholder="e.g. RR too low" value={filters.reason} onChange={(e) => onChange({ ...filters, reason: e.target.value })} />
       </label>
-      <label className="flex items-center gap-1.5 pb-1.5 text-[0.78em] text-muted">
+      <label className="flex items-center gap-1.5 px-1 py-2 text-[0.78em] text-muted">
         <input type="checkbox" checked={filters.riskRejected} onChange={(e) => onChange({ ...filters, riskRejected: e.target.checked })} />
         Risk-rejected only
       </label>
@@ -173,7 +173,7 @@ function DecisionJsonPanel({ decision, onClose }: { decision: DecisionEntry; onC
   return (
     <Panel
       title={`Decision JSON — ${decision.symbol} @ ${decision.timestamp}`}
-      right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}
+      right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}
     >
       {prov && (
         <div className="px-4 py-2.5 border-b border-border text-[0.75em] flex flex-wrap gap-x-5 gap-y-1">
@@ -226,7 +226,7 @@ function AIExplanationPanel({ decision, onClose }: { decision: DecisionEntry; on
   }, [decision.symbol, decision.timestamp])
 
   return (
-    <Panel title={`AI Explanation — ${decision.symbol}`} right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+    <Panel title={`AI Explanation — ${decision.symbol}`} right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}>
       <div className="p-4">
         <AiStatusFrame
           loading={state.loading}

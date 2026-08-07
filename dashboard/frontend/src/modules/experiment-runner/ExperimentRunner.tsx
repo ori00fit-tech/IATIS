@@ -70,7 +70,7 @@ function SymbolMultiSelect({
           />
           <div className="flex flex-col gap-0.5">
             {filtered.map((s) => (
-              <label key={s.internal} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-surface cursor-pointer text-[0.78em]">
+              <label key={s.internal} className="flex items-center gap-2 px-2 py-2 rounded hover:bg-surface cursor-pointer text-[0.78em]">
                 <input type="checkbox" checked={value.includes(s.internal)} onChange={() => toggle(s.internal)} />
                 <span className="font-mono">{s.internal}</span>
               </label>
@@ -163,12 +163,12 @@ export function ExperimentRunner() {
             <button
               onClick={() => cancel(j.job_id)}
               disabled={cancelling === j.job_id}
-              className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50"
+              className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50 px-2 py-1.5"
             >
               {cancelling === j.job_id ? 'Cancelling…' : 'Cancel'}
             </button>
           )}
-          <button onClick={() => setViewing(j.job_id)} className="text-accent hover:text-accent2 text-[0.85em] underline decoration-dotted">
+          <button onClick={() => setViewing(j.job_id)} className="text-accent hover:text-accent2 text-[0.85em] underline decoration-dotted px-2 py-1.5">
             View
           </button>
         </div>
@@ -237,12 +237,12 @@ export function ExperimentRunner() {
                 <button
                   onClick={() => cancel(detail.job_id)}
                   disabled={cancelling === detail.job_id}
-                  className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50"
+                  className="text-red hover:text-red/80 text-[0.85em] underline decoration-dotted disabled:opacity-50 px-2 py-1.5"
                 >
                   {cancelling === detail.job_id ? 'Cancelling…' : 'Cancel'}
                 </button>
               )}
-              <button onClick={() => setViewing(null)} className="text-muted hover:text-text">
+              <button onClick={() => setViewing(null)} className="text-muted hover:text-text px-2 py-1.5">
                 ✕ close
               </button>
             </div>

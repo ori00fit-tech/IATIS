@@ -135,7 +135,7 @@ function HypothesisDetailPanel({ id, onClose }: { id: string; onClose: () => voi
   const rest = hyp ? Object.fromEntries(Object.entries(hyp).filter(([k]) => !SPECIAL_KEYS.has(k))) : {}
 
   return (
-    <Panel title={`Hypothesis ${id}`} right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+    <Panel title={`Hypothesis ${id}`} right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}>
       {state.loading ? (
         <Empty>Loading...</Empty>
       ) : state.error ? (
@@ -266,7 +266,7 @@ function HypothesisComparePanel({ ids, onClose }: { ids: string[]; onClose: () =
   ]
 
   return (
-    <Panel title="Hypothesis Comparison" right={<button onClick={onClose} className="text-muted hover:text-text">✕ close</button>}>
+    <Panel title="Hypothesis Comparison" right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}>
       {state.loading ? (
         <Empty>Loading...</Empty>
       ) : state.error ? (

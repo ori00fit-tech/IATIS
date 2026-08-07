@@ -70,7 +70,7 @@ function AiBriefingPanel() {
         <button
           onClick={generate}
           disabled={b.loading}
-          className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50"
+          className="text-accent hover:text-accent2 text-[0.78em] disabled:opacity-50 px-2 py-1.5"
         >
           {b.loading ? 'Generating…' : generated ? 'Regenerate' : 'Generate'}
         </button>

@@ -48,7 +48,7 @@ export function Reports() {
       {viewing && (
         <Panel
           title={data?.title ?? viewing}
-          right={<button onClick={() => setViewing(null)} className="text-muted hover:text-text">✕ close</button>}
+          right={<button onClick={() => setViewing(null)} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}
         >
           {loading ? (
             <Empty>Loading...</Empty>

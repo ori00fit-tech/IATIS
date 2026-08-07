@@ -105,13 +105,13 @@ export function FileExplorer() {
       <Panel title="File Explorer" right="read-only">
         <div className="flex flex-wrap items-end gap-2 px-4 py-3 border-b border-border bg-surface/40">
           <div className="flex items-center gap-1 text-[0.82em] flex-wrap">
-            <button onClick={() => loadTree('')} className="text-accent hover:text-accent2">
+            <button onClick={() => loadTree('')} className="text-accent hover:text-accent2 px-1.5 py-1.5">
               root
             </button>
             {segments.map((seg, i) => (
               <span key={i} className="flex items-center gap-1">
                 <span className="text-muted">/</span>
-                <button onClick={() => loadTree(segments.slice(0, i + 1).join('/'))} className="text-accent hover:text-accent2">
+                <button onClick={() => loadTree(segments.slice(0, i + 1).join('/'))} className="text-accent hover:text-accent2 px-1.5 py-1.5">
                   {seg}
                 </button>
               </span>
@@ -195,10 +195,10 @@ export function FileExplorer() {
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border sticky top-0 bg-card">
                   <span className="text-[0.8em] text-text truncate">{selected}</span>
                   <div className="flex gap-3 text-[0.78em] shrink-0">
-                    <button onClick={toggleDiff} className="text-accent hover:text-accent2">
+                    <button onClick={toggleDiff} className="text-accent hover:text-accent2 px-1.5 py-1.5">
                       {showDiff ? 'Hide diff' : 'Diff vs HEAD'}
                     </button>
-                    <a href={downloadUrl(selected)} className="text-accent hover:text-accent2">
+                    <a href={downloadUrl(selected)} className="text-accent hover:text-accent2 px-1.5 py-1.5">
                       Download
                     </a>
                   </div>

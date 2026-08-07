@@ -60,11 +60,38 @@ docker pull ismailfer/dukascopy-api:latest
 # which you should do regardless of which option you run it with)
 git clone https://github.com/ismailfer/dukascopy-api-websocket.git /opt/iatis/dukas-api
 cd /opt/iatis/dukas-api
-mvn clean package
+mvn clean package -DskipTests
 ```
 
 **Read the source before running it against your account** — this is
 the point where you decide whether you trust this project.
+
+**Known build issue, confirmed live 2026-08-07**: the project's own
+`pom.xml` ships with THREE competing SLF4J bindings on the classpath at
+once (`slf4j-reload4j` — pulled in transitively by the real JForex SDK
+jar, keep this one as a dependency; `slf4j-simple` — directly, redundantly
+declared in `pom.xml` itself; `logback-classic` — pulled in by Spring
+Boot's own default logging starter, and the one Spring Boot's
+`LogbackLoggingSystem` actually requires to be active). SLF4J picks
+non-deterministically among them, and if it doesn't pick Logback, the
+app crashes on startup with `IllegalArgumentException: LoggerFactory is
+not a Logback LoggerContext but Logback is on the classpath`. Fix, before
+`mvn clean package`:
+1. Delete the directly-declared `slf4j-simple` `<dependency>` block from
+   `pom.xml` entirely.
+2. Add an `<exclusions>` block to the `DDS2-jClient-JForex` `<dependency>`
+   excluding `org.slf4j:slf4j-reload4j` **as a binding only** — the JForex
+   SDK jar dependency itself must stay; only its transitive
+   `slf4j-reload4j` binding needs excluding.
+
+Confirm neither jar is present after building:
+```bash
+unzip -l target/dukascopy-api-websocket-1.0.war | grep -E "slf4j-simple|slf4j-reload4j"
+```
+Should print nothing. `logback-classic` and `reload4j` (the underlying
+log4j-compatible library `slf4j-reload4j` still depends on, unrelated to
+the *binding* conflict above) are expected to remain — only the
+`slf4j-simple`/`slf4j-reload4j` **bindings** are the problem.
 
 ## 3. Configure credentials — NEVER in IATIS's own `.env`, NEVER in chat
 
@@ -76,14 +103,32 @@ if a JForex login/password ever appears anywhere outside this file,
 rotate it the same day (same rule CLAUDE.md applies to every other
 secret in this repo).
 
+**The real property keys, confirmed live 2026-08-07 by reading the
+project's own shipped `src/main/resources/application.properties` and
+`DukasService.java` source directly** (an earlier version of this doc
+guessed a flat `dukascopy.username`/`dukascopy.password`/`dukascopy.
+server`/`rest.port` shape from a README summary — that was wrong and
+produced a `java.net.MalformedURLException: url=null` crash; the real
+keys are kebab-case and nested under `dukascopy.credential-*`):
+
 ```properties
 # application.properties (bridge process only — not part of the IATIS repo)
-dukascopy.username=<your JForex login>
-dukascopy.password=<your JForex password>
-dukascopy.server=demo
-rest.port=7080
-websocket.port=7081
+server.port=7080
+dukascopy.ws-server-port=7081
+dukascopy.credential-jnlp=http://platform.dukascopy.com/demo/jforex.jnlp
+dukascopy.credential-username=<your JForex login>
+dukascopy.credential-password=<your JForex password>
+dukascopy.subscription-instruments=EUR/USD,GBP/USD,USD/JPY,XAU/USD,XAG/USD,BTC/USD,ETH/USD
+dukascopy.lifecycle-wait=60000
+dukascopy.connection-wait=60000
 ```
+
+For a real (non-demo) account, use the real-server JNLP URL Dukascopy
+gives you instead of the demo one above. If a future version of the
+project changes these keys again, pull the ground truth the same way —
+`cat src/main/resources/application.properties` and `grep -n
+credential-jnlp src/main/java/**/DukasService.java` in your own clone —
+rather than trusting this doc or the upstream README blindly.
 
 Place this file outside the IATIS repo (e.g. `/opt/iatis/dukas-api-secrets/`),
 readable only by the service user (`chmod 600`).
@@ -91,14 +136,22 @@ readable only by the service user (`chmod 600`).
 ## 4. Run the bridge, bound to localhost only
 
 ```bash
-# Docker:
+# Docker (only if your VPS is amd64 — the published
+# ismailfer/dukascopy-api:latest image is amd64-only, confirmed via
+# Docker Hub; on an ARM VPS (e.g. Oracle Cloud's ARM shapes) this will
+# fail to run at all — skip straight to build-from-source below):
 docker run --name dukascopy-api -d \
   -p 127.0.0.1:7080:7080 -p 127.0.0.1:7081:7081 \
   -v /opt/iatis/dukas-api-secrets/application.properties:/app/application.properties:ro \
   ismailfer/dukascopy-api:latest
 
-# or, if built from source:
-java -jar target/dukas-api.jar --spring.config.location=/opt/iatis/dukas-api-secrets/application.properties
+# or, if built from source (works on any architecture — compiled
+# bytecode, not a native binary). The real jar name confirmed live
+# 2026-08-07 is dukascopy-api-websocket-1.0.war (a Spring Boot
+# executable WAR, still run the normal `java -jar` way), NOT
+# dukas-api.jar — build first with `mvn clean package -DskipTests`,
+# then:
+java -jar target/dukascopy-api-websocket-1.0.war --spring.config.location=/opt/iatis/dukas-api-secrets/application.properties
 ```
 
 **Never publish these ports beyond `127.0.0.1`.** Unlike the MT5
@@ -129,7 +182,50 @@ JForex session handshake has been observed to clear on retry). If this
 fails after a retry, check the bridge's own logs before touching
 anything on the IATIS side.
 
-## 6. Point IATIS at the bridge — data confirmation BEFORE any opt-in
+## 6. Keep it alive with systemd
+
+A plain `java -jar ...` run in a terminal (or `nohup`'d) dies the moment
+that shell session ends, gets killed, or the VPS reboots — fine for the
+first smoke test, not for anything you actually depend on. Convert it to
+a systemd unit, matching the MT5 bridge's own precedent
+(`docs/MT5_BRIDGE_SETUP.md`):
+
+```ini
+# /etc/systemd/system/iatis-dukas-bridge.service
+[Unit]
+Description=IATIS Dukascopy JForex data bridge (dukas-api)
+After=network.target
+
+[Service]
+Type=simple
+User=iatis
+WorkingDirectory=/opt/iatis/dukas-api
+ExecStart=/usr/bin/java -jar target/dukascopy-api-websocket-1.0.war --spring.config.location=/opt/iatis/dukas-api-secrets/application.properties
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Adjust `ExecStart`'s `java` path if `which java` on your VPS points
+somewhere other than `/usr/bin/java`. First, kill any manually-started
+`java -jar ...`/`nohup` process for this bridge (`pkill -u iatis -f
+dukascopy-api-websocket` or find its PID via `jobs`/`ps aux | grep
+dukascopy`) so systemd owns the process cleanly, not a duplicate:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now iatis-dukas-bridge
+sudo systemctl status iatis-dukas-bridge
+```
+
+Re-run the section 5 verification curl to confirm the systemd-managed
+process is the one actually serving requests. `journalctl -u
+iatis-dukas-bridge -f` is the equivalent of tailing the old
+`/tmp/dukas-bridge.log` file going forward.
+
+## 7. Point IATIS at the bridge — data confirmation BEFORE any opt-in
 
 In the main repo's `.env`:
 
@@ -157,7 +253,7 @@ divergence between `dukascopy_jforex` and `ctrader` on the same symbol
 is the first real signal something's wrong with the symbol/timeframe
 mapping — catch it there, before it ever reaches a live decision.
 
-## 7. Order execution (Phase 2b) — mandatory manual verification BEFORE enabling
+## 8. Order execution (Phase 2b) — mandatory manual verification BEFORE enabling
 
 `execution/dukascopy_jforex_client.py` places real orders through the
 bridge's `POST`/`PUT /api/v1/position` endpoints, gated by

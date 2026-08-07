@@ -1172,7 +1172,10 @@ def _fetch_dukascopy_jforex(symbol: str, interval: str, outputsize: int) -> pd.D
         resp = requests.get(
             f"{_dukascopy_jforex_bridge_url()}/api/v1/history",
             params={"instID": inst_id, "timeFrame": tf, "from": from_ms},
-            timeout=15,
+            # 30s, not 15s: a cold historical range (bridge hasn't cached
+            # it yet) was observed live to exceed 15s once, 2026-08-07 —
+            # a genuinely slower path than a live-quote poll, not a hang.
+            timeout=30,
         )
         resp.raise_for_status()
         rows = resp.json()

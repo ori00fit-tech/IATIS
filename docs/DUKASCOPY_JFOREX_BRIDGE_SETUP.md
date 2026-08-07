@@ -146,6 +146,64 @@ divergence between `dukascopy_jforex` and `ctrader` on the same symbol
 is the first real signal something's wrong with the symbol/timeframe
 mapping — catch it there, before it ever reaches a live decision.
 
+## 7. Order execution (Phase 2b) — mandatory manual verification BEFORE enabling
+
+`execution/dukascopy_jforex_client.py` places real orders through the
+bridge's `POST`/`PUT /api/v1/position` endpoints, gated by
+`config.yaml`'s `execution.dukascopy_jforex_enabled` (**false by
+default**) plus the standard `dry_run`/`broker: dukascopy_jforex`/
+`allow_live_trading` gates already used for cTrader/OANDA.
+
+**Two things in this client are best-documented assumptions, not
+verified facts** (see the module's own docstring for the full
+reasoning):
+
+1. **Position sizing is a fixed quantity**
+   (`execution.dukascopy_jforex_fixed_quantity`, `0.0` = refuse to
+   trade) — the bridge documents no account-balance endpoint, so there
+   is no live number to compute cTrader/OANDA-style `risk_pct × balance`
+   sizing from. Set this to something deliberately tiny for your first
+   test.
+2. **Stop-loss/take-profit are converted to pips** using a standard FX
+   pip-size table (`execution/dukascopy_jforex_client.py`'s
+   `_PIP_SIZE`) — the bridge's `PUT /api/v1/position` documents
+   `stopLossPips`/`takeProfitPips`, but no per-instrument pip-size
+   convention is documented anywhere found. **`quantity`'s exact unit
+   (lots vs. base-currency units) is also undocumented.**
+
+**Before ever setting `dukascopy_jforex_enabled: true` and letting the
+scheduler loop run unattended**, place exactly ONE real order manually
+and inspect it:
+
+```bash
+python3 -c "
+from execution.dukascopy_jforex_client import DukascopyJForexClient, DukascopyJForexOrder
+client = DukascopyJForexClient()
+order = DukascopyJForexOrder(
+    symbol='EURUSD', direction='BUY', quantity=0.01,   # start tiny
+    stop_loss=1.0700, take_profit=1.1000,               # pick real, sane demo-account levels
+    client_order_id='IATIS_EURUSD_MANUAL_TEST',
+)
+result = client.place_market_order(order)
+print(result)
+"
+```
+
+Then, in the real JForex terminal UI (or the bridge's own logs):
+
+- Confirm the position size is what you actually intended (`quantity`'s
+  unit assumption).
+- Confirm the stop-loss and take-profit are placed at approximately the
+  right distance from entry (the pip-size assumption) — not 10x too
+  close, not 10x too far.
+- Only once both look correct, consider enabling
+  `dukascopy_jforex_enabled` for real scheduler-loop use.
+
+If either assumption is wrong, fix the specific piece
+(`_PIP_SIZE[symbol]` or the `quantity` semantics in
+`DukascopyJForexOrder`) before trusting this integration with anything
+beyond that one manual test order.
+
 ## Known fragility, stated plainly
 
 - This is unaudited, third-party code with no vendor support contract —

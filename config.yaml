@@ -163,6 +163,18 @@ execution:
   max_open_trade_hours: 168
   min_score_to_execute: 60.0
   oanda_enabled: false
+  # Dukascopy JForex (2026-08-08) — via the local dukas-api bridge, see
+  # execution/dukascopy_jforex_client.py's module docstring and docs/
+  # DUKASCOPY_JFOREX_BRIDGE_SETUP.md. UNAUDITED THIRD-PARTY BRIDGE CODE —
+  # stays false until you've run the mandatory single-order manual-
+  # verification step (inspect SL/TP/size in the real JForex terminal)
+  # described in that doc. Same true/dry_run:false → real orders,
+  # allow_live_trading gates non-demo, pattern as ctrader_enabled above.
+  dukascopy_jforex_enabled: false
+  # No account-balance endpoint exists on the bridge (see the client's
+  # docstring) — position size is this fixed quantity, never risk_pct-
+  # derived. 0.0 = refuse to trade (fail loud, never guess a size).
+  dukascopy_jforex_fixed_quantity: 0.0
 # On/off switches for real, already-built gates — toggle behavior without
 # editing code. This is NOT the feature store (utils/feature_def.py, a
 # separate indicator/versioning registry) — different concept, same word.

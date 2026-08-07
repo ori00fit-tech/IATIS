@@ -82,6 +82,7 @@ class TradeExecutor:
         max_open_trades: int = 5,
         min_score: float = 60.0,
         allow_live_trading: bool = False,
+        dukascopy_jforex_fixed_quantity: float = 0.0,
     ):
         self.dry_run = dry_run
         self.broker = broker
@@ -92,6 +93,14 @@ class TradeExecutor:
         # runs on demo, so this stays False — enabling ctrader execution
         # can never touch a live account by accident.
         self.allow_live_trading = allow_live_trading
+        # dukas-api has no documented account-balance endpoint, so JForex
+        # orders can't use the risk_pct-based sizing cTrader/OANDA use
+        # (execution/dukascopy_jforex_client.py's module docstring has the
+        # full reasoning) — a fixed quantity, set explicitly per config.yaml
+        # execution.dukascopy_jforex_fixed_quantity. 0.0 (unset) means
+        # "refuse to trade" (see the dukascopy_jforex branch below), never
+        # a silently-guessed default size.
+        self.dukascopy_jforex_fixed_quantity = dukascopy_jforex_fixed_quantity
         self._client = None
 
         mode = "DRY RUN" if dry_run else f"LIVE ({broker.upper()})"
@@ -115,6 +124,9 @@ class TradeExecutor:
             if self.broker == "ctrader":
                 from core.data_providers import get_shared_ctrader_client
                 self._client = get_shared_ctrader_client()
+            elif self.broker == "dukascopy_jforex":
+                from execution.dukascopy_jforex_client import DukascopyJForexClient
+                self._client = DukascopyJForexClient()
             else:
                 from execution.oanda_client import OandaClient
                 self._client = OandaClient()
@@ -272,6 +284,78 @@ class TradeExecutor:
                     return ExecutionResult(
                         executed=False, symbol=symbol,
                         skip_reason=f"cTrader error: {result.error}",
+                        dry_run=False,
+                    )
+
+            elif self.broker == "dukascopy_jforex":
+                # Dukascopy JForex execution path, via the local dukas-api
+                # bridge — see execution/dukascopy_jforex_client.py's module
+                # docstring for the fixed-quantity/pip-size/duplicate-check
+                # design decisions (dukas-api documents no account-balance
+                # or list-open-positions endpoint).
+                from execution.dukascopy_jforex_client import DukascopyJForexOrder
+
+                # HARD money-safety gate: identical structure to the cTrader
+                # branch above — self-reported environment, refuse a
+                # non-demo order unless explicitly allowed.
+                env = getattr(client, "environment", "demo")
+                if env != "demo" and not self.allow_live_trading:
+                    logger.error(
+                        f"REFUSING live order for {symbol}: DUKASCOPY_JFOREX_ENVIRONMENT="
+                        f"{env} but allow_live_trading is False. Set "
+                        f"execution.allow_live_trading only when you truly mean it."
+                    )
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Live trading blocked (env={env}, allow_live_trading=False)",
+                        dry_run=False,
+                    )
+
+                if self.dukascopy_jforex_fixed_quantity <= 0:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason="dukascopy_jforex_fixed_quantity not configured (must be > 0)",
+                        dry_run=False,
+                    )
+
+                if client.has_open_position(symbol):
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Already have open position for {symbol}",
+                        dry_run=False,
+                    )
+
+                jf_order = DukascopyJForexOrder(
+                    symbol=symbol,
+                    direction=direction,
+                    quantity=self.dukascopy_jforex_fixed_quantity,
+                    stop_loss=float(sl),
+                    take_profit=float(tp),
+                    client_order_id=f"IATIS_{symbol}",
+                )
+                result = client.place_market_order(jf_order)
+
+                if result.success:
+                    logger.info(
+                        f"✅ Dukascopy JForex ORDER: {direction} {symbol} "
+                        f"qty={self.dukascopy_jforex_fixed_quantity} "
+                        f"order_id={result.dukas_order_id}"
+                    )
+                    return ExecutionResult(
+                        executed=True, symbol=symbol,
+                        # ExecutionResult.units is int-typed; a fractional
+                        # quantity (e.g. 0.01 lots) rounds for display only —
+                        # the log line above and the order actually sent to
+                        # the bridge both used the precise float value.
+                        direction=direction, units=round(self.dukascopy_jforex_fixed_quantity),
+                        entry_price=result.fill_price,
+                        stop_loss=float(sl), take_profit=float(tp),
+                        trade_id=result.dukas_order_id, dry_run=False,
+                    )
+                else:
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Dukascopy JForex error: {result.error}",
                         dry_run=False,
                     )
 

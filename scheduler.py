@@ -210,10 +210,12 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                     exec_cfg = config.get("execution", {})
                     oanda_enabled = exec_cfg.get("oanda_enabled", False)
                     ctrader_enabled = exec_cfg.get("ctrader_enabled", False)
+                    dukascopy_jforex_enabled = exec_cfg.get("dukascopy_jforex_enabled", False)
                     dry_run = exec_cfg.get("dry_run", True)
                     broker = exec_cfg.get("broker", "ctrader")
                     broker_live = (ctrader_enabled and broker == "ctrader") or \
-                                  (oanda_enabled and broker == "oanda")
+                                  (oanda_enabled and broker == "oanda") or \
+                                  (dukascopy_jforex_enabled and broker == "dukascopy_jforex")
                     if dry_run or broker_live:
                         try:
                             executor = TradeExecutor(
@@ -222,6 +224,7 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                 max_open_trades=exec_cfg.get("max_open_trades", 5),
                                 min_score=exec_cfg.get("min_score_to_execute", 60.0),
                                 allow_live_trading=exec_cfg.get("allow_live_trading", False),
+                                dukascopy_jforex_fixed_quantity=exec_cfg.get("dukascopy_jforex_fixed_quantity", 0.0),
                             )
                             exec_result = executor.execute_from_report(report)
                             if exec_result.executed:

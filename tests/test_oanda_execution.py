@@ -192,3 +192,106 @@ def test_ctrader_live_allowed_when_flag_set():
 
     assert result.executed is True
     fake_client.place_market_order.assert_called_once()
+
+
+# ─── Dukascopy JForex (2026-08-08) ─────────────────────────────────────────
+
+def test_dukascopy_jforex_refuses_live_account_without_allow_flag():
+    executor = TradeExecutor(
+        dry_run=False, broker="dukascopy_jforex", allow_live_trading=False,
+        dukascopy_jforex_fixed_quantity=0.01,
+    )
+    fake_client = MagicMock()
+    fake_client.environment = "live"
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "Live trading blocked" in result.skip_reason
+    fake_client.place_market_order.assert_not_called()
+
+
+def test_dukascopy_jforex_refuses_when_no_fixed_quantity_configured():
+    """0.0 (unset) must refuse to trade, never guess a size."""
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.0)
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "not configured" in result.skip_reason
+    fake_client.place_market_order.assert_not_called()
+
+
+def test_dukascopy_jforex_refuses_duplicate_open_position():
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = True
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "Already have open position" in result.skip_reason
+    fake_client.place_market_order.assert_not_called()
+
+
+def test_dukascopy_jforex_places_order_on_demo_account():
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, dukas_order_id="jf123", fill_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    assert result.dry_run is False
+    assert result.trade_id == "jf123"
+    fake_client.place_market_order.assert_called_once()
+    sent_order = fake_client.place_market_order.call_args[0][0]
+    assert sent_order.quantity == 0.01
+    assert sent_order.client_order_id == "IATIS_EURUSD"
+
+
+def test_dukascopy_jforex_reports_bridge_rejection():
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
+    fake_client.place_market_order.return_value = MagicMock(success=False, error="insufficient margin")
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "insufficient margin" in result.skip_reason
+
+
+def test_dukascopy_jforex_live_allowed_when_flag_set():
+    executor = TradeExecutor(
+        dry_run=False, broker="dukascopy_jforex", allow_live_trading=True,
+        dukascopy_jforex_fixed_quantity=0.01,
+    )
+    fake_client = MagicMock()
+    fake_client.environment = "live"
+    fake_client.has_open_position.return_value = False
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, dukas_order_id="live_jf1", fill_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    fake_client.place_market_order.assert_called_once()
+
+
+def test_get_client_constructs_dukascopy_jforex_client(monkeypatch):
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+    from execution.dukascopy_jforex_client import DukascopyJForexClient
+
+    executor = TradeExecutor(broker="dukascopy_jforex")
+    client = executor._get_client()
+    assert isinstance(client, DukascopyJForexClient)

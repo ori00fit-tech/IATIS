@@ -222,6 +222,31 @@ def test_run_once_does_not_log_outcome_when_broker_path_unconfigured(synthetic_c
     assert get_open_signals() == []
 
 
+def test_run_once_constructs_executor_when_dukascopy_jforex_enabled(synthetic_config):
+    """dukascopy_jforex_enabled + broker=dukascopy_jforex must reach the
+    same broker_live gate ctrader_enabled/oanda_enabled already do — the
+    additive config key from Dukascopy JForex Phase 2b."""
+    from scheduler import run_once
+
+    synthetic_config["execution"] = {
+        "dry_run": False, "broker": "dukascopy_jforex",
+        "ctrader_enabled": False, "oanda_enabled": False,
+        "dukascopy_jforex_enabled": True, "dukascopy_jforex_fixed_quantity": 0.01,
+    }
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor:
+        MockExecutor.return_value.execute_from_report.return_value = MagicMock(
+            executed=False, dry_run=False, skip_reason="test"
+        )
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    MockExecutor.assert_called_once()
+    assert MockExecutor.call_args.kwargs["broker"] == "dukascopy_jforex"
+    assert MockExecutor.call_args.kwargs["dukascopy_jforex_fixed_quantity"] == 0.01
+
+
 # ---------------------------------------------------------------------------
 # correlation filter — must span across runs, not just within one tick
 # (2026-07-25 Risk Engine audit finding: execute_signals started empty

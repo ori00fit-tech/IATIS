@@ -175,11 +175,20 @@ def test_candles_uses_asset_class_provider_chain(client):
     chain, which has no ccxt entry at all and would never even try
     Binance for BTC/ETH."""
     from core.data_providers import provider_chain_for
+    from execution.api_core import _get_config
     with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "ccxt")) as mock_fetch:
         r = client.get("/candles/BTCUSD", headers=HDR)
     assert r.status_code == 200
     used_chain = mock_fetch.call_args.kwargs.get("providers")
-    assert used_chain == provider_chain_for("BTC/USD")
+    # Real config.yaml provider_chains, not provider_chain_for()'s own
+    # DEFAULT_CHAINS fallback — the real /candles route always passes
+    # config.yaml's data.provider_chains as overrides (analyze.py:161), so
+    # this must match that, not the hardcoded default, even on days they
+    # happen to agree (2026-08-07: fx's default/config chains diverged
+    # once dukascopy_jforex was opted into config.yaml only — the same
+    # silent-coincidence gap could bite crypto next).
+    real_chain = provider_chain_for("BTC/USD", _get_config().get("data", {}).get("provider_chains"))
+    assert used_chain == real_chain
     assert used_chain[0] == "ccxt"
 
 
@@ -197,7 +206,13 @@ def test_candles_never_opens_a_ctrader_session(client):
     provider_chain_for() chain before it reaches fetch_with_failover,
     even though that chain puts it first for fx/metals/indices."""
     from core.data_providers import provider_chain_for
-    real_chain = provider_chain_for("EUR/USD")
+    from execution.api_core import _get_config
+    # Real config.yaml provider_chains, matching exactly what the real
+    # /candles route passes as overrides (analyze.py:161) — NOT
+    # provider_chain_for()'s own DEFAULT_CHAINS fallback, which
+    # deliberately excludes opt-in-only providers like dukascopy_jforex
+    # and so can silently diverge from the real, config-driven chain.
+    real_chain = provider_chain_for("EUR/USD", _get_config().get("data", {}).get("provider_chains"))
     assert "ctrader" in real_chain  # pin the premise: it WOULD be used otherwise
     with patch("core.data_providers.fetch_with_failover", return_value=(_fake_candles_df(), "twelve_data")) as mock_fetch:
         r = client.get("/candles/EURUSD", headers=HDR)

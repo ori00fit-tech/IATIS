@@ -82,7 +82,18 @@ data:
     metals:  [ctrader, twelve_data, fcs_api, finnhub]
     energy:  [ctrader, finnhub]
     indices: [ctrader, fcs_api, finnhub]
-    fx:      [ctrader, twelve_data, fcs_api, alpha_vantage, finnhub]
+    # dukascopy_jforex (2026-08-07): opted into fx ONLY, non-primary slot
+    # (right after ctrader, never first) — per docs/
+    # DUKASCOPY_JFOREX_BRIDGE_SETUP.md's own recommended rollout. Live-
+    # verified end-to-end on the operator's VPS for EUR/USD only; metals/
+    # crypto instruments the bridge also subscribes to (XAU/USD, XAG/USD,
+    # BTC/USD, ETH/USD) are NOT yet added to their chains — do that only
+    # after the same live-fetch verification for those symbols, and after
+    # watching core/data_confidence.py's cross-provider checks (GET
+    # /data-confidence) for a MATERIAL divergence-free stretch here first.
+    # Still unofficial, third-party bridge code — see the setup doc's
+    # "Known fragility" section before expanding scope further.
+    fx:      [ctrader, dukascopy_jforex, twelve_data, fcs_api, alpha_vantage, finnhub]
     # stocks/etf — LIVE-VERIFIED on the VPS 2026-07-24 (real probe, 4
     # starter symbols, scripts/probe_equity_data_providers.py):
     #   alpaca:        CONFIRMED WORKING after fixing a real bug — the

@@ -174,3 +174,117 @@ def test_load_macro_snapshot_default_symbols_unchanged(monkeypatch):
     monkeypatch.setattr(adl, "load_vix_from_cboe", lambda: (_ for _ in ()).throw(ValueError("cboe down")))
     adl.load_macro_snapshot()  # no explicit symbols -> default list
     assert set(seen) == {"DTWEXBGS", "DGS10", "DGS2", "VIXCLS", "GOLDAMGBD228NLBM", "SP500"}
+
+
+# ---------------------------------------------------------------------------
+# Provider Benchmark Phase 3 (Macro Benchmark) — Alpha Vantage economic
+# indicators. Used only for benchmarking; load_macro_snapshot() (the Macro
+# engine's live-decision-path source, tested above) must stay completely
+# unaffected — pinned explicitly at the bottom of this block.
+# ---------------------------------------------------------------------------
+
+AV_ECONOMIC_JSON = {
+    "name": "10-Year Treasury Constant Maturity Rate",
+    "interval": "daily",
+    "unit": "percent",
+    "data": [
+        {"date": "2026-07-09", "value": "4.25"},
+        {"date": "2026-07-08", "value": "."},   # Alpha Vantage's own missing-observation marker
+        {"date": "2026-07-07", "value": "4.30"},
+    ],
+}
+
+
+def test_av_economic_skips_missing_marker_and_sorts(monkeypatch):
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    monkeypatch.setattr(requests, "get", _fake_get(payload_json=AV_ECONOMIC_JSON))
+    df = adl.load_from_alpha_vantage_economic("US10Y")
+    assert len(df) == 2                        # the "." observation dropped
+    assert list(df["close"]) == [4.30, 4.25]    # sorted ascending by date
+    assert (df["open"] == df["close"]).all()    # close-only contract
+
+
+def test_av_economic_unknown_series_raises(monkeypatch):
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    with pytest.raises(ValueError, match="No Alpha Vantage economic series"):
+        adl.load_from_alpha_vantage_economic("NOT_A_SERIES")
+
+
+def test_av_economic_missing_api_key_raises(monkeypatch):
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="API key not set"):
+        adl.load_from_alpha_vantage_economic("US10Y")
+
+
+def test_av_economic_rate_limit_note_raises(monkeypatch):
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    monkeypatch.setattr(requests, "get", _fake_get(payload_json={"Note": "daily limit reached"}))
+    with pytest.raises(ValueError, match="rate limit"):
+        adl.load_from_alpha_vantage_economic("CPI")
+
+
+def test_av_economic_error_message_raises(monkeypatch):
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    monkeypatch.setattr(requests, "get", _fake_get(payload_json={"Error Message": "bad function"}))
+    with pytest.raises(ValueError, match="Alpha Vantage error"):
+        adl.load_from_alpha_vantage_economic("REAL_GDP")
+
+
+def test_av_economic_empty_data_raises(monkeypatch):
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    monkeypatch.setattr(requests, "get", _fake_get(payload_json={"data": []}))
+    with pytest.raises(ValueError, match="no data|no usable"):
+        adl.load_from_alpha_vantage_economic("UNEMPLOYMENT")
+
+
+def test_av_economic_all_missing_markers_raises(monkeypatch):
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    payload = {"data": [{"date": "2026-07-09", "value": "."}]}
+    monkeypatch.setattr(requests, "get", _fake_get(payload_json=payload))
+    with pytest.raises(ValueError, match="no usable observations"):
+        adl.load_from_alpha_vantage_economic("NONFARM_PAYROLL")
+
+
+@pytest.mark.parametrize("series_key,expected_function,expected_maturity", [
+    ("US10Y", "TREASURY_YIELD", "10year"),
+    ("US02Y", "TREASURY_YIELD", "2year"),
+    ("FED_FUNDS_RATE", "FEDERAL_FUNDS_RATE", None),
+    ("CPI", "CPI", None),
+    ("REAL_GDP", "REAL_GDP", None),
+    ("UNEMPLOYMENT", "UNEMPLOYMENT", None),
+    ("NONFARM_PAYROLL", "NONFARM_PAYROLL", None),
+])
+def test_av_economic_series_map_functions(monkeypatch, series_key, expected_function, expected_maturity):
+    seen_params = {}
+
+    def fake_get(url, params=None, timeout=None):
+        seen_params.update(params)
+        return SimpleNamespace(
+            json=lambda: {"data": [{"date": "2026-07-09", "value": "1.0"}]},
+            raise_for_status=lambda: None,
+        )
+
+    import requests
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-av-key")
+    monkeypatch.setattr(requests, "get", fake_get)
+    adl.load_from_alpha_vantage_economic(series_key)
+    assert seen_params["function"] == expected_function
+    if expected_maturity:
+        assert seen_params["maturity"] == expected_maturity
+
+
+def test_av_economic_never_reaches_load_macro_snapshot(monkeypatch):
+    """Hard-block: load_macro_snapshot() (the Macro engine's live source)
+    must never call the new Alpha Vantage function — this addition is
+    benchmark-only, the live decision path is completely unchanged."""
+    calls = []
+    monkeypatch.setattr(adl, "load_from_alpha_vantage_economic",
+                         lambda *a, **k: calls.append(a) or pytest.fail("must not be called"))
+    monkeypatch.setattr(adl, "load_from_fred", lambda series_id, months=6: adl._close_only_frame(["2026-07-09"], [1.0]))
+    adl.load_macro_snapshot(["DXY", "US10Y", "US02Y", "VIX"])
+    assert calls == []

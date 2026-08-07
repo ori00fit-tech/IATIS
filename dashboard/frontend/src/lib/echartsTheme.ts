@@ -1,15 +1,21 @@
 import * as echarts from 'echarts/core'
-import { HeatmapChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
+import { HeatmapChart, BarChart, LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, VisualMapComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
-// One-time modular registration (Phase 3 institutional redesign) — only the
-// series/components the two charts that exist today actually use, so the
-// bundle carries a fraction of the full echarts library. Re-exported so
-// MonthlyReturnsHeatmap/RMultipleHistogram pass this exact configured
-// instance to echarts-for-react's tree-shakeable core component instead of
-// its default auto-registering one.
-echarts.use([HeatmapChart, BarChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
+// One-time modular registration (Phase 3 institutional redesign; LineChart/
+// LegendComponent added Provider Benchmark Phase 1c for ScoreHistoryChart's
+// multi-provider trend lines) — only the series/components the charts that
+// exist today actually use, so the bundle carries a fraction of the full
+// echarts library. Re-exported so MonthlyReturnsHeatmap/RMultipleHistogram/
+// ScoreHistoryChart pass this exact configured instance to echarts-for-
+// react's tree-shakeable core component instead of its default
+// auto-registering one.
+echarts.use([
+  HeatmapChart, BarChart, LineChart,
+  GridComponent, TooltipComponent, VisualMapComponent, LegendComponent,
+  CanvasRenderer,
+])
 
 export { echarts }
 

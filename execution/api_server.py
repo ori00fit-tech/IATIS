@@ -105,8 +105,11 @@ from execution.routes import (
     health,
     journal,
     logs,
+    macro_benchmark,
     missions,
+    news_benchmark,
     outcomes,
+    provider_benchmark,
     research,
 )
 
@@ -131,6 +134,20 @@ app.include_router(dashboard_legacy.router)
 app.include_router(experience.router)
 app.include_router(missions.router)
 app.include_router(diagnostics.router)
+# Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — same
+# collision reasoning as missions.router above: GET
+# /research/provider-benchmark (one path segment after /research/) would
+# otherwise be swallowed by research.py's own GET /research/{hypothesis_id}
+# catch-all if registered after it.
+app.include_router(provider_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — identical
+# collision reasoning: GET /research/news-benchmark must register before
+# research.router's catch-all.
+app.include_router(news_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 3 (2026-08-XX) — identical
+# collision reasoning: GET /research/macro-benchmark must register before
+# research.router's catch-all.
+app.include_router(macro_benchmark.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

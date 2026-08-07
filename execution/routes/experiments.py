@@ -96,6 +96,30 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # trial. Same one-subprocess-per-job-slot model as research_mission.
     # Full argv is built per-request in execution/routes/missions.py.
     "mission_validate": [sys.executable, "-m", "backtest.mission_validator"],
+    # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — a whole
+    # benchmark run is ONE subprocess (same one-job-slot-per-run model as
+    # research_mission/mission_validate), looping over every
+    # (symbol, timeframe, provider) point in-process internally
+    # (backtest/price_benchmark.py). Measurement/advisory only — never
+    # writes config.yaml's provider_chains. Full argv is built per-request
+    # in execution/routes/provider_benchmark.py.
+    "price_benchmark": [sys.executable, "-m", "backtest.price_benchmark"],
+    # Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — same
+    # one-job-slot-per-run model as price_benchmark, looping over every
+    # (symbol, provider) point in-process internally (backtest/
+    # news_benchmark.py). Two real providers (MarketAux, Finnhub),
+    # measurement/advisory only. Full argv is built per-request in
+    # execution/routes/news_benchmark.py.
+    "news_benchmark": [sys.executable, "-m", "backtest.news_benchmark"],
+    # Provider Benchmark & Data Quality Lab Phase 3 (2026-08-XX) — same
+    # one-job-slot-per-run model as price_benchmark/news_benchmark,
+    # looping over every (series, provider) point in-process internally
+    # (backtest/macro_benchmark.py). Macro has no symbol/timeframe
+    # dimension — a small, fixed series catalog, almost all single-
+    # provider (FRED), with a real second source (Alpha Vantage) only for
+    # VIX/US10Y/US02Y. Full argv is built per-request in
+    # execution/routes/macro_benchmark.py.
+    "macro_benchmark": [sys.executable, "-m", "backtest.macro_benchmark"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -112,6 +136,9 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
     "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
     "mission_validate": "Multi-stage validation (backtest/mission_validator.py) of one operator-chosen mission trial across operator-chosen validation symbols: re-evaluation + Monte Carlo + walk-forward + robustness sweep per symbol. Launched via POST /research/missions/{id}/validate, not this endpoint directly — result is a LEAD (NO_EDGE/WEAK_LEAD/STRONG_LEAD), never a registry.json promotion.",
+    "price_benchmark": "Provider Benchmark & Data Quality Lab (backtest/price_benchmark.py): scores every FX/metals/crypto/indices provider's fetched candles for completeness, per-field correctness vs. a median consensus, timestamp integrity, OHLC integrity, cross-provider agreement, freshness, and latency. Launched via POST /research/provider-benchmark, not this endpoint directly — measurement/advisory only, never auto-changes config.yaml's provider_chains.",
+    "news_benchmark": "Provider Benchmark & Data Quality Lab Phase 2 (backtest/news_benchmark.py): scores MarketAux and Finnhub news feeds per symbol for coverage, source diversity, duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider coverage agreement. Launched via POST /research/news-benchmark, not this endpoint directly — measurement/advisory only, never influences H021's own pre-registered process or config.yaml.",
+    "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -132,6 +159,9 @@ _JOB_CATEGORIES: dict[str, str] = {
     "robustness": "research",
     "research_mission": "research",
     "mission_validate": "research",
+    "price_benchmark": "research",
+    "news_benchmark": "research",
+    "macro_benchmark": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -164,6 +194,23 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # is a starting point, not a measurement — revisit if real runs need
     # more headroom.
     "mission_validate": 3_600,
+    # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — last-
+    # resort net only, same framing as research_mission's own ceiling: a
+    # Deep-profile run (~50 in-scope symbols x 4 timeframes x ~4 avg
+    # providers) is several hundred independent network fetches; no
+    # internal wall-clock budget exists yet in backtest/price_benchmark.py
+    # (Phase 1 has no resume loop), so this is a starting point, not a
+    # measurement — recalibrate after a real Deep run.
+    "price_benchmark": 10_800,
+    # Provider Benchmark & Data Quality Lab Phase 2 (2026-08-08) — a Deep
+    # profile is ~14 symbols x 2 providers = 28 HTTP calls, far cheaper
+    # than price_benchmark's Deep run (no per-timeframe multiplication) —
+    # a much smaller ceiling reflects the real, much lower cost class.
+    "news_benchmark": 900,
+    # Provider Benchmark & Data Quality Lab Phase 3 (2026-08-XX) — a Deep
+    # profile is 16 series x up to 2 providers = ~18 fetches, most of them
+    # single-provider — the cheapest of the three benchmarks in this lab.
+    "macro_benchmark": 600,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against

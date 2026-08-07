@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
 import pytest
 
-from fundamentals.marketaux_client import get_news_sentiment
+from fundamentals.marketaux_client import get_news_sentiment, get_news_articles
 
 
 def _article(symbol="EURUSD", sentiment=0.3, hours_ago=1):
@@ -91,4 +91,86 @@ def test_returns_none_on_request_exception(monkeypatch):
     monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
     with patch("requests.get", side_effect=Exception("timeout")):
         result = get_news_sentiment("EURUSD")
+    assert result is None
+
+
+# ── get_news_articles (Provider Benchmark Phase 2) ──────────────────
+
+def test_get_news_articles_returns_none_without_api_key(monkeypatch):
+    monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
+    assert get_news_articles("EURUSD") is None
+
+
+def test_get_news_articles_returns_none_for_unmapped_symbol(monkeypatch):
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    assert get_news_articles("USOIL") is None
+
+
+def test_get_news_articles_extracts_headline_source_and_sentiment(monkeypatch):
+    """The exact fields get_news_sentiment() discards — this is the
+    additive function that stops discarding them."""
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    published = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    data = {
+        "meta": {},
+        "data": [{
+            "title": "EUR/USD rallies on ECB hawkish tone", "published_at": published, "source": "reuters.com",
+            "entities": [{"symbol": "EURUSD", "sentiment_score": 0.6}],
+        }],
+    }
+    with patch("requests.get", return_value=_mock_response(data)):
+        result = get_news_articles("EURUSD")
+    assert result == [{
+        "headline": "EUR/USD rallies on ECB hawkish tone",
+        "published_at": published,
+        "source": "reuters.com",
+        "sentiment": 0.6,
+    }]
+
+
+def test_get_news_articles_sentiment_none_when_no_scored_entity(monkeypatch):
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    published = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    data = {"meta": {}, "data": [{
+        "title": "headline", "published_at": published, "source": "src", "entities": [],
+    }]}
+    with patch("requests.get", return_value=_mock_response(data)):
+        result = get_news_articles("EURUSD")
+    assert result[0]["sentiment"] is None
+
+
+def test_get_news_articles_excludes_stale_articles(monkeypatch):
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    published = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat().replace("+00:00", "Z")
+    data = {"meta": {}, "data": [{
+        "title": "old news", "published_at": published, "source": "src",
+        "entities": [{"symbol": "EURUSD", "sentiment_score": 0.1}],
+    }]}
+    with patch("requests.get", return_value=_mock_response(data)):
+        result = get_news_articles("EURUSD", hours_back=48)
+    assert result == []
+
+
+def test_get_news_articles_returns_empty_list_not_none_on_zero_matches(monkeypatch):
+    """[] means "fetched successfully, zero matching articles" — distinct
+    from None ("no signal available at all"), matching get_news_sentiment's
+    own None-vs-empty convention."""
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    with patch("requests.get", return_value=_mock_response({"meta": {}, "data": []})):
+        result = get_news_articles("EURUSD")
+    assert result == []
+
+
+def test_get_news_articles_returns_none_on_api_error_body(monkeypatch):
+    monkeypatch.setenv("MARKETAUX_API_KEY", "bad_key")
+    data = {"error": {"code": "invalid_api_token", "message": "invalid"}}
+    with patch("requests.get", return_value=_mock_response(data)):
+        result = get_news_articles("EURUSD")
+    assert result is None
+
+
+def test_get_news_articles_returns_none_on_request_exception(monkeypatch):
+    monkeypatch.setenv("MARKETAUX_API_KEY", "test_key")
+    with patch("requests.get", side_effect=Exception("timeout")):
+        result = get_news_articles("EURUSD")
     assert result is None

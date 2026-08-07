@@ -107,3 +107,68 @@ def get_news_sentiment(symbol: str, limit: int = 20, hours_back: int = 48) -> di
         "mean_sentiment": round(sum(scores) / len(scores), 4),
         "scores": scores,
     }
+
+
+def get_news_articles(symbol: str, limit: int = 20, hours_back: int = 48) -> list[dict] | None:
+    """Provider Benchmark Phase 2 (News Benchmark) — per-article records,
+    for the fields get_news_sentiment() already fetches but discards
+    (title/source, kept only as aggregate scores above). Returns None
+    (not []) under the exact same conditions get_news_sentiment() does:
+    no MARKETAUX_API_KEY, unmapped symbol, or a failed/errored request —
+    None means "no signal available", [] means "fetched successfully,
+    zero matching articles in the window".
+
+    Each record: {"headline", "published_at" (iso), "source",
+    "sentiment": float|None} — sentiment is the mean of that article's own
+    entity sentiment_score(s) for `symbol`'s entity, None if the article
+    matched the symbol filter but carried no scored entity (rare, but the
+    live API's own filter_entities=true doesn't guarantee every entity has
+    a score)."""
+    api_key = os.environ.get("MARKETAUX_API_KEY", "")
+    if not api_key:
+        return None
+
+    ma_symbol = MARKETAUX_SYMBOL_MAP.get(symbol)
+    if not ma_symbol:
+        return None
+
+    params = {
+        "symbols": ma_symbol,
+        "filter_entities": "true",
+        "language": "en",
+        "limit": limit,
+        "api_token": api_key,
+    }
+    try:
+        resp = requests.get(BASE_URL, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(f"MarketAux request failed for {symbol}: {exc}")
+        return None
+
+    if "error" in data:
+        logger.warning(f"MarketAux error for {symbol}: {data['error'].get('message', data['error'])}")
+        return None
+
+    cutoff = time.time() - hours_back * 3600
+    out: list[dict] = []
+    for article in data.get("data", []):
+        published = article.get("published_at", "")
+        try:
+            ts = datetime.fromisoformat(published.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        entity_scores = [
+            float(e["sentiment_score"]) for e in article.get("entities", [])
+            if e.get("symbol") == ma_symbol and e.get("sentiment_score") is not None
+        ]
+        out.append({
+            "headline": article.get("title", ""),
+            "published_at": published,
+            "source": article.get("source", ""),
+            "sentiment": round(sum(entity_scores) / len(entity_scores), 4) if entity_scores else None,
+        })
+    return out

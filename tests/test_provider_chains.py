@@ -407,6 +407,34 @@ def test_fetch_dukascopy_jforex_parses_bridge_response(monkeypatch):
     assert float(df["volume"].iloc[0]) == 250.0
 
 
+def test_fetch_dukascopy_jforex_from_is_aligned_to_period_boundary(monkeypatch):
+    # Real bug found live 2026-08-07: the JForex SDK's getHistData rejects
+    # a `from` that isn't aligned to the requested period's boundary
+    # ("Interval from [...07:06:40] ... is not valid for period [Hourly]").
+    # A misaligned `from` must never reach the bridge again.
+    monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
+    captured = {}
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"timestamp": 1785704400000, "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.1, "volume": 1.0}]
+
+    def _fake_get(url, params=None, timeout=None):
+        captured["from"] = params["from"]
+        return _FakeResp()
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    for interval in ("M1", "M5", "M15", "H1", "D1"):
+        dp._fetch_dukascopy_jforex("EUR/USD", interval, 10)
+        bar_ms = dp._DUKASCOPY_JFOREX_TF_MS[interval]
+        assert captured["from"] % bar_ms == 0, f"{interval}: from={captured['from']} not aligned to {bar_ms}ms"
+
+
 def test_fetch_dukascopy_jforex_defaults_missing_volume_to_zero(monkeypatch):
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
     ts_ms = int(pd.Timestamp("2026-08-08 12:00:00", tz="UTC").timestamp() * 1000)

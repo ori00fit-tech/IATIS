@@ -32,6 +32,7 @@ import pytest
 from engines.base_engine import Bias
 from engines.smc_engine import (
     SMCEngine,
+    _count_swing_direction,
     decide_structural_bias,
     detect_bos_choch,
     extract_structural_features,
@@ -178,6 +179,31 @@ def test_flag_off_still_reports_structure_state_and_swing_timing():
     assert "structural_events" not in out.raw
     assert "zones" not in out.raw
     assert out.raw["order_blocks"] == "DISABLED_BY_FLAG_smc_full_spec"
+
+
+# ── Indicator golden test (#368): _count_swing_direction had zero
+#    direct test coverage anywhere (only ever exercised indirectly
+#    through extract_structural_features/decide_structural_bias) ───────
+
+def test_count_swing_direction_hand_computed_cases():
+    # Strictly rising: every consecutive pair counts as rising, none falling.
+    assert _count_swing_direction([1.0, 2.0, 3.0, 4.0]) == (3, 0)
+    # Strictly falling: the mirror case.
+    assert _count_swing_direction([4.0, 3.0, 2.0, 1.0]) == (0, 3)
+    # Mixed, hand-counted: 1->3 rising, 3->2 falling, 2->5 rising, 5->5 flat (neither).
+    assert _count_swing_direction([1.0, 3.0, 2.0, 5.0, 5.0]) == (2, 1)
+    # Fewer than 2 points -> no pairs to compare.
+    assert _count_swing_direction([1.0]) == (0, 0)
+    assert _count_swing_direction([]) == (0, 0)
+
+
+def test_count_swing_direction_accepts_any_iterable_not_just_a_list():
+    # The function's own signature takes `series` generically (list()'d
+    # internally) -- confirm a pandas Series input produces the same
+    # result as the equivalent plain list.
+    result_series = _count_swing_direction(pd.Series([10.0, 12.0, 11.0, 15.0]))
+    result_list = _count_swing_direction([10.0, 12.0, 11.0, 15.0])
+    assert result_series == result_list == (2, 1)
 
 
 # ── zero behavior change: bias/score/reasons unaffected ────────────────

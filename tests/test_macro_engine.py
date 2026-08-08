@@ -219,6 +219,57 @@ def test_decide_commodities_appear_in_reasons_never_in_score():
     assert any("informational only" in r for r in reasons_with)
 
 
+def test_extract_features_risk_vote_detail_records_as_of_and_cadence():
+    spy_df = _series_df(list(np.linspace(400, 430, 30)))
+    bs_df = _series_df(list(np.linspace(100.0, 110.0, 12)), freq="W")
+    snapshot = {"SPY": spy_df, "FED_BALANCE_SHEET": bs_df}
+    f = extract_features(snapshot, {"fed_balance_sheet_threshold_pct": 0.01})
+    votes = {v["vote"]: v for v in f["risk_vote_detail"]}
+    assert votes["spy_vs_ma"]["direction"] == "on"
+    assert votes["spy_vs_ma"]["cadence"] == "daily"
+    assert votes["spy_vs_ma"]["as_of"] == str(spy_df.index[-1].date())
+    assert votes["fed_balance_sheet"]["direction"] == "on"
+    assert votes["fed_balance_sheet"]["cadence"] == "weekly"
+    assert votes["fed_balance_sheet"]["as_of"] == str(bs_df.index[-1].date())
+
+
+def test_extract_features_risk_vote_detail_empty_when_no_votes_cast():
+    f = extract_features({}, {})
+    assert f["risk_vote_detail"] == []
+
+
+def test_decide_is_invariant_to_risk_vote_detail_content():
+    """Engine Refinement V1 (#366) load-bearing guarantee: risk_vote_detail
+    is observability-only. decide() must produce byte-identical bias/score/
+    reasons regardless of what risk_vote_detail contains — proving the new
+    field can never silently influence the verdict."""
+    base = _base_features(dxy_direction="up", dxy_spread_pct=2.0, risk_off_votes=3, risk_on_votes=0)
+    features_no_detail = {**base, "risk_vote_detail": []}
+    features_with_detail = {
+        **base,
+        "risk_vote_detail": [
+            {"vote": "spy_vs_ma", "direction": "off", "cadence": "daily", "as_of": "2020-01-01"},
+            {"vote": "vix", "direction": "off", "cadence": "daily", "as_of": "1999-12-31"},
+            {"vote": "fed_balance_sheet", "direction": "on", "cadence": "weekly", "as_of": "2020-06-15"},
+        ],
+    }
+    r1 = decide(features_no_detail, {})
+    r2 = decide(features_with_detail, {})
+    assert r1 == r2
+
+
+def test_decide_states_independence_assumption_when_two_or_more_votes():
+    features = _base_features(dxy_direction="up", dxy_spread_pct=2.0, risk_off_votes=2, risk_on_votes=0)
+    _, _, reasons = decide(features, {})
+    assert any("independent" in r and "risk_vote_detail" in r for r in reasons)
+
+
+def test_decide_omits_independence_assumption_below_two_votes():
+    features = _base_features(dxy_direction="up", dxy_spread_pct=2.0, risk_off_votes=1, risk_on_votes=0)
+    _, _, reasons = decide(features, {})
+    assert not any("treats" in r and "independent" in r for r in reasons)
+
+
 def test_decide_no_data_is_neutral_zero():
     bias, score, reasons = decide(_base_features(), {})
     assert bias == Bias.NEUTRAL
@@ -299,6 +350,16 @@ def test_engine_output_features_and_raw_json_serializable(monkeypatch):
     out = MacroEngine().safe_analyze({})
     json.dumps(out.features, default=str)
     json.dumps(out.raw, default=str)
+
+
+def test_engine_raw_includes_risk_vote_detail(monkeypatch):
+    import core.alt_data_loader as adl
+    snapshot = {"DXY": _series_df(list(np.linspace(100, 110, 40))), "SPY": _series_df(list(np.linspace(400, 430, 30)))}
+    monkeypatch.setattr(adl, "load_macro_snapshot", lambda symbols: snapshot)
+    out = MacroEngine().safe_analyze({})
+    assert "risk_vote_detail" in out.raw
+    assert out.raw["risk_vote_detail"][0]["vote"] == "spy_vs_ma"
+    assert out.raw["risk_vote_detail"][0]["as_of"] is not None
 
 
 def test_engine_evidence_level_and_probability_defaults(monkeypatch):

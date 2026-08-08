@@ -416,7 +416,7 @@ thresholds:
 versions:
   divergence: "2.1"
   ict: "1.1"
-  macro: "2.0"
+  macro: "2.1"
   market_structure: "1.1"
   nnfx: "1.0"
   price_action: "1.0"

@@ -180,6 +180,16 @@
       "performance_driven": false,
       "commit": "8f32af237b839cad54847908a1e4d44e251f32dd",
       "recorded_at": "2026-08-08T19:25:14.588043+00:00"
+    },
+    {
+      "change_id": "MACRO-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "macro",
+      "description": "Confirmed conflict (reports/engine_refinement/ENGINE_INVENTORY.md's Macro entry, 'vote-independence assumption, no available_at'): the 6 risk-on/off votes (SPY-vs-MA20, VIX bucket, Gold-vs-SPY, yield-curve inversion, credit-spread direction, Fed-balance-sheet direction) were summed as if independent and simultaneous, with no per-observation timestamp/cadence distinction anywhere in this engine, even though they update on genuinely different real-world cadences (daily vs. weekly). Operator-pre-approved framing: 'refine aggregation semantics, observability only' -- explicitly NO score/bias/vote-counting change permitted, only added transparency. Fixed, observability-only: extract_features() gained a new risk_vote_detail list reporting each cast vote's own as_of date and cadence (daily/weekly); decide() gained one new reason string (gated on total_votes >= 2) stating the independence-assumption caveat explicitly instead of silently implying risk_conf is a calibrated probability. The vote-counting arithmetic itself (risk_on/risk_off tallying, risk_state classification, risk_conf, DXY confirm/conflict scoring) is BYTE-IDENTICAL -- proven by a new dedicated test (test_decide_is_invariant_to_risk_vote_detail_content) showing decide() produces identical bias/score/reasons regardless of risk_vote_detail's content. Macro is disabled by default (engines.enabled.macro: false) and its confluence weight is already forced to 0.0 -- zero live-trading impact regardless. versions.macro 2.0 -> 2.1. 7 new tests added; all pre-existing tests pass unchanged (purely additive field, no golden-value recapture needed).",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "3cd7c440db9c3ab102ca2f2e3ef335bf403751ad",
+      "recorded_at": "2026-08-08T20:04:53.980329+00:00"
     }
   ]
 }

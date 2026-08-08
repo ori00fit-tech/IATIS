@@ -90,6 +90,26 @@
       "performance_driven": false,
       "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
       "recorded_at": "2026-08-08T16:27:55.947494+00:00"
+    },
+    {
+      "change_id": "WYCKOFF-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "wyckoff",
+      "description": "extract_features() now reports range_atr_zero, via a new standalone _range_atr_zero() helper -- deliberately NOT added to _identify_trading_range()'s own return tuple, since engines/wyckoff_engine_v2.py (an untouched research variant per finalized scope) imports and unpacks that function as a fixed 3-tuple (range_low, range_high, _ = _identify_trading_range(...)) and changing its arity would have silently broken v2. Surfaces the pre-existing 99-sentinel spread_in_atr fallback that fires when range_atr()==0 (a fully flat/stale instrument), which deterministically forces in_range=False (99 >= any sane range_atr_max) -- correct behavior, previously silent. No behavior change; confirmed via a dedicated test that _identify_trading_range() still returns exactly 3 values and wyckoff_engine_v2.py is byte-identical (empty git diff) after this change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "024cb645512e33bd5bd96c1d3cf5bcf537bfe9b6",
+      "recorded_at": "2026-08-08T16:33:55.950306+00:00"
+    },
+    {
+      "change_id": "WYCKOFF-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "wyckoff",
+      "description": "Removed two dead locals: `close` in _identify_trading_range() and `last` in _detect_spring_upthrust() -- both computed, never read anywhere in their respective functions. Neither is part of any return signature (_identify_trading_range()'s 3-tuple contract, depended on directly by engines/wyckoff_engine_v2.py, is unchanged), so this is safe regardless of v2's dependency on these functions. Confirmed behavior-identical via dedicated regression tests and the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "024cb645512e33bd5bd96c1d3cf5bcf537bfe9b6",
+      "recorded_at": "2026-08-08T16:33:55.950766+00:00"
     }
   ]
 }

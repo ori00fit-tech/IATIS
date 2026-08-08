@@ -32,6 +32,13 @@ What changed from v1:
     is REMOVED — it never existed in the actual analyze() body, was
     dead documentation, and nobody asked for a new session-dependent
     feature here.
+  - Engine Refinement V1 (#364, 2026-08-08, operator-pre-approved
+    "remove automatic bonuses"): Triple divergence, MACD agreement, and
+    Multi-timeframe agreement no longer add/subtract fixed score deltas
+    (triple_bonus/macd_confirm_bonus/mtf_confirm_bonus/mtf_conflict_
+    penalty, removed from config/engines.yaml's thresholds.divergence)
+    — reported as context-only reasons instead. See decide()'s own
+    docstring for the full rationale.
 
 Types (unchanged from v1's definitions):
   Regular Bearish: price HH, momentum LH → bearish reversal
@@ -42,8 +49,9 @@ Types (unchanged from v1's definitions):
 Both RSI and MACD comparisons are driven by the SAME price-pivot bars
 (matches v1's real behavior: _detect_divergence always found swings on
 `price`, only ever reading the indicator's value AT those bars — not a
-separately swing-detected MACD/RSI series). RSI is primary; MACD confirms
-or, absent any RSI divergence, stands alone at a discount.
+separately swing-detected MACD/RSI series). RSI is primary; MACD agreement
+is reported as context (Engine Refinement V1 #364) or, absent any RSI
+divergence, MACD stands alone as the sole signal at a discount.
 
 Research status: RESEARCH (H010 pending — needs statistical validation)
 Compatible with: SMC (BOS confirms divergence), NNFX (trend filter)
@@ -225,9 +233,28 @@ def extract_features(mtf_data: dict[str, pd.DataFrame], t: dict, tf: str) -> dic
 
 def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
     """Decision Logic layer — turns an extract_features() snapshot into
-    a bias/score opinion. Priority: Regular (+ Triple/MACD/MTF layered
-    on top) > Hidden (+ MACD only) > MACD-only fallback > none. Pure
-    function of (features, thresholds), never touches a DataFrame."""
+    a bias/score opinion. Priority: Regular (+ Triple/MACD/MTF reported
+    as context) > Hidden (+ MACD reported as context) > MACD-only
+    fallback > none. Pure function of (features, thresholds), never
+    touches a DataFrame.
+
+    Engine Refinement V1 (#364, DIVERGENCE-REFINE, SEMANTIC_FIX,
+    operator-pre-approved, "remove automatic bonuses" — confirmed in
+    reports/engine_refinement/ENGINE_INVENTORY.md's Divergence entry):
+    triple_div/MACD-agreement/MTF-agreement used to be fixed automatic
+    score deltas (triple_bonus/macd_confirm_bonus/mtf_confirm_bonus/
+    mtf_conflict_penalty) added/subtracted directly inside this
+    function, never independently inspectable apart from their effect
+    on the final score. They are now reported as observability-only
+    reasons — the SAME facts (already present in extract_features()'s
+    own output: triple_div, macd_pattern_type, mtf_regular_div_type),
+    but no longer modify `score` — matching the "informational only,
+    provably never scored" convention already established for macro_
+    engine.py's commodity trends and quant_engine.py's vol_clustering.
+    The base pattern's own magnitude (regular_magnitude_scale/cap) is
+    UNCHANGED — that is the primary signal's own strength measure, not
+    a bonus from a separate confirming source, and was never flagged.
+    """
     reasons: list[str] = []
     score = 0.0
     bias = Bias.NEUTRAL
@@ -248,27 +275,30 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
             f"(price move {features['rsi_pattern_price_move_pct'] * 100:.2f}%)"
         )
         if features["triple_div"]:
-            score += t.get("triple_bonus", 15.0)
-            reasons.append("Triple divergence: a third confirmed swing also agrees — stronger conviction")
+            reasons.append(
+                "Triple divergence: a third confirmed swing also agrees (context only, not scored)"
+            )
         if macd_type == rsi_type:
-            score += t.get("macd_confirm_bonus", 15.0)
-            reasons.append(f"MACD confirms: {macd_type.replace('_', ' ')}")
+            reasons.append(f"MACD confirms: {macd_type.replace('_', ' ')} (context only, not scored)")
         this_direction = "bearish" if is_bearish else "bullish"
         mtf_type = features["mtf_regular_div_type"]
         if mtf_type == this_direction:
-            score += t.get("mtf_confirm_bonus", 10.0)
-            reasons.append(f"{features['mtf_tf_checked']} confirms same-direction regular divergence")
+            reasons.append(
+                f"{features['mtf_tf_checked']} confirms same-direction regular divergence "
+                f"(context only, not scored)"
+            )
         elif mtf_type is not None and mtf_type != this_direction:
-            score -= t.get("mtf_conflict_penalty", 5.0)
-            reasons.append(f"{features['mtf_tf_checked']} shows opposite-direction divergence — conflicting signal")
+            reasons.append(
+                f"{features['mtf_tf_checked']} shows opposite-direction divergence — "
+                f"conflicting signal (context only, not scored)"
+            )
 
     elif rsi_type in ("hidden_bearish", "hidden_bullish"):
         bias = Bias.BEARISH if rsi_type == "hidden_bearish" else Bias.BULLISH
         score = t.get("hidden_score", 40.0)
         reasons.append(f"RSI {rsi_type.replace('_', ' ')} divergence — continuation")
         if macd_type == rsi_type:
-            score += t.get("macd_confirm_bonus", 15.0)
-            reasons.append(f"MACD confirms: {macd_type.replace('_', ' ')}")
+            reasons.append(f"MACD confirms: {macd_type.replace('_', ' ')} (context only, not scored)")
 
     elif macd_type != "none":
         bias = Bias.BEARISH if "bearish" in macd_type else Bias.BULLISH

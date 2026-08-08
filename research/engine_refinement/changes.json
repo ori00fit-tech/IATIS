@@ -160,6 +160,16 @@
       "performance_driven": false,
       "commit": "f1a4e44728f085417423e9057a12b4d1a1cbfb6a",
       "recorded_at": "2026-08-08T18:27:06.654273+00:00"
+    },
+    {
+      "change_id": "DIVERGENCE-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "divergence",
+      "description": "decide() previously applied fixed automatic score bonuses -- triple_bonus (15.0) when a 3rd swing confirmed, macd_confirm_bonus (15.0) when MACD's own pattern agreed, mtf_confirm_bonus (10.0)/mtf_conflict_penalty (5.0) for cross-timeframe agreement/disagreement -- all directly added to or subtracted from `score` inside decide()'s own arithmetic. Confirmed via this refinement pass's own audit (reports/engine_refinement/ENGINE_INVENTORY.md's Divergence entry, 'CONFIRMED CONFLICT') and operator-pre-approved ('remove automatic bonuses'). Fixed: these three confirmations are now reported as observability-only reasons (each suffixed 'context only, not scored') -- the same underlying facts (triple_div, macd_pattern_type, mtf_regular_div_type) already existed in extract_features()'s output, unchanged -- but they no longer modify `score`. Only the base pattern's own price-move magnitude (regular_magnitude_scale/cap) sets the score beyond the flat base (regular_base_score/hidden_score) -- that magnitude is the primary signal's own strength measure, not a bonus from a separate confirming source, and was never flagged. Mirrors the 'informational only, provably never scored' convention already established for macro_engine.py's commodity trends and quant_engine.py's vol_clustering (both pinned by a dedicated test proving identical scores regardless of the informational field's value -- the same proof pattern used here, tests/test_divergence_engine_v2.py::test_confirmations_are_provably_never_scored). config/engines.yaml's thresholds.divergence had triple_bonus/macd_confirm_bonus/mtf_confirm_bonus/mtf_conflict_penalty removed (now-dead keys, would otherwise silently misrepresent what decide() actually does). Divergence is disabled by default (engines.enabled.divergence: false) -- changes zero live-decision behavior. 3 existing tests recaptured (test_decide_regular_bearish_with_triple_macd_and_mtf_confirm_are_context_only, test_decide_regular_bullish_with_mtf_conflict_is_context_only, test_decide_hidden_with_macd_confirm_is_context_only).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "0cf68ca90bfbe4b4ee5e9ade36a7619379f82b1e",
+      "recorded_at": "2026-08-08T19:05:18.056030+00:00"
     }
   ]
 }

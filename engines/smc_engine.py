@@ -66,13 +66,36 @@ def _count_swing_direction(series) -> tuple[int, int]:
 def extract_structural_features(df: pd.DataFrame, window: int = 3, lookback: int = 6) -> dict:
     """Feature Extraction layer (Confluence Engine Overhaul Phase 2) —
     swing-point stats structural_bias's decide step needs. Pure function
-    of (df, window, lookback), no bias/score logic."""
+    of (df, window, lookback), no bias/score logic.
+
+    Engine Refinement V1 (2026-08-08, OBSERVABILITY) — adds causal-timing
+    metadata: last_swing_high_bar/last_swing_low_bar are the swing's own
+    bar POSITION within df (0-indexed, not a timestamp); *_confirmation_bar
+    is the earliest bar position at which find_swings' centered rolling
+    window could have marked it (pivot_bar + window). This is always a
+    real, in-range position for any swing find_swings actually detects —
+    a centered rolling window only returns True once its window is fully
+    inside the data, so confirmation_bar <= len(df)-1 by construction.
+    Never consumed by decide_structural_bias() — pure diagnostics so a
+    human/research pass can see exactly how stale the structural read is
+    and when it became knowable, without re-deriving it from df each time.
+    """
     swings = find_swing_points(df, window=window)
     swing_highs = df["high"][swings["swing_high"]].tail(lookback)
     swing_lows = df["low"][swings["swing_low"]].tail(lookback)
 
+    last_high_bar = int(df.index.get_loc(swing_highs.index[-1])) if len(swing_highs) > 0 else None
+    last_low_bar = int(df.index.get_loc(swing_lows.index[-1])) if len(swing_lows) > 0 else None
+    timing = {
+        "last_swing_high_bar": last_high_bar,
+        "last_swing_high_confirmation_bar": (last_high_bar + window) if last_high_bar is not None else None,
+        "last_swing_low_bar": last_low_bar,
+        "last_swing_low_confirmation_bar": (last_low_bar + window) if last_low_bar is not None else None,
+        "swing_confirmation_delay": window,
+    }
+
     if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return {"insufficient": True}
+        return {"insufficient": True, **timing}
 
     highs_rising, highs_falling = _count_swing_direction(swing_highs)
     lows_rising, lows_falling = _count_swing_direction(swing_lows)
@@ -83,6 +106,7 @@ def extract_structural_features(df: pd.DataFrame, window: int = 3, lookback: int
         "total_pairs": total_pairs,
         "bullish_pairs": highs_rising + lows_rising,
         "bearish_pairs": highs_falling + lows_falling,
+        **timing,
     }
 
 
@@ -239,6 +263,12 @@ def detect_bos_choch(df: pd.DataFrame, window: int = 3) -> dict:
     Latest close above the last confirmed swing high → bullish break;
     below the last confirmed swing low → bearish break. It is a BOS when
     it continues the prevailing structural bias, a CHoCH when it flips it.
+
+    Engine Refinement V1 (2026-08-08, OBSERVABILITY) — reference_bar/
+    bars_since_reference/confirmation_delay added to the returned dict:
+    which bar the broken level came from and how stale it is. Purely
+    additive — `event`/`direction`/`level` and which branch fires are
+    completely unchanged.
     """
     swings = find_swing_points(df, window=window)
     sh = df["high"][swings["swing_high"]]
@@ -248,14 +278,19 @@ def detect_bos_choch(df: pd.DataFrame, window: int = 3) -> dict:
     prior_bias, _, _ = structural_bias(df.iloc[:-1], window=window)
     close_now = float(df["close"].iloc[-1])
     last_high, last_low = float(sh.iloc[-1]), float(sl.iloc[-1])
+    current_bar = len(df) - 1
     if close_now > last_high:
+        high_bar = int(df.index.get_loc(sh.index[-1]))
         event = "BOS" if prior_bias == Bias.BULLISH else "CHoCH"
-        return {"event": event, "direction": "bullish",
-                "level": last_high}
+        return {"event": event, "direction": "bullish", "level": last_high,
+                "reference_bar": high_bar, "bars_since_reference": current_bar - high_bar,
+                "confirmation_delay": window}
     if close_now < last_low:
+        low_bar = int(df.index.get_loc(sl.index[-1]))
         event = "BOS" if prior_bias == Bias.BEARISH else "CHoCH"
-        return {"event": event, "direction": "bearish",
-                "level": last_low}
+        return {"event": event, "direction": "bearish", "level": last_low,
+                "reference_bar": low_bar, "bars_since_reference": current_bar - low_bar,
+                "confirmation_delay": window}
     return {"event": "none", "direction": "none"}
 
 
@@ -355,9 +390,36 @@ class SMCEngine(BaseEngine):
         )
         features = {"structural": structural_features}
 
+        # Engine Refinement V1 (2026-08-08, SEMANTIC_FIX — output schema
+        # only, zero change to bias/score/reasons) — explicit separation
+        # of STATE (the swing-majority read, persists across bars until
+        # new swings shift it) from EVENTS (BOS/CHoCH, true only on the
+        # bar it fires) from ZONES (FVG/order blocks, persist until
+        # filled/invalidated). Previously these three different temporal
+        # categories were flattened into flat, same-shaped raw keys with
+        # no structural distinction. `structure_state`/`swing_timing` are
+        # new top-level keys present in BOTH branches below; the existing
+        # order_blocks/fvg/bos_choch/liquidity_zones/timeframe_used keys
+        # are kept byte-for-byte (tests/test_smc_fullspec.py depends on
+        # their exact values) — this is additive, not a rename.
+        structure_state = {
+            "bullish_pairs": structural_features.get("bullish_pairs"),
+            "bearish_pairs": structural_features.get("bearish_pairs"),
+            "total_pairs": structural_features.get("total_pairs"),
+        }
+        swing_timing = {
+            "last_swing_high_bar": structural_features.get("last_swing_high_bar"),
+            "last_swing_high_confirmation_bar": structural_features.get("last_swing_high_confirmation_bar"),
+            "last_swing_low_bar": structural_features.get("last_swing_low_bar"),
+            "last_swing_low_confirmation_bar": structural_features.get("last_swing_low_confirmation_bar"),
+            "confirmation_delay": structural_features.get("swing_confirmation_delay"),
+        }
+
         if not self.full_spec:
             raw = {
                 "timeframe_used": tf,
+                "structure_state": structure_state,
+                "swing_timing": swing_timing,
                 # Implemented behind engines.smc_full_spec (default off) —
                 # markers kept so downstream consumers see the flag state.
                 "order_blocks": "DISABLED_BY_FLAG_smc_full_spec",
@@ -378,6 +440,10 @@ class SMCEngine(BaseEngine):
         raw = {
             "timeframe_used": tf,
             "full_spec": True,
+            "structure_state": structure_state,
+            "swing_timing": swing_timing,
+            "structural_events": {"bos_choch": full_spec_features["bos_choch"]},
+            "zones": {"order_block": full_spec_features["order_block"], "fvg": full_spec_features["fvg"]},
             "order_blocks": full_spec_features["order_block"],
             "fvg": full_spec_features["fvg"],
             "bos_choch": full_spec_features["bos_choch"],

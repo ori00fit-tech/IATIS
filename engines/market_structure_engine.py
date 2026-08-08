@@ -61,6 +61,7 @@ def _swing_points(df: pd.DataFrame, window: int = 3) -> tuple[list, list]:
 def _classify_structure(
     highs: list,
     lows: list,
+    close_now: float | None = None,
     bos_strength: float = 65,
     choch_strength: float = 75,
     ranging_strength: float = 20,
@@ -73,9 +74,33 @@ def _classify_structure(
       last_event: 'BOS' | 'CHoCH' | 'MSS' | 'none'
       last_event_bias: 'bullish' | 'bearish'
       strength: 0-100
+      broke_level / break_direction / break_price: was the most recent
+        confirmed swing high/low actually broken by the current close?
+
+    Engine Refinement V1 (#363, MARKET-STRUCTURE-REFINE, SEMANTIC_FIX,
+    operator-approved via "audit + fix if needed"): last_event (BOS/
+    CHoCH/MSS) now REQUIRES a real level break — the current close must
+    have actually closed beyond the most recent confirmed swing high
+    (bullish) or swing low (bearish), mirroring smc_engine.
+    detect_bos_choch's already-established close-beyond-level
+    convention. Before this fix, last_event was assigned purely from a
+    geometric comparison of the last 2-3 swing-pivot VALUES (was the
+    newest swing high numerically higher than the previous one?) with
+    no requirement that price ever actually broke a level — exactly the
+    "swing pair voting" this module's own header docstring claims this
+    engine improves on over the plain SMC engine. `trend` (the HH/HL/
+    LH/LL swing-pattern classification) is UNCHANGED by this fix:
+    describing an existing swing sequence as bullish/bearish/ranging is
+    a legitimate geometric fact that doesn't need a break to be true —
+    only the event label (and the strength it drives) needed the break
+    requirement. broke_level/break_direction/break_price are always
+    returned (even when False/none/None) for observability.
     """
     if len(highs) < 2 or len(lows) < 2:
-        return {"trend": "ranging", "last_event": "none", "strength": 0}
+        return {
+            "trend": "ranging", "last_event": "none", "last_event_bias": "none", "strength": 0,
+            "broke_level": False, "break_direction": "none", "break_price": None,
+        }
 
     # Get last 4 highs and lows
     recent_h = highs[-4:]
@@ -90,7 +115,23 @@ def _classify_structure(
     bullish_structure = hh and hl
     bearish_structure = lh and ll
 
-    # Detect structural events
+    # Break-of-level check (mirrors smc_engine.detect_bos_choch): does the
+    # CURRENT close actually close beyond the most recent confirmed swing
+    # high/low? This is a fact about price action, independent of the
+    # swing-pivot-value comparison above.
+    last_high_price = highs[-1][1]
+    last_low_price = lows[-1][1]
+    broke_level = False
+    break_direction = "none"
+    break_price = None
+    if close_now is not None:
+        if close_now > last_high_price:
+            broke_level, break_direction, break_price = True, "bullish", last_high_price
+        elif close_now < last_low_price:
+            broke_level, break_direction, break_price = True, "bearish", last_low_price
+
+    # Detect structural events — each requires a real break in the
+    # matching direction, not just a swing-value pattern.
     last_event = "none"
     last_event_bias = "none"
 
@@ -100,7 +141,7 @@ def _classify_structure(
         broke_above = recent_h[-1][1] > recent_h[-2][1]  # now HH
         low_made = recent_l[-1][1] > recent_l[-2][1]      # HL too
 
-        if was_bearish and broke_above:
+        if was_bearish and broke_above and broke_level and break_direction == "bullish":
             last_event = "CHoCH" if not low_made else "MSS"
             last_event_bias = "bullish"
 
@@ -109,15 +150,15 @@ def _classify_structure(
         broke_below = recent_l[-1][1] < recent_l[-2][1]  # now LL
         high_made = recent_h[-1][1] < recent_h[-2][1]    # LH too
 
-        if was_bullish and broke_below:
+        if was_bullish and broke_below and broke_level and break_direction == "bearish":
             last_event = "CHoCH" if not high_made else "MSS"
             last_event_bias = "bearish"
 
         # BOS: trend continuation break
-        if bullish_structure and last_event == "none":
+        if bullish_structure and last_event == "none" and broke_level and break_direction == "bullish":
             last_event = "BOS"
             last_event_bias = "bullish"
-        elif bearish_structure and last_event == "none":
+        elif bearish_structure and last_event == "none" and broke_level and break_direction == "bearish":
             last_event = "BOS"
             last_event_bias = "bearish"
 
@@ -141,6 +182,9 @@ def _classify_structure(
         "structure_hh": hh, "structure_hl": hl,
         "structure_lh": lh, "structure_ll": ll,
         "strength": strength,
+        "broke_level": broke_level,
+        "break_direction": break_direction,
+        "break_price": break_price,
     }
 
 
@@ -158,11 +202,15 @@ def extract_features(df_cur: pd.DataFrame, df_macro: pd.DataFrame, t: dict) -> d
     }
 
     h1_window = df_cur.tail(h1_lookback_bars)
+    h4_window = df_macro.tail(h4_lookback_bars)
     h1_highs, h1_lows = _swing_points(h1_window, window=t.get("h1_window", 3))
-    h4_highs, h4_lows = _swing_points(df_macro.tail(h4_lookback_bars), window=t.get("h4_window", 2))
+    h4_highs, h4_lows = _swing_points(h4_window, window=t.get("h4_window", 2))
 
-    h1_struct = _classify_structure(h1_highs, h1_lows, **structure_kwargs)
-    h4_struct = _classify_structure(h4_highs, h4_lows, **structure_kwargs)
+    h1_close_now = float(h1_window["close"].iloc[-1]) if len(h1_window) else None
+    h4_close_now = float(h4_window["close"].iloc[-1]) if len(h4_window) else None
+
+    h1_struct = _classify_structure(h1_highs, h1_lows, close_now=h1_close_now, **structure_kwargs)
+    h4_struct = _classify_structure(h4_highs, h4_lows, close_now=h4_close_now, **structure_kwargs)
 
     last_h1_high = h1_highs[-1][1] if h1_highs else 0
     last_h1_low = h1_lows[-1][1] if h1_lows else 0
@@ -212,7 +260,10 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
             score = h1_struct["strength"]
             if h1_event in ("CHoCH", "MSS"):
                 score = min(score + aligned_bonus, aligned_score_cap)
-                reasons.append(f"H1 {h1_event} bullish confirmed by H4 bullish structure")
+                reasons.append(
+                    f"H1 {h1_event} bullish (confirmed break of {h1_struct['break_price']:.5f}) "
+                    f"confirmed by H4 bullish structure"
+                )
             else:
                 reasons.append(f"H1+H4 bullish structure (BOS continuation)")
         else:
@@ -220,7 +271,10 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
             score = h1_struct["strength"]
             if h1_event in ("CHoCH", "MSS"):
                 score = min(score + aligned_bonus, aligned_score_cap)
-                reasons.append(f"H1 {h1_event} bearish confirmed by H4 bearish structure")
+                reasons.append(
+                    f"H1 {h1_event} bearish (confirmed break of {h1_struct['break_price']:.5f}) "
+                    f"confirmed by H4 bearish structure"
+                )
             else:
                 reasons.append(f"H1+H4 bearish structure (BOS continuation)")
 
@@ -229,11 +283,17 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
         if h1_event_dir == "bullish":
             bias = Bias.BULLISH
             score = disagree_score  # lower confidence — H4 disagrees
-            reasons.append(f"H1 {h1_event} bullish but H4 still {h4_bias} — early reversal")
+            reasons.append(
+                f"H1 {h1_event} bullish (confirmed break of {h1_struct['break_price']:.5f}) "
+                f"but H4 still {h4_bias} — early reversal"
+            )
         else:
             bias = Bias.BEARISH
             score = disagree_score
-            reasons.append(f"H1 {h1_event} bearish but H4 still {h4_bias} — early reversal")
+            reasons.append(
+                f"H1 {h1_event} bearish (confirmed break of {h1_struct['break_price']:.5f}) "
+                f"but H4 still {h4_bias} — early reversal"
+            )
 
     # Only H1 structure
     elif h1_bias != "ranging":
@@ -331,5 +391,14 @@ class MarketStructureEngine(BaseEngine):
                 "last_h1_low": features["last_h1_low"],
                 "last_high_bar_age": features["last_high_bar_age"],
                 "last_low_bar_age": features["last_low_bar_age"],
+                # Engine Refinement V1 (#363) — the level-break fact behind
+                # h1_event/h4's own trend; see _classify_structure's
+                # docstring for why last_event now requires this.
+                "h1_broke_level": features["h1_struct"]["broke_level"],
+                "h1_break_direction": features["h1_struct"]["break_direction"],
+                "h1_break_price": features["h1_struct"]["break_price"],
+                "h4_broke_level": features["h4_struct"]["broke_level"],
+                "h4_break_direction": features["h4_struct"]["break_direction"],
+                "h4_break_price": features["h4_struct"]["break_price"],
             },
         )

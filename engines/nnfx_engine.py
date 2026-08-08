@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from engines.base_engine import BaseEngine, Bias, EngineOutput
+from utils.indicators import atr as _atr_series
 from utils.indicators import rsi as _rsi_series
 from utils.logger import get_logger
 
@@ -31,21 +32,24 @@ def _ema(series: pd.Series, period: int) -> pd.Series:
 
 
 def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Average Directional Index — trend strength (not direction)."""
-    from utils.indicators import true_range
-
-    high, low, close = df["high"], df["low"], df["close"]
-
-    tr = true_range(df)
+    """Average Directional Index — trend strength (not direction).
+    Deliberately the "simplified" ADX this module's docstring describes —
+    a plain rolling mean, not Wilder's exponential smoothing of DI+/DI-/
+    ADX. Not touched here (strategy design, out of scope for this pass)."""
+    high, low = df["high"], df["low"]
 
     dm_plus = (high - high.shift()).clip(lower=0)
     dm_minus = (low.shift() - low).clip(lower=0)
     dm_plus = dm_plus.where(dm_plus > dm_minus, 0)
     dm_minus = dm_minus.where(dm_minus > dm_plus, 0)
 
-    atr = tr.rolling(period).mean()
-    di_plus = 100 * dm_plus.rolling(period).mean() / atr.replace(0, np.nan)
-    di_minus = 100 * dm_minus.rolling(period).mean() / atr.replace(0, np.nan)
+    # utils.indicators.atr()'s own rolling(window=period, min_periods=period)
+    # mean is formula-identical to the plain tr.rolling(period).mean() this
+    # used to compute locally — reused, not duplicated (Confluence Engine
+    # Overhaul Phase 1's indicator-unification charter).
+    atr_val = _atr_series(df, period)
+    di_plus = 100 * dm_plus.rolling(period).mean() / atr_val.replace(0, np.nan)
+    di_minus = 100 * dm_minus.rolling(period).mean() / atr_val.replace(0, np.nan)
 
     dx = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan)
     return dx.rolling(period).mean()
@@ -65,13 +69,26 @@ def extract_features(df: pd.DataFrame, t: dict) -> dict:
     current = float(close.iloc[-1])
     e200 = float(ema200.iloc[-1])
 
+    # NaN here means the underlying ratio was genuinely undefined at this
+    # bar (ADX: DI+ == DI- == 0, no directional movement at all in the
+    # window; RSI: zero average loss or zero average gain, RS undefined —
+    # true value 100/0, not "neutral") — not "no information." adx_undefined/
+    # rsi_undefined make the fallback distinguishable from a genuine
+    # near-0/near-50 reading (OBSERVABILITY only; the fallback values
+    # themselves are unchanged — correcting them would shift decide()'s
+    # threshold branching, a strategy-semantics change out of scope here).
+    adx_undefined = bool(pd.isna(adx.iloc[-1]))
+    rsi_undefined = bool(pd.isna(rsi.iloc[-1]))
+
     return {
         "current": current,
         "e50": float(ema50.iloc[-1]),
         "e100": float(ema100.iloc[-1]),
         "e200": e200,
-        "adx_val": float(adx.iloc[-1]) if not pd.isna(adx.iloc[-1]) else 0.0,
-        "rsi_val": float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0,
+        "adx_val": float(adx.iloc[-1]) if not adx_undefined else 0.0,
+        "adx_undefined": adx_undefined,
+        "rsi_val": float(rsi.iloc[-1]) if not rsi_undefined else 50.0,
+        "rsi_undefined": rsi_undefined,
         "price_vs_ema200_pct": round((current - e200) / e200 * 100, 3),
     }
 
@@ -176,7 +193,9 @@ class NNFXEngine(BaseEngine):
             "ema100": round(features["e100"], 5),
             "ema200": round(features["e200"], 5),
             "adx": round(features["adx_val"], 1),
+            "adx_undefined": features["adx_undefined"],
             "rsi": round(features["rsi_val"], 1),
+            "rsi_undefined": features["rsi_undefined"],
             "price_vs_ema200_pct": features["price_vs_ema200_pct"],
         }
 

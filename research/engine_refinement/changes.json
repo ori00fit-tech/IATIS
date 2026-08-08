@@ -1,0 +1,195 @@
+{
+  "_comment": "Engine Refinement V1 change log. NOT research/results/registry.json (that schema is reserved for pre-registered trading hypotheses). Every entry here is additive-only, append via research.engine_refinement.changes.append_change().",
+  "changes": [
+    {
+      "change_id": "SMC-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "smc",
+      "description": "extract_structural_features() now reports swing pivot/confirmation timing (last_swing_high_bar, last_swing_high_confirmation_bar, last_swing_low_bar, last_swing_low_confirmation_bar, swing_confirmation_delay). Every reported confirmation_bar is a real, in-range bar position that find_swings()'s centered rolling window actually had available (confirmation_bar = pivot_bar + window, provably <= len(df)-1 by construction). Present even in the insufficient=True short-circuit branch, so operators can diagnose WHY the engine is abstaining. decide_structural_bias() confirmed unchanged and provably ignores these new keys (regression test strips them and shows identical bias/score).",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.108895+00:00"
+    },
+    {
+      "change_id": "SMC-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "smc",
+      "description": "detect_bos_choch() now reports reference_bar, bars_since_reference, and confirmation_delay on the two triggering branches (bullish/bearish break), giving the exact bar the broken level came from and how stale it is at decision time. The event=\"none\" branch does not fabricate these fields (confirmed by test). No change to event/direction detection logic.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.109124+00:00"
+    },
+    {
+      "change_id": "SMC-REFINE-003",
+      "type": "SEMANTIC_FIX",
+      "engine": "smc",
+      "description": "SMCEngine.analyze() raw output now explicitly separates structure_state (persistent bullish_pairs/bearish_pairs/total_pairs read) from swing_timing (the new pivot/confirmation metadata) from, when full_spec is on, structural_events (wraps bos_choch, true only on the firing bar) and zones (wraps order_block+fvg, persist until filled/invalidated) as new grouped top-level raw keys. Schema-only: every pre-existing raw key (order_blocks, fvg, bos_choch, liquidity_zones, timeframe_used, full_spec) is preserved byte-for-byte in both flag-on and flag-off branches. bias/score/reasons computation is completely untouched.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.109441+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "price_action",
+      "description": "extract_features() now reports rsi_undefined: rsi() (utils/indicators.py) returns NaN when the lookback window has zero average loss or zero average gain (RS undefined; the true value there is 100 or 0, not neutral), which the engine previously defaulted silently to 50.0 with no way to distinguish it from a genuine ~50 reading. The fallback VALUE itself is unchanged \u2014 only its meaning is now disambiguated. Correcting the fallback to the true 100/0 was deliberately NOT done: it would shift decide()'s RSI-threshold branching (rsi_val > rsi_bull, etc.), a strategy-semantics change out of scope for this refinement pass. Flagged for the operator's own decision if they want it fixed as a separate, evidence-driven change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433282+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "price_action",
+      "description": "extract_features() now reports momentum_bars_used and momentum_bars_configured, making the pre-existing min(momentum_bars, len(df)-1) clamp observable when a configured momentum_bars exceeds available history, instead of silently using a shorter lookback than configured with no trace in raw/features. The clamp behavior itself is unchanged.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433787+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-003",
+      "type": "BUG_FIX",
+      "engine": "price_action",
+      "description": "_candle_pattern() computed c2 (two bars ago) and body1 (previous-bar body size) but never read either in any pattern check \u2014 dead code that could mislead a future reader into thinking the pattern detector uses 3-candle context or the previous bar's body when it does not. Removed both locals; confirmed pattern detection (hammer/shooting_star/engulfing/doji) is byte-identical via a dedicated regression test, and via the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433989+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "nnfx",
+      "description": "extract_features() now reports adx_undefined and rsi_undefined: both indicators return NaN when their underlying ratio is genuinely undefined at a bar (ADX: DI+==DI-==0, no directional movement at all in the window; RSI: zero average loss or zero average gain, RS undefined \u2014 true value 100/0, not neutral) rather than \"no information,\" which the engine previously defaulted silently to a fallback value (0.0/50.0) indistinguishable from a genuine low/neutral reading. The fallback VALUES are unchanged \u2014 only their meaning is now disambiguated. Correcting the fallbacks to their true values was deliberately NOT done: it would shift decide()'s ADX/RSI-threshold branching, a strategy-semantics change out of scope for this refinement pass. Flagged for the operator's own decision if they want it fixed as a separate, evidence-driven change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.946748+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "nnfx",
+      "description": "_adx()'s internal ATR now reuses utils.indicators.atr() instead of a locally duplicated tr.rolling(period).mean() \u2014 confirmed formula-identical (pandas rolling(window).mean()'s default min_periods=window matches atr()'s explicit min_periods=period), verified via a dedicated regression test comparing the old-style and new-style series directly. Reduces duplicate indicator math per the Confluence Engine Overhaul Phase 1 indicator-unification precedent already applied elsewhere in this codebase.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.947211+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-003",
+      "type": "BUG_FIX",
+      "engine": "nnfx",
+      "description": "_adx() computed df[\"close\"] into a local variable but never read it (only high/low are used) \u2014 dead code that could mislead a future reader into thinking ADX here depends on close price. Removed; confirmed behavior-identical via a dedicated regression test and the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.947494+00:00"
+    },
+    {
+      "change_id": "WYCKOFF-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "wyckoff",
+      "description": "extract_features() now reports range_atr_zero, via a new standalone _range_atr_zero() helper -- deliberately NOT added to _identify_trading_range()'s own return tuple, since engines/wyckoff_engine_v2.py (an untouched research variant per finalized scope) imports and unpacks that function as a fixed 3-tuple (range_low, range_high, _ = _identify_trading_range(...)) and changing its arity would have silently broken v2. Surfaces the pre-existing 99-sentinel spread_in_atr fallback that fires when range_atr()==0 (a fully flat/stale instrument), which deterministically forces in_range=False (99 >= any sane range_atr_max) -- correct behavior, previously silent. No behavior change; confirmed via a dedicated test that _identify_trading_range() still returns exactly 3 values and wyckoff_engine_v2.py is byte-identical (empty git diff) after this change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "024cb645512e33bd5bd96c1d3cf5bcf537bfe9b6",
+      "recorded_at": "2026-08-08T16:33:55.950306+00:00"
+    },
+    {
+      "change_id": "WYCKOFF-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "wyckoff",
+      "description": "Removed two dead locals: `close` in _identify_trading_range() and `last` in _detect_spring_upthrust() -- both computed, never read anywhere in their respective functions. Neither is part of any return signature (_identify_trading_range()'s 3-tuple contract, depended on directly by engines/wyckoff_engine_v2.py, is unchanged), so this is safe regardless of v2's dependency on these functions. Confirmed behavior-identical via dedicated regression tests and the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "024cb645512e33bd5bd96c1d3cf5bcf537bfe9b6",
+      "recorded_at": "2026-08-08T16:33:55.950766+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "ict",
+      "description": "decide() previously let premium/discount zone position auto-set bias directly (DISCOUNT->BULLISH, PREMIUM->BEARISH) and let killzone session timing add a fixed score bonus on its own -- conflating CONTEXT (statistical price position, clock time) with actual trading-event evidence. Operator-pre-approved fix (explicit 'fix must happen now' directive): the only real trading-event evidence this engine detects -- a Judas swing (false breakout that reverses) -- is now the sole bias/score source. Zone/killzone/H1-trend are confirmation-only modifiers on an already-real Judas signal; with no Judas swing, bias stays NEUTRAL/score 0.0 regardless of zone/killzone state. New threshold keys (judas_base_score, zone_confirm_score, zone_conflict_penalty, killzone_confirm_score, trend_conflict_penalty) supersede the old zone_score/killzone_score/judas_confirm_score/judas_conflict_penalty set. ICT is disabled by default (engines.enabled.ict: false) -- changes zero live-decision behavior. Golden values recaptured in tests/test_engine_config_extraction_no_behavior_change.py (ICT A: NEUTRAL 10.0 -> BULLISH 70.0, B: BULLISH 55.0 -> NEUTRAL 0.0).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.481773+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "ict",
+      "description": "raw['is_killzone'] previously reported session.is_session_open alone, which is True during ANY major session's first two hours including Asia -- not the London/NewYork/Overlap-only definition this engine's own module docstring and decide()'s real killzone check both use. Corrected to the same definition decide() now uses. Confirmed via a dedicated test that an Asia-hour bar no longer reports is_killzone=True.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.482244+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-003",
+      "type": "OBSERVABILITY",
+      "engine": "ict",
+      "description": "raw gains additive context/event grouped keys -- context (zone, zone_pct, is_killzone, session, in_uptrend, in_downtrend) and event (judas_swing) -- mirroring SMC's structure_state/structural_events/zones separation, making the context-vs-evidence distinction driving ICT-REFINE-001 directly visible in the engine's own output shape. Every pre-existing flat raw key is preserved.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.482471+00:00"
+    },
+    {
+      "change_id": "MARKET-STRUCTURE-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "market_structure",
+      "description": "_classify_structure() previously assigned last_event (BOS/CHoCH/MSS) purely from a geometric comparison of the last 2-3 swing-pivot VALUES (was the newest swing high/low numerically higher/lower than the previous one?), with no requirement that price ever actually broke a level -- exactly the 'swing pair voting' this module's own header docstring claims this engine improves on over the plain SMC engine ('MSS: identifies specific structural EVENTS (more nuanced)' vs 'SMC: counts swing pairs, votes (simple)'). Audited per the operator's directive table entry ('Market Structure -> audit + fix if needed'), confirmed as a real conflict between the engine's documented design intent and its actual implementation, and fixed: last_event now REQUIRES the current close to have actually closed beyond the most recent confirmed swing high (bullish) or swing low (bearish), mirroring smc_engine.detect_bos_choch's already-established close-beyond-level convention exactly. `trend` (the HH/HL/LH/LL swing-pattern classification) is UNCHANGED -- describing an existing swing sequence as bullish/bearish/ranging is a legitimate geometric fact that doesn't need a break to be true; only the event label (and the strength/scoring it drives) needed the break requirement. Net effect: a clean swing structure with no recent break now scores weak_structure_strength (45) instead of bos_strength (65) -- previously ANY clean HH/HL or LH/LL pattern got BOS-level scoring regardless of whether price had recently broken anything. MarketStructure is disabled by default (engines.enabled.market_structure: false) -- changes zero live-decision behavior. Golden value recaptured in tests/test_engine_config_extraction_no_behavior_change.py (scenario A: BEARISH 65.0 -> BEARISH 45.0, bias unchanged; scenario B unaffected, its H1-only branch doesn't depend on event/break state).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "f1a4e44728f085417423e9057a12b4d1a1cbfb6a",
+      "recorded_at": "2026-08-08T18:27:06.653785+00:00"
+    },
+    {
+      "change_id": "MARKET-STRUCTURE-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "market_structure",
+      "description": "raw gains additive h1_broke_level/h1_break_direction/h1_break_price and h4_broke_level/h4_break_direction/h4_break_price keys -- the level-break fact behind h1_event/h4_trend's own classification, surfaced for both timeframes even when no event fires (broke_level=False) or when the break-check input (close_now) wasn't available. decide()'s own reason strings for the CHoCH/MSS branches now also cite the real break price. Every pre-existing flat raw key is preserved.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "f1a4e44728f085417423e9057a12b4d1a1cbfb6a",
+      "recorded_at": "2026-08-08T18:27:06.654273+00:00"
+    },
+    {
+      "change_id": "DIVERGENCE-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "divergence",
+      "description": "decide() previously applied fixed automatic score bonuses -- triple_bonus (15.0) when a 3rd swing confirmed, macd_confirm_bonus (15.0) when MACD's own pattern agreed, mtf_confirm_bonus (10.0)/mtf_conflict_penalty (5.0) for cross-timeframe agreement/disagreement -- all directly added to or subtracted from `score` inside decide()'s own arithmetic. Confirmed via this refinement pass's own audit (reports/engine_refinement/ENGINE_INVENTORY.md's Divergence entry, 'CONFIRMED CONFLICT') and operator-pre-approved ('remove automatic bonuses'). Fixed: these three confirmations are now reported as observability-only reasons (each suffixed 'context only, not scored') -- the same underlying facts (triple_div, macd_pattern_type, mtf_regular_div_type) already existed in extract_features()'s output, unchanged -- but they no longer modify `score`. Only the base pattern's own price-move magnitude (regular_magnitude_scale/cap) sets the score beyond the flat base (regular_base_score/hidden_score) -- that magnitude is the primary signal's own strength measure, not a bonus from a separate confirming source, and was never flagged. Mirrors the 'informational only, provably never scored' convention already established for macro_engine.py's commodity trends and quant_engine.py's vol_clustering (both pinned by a dedicated test proving identical scores regardless of the informational field's value -- the same proof pattern used here, tests/test_divergence_engine_v2.py::test_confirmations_are_provably_never_scored). config/engines.yaml's thresholds.divergence had triple_bonus/macd_confirm_bonus/mtf_confirm_bonus/mtf_conflict_penalty removed (now-dead keys, would otherwise silently misrepresent what decide() actually does). Divergence is disabled by default (engines.enabled.divergence: false) -- changes zero live-decision behavior. 3 existing tests recaptured (test_decide_regular_bearish_with_triple_macd_and_mtf_confirm_are_context_only, test_decide_regular_bullish_with_mtf_conflict_is_context_only, test_decide_hidden_with_macd_confirm_is_context_only).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "0cf68ca90bfbe4b4ee5e9ade36a7619379f82b1e",
+      "recorded_at": "2026-08-08T19:05:18.056030+00:00"
+    },
+    {
+      "change_id": "QUANT-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "quant",
+      "description": "_classify_regime() previously returned 'RANDOM' both when (a) too few diagnostics could vote at all (short history, degenerate input -- a data-insufficiency problem) and (b) enough diagnostics DID vote but the aggregate genuinely showed no trending/mean-reverting majority (a real statistical finding) -- confirmed as a real conflation via this refinement pass's own audit (reports/engine_refinement/ENGINE_INVENTORY.md's Quant entry, 'CONFIRMED CONFLICT') and operator-pre-approved ('fix RANDOM vs UNKNOWN'). Fixed: case (a) is now UNKNOWN, a distinct classification from RANDOM. decide() gives UNKNOWN its own reason string ('Too few diagnostics could vote... data insufficiency') distinct from RANDOM's ('No statistically significant regime detected'). Both states still abstain identically (NEUTRAL/0.0) in decide() -- this changes only the reported classification/reasoning, never the live decision. Quant is disabled by default (engines.enabled.quant: false). versions.quant 2.0 -> 2.1. 2 existing tests recaptured (test_classify_regime_all_abstain_is_unknown, test_classify_regime_insufficient_evidence_is_unknown), 1 new test added proving UNKNOWN abstains identically to RANDOM with a distinct reason.",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "8f32af237b839cad54847908a1e4d44e251f32dd",
+      "recorded_at": "2026-08-08T19:25:14.588043+00:00"
+    },
+    {
+      "change_id": "MACRO-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "macro",
+      "description": "Confirmed conflict (reports/engine_refinement/ENGINE_INVENTORY.md's Macro entry, 'vote-independence assumption, no available_at'): the 6 risk-on/off votes (SPY-vs-MA20, VIX bucket, Gold-vs-SPY, yield-curve inversion, credit-spread direction, Fed-balance-sheet direction) were summed as if independent and simultaneous, with no per-observation timestamp/cadence distinction anywhere in this engine, even though they update on genuinely different real-world cadences (daily vs. weekly). Operator-pre-approved framing: 'refine aggregation semantics, observability only' -- explicitly NO score/bias/vote-counting change permitted, only added transparency. Fixed, observability-only: extract_features() gained a new risk_vote_detail list reporting each cast vote's own as_of date and cadence (daily/weekly); decide() gained one new reason string (gated on total_votes >= 2) stating the independence-assumption caveat explicitly instead of silently implying risk_conf is a calibrated probability. The vote-counting arithmetic itself (risk_on/risk_off tallying, risk_state classification, risk_conf, DXY confirm/conflict scoring) is BYTE-IDENTICAL -- proven by a new dedicated test (test_decide_is_invariant_to_risk_vote_detail_content) showing decide() produces identical bias/score/reasons regardless of risk_vote_detail's content. Macro is disabled by default (engines.enabled.macro: false) and its confluence weight is already forced to 0.0 -- zero live-trading impact regardless. versions.macro 2.0 -> 2.1. 7 new tests added; all pre-existing tests pass unchanged (purely additive field, no golden-value recapture needed).",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "3cd7c440db9c3ab102ca2f2e3ef335bf403751ad",
+      "recorded_at": "2026-08-08T20:04:53.980329+00:00"
+    }
+  ]
+}

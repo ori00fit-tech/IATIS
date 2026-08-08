@@ -69,15 +69,41 @@ _GOLDEN = {
         # engine/scenario combination in this file was re-verified
         # unaffected.
         "Wyckoff": ("BULLISH", 25.0),
-        "ICT": ("NEUTRAL", 10.0),
-        "MarketStructure": ("BEARISH", 65.0),
+        # ICT recaptured (Engine Refinement V1 #362, operator-pre-approved
+        # semantics fix): premium/discount zone position and killzone
+        # session timing used to auto-set bias/score directly (conflating
+        # CONTEXT with trading-event evidence). Now only a detected Judas
+        # swing (a real false-breakout+reversal) sets bias/score; zone/
+        # killzone/trend are confirmation-only modifiers on that event.
+        # ICT is disabled by default (engines.enabled.ict: false) — this
+        # is a deliberate, approved scoring-logic change, not a bug fix
+        # to a live-affecting value.
+        "ICT": ("BULLISH", 70.0),
+        # MarketStructure recaptured (Engine Refinement V1 #363, "audit +
+        # fix if needed"): _classify_structure()'s BOS/CHoCH/MSS labels
+        # used to be assigned from a purely geometric comparison of the
+        # last 2-3 swing-pivot VALUES, with no requirement that price
+        # ever actually broke a level — the exact "swing pair voting"
+        # this engine's own module docstring claims to improve on over
+        # plain SMC. Now last_event requires a real close-beyond-level
+        # break (mirroring smc_engine.detect_bos_choch's own convention).
+        # Scenario A's H1/H4 both show a clean bearish HH/HL-less swing
+        # structure but no recent break — score correctly downgrades from
+        # bos_strength (65, previously granted to ANY clean structure) to
+        # weak_structure_strength (45, "structure exists, no confirmed
+        # break yet"). Bias unchanged (BEARISH). MarketStructure is
+        # disabled by default (engines.enabled.market_structure: false).
+        "MarketStructure": ("BEARISH", 45.0),
     },
     "B": {
         "SMC": ("BEARISH", 65.0),
         "PriceAction": ("NEUTRAL", 0.0),
         "NNFX": ("BEARISH", 55.0),
         "Wyckoff": ("NEUTRAL", 0.0),
-        "ICT": ("BULLISH", 55.0),
+        "ICT": ("NEUTRAL", 0.0),  # recaptured — see scenario A's ICT comment
+        # Unchanged by the #363 fix — scenario B's H1-only branch
+        # (H4 ranging/insufficient) uses a fixed h1_only_score regardless
+        # of event/break state, so it was never affected by the gap.
         "MarketStructure": ("BULLISH", 40.0),
     },
 }

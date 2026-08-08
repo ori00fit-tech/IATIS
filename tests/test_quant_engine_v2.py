@@ -52,12 +52,15 @@ def test_classify_regime_clean_mean_reverting_vote():
     assert confidence == pytest.approx(1.0)
 
 
-def test_classify_regime_all_abstain_is_random():
+def test_classify_regime_all_abstain_is_unknown():
+    """Engine Refinement V1 (#365, QUANT-REFINE): zero votes cast is a
+    data-insufficiency problem (UNKNOWN), not a statistical finding that
+    the market is random (RANDOM) — these were conflated before this fix."""
     regime, votes, confidence = _classify_regime(
         hurst=None, variance_ratio_val=None, adf_p=None,
         autocorr_val=None, er=None, hl=None, entropy_val=None, t={},
     )
-    assert regime == "RANDOM"
+    assert regime == "UNKNOWN"
     assert confidence == 0.0
     assert votes["abstain"] == 7
 
@@ -84,13 +87,15 @@ def test_classify_regime_entropy_dominant_is_random_despite_directional_votes():
     assert regime == "TRENDING"
 
 
-def test_classify_regime_insufficient_evidence_is_random():
-    # Only 1 vote cast total (below regime_min_votes=2 default) -> RANDOM
+def test_classify_regime_insufficient_evidence_is_unknown():
+    # Engine Refinement V1 (#365): only 1 vote cast total (below
+    # regime_min_votes=2 default) -> UNKNOWN (data insufficiency), not
+    # RANDOM (a real statistical finding that needs enough votes cast).
     regime, votes, confidence = _classify_regime(
         hurst=0.7, variance_ratio_val=None, adf_p=None,
         autocorr_val=None, er=None, hl=None, entropy_val=None, t={},
     )
-    assert regime == "RANDOM"
+    assert regime == "UNKNOWN"
     assert confidence == 0.0
 
 
@@ -151,6 +156,31 @@ def test_decide_random_regime_always_neutral():
     assert bias == Bias.NEUTRAL
     assert score == 0.0
     assert any("no-guess policy" in r for r in reasons)
+    assert any("No statistically significant regime detected" in r for r in reasons)
+
+
+def test_decide_unknown_regime_always_neutral_with_distinct_reason():
+    """Engine Refinement V1 (#365): UNKNOWN abstains identically to RANDOM
+    (NEUTRAL/0.0) but with a distinct, data-insufficiency-specific reason —
+    proving the fix changed only the reported classification/reasoning,
+    never the live decision."""
+    features = {
+        "regime": "UNKNOWN",
+        "regime_votes": {"trending": 0, "mean_reverting": 0, "random": 0, "abstain": 7},
+        "regime_confidence": 0.0,
+        "vol_regime": "NORMAL",
+        "atr_percentile": 0.5,
+        "zscore": -3.0,
+        "rsi": 10.0,
+        "half_life_bars": None,
+        "vol_clustering": None,
+    }
+    bias, score, reasons = decide(features, {})
+    assert bias == Bias.NEUTRAL
+    assert score == 0.0
+    assert any("no-guess policy" in r for r in reasons)
+    assert any("Too few diagnostics could vote" in r for r in reasons)
+    assert not any("No statistically significant regime detected" in r for r in reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +316,7 @@ def test_engine_output_evidence_level_and_probability_defaults():
 
 def test_engine_output_has_regime_and_votes_in_features():
     out = QuantEngine().safe_analyze(_mtf(seed=3))
-    assert out.features["regime"] in ("TRENDING", "MEAN_REVERTING", "RANDOM")
+    assert out.features["regime"] in ("TRENDING", "MEAN_REVERTING", "RANDOM", "UNKNOWN")
     assert "regime_votes" in out.features
     assert set(out.features["regime_votes"].keys()) == {"trending", "mean_reverting", "random", "abstain"}
 

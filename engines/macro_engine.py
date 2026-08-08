@@ -39,6 +39,20 @@ claimed otherwise but never actually did so — corrected here).
 Requires: network access to CBOE / FRED (FRED_API_KEY optional — the
 keyless fredgraph.csv export is used when it's absent).
 Gracefully degrades to NEUTRAL if data unavailable.
+
+Engine Refinement V1 (#366, MACRO-REFINE, OBSERVABILITY, operator-pre-
+approved "aggregation semantics, observability only"): confirmed
+conflict — the 6 risk-on/off votes (SPY-vs-MA20, VIX bucket, Gold-vs-
+SPY, yield-curve inversion, credit-spread direction, Fed-balance-sheet
+direction) were summed as if independent and simultaneous, with no
+per-observation timestamp/cadence distinction anywhere in this engine,
+even though they update on genuinely different real-world cadences
+(daily vs. weekly). Fixed, observability-only: extract_features()'s
+new `risk_vote_detail` reports each cast vote's own as_of date and
+cadence; decide() states the independence-assumption caveat explicitly
+in its reasons rather than silently implying `risk_conf` is a
+calibrated probability. The vote-counting arithmetic itself is
+UNCHANGED — no score/bias/threshold values were altered.
 """
 
 from __future__ import annotations
@@ -54,6 +68,27 @@ _SNAPSHOT_SYMBOLS = [
     "DXY", "SPY", "VIX", "GLD", "US10Y", "US02Y",
     "OIL_WTI", "COPPER", "NATGAS", "CREDIT_SPREAD", "FED_BALANCE_SHEET",
 ]
+
+
+def _series_as_of(df: pd.DataFrame | None) -> str | None:
+    """The real, most-recent observation DATE a fetched macro series'
+    last bar carries — the closest thing to a per-observation timestamp
+    this engine can honestly report. Engine Refinement V1 (#366,
+    MACRO-REFINE, OBSERVABILITY): confirmed conflict — no per-observation
+    observation_timestamp/publication_timestamp/available_at distinction
+    existed anywhere in this engine (reports/engine_refinement/
+    ENGINE_INVENTORY.md's Macro entry). This is deliberately NOT a
+    publication-vintage guarantee — it's the dated VALUE of the series'
+    own last row, not proof of when that row was actually published or
+    revised (no free source provides revision vintages for any of these
+    series — Provider Benchmark Phase 3's own reconfirmed finding).
+    Callers must not treat `as_of` as an "available_at" timestamp."""
+    if df is None or len(df) == 0:
+        return None
+    try:
+        return str(df.index[-1].date())
+    except Exception:
+        return str(df.index[-1])
 
 
 def _series_trend(df: pd.DataFrame | None, lookback: int, flat_threshold_pct: float) -> str | None:
@@ -104,9 +139,20 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         dxy_direction = "up" if e_fast > e_slow else "down"
 
     # --- Risk-on/off votes (facts only — decide() classifies) ---
+    # Engine Refinement V1 (#366, MACRO-REFINE, OBSERVABILITY): each vote
+    # also records its own as_of date and cadence via risk_vote_detail
+    # below — the confirmed gap (ENGINE_INVENTORY.md's Macro entry) was
+    # that no per-observation timing distinction existed anywhere in this
+    # engine, even though these 6 series update on genuinely different
+    # real-world cadences (daily SPY/VIX/GLD/yields/credit-spread vs.
+    # weekly Fed balance sheet) and are summed as if independent and
+    # simultaneous. This fix is observability-only: the vote-counting
+    # arithmetic itself (below) is UNCHANGED — see decide()'s new
+    # independence-assumption reason for the pre-approved framing.
     risk_on = 0
     risk_off = 0
     risk_reasons: list[str] = []
+    risk_vote_detail: list[dict] = []
 
     if spy_df is not None and len(spy_df) >= t.get("spy_ma_period", 20):
         spy = spy_df["close"]
@@ -114,10 +160,13 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         spy_current = float(spy.iloc[-1])
         if spy_current > spy_ma:
             risk_on += 1
+            direction = "on"
             risk_reasons.append(f"SPY above MA{t.get('spy_ma_period', 20)} ({spy_current:.0f} > {spy_ma:.0f}) — Risk-On")
         else:
             risk_off += 1
+            direction = "off"
             risk_reasons.append(f"SPY below MA{t.get('spy_ma_period', 20)} ({spy_current:.0f} < {spy_ma:.0f}) — Risk-Off")
+        risk_vote_detail.append({"vote": "spy_vs_ma", "direction": direction, "cadence": "daily", "as_of": _series_as_of(spy_df)})
 
     if vix_df is not None and len(vix_df) >= 5:
         vix_level = float(vix_df["close"].iloc[-1])
@@ -126,9 +175,11 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         if vix_level < vix_low:
             risk_on += 1
             risk_reasons.append(f"VIX={vix_level:.1f} (low fear) — Risk-On")
+            risk_vote_detail.append({"vote": "vix", "direction": "on", "cadence": "daily", "as_of": _series_as_of(vix_df)})
         elif vix_level > vix_high:
             risk_off += 1
             risk_reasons.append(f"VIX={vix_level:.1f} (elevated fear) — Risk-Off")
+            risk_vote_detail.append({"vote": "vix", "direction": "off", "cadence": "daily", "as_of": _series_as_of(vix_df)})
         else:
             risk_reasons.append(f"VIX={vix_level:.1f} (neutral)")
 
@@ -140,9 +191,11 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         if gld_chg > gold_threshold and spy_chg < -gold_threshold:
             risk_off += 1
             risk_reasons.append(f"Gold up {gld_chg:+.1%} while SPY down {spy_chg:+.1%} — flight to safety Risk-Off")
+            risk_vote_detail.append({"vote": "gold_vs_spy", "direction": "off", "cadence": "daily", "as_of": _series_as_of(gld_df)})
         elif spy_chg > gold_threshold and gld_chg < 0:
             risk_on += 1
             risk_reasons.append(f"SPY up {spy_chg:+.1%} while Gold down — Risk-On rotation")
+            risk_vote_detail.append({"vote": "gold_vs_spy", "direction": "on", "cadence": "daily", "as_of": _series_as_of(gld_df)})
 
     # --- Yield curve (real feature, finally wired up this phase) ---
     yield_spread: float | None = None
@@ -155,6 +208,7 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         if yield_inverted:
             risk_off += 1
             risk_reasons.append(f"Yield curve INVERTED (US10Y {us10y:.2f} - US02Y {us02y:.2f} = {yield_spread:+.2f}) — recession-warning Risk-Off")
+            risk_vote_detail.append({"vote": "yield_curve", "direction": "off", "cadence": "daily", "as_of": _series_as_of(us10y_df)})
         else:
             risk_reasons.append(f"Yield curve normal (spread={yield_spread:+.2f})")
 
@@ -168,9 +222,11 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         if credit_change > credit_widen_threshold:
             risk_off += 1
             risk_reasons.append(f"Credit spread widening ({credit_before:.2f}->{credit_now:.2f}) — credit-stress Risk-Off")
+            risk_vote_detail.append({"vote": "credit_spread", "direction": "off", "cadence": "daily", "as_of": _series_as_of(credit_df)})
         elif credit_change < -credit_widen_threshold:
             risk_on += 1
             risk_reasons.append(f"Credit spread narrowing ({credit_before:.2f}->{credit_now:.2f}) — Risk-On")
+            risk_vote_detail.append({"vote": "credit_spread", "direction": "on", "cadence": "daily", "as_of": _series_as_of(credit_df)})
 
     # --- Fed balance sheet direction (expansion=QE=risk-on, contraction=QT=risk-off) ---
     bs_lookback = t.get("fed_balance_sheet_lookback_weeks", 8)
@@ -180,9 +236,11 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         if bs_chg > bs_threshold:
             risk_on += 1
             risk_reasons.append(f"Fed balance sheet expanding ({bs_chg:+.1%} over {bs_lookback}w) — liquidity Risk-On")
+            risk_vote_detail.append({"vote": "fed_balance_sheet", "direction": "on", "cadence": "weekly", "as_of": _series_as_of(balance_sheet_df)})
         elif bs_chg < -bs_threshold:
             risk_off += 1
             risk_reasons.append(f"Fed balance sheet contracting ({bs_chg:+.1%} over {bs_lookback}w) — QT Risk-Off")
+            risk_vote_detail.append({"vote": "fed_balance_sheet", "direction": "off", "cadence": "weekly", "as_of": _series_as_of(balance_sheet_df)})
 
     # --- Commodities: informational only, never scored (see module docstring) ---
     commodity_lookback = t.get("commodity_lookback_periods", 20)
@@ -201,6 +259,7 @@ def extract_features(snapshot: dict[str, pd.DataFrame], t: dict) -> dict:
         "risk_on_votes": risk_on,
         "risk_off_votes": risk_off,
         "risk_reasons": risk_reasons,
+        "risk_vote_detail": risk_vote_detail,
         "yield_spread": yield_spread,
         "yield_inverted": yield_inverted,
         "oil_trend": oil_trend,
@@ -260,6 +319,22 @@ def decide(features: dict, t: dict, usd_is_base: bool = False) -> tuple[Bias, fl
     else:
         risk_state, risk_conf = "NEUTRAL", 0.5
     reasons.extend(features["risk_reasons"])
+
+    # Engine Refinement V1 (#366, MACRO-REFINE, OBSERVABILITY, operator-
+    # pre-approved "aggregation semantics, observability only"): the
+    # confirmed conflict was that these votes are summed as if
+    # independent (equal weight, no correlation adjustment) with no
+    # stated caveat. Fixed by stating it explicitly here rather than
+    # silently implying risk_conf is a calibrated probability — the
+    # vote-counting arithmetic above is UNCHANGED, this is text only.
+    if total_votes >= 2:
+        reasons.append(
+            f"Risk vote aggregation treats {total_votes} signal(s) as independent "
+            f"(a known simplification — some may correlate, e.g. yield-curve "
+            f"inversion and credit-spread widening both reflect tightening "
+            f"conditions); risk_conf is a signal-count ratio, not a calibrated "
+            f"probability. See raw['risk_vote_detail'] for each vote's own as_of date."
+        )
 
     risk_confirm_score = t.get("risk_confirm_score", 30.0)
     risk_conflict_penalty = t.get("risk_conflict_penalty", 10.0)

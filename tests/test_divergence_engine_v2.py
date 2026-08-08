@@ -263,37 +263,59 @@ def _base_features(**overrides) -> dict:
     return features
 
 
-def test_decide_regular_bearish_with_triple_macd_and_mtf_confirm():
+def test_decide_regular_bearish_with_triple_macd_and_mtf_confirm_are_context_only():
+    """Engine Refinement V1 (#364, DIVERGENCE-REFINE, operator-pre-approved
+    "remove automatic bonuses"): triple_div/MACD-agreement/MTF-agreement no
+    longer add to score — only the base pattern's own magnitude does. The
+    three confirmations still surface as reasons (context, not score)."""
     features = _base_features(
         rsi_pattern_type="regular_bearish", rsi_pattern_price_move_pct=0.02,
         macd_pattern_type="regular_bearish", triple_div=True, mtf_regular_div_type="bearish",
     )
     bias, score, reasons = decide(features, {})
     assert bias == Bias.BEARISH
-    # base(55) + magnitude(min(25, 0.02*1000=20)) + triple(15) + macd(15) + mtf(10) = 115, capped at 90
-    assert score == pytest.approx(90.0)
-    assert any("Triple" in r for r in reasons)
-    assert any("MACD confirms" in r for r in reasons)
-    assert any("H4 confirms" in r for r in reasons)
+    # base(55) + magnitude(min(25, 0.02*1000=20)) = 75 — triple/macd/mtf no longer add anything
+    assert score == pytest.approx(75.0)
+    assert any("Triple" in r and "not scored" in r for r in reasons)
+    assert any("MACD confirms" in r and "not scored" in r for r in reasons)
+    assert any("H4 confirms" in r and "not scored" in r for r in reasons)
 
 
-def test_decide_regular_bullish_with_mtf_conflict_penalty():
+def test_decide_regular_bullish_with_mtf_conflict_is_context_only():
     features = _base_features(
         rsi_pattern_type="regular_bullish", rsi_pattern_price_move_pct=0.01,
         mtf_regular_div_type="bearish",  # opposite direction
     )
     bias, score, reasons = decide(features, {})
     assert bias == Bias.BULLISH
-    # base(55) + magnitude(10) - mtf_conflict(5) = 60
-    assert score == pytest.approx(60.0)
-    assert any("opposite-direction" in r for r in reasons)
+    # base(55) + magnitude(10) = 65 — mtf conflict no longer subtracts anything
+    assert score == pytest.approx(65.0)
+    assert any("opposite-direction" in r and "not scored" in r for r in reasons)
 
 
-def test_decide_hidden_with_macd_confirm():
+def test_decide_hidden_with_macd_confirm_is_context_only():
     features = _base_features(rsi_pattern_type="hidden_bearish", macd_pattern_type="hidden_bearish")
     bias, score, reasons = decide(features, {})
     assert bias == Bias.BEARISH
-    assert score == pytest.approx(55.0)  # hidden(40) + macd_confirm(15)
+    assert score == pytest.approx(40.0)  # hidden(40) — macd confirm no longer adds
+    assert any("MACD confirms" in r and "not scored" in r for r in reasons)
+
+
+def test_confirmations_are_provably_never_scored():
+    """The authoritative proof (Engine Refinement V1 #364): two otherwise-
+    identical feature dicts differing ONLY in triple_div/macd_pattern_type/
+    mtf_regular_div_type must produce identical scores — mirrors the
+    'informational only, provably never scored' pattern already
+    established for macro_engine.py's commodity trends and quant_engine.
+    py's vol_clustering."""
+    plain = _base_features(rsi_pattern_type="regular_bearish", rsi_pattern_price_move_pct=0.02)
+    loaded = _base_features(
+        rsi_pattern_type="regular_bearish", rsi_pattern_price_move_pct=0.02,
+        macd_pattern_type="regular_bearish", triple_div=True, mtf_regular_div_type="bearish",
+    )
+    _, plain_score, _ = decide(plain, {})
+    _, loaded_score, _ = decide(loaded, {})
+    assert plain_score == loaded_score
 
 
 def test_decide_macd_only_fallback_regular():

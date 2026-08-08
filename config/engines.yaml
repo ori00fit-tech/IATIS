@@ -105,13 +105,15 @@ thresholds:
     regular_magnitude_scale: 1000.0
     regular_magnitude_cap: 25.0
     hidden_score: 40.0
-    triple_bonus: 15.0
-    macd_confirm_bonus: 15.0
     macd_only_scale: 0.75
-    mtf_confirm_bonus: 10.0
-    mtf_conflict_penalty: 5.0
     score_cap: 90.0
     score_neutral_floor: 15.0
+    # Engine Refinement V1 (#364, DIVERGENCE-REFINE): triple_bonus/
+    # macd_confirm_bonus/mtf_confirm_bonus/mtf_conflict_penalty removed —
+    # decide() no longer scores these (they're context-only reasons now,
+    # see engines/divergence_engine.py's decide() docstring). Leaving
+    # dead threshold keys here would silently misrepresent what the
+    # engine actually does.
 
   quant:
     min_bars: 100
@@ -372,10 +374,21 @@ thresholds:
     dealing_range_lookback: 20
     premium_pct: 0.60
     discount_pct: 0.40
-    zone_score: 35.0
-    killzone_score: 20.0
-    judas_confirm_score: 20.0
-    judas_conflict_penalty: 10.0
+    # ICT-SEMANTICS-FIX (Engine Refinement V1 #362, pre-approved by the
+    # operator): zone_score/killzone_score/judas_confirm_score/
+    # judas_conflict_penalty (the pre-fix key set) let premium/discount
+    # zone position and killzone session timing auto-generate bias/score
+    # directly — conflating CONTEXT with actual trading-event evidence.
+    # Superseded by the keys below: Judas swing (a real detected false-
+    # breakout+reversal) is now the only signal source; zone/killzone/
+    # trend are confirmation-only modifiers on an already-real event.
+    # ICT is disabled by default (engines.enabled.ict: false above) —
+    # this changed zero live-decision behavior.
+    judas_base_score: 45.0
+    zone_confirm_score: 20.0
+    zone_conflict_penalty: 10.0
+    killzone_confirm_score: 15.0
+    trend_conflict_penalty: 10.0
     trend_ema_fast: 20
     trend_ema_slow: 50
     trend_buffer_pct: 0.001
@@ -401,14 +414,14 @@ thresholds:
 # changes materially, so research manifests can be cross-referenced to a
 # specific engine version rather than just a git commit.
 versions:
-  divergence: "2.0"
-  ict: "1.0"
-  macro: "2.0"
-  market_structure: "1.0"
+  divergence: "2.1"
+  ict: "1.1"
+  macro: "2.1"
+  market_structure: "1.1"
   nnfx: "1.0"
   price_action: "1.0"
   price_action_v2: "2.0"
-  quant: "2.0"
+  quant: "2.1"
   sentiment: "1.0"
   smc: "1.0"
   wyckoff: "1.0"

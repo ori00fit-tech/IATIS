@@ -60,6 +60,36 @@
       "performance_driven": false,
       "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
       "recorded_at": "2026-08-08T16:24:09.433989+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "nnfx",
+      "description": "extract_features() now reports adx_undefined and rsi_undefined: both indicators return NaN when their underlying ratio is genuinely undefined at a bar (ADX: DI+==DI-==0, no directional movement at all in the window; RSI: zero average loss or zero average gain, RS undefined \u2014 true value 100/0, not neutral) rather than \"no information,\" which the engine previously defaulted silently to a fallback value (0.0/50.0) indistinguishable from a genuine low/neutral reading. The fallback VALUES are unchanged \u2014 only their meaning is now disambiguated. Correcting the fallbacks to their true values was deliberately NOT done: it would shift decide()'s ADX/RSI-threshold branching, a strategy-semantics change out of scope for this refinement pass. Flagged for the operator's own decision if they want it fixed as a separate, evidence-driven change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.946748+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "nnfx",
+      "description": "_adx()'s internal ATR now reuses utils.indicators.atr() instead of a locally duplicated tr.rolling(period).mean() \u2014 confirmed formula-identical (pandas rolling(window).mean()'s default min_periods=window matches atr()'s explicit min_periods=period), verified via a dedicated regression test comparing the old-style and new-style series directly. Reduces duplicate indicator math per the Confluence Engine Overhaul Phase 1 indicator-unification precedent already applied elsewhere in this codebase.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.947211+00:00"
+    },
+    {
+      "change_id": "NNFX-REFINE-003",
+      "type": "BUG_FIX",
+      "engine": "nnfx",
+      "description": "_adx() computed df[\"close\"] into a local variable but never read it (only high/low are used) \u2014 dead code that could mislead a future reader into thinking ADX here depends on close price. Removed; confirmed behavior-identical via a dedicated regression test and the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "1391bf3bec5ca4984abf4e8f9606062383410c56",
+      "recorded_at": "2026-08-08T16:27:55.947494+00:00"
     }
   ]
 }

@@ -1,0 +1,35 @@
+{
+  "_comment": "Engine Refinement V1 change log. NOT research/results/registry.json (that schema is reserved for pre-registered trading hypotheses). Every entry here is additive-only, append via research.engine_refinement.changes.append_change().",
+  "changes": [
+    {
+      "change_id": "SMC-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "smc",
+      "description": "extract_structural_features() now reports swing pivot/confirmation timing (last_swing_high_bar, last_swing_high_confirmation_bar, last_swing_low_bar, last_swing_low_confirmation_bar, swing_confirmation_delay). Every reported confirmation_bar is a real, in-range bar position that find_swings()'s centered rolling window actually had available (confirmation_bar = pivot_bar + window, provably <= len(df)-1 by construction). Present even in the insufficient=True short-circuit branch, so operators can diagnose WHY the engine is abstaining. decide_structural_bias() confirmed unchanged and provably ignores these new keys (regression test strips them and shows identical bias/score).",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.108895+00:00"
+    },
+    {
+      "change_id": "SMC-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "smc",
+      "description": "detect_bos_choch() now reports reference_bar, bars_since_reference, and confirmation_delay on the two triggering branches (bullish/bearish break), giving the exact bar the broken level came from and how stale it is at decision time. The event=\"none\" branch does not fabricate these fields (confirmed by test). No change to event/direction detection logic.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.109124+00:00"
+    },
+    {
+      "change_id": "SMC-REFINE-003",
+      "type": "SEMANTIC_FIX",
+      "engine": "smc",
+      "description": "SMCEngine.analyze() raw output now explicitly separates structure_state (persistent bullish_pairs/bearish_pairs/total_pairs read) from swing_timing (the new pivot/confirmation metadata) from, when full_spec is on, structural_events (wraps bos_choch, true only on the firing bar) and zones (wraps order_block+fvg, persist until filled/invalidated) as new grouped top-level raw keys. Schema-only: every pre-existing raw key (order_blocks, fvg, bos_choch, liquidity_zones, timeframe_used, full_spec) is preserved byte-for-byte in both flag-on and flag-off branches. bias/score/reasons computation is completely untouched.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
+      "recorded_at": "2026-08-08T07:15:55.109441+00:00"
+    }
+  ]
+}

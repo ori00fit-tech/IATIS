@@ -190,6 +190,16 @@
       "performance_driven": false,
       "commit": "3cd7c440db9c3ab102ca2f2e3ef335bf403751ad",
       "recorded_at": "2026-08-08T20:04:53.980329+00:00"
+    },
+    {
+      "change_id": "SENTIMENT-REFINE-001",
+      "type": "CAUSALITY_FIX",
+      "engine": "sentiment",
+      "description": "Confirmed gap (reports/engine_refinement/ENGINE_INVENTORY.md's Sentiment entry, refinement plan #16): zero hits for report_date/publication_date/available_at anywhere in engines/sentiment_engine.py, even though the COT cache (scripts/download_cot.py) has always written a real report_date (the CFTC report's own 'as of' date) that this engine never once read. BUG-005's bar-time gate (_bar_time_is_live) already prevents the vast majority of lookahead by skipping COT/MarketAux entirely outside a tolerance window around wall-clock 'now', but never checked the loaded snapshot's OWN vintage against the bar being evaluated. Fixed: a new _parse_report_date() helper parses the snapshot's report_date; analyze() now discards a COT snapshot dated AFTER the bar's own timestamp (never used, exactly like a missing snapshot would be) as defense-in-depth alongside the existing is_live gate. A snapshot with no parseable report_date (unknown vintage -- e.g. a test double or a pre-fix cache) is NOT discarded, matching this refinement pass's established 'no data -> no opinion changed' convention (verified by 3 dedicated tests: missing report_date, unparseable report_date, both leave bias/score unchanged). report_date and report_age_days are surfaced in raw for transparency, mirroring the Macro engine's as_of pattern (#366). Sentiment is disabled by default (engines.enabled.sentiment: false) -- zero live-trading impact. versions.sentiment 1.0 -> 1.1. 8 new tests added; all 8 pre-existing sentiment-engine tests pass unchanged.",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "60f819e041b9078b1066ca331fad00ae32802a53",
+      "recorded_at": "2026-08-08T20:21:07.547379+00:00"
     }
   ]
 }

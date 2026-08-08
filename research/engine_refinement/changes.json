@@ -170,6 +170,16 @@
       "performance_driven": false,
       "commit": "0cf68ca90bfbe4b4ee5e9ade36a7619379f82b1e",
       "recorded_at": "2026-08-08T19:05:18.056030+00:00"
+    },
+    {
+      "change_id": "QUANT-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "quant",
+      "description": "_classify_regime() previously returned 'RANDOM' both when (a) too few diagnostics could vote at all (short history, degenerate input -- a data-insufficiency problem) and (b) enough diagnostics DID vote but the aggregate genuinely showed no trending/mean-reverting majority (a real statistical finding) -- confirmed as a real conflation via this refinement pass's own audit (reports/engine_refinement/ENGINE_INVENTORY.md's Quant entry, 'CONFIRMED CONFLICT') and operator-pre-approved ('fix RANDOM vs UNKNOWN'). Fixed: case (a) is now UNKNOWN, a distinct classification from RANDOM. decide() gives UNKNOWN its own reason string ('Too few diagnostics could vote... data insufficiency') distinct from RANDOM's ('No statistically significant regime detected'). Both states still abstain identically (NEUTRAL/0.0) in decide() -- this changes only the reported classification/reasoning, never the live decision. Quant is disabled by default (engines.enabled.quant: false). versions.quant 2.0 -> 2.1. 2 existing tests recaptured (test_classify_regime_all_abstain_is_unknown, test_classify_regime_insufficient_evidence_is_unknown), 1 new test added proving UNKNOWN abstains identically to RANDOM with a distinct reason.",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "8f32af237b839cad54847908a1e4d44e251f32dd",
+      "recorded_at": "2026-08-08T19:25:14.588043+00:00"
     }
   ]
 }

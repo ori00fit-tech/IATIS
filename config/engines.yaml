@@ -421,7 +421,7 @@ versions:
   nnfx: "1.0"
   price_action: "1.0"
   price_action_v2: "2.0"
-  quant: "2.0"
+  quant: "2.1"
   sentiment: "1.0"
   smc: "1.0"
   wyckoff: "1.0"

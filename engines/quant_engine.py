@@ -5,8 +5,8 @@ Quantitative/statistical engine — Confluence Engine Overhaul Phase 3a
 (2026-08-01) full rebuild.
 
 Regime-aware design: classifies the market as TRENDING, MEAN_REVERTING,
-or RANDOM using a vote across several independent statistics (Hurst
-exponent, variance ratio, ADF stationarity, return autocorrelation,
+RANDOM, or UNKNOWN using a vote across several independent statistics
+(Hurst exponent, variance ratio, ADF stationarity, return autocorrelation,
 efficiency ratio, half-life, entropy), computed in extract_features().
 decide() then uses THAT classification to choose which family of
 directional signals to trust — a mean-reversion z-score extreme only
@@ -14,6 +14,18 @@ means something if the market is actually mean-reverting; a momentum
 signal only means something if it's actually trending. Even a single
 shared indicator (RSI) is read two different ways depending on regime:
 contrarian in MEAN_REVERTING, momentum-confirming in TRENDING.
+
+Engine Refinement V1 (#365, QUANT-REFINE, SEMANTIC_FIX, operator-pre-
+approved, confirmed in reports/engine_refinement/ENGINE_INVENTORY.md's
+Quant entry): RANDOM and UNKNOWN are now distinct classifications.
+Before this fix, _classify_regime() returned "RANDOM" both when (a)
+too few diagnostics could vote at all (short history, degenerate
+input — a data-insufficiency problem) and (b) enough diagnostics DID
+vote but the aggregate genuinely showed no trending/mean-reverting
+majority (a real statistical finding). Case (a) is now UNKNOWN. Both
+still abstain (NEUTRAL/0.0) in decide() — this changes only the
+reported classification/reasoning, never the live decision, and Quant
+is disabled by default (engines.enabled.quant: false).
 
 NOTE: this engine's `regime` (TRENDING/MEAN_REVERTING/RANDOM) is an
 ENGINE-INTERNAL classification, computed from this engine's own
@@ -147,7 +159,14 @@ def _classify_regime(
     ADF and half-life are one-sided: absence of mean-reversion evidence
     is not evidence of trending (matches base_engine.py's "unclear data
     -> no opinion" principle). Entropy casts a separate RANDOM vote.
-    Returns (regime, votes_dict, confidence)."""
+    Returns (regime, votes_dict, confidence).
+
+    regime is one of TRENDING/MEAN_REVERTING/RANDOM/UNKNOWN. UNKNOWN
+    means too few diagnostics could vote at all to form ANY opinion
+    (data insufficiency) — distinct from RANDOM, which means enough
+    diagnostics DID vote but their aggregate genuinely shows no
+    trending/mean-reverting majority (a real statistical finding).
+    Engine Refinement V1 (#365) — these were conflated before this fix."""
     votes = {"trending": 0, "mean_reverting": 0, "random": 0, "abstain": 0}
 
     hurst_trend = t.get("hurst_trend_threshold", 0.55)
@@ -218,7 +237,7 @@ def _classify_regime(
     margin = t.get("regime_margin", 1)
 
     if total_cast < min_votes:
-        return "RANDOM", votes, 0.0
+        return "UNKNOWN", votes, 0.0
     if votes["trending"] > votes["mean_reverting"] + margin and votes["trending"] > votes["random"]:
         return "TRENDING", votes, votes["trending"] / total_cast
     if votes["mean_reverting"] > votes["trending"] + margin and votes["mean_reverting"] > votes["random"]:
@@ -419,6 +438,12 @@ def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
                 elif bias == Bias.BEARISH and rsi_val > rsi_bull_confirm:
                     score -= rsi_conflict_penalty
                     reasons.append(f"RSI={rsi_val:.1f} conflicts with bearish trend")
+
+    elif regime == "UNKNOWN":
+        reasons.append(
+            "Too few diagnostics could vote to classify a regime (data "
+            "insufficiency, e.g. short history) — abstaining per no-guess policy"
+        )
 
     else:
         reasons.append("No statistically significant regime detected — abstaining per no-guess policy")

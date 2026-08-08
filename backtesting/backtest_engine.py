@@ -536,7 +536,14 @@ def run_backtest(
     config: BacktestConfig | None = None,
     engine_config: dict | None = None,
 ) -> BacktestResult:
-    """Walk-forward backtest on historical OHLCV data — no lookahead."""
+    """Walk-forward backtest on historical OHLCV data — no lookahead.
+
+    Engine Refinement V1 (2026-08-08) — that claim is now a checked
+    precondition, not just a comment: raises research.guards.
+    causal_guard.LookaheadError if `df` isn't sorted with strictly
+    increasing timestamps, since `window = df.iloc[:i+1]` (below) only
+    means "every bar known as of bar i" when that holds.
+    """
     from utils.helpers import load_config
     from core.timeframe_sync import build_multi_timeframe_view
     from engines.smc_engine import SMCEngine
@@ -559,6 +566,23 @@ def run_backtest(
         config = BacktestConfig()
     if engine_config is None:
         engine_config = load_config()
+
+    # Engine Refinement V1 (2026-08-08) — §6 Causality Hardening. The
+    # docstring above already claims "no lookahead", but nothing checked
+    # the one precondition that claim actually depends on: `window =
+    # df.iloc[:i+1]` (below) only means "every bar known as of bar i" if
+    # `df` is sorted, strictly-increasing, non-duplicate timestamps to
+    # begin with — a shuffled or duplicate-timestamp input (e.g. a
+    # provider merge gone wrong upstream) would silently make "the first
+    # i+1 rows" NOT correspond to "bars up to time T" at all, the exact
+    # failure shape research/guards/causal_guard.py exists to catch.
+    # Cheap (runs once per call, not per bar); real callers (backtest/
+    # runner.py::load_symbol_data, core/data_loader.py::load_synthetic)
+    # already sort_index() before calling this, so this never fires on
+    # correctly-loaded data — only on genuinely broken input, which must
+    # fail loudly rather than produce a silently-meaningless backtest.
+    from research.guards.causal_guard import assert_monotonic_timestamps
+    assert_monotonic_timestamps(df, label=f"{config.symbol} input OHLCV")
 
     weights = engine_config["confluence"]["weights"]
     min_score = engine_config["confluence"]["min_score_to_trade"]

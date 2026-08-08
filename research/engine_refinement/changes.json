@@ -30,6 +30,36 @@
       "performance_driven": false,
       "commit": "07627059757828d1a4c0ed8c78dd9daa2015d0a8",
       "recorded_at": "2026-08-08T07:15:55.109441+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-001",
+      "type": "OBSERVABILITY",
+      "engine": "price_action",
+      "description": "extract_features() now reports rsi_undefined: rsi() (utils/indicators.py) returns NaN when the lookback window has zero average loss or zero average gain (RS undefined; the true value there is 100 or 0, not neutral), which the engine previously defaulted silently to 50.0 with no way to distinguish it from a genuine ~50 reading. The fallback VALUE itself is unchanged \u2014 only its meaning is now disambiguated. Correcting the fallback to the true 100/0 was deliberately NOT done: it would shift decide()'s RSI-threshold branching (rsi_val > rsi_bull, etc.), a strategy-semantics change out of scope for this refinement pass. Flagged for the operator's own decision if they want it fixed as a separate, evidence-driven change.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433282+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "price_action",
+      "description": "extract_features() now reports momentum_bars_used and momentum_bars_configured, making the pre-existing min(momentum_bars, len(df)-1) clamp observable when a configured momentum_bars exceeds available history, instead of silently using a shorter lookback than configured with no trace in raw/features. The clamp behavior itself is unchanged.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433787+00:00"
+    },
+    {
+      "change_id": "PA-REFINE-003",
+      "type": "BUG_FIX",
+      "engine": "price_action",
+      "description": "_candle_pattern() computed c2 (two bars ago) and body1 (previous-bar body size) but never read either in any pattern check \u2014 dead code that could mislead a future reader into thinking the pattern detector uses 3-candle context or the previous bar's body when it does not. Removed both locals; confirmed pattern detection (hammer/shooting_star/engulfing/doji) is byte-identical via a dedicated regression test, and via the unchanged golden-value bias/score suite.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "c05cac9ee7e67574d70204eaa630d6ee931ed716",
+      "recorded_at": "2026-08-08T16:24:09.433989+00:00"
     }
   ]
 }

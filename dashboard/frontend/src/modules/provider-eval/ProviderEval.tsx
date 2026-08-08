@@ -33,6 +33,10 @@ import {
   createAnalyticsBenchmark, getAnalyticsBenchmark, getAnalyticsBenchmarkResults, cancelAnalyticsBenchmark,
   type AnalyticsBenchmarkProfile, type AnalyticsBenchmarkResultRow,
 } from './analyticsBenchmarkApi'
+import {
+  getProviderScorecard, getBestProvider, SCORECARD_DOMAINS,
+  type ScorecardDomain, type BestProviderResponse,
+} from './scorecardApi'
 
 const POLL_MS = 60_000
 const BENCHMARK_POLL_MS = 2_000
@@ -120,6 +124,172 @@ function qualityScoreColor(s: number | null): string {
   if (s >= 90) return 'text-green'
   if (s >= 70) return 'text-amber'
   return 'text-red'
+}
+
+// Phase 5 — combined Price/News/Macro/Analytics overview + the per-
+// (symbol[+timeframe]|series, domain) best_provider query surface named
+// in this lab's own roadmap. Pure synthesis over the four domains' own
+// already-recorded results — introduces no new fetch/scoring engine.
+const DOMAIN_LABELS: Record<ScorecardDomain, string> = { price: 'Price', news: 'News', macro: 'Macro', analytics: 'Analytics' }
+
+function ProviderScorecardPanel() {
+  const { markUnauthenticated } = useAuth()
+  const scorecard = usePolling(getProviderScorecard, POLL_MS, markUnauthenticated)
+
+  const [lookupDomain, setLookupDomain] = useState<ScorecardDomain>('price')
+  const [lookupSymbol, setLookupSymbol] = useState('')
+  const [lookupTimeframe, setLookupTimeframe] = useState('H1')
+  const [lookupResult, setLookupResult] = useState<BestProviderResponse | null>(null)
+  const [lookupError, setLookupError] = useState<string | null>(null)
+  const [lookupLoading, setLookupLoading] = useState(false)
+
+  const runLookup = async () => {
+    if (!lookupSymbol.trim()) return
+    setLookupLoading(true)
+    setLookupError(null)
+    try {
+      const params =
+        lookupDomain === 'macro'
+          ? { domain: lookupDomain, series: lookupSymbol.trim() }
+          : lookupDomain === 'price'
+            ? { domain: lookupDomain, symbol: lookupSymbol.trim(), timeframe: lookupTimeframe }
+            : { domain: lookupDomain, symbol: lookupSymbol.trim() }
+      setLookupResult(await getBestProvider(params))
+    } catch (e) {
+      setLookupError(e instanceof Error ? e.message : String(e))
+      setLookupResult(null)
+    } finally {
+      setLookupLoading(false)
+    }
+  }
+
+  if (!scorecard.data) {
+    return (
+      <Panel title="Provider Scorecard" right="combined Price / News / Macro / Analytics quality">
+        <Empty>{scorecard.loading ? 'Loading scorecard…' : 'No scorecard data available'}</Empty>
+      </Panel>
+    )
+  }
+
+  const domains = scorecard.data.domains
+  const allProviders = new Set<string>()
+  for (const d of SCORECARD_DOMAINS) {
+    for (const p of domains[d]?.providers ?? []) allProviders.add(p.provider)
+  }
+  const providerNames = [...allProviders].sort()
+
+  return (
+    <Panel title="Provider Scorecard" right="combined Price / News / Macro / Analytics quality — advisory only">
+      <div className="p-4 flex flex-col gap-4">
+        <p className="text-[0.74em] text-muted">
+          One row per provider, one column per benchmark domain — mean composite score from each domain's latest
+          FINISHED run. A blank cell means that provider was never benchmarked in that domain's latest run, not a
+          zero score. Never changes a chain; run each domain's own benchmark below to refresh a column.
+        </p>
+        {providerNames.length === 0 ? (
+          <Empty>No finished benchmark runs yet in any domain — run Price/News/Macro/Analytics below.</Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[0.8em] border-collapse">
+              <thead>
+                <tr className="text-left text-muted uppercase text-[0.7em] tracking-[1px] border-b border-border">
+                  <th className="py-1.5 pr-3">Provider</th>
+                  {SCORECARD_DOMAINS.map((d) => (
+                    <th key={d} className="py-1.5 px-3">{DOMAIN_LABELS[d]}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {providerNames.map((provider) => (
+                  <tr key={provider} className="border-b border-border/50">
+                    <td className="py-1.5 pr-3 font-mono">{provider}</td>
+                    {SCORECARD_DOMAINS.map((d) => {
+                      const row = domains[d]?.providers.find((p) => p.provider === provider)
+                      return (
+                        <td key={d} className={`py-1.5 px-3 ${qualityScoreColor(row?.mean_composite_score ?? null)}`}>
+                          {row ? (row.mean_composite_score ?? '—') : '—'}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="text-[0.7em] text-muted flex flex-wrap gap-x-4 gap-y-1">
+          {SCORECARD_DOMAINS.map((d) => (
+            <span key={d}>
+              {DOMAIN_LABELS[d]}: {domains[d]?.available ? `run ${domains[d].run_id} (${domains[d].profile})` : 'no finished run yet'}
+            </span>
+          ))}
+        </div>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <span className="text-[0.72em] text-muted uppercase tracking-[1px]">Best Provider Lookup</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={lookupDomain}
+              onChange={(e) => setLookupDomain(e.target.value as ScorecardDomain)}
+              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text min-h-11"
+            >
+              {SCORECARD_DOMAINS.map((d) => (
+                <option key={d} value={d}>{DOMAIN_LABELS[d]}</option>
+              ))}
+            </select>
+            <input
+              value={lookupSymbol}
+              onChange={(e) => setLookupSymbol(e.target.value)}
+              placeholder={lookupDomain === 'macro' ? 'series, e.g. VIX' : 'symbol, e.g. EURUSD'}
+              className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text w-40 min-h-11"
+            />
+            {lookupDomain === 'price' && (
+              <select
+                value={lookupTimeframe}
+                onChange={(e) => setLookupTimeframe(e.target.value)}
+                className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text min-h-11"
+              >
+                {['M15', 'H1', 'H4', 'D1'].map((tf) => (
+                  <option key={tf} value={tf}>{tf}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={runLookup}
+              disabled={lookupLoading || !lookupSymbol.trim()}
+              className="px-2.5 py-1.5 rounded border border-accent/40 text-accent text-[0.78em] hover:bg-accent/10 disabled:opacity-50 min-h-11"
+            >
+              {lookupLoading ? 'Looking up…' : 'Look up'}
+            </button>
+          </div>
+          {lookupError && <div className="text-[0.78em] text-red">{lookupError}</div>}
+          {lookupResult && (
+            <div className="text-[0.8em] flex flex-col gap-1.5">
+              {!lookupResult.available || !lookupResult.best ? (
+                <span className="text-muted">{lookupResult.note ?? 'Not available.'}</span>
+              ) : (
+                <>
+                  <span>
+                    Best: <b className={qualityScoreColor(lookupResult.best.composite_score)}>{lookupResult.best.provider}</b>{' '}
+                    ({lookupResult.best.composite_score}/100) — run {lookupResult.run_id} ({lookupResult.profile})
+                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    {lookupResult.ranking.map((r) => (
+                      <div key={r.provider} className="flex items-center gap-2 text-[0.85em]">
+                        <span className="w-4 text-muted">{r.rank}</span>
+                        <span className="font-mono">{r.provider}</span>
+                        <span className={qualityScoreColor(r.composite_score)}>{r.composite_score ?? (r.error ?? 'unavailable')}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Panel>
+  )
 }
 
 function PriceBenchmarkPanel() {
@@ -1072,6 +1242,8 @@ export function ProviderEval() {
           {best.nativeDecisionTFs.join('/') || 'none'} · in {best.chainsIn.length} chain(s)
         </div>
       )}
+
+      <ProviderScorecardPanel />
 
       <Panel title="Provider Ranking" right={`${ranked.length} providers · best data first`}>
         <div>

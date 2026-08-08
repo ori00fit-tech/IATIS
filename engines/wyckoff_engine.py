@@ -49,11 +49,15 @@ def _identify_trading_range(
 
     Uses ATR-normalized spread instead of raw % to handle both
     low-price forex (1.08) and high-price crypto (60,000+).
+
+    NOTE: return arity (low, high, in_range) is a shared contract —
+    engines/wyckoff_engine_v2.py imports and calls this function
+    directly (`range_low, range_high, _ = _identify_trading_range(...)`).
+    Do not add/remove return values here without checking that call site.
     """
     window = df.tail(lookback)
     high = float(window["high"].max())
     low = float(window["low"].min())
-    close = float(df["close"].iloc[-1])
 
     # ATR-normalized spread (works for any price level).
     # range_atr, NOT true ATR — deliberate variant, see utils/indicators.py.
@@ -74,6 +78,20 @@ def _identify_trading_range(
     return low, high, bool(in_range)
 
 
+def _range_atr_zero(df: pd.DataFrame) -> bool:
+    """True when range_atr(df, 14) == 0 (a fully flat instrument over the
+    ATR lookback — e.g. a stale/frozen feed). _identify_trading_range()
+    already handles this internally via a 99 sentinel spread_in_atr that
+    deterministically forces in_range=False (99 >= any sane
+    range_atr_max) — correct, but silent. This helper exists purely so
+    extract_features() can surface the reason without touching
+    _identify_trading_range()'s return signature, which
+    engines/wyckoff_engine_v2.py depends on directly (OBSERVABILITY
+    only, no behavior change)."""
+    from utils.indicators import range_atr
+    return range_atr(df, 14) <= 0
+
+
 def _detect_spring_upthrust(
     df: pd.DataFrame,
     range_low: float,
@@ -88,7 +106,6 @@ def _detect_spring_upthrust(
     Returns (event_type, strength) where event_type is 'spring', 'upthrust', or 'none'.
     strength = how far price went beyond the range relative to ATR.
     """
-    last = df.tail(5)
     bar = df.iloc[-1]
 
     # Spring: wicked below range low, closed above it
@@ -174,6 +191,7 @@ def extract_features(df: pd.DataFrame, t: dict) -> dict:
 
     return {
         "range_low": range_low, "range_high": range_high, "in_range": in_range,
+        "range_atr_zero": _range_atr_zero(df),
         "current": current, "event": event, "strength": strength, "vol": vol,
     }
 
@@ -308,6 +326,7 @@ class WyckoffEngine(BaseEngine):
             "trading_range": {
                 "low": features["range_low"], "high": features["range_high"],
                 "in_range": features["in_range"],
+                "range_atr_zero": features["range_atr_zero"],
             },
             "event": features["event"],
             "event_strength_pct": features["strength"],

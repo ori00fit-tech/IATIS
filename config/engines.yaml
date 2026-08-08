@@ -372,10 +372,21 @@ thresholds:
     dealing_range_lookback: 20
     premium_pct: 0.60
     discount_pct: 0.40
-    zone_score: 35.0
-    killzone_score: 20.0
-    judas_confirm_score: 20.0
-    judas_conflict_penalty: 10.0
+    # ICT-SEMANTICS-FIX (Engine Refinement V1 #362, pre-approved by the
+    # operator): zone_score/killzone_score/judas_confirm_score/
+    # judas_conflict_penalty (the pre-fix key set) let premium/discount
+    # zone position and killzone session timing auto-generate bias/score
+    # directly — conflating CONTEXT with actual trading-event evidence.
+    # Superseded by the keys below: Judas swing (a real detected false-
+    # breakout+reversal) is now the only signal source; zone/killzone/
+    # trend are confirmation-only modifiers on an already-real event.
+    # ICT is disabled by default (engines.enabled.ict: false above) —
+    # this changed zero live-decision behavior.
+    judas_base_score: 45.0
+    zone_confirm_score: 20.0
+    zone_conflict_penalty: 10.0
+    killzone_confirm_score: 15.0
+    trend_conflict_penalty: 10.0
     trend_ema_fast: 20
     trend_ema_slow: 50
     trend_buffer_pct: 0.001
@@ -402,7 +413,7 @@ thresholds:
 # specific engine version rather than just a git commit.
 versions:
   divergence: "2.0"
-  ict: "1.0"
+  ict: "1.1"
   macro: "2.0"
   market_structure: "1.0"
   nnfx: "1.0"

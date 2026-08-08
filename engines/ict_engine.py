@@ -142,84 +142,112 @@ def extract_features(mtf_data: dict[str, pd.DataFrame], t: dict) -> dict:
 
 def decide(features: dict, t: dict) -> tuple[Bias, float, list[str]]:
     """Decision Logic layer (Confluence Engine Overhaul Phase 2) — turns
-    an extract_features() snapshot into a bias/score opinion via ICT's
-    zone -> killzone -> judas-swing confirmation sequence. Pure function
-    of (features, thresholds)."""
+    an extract_features() snapshot into a bias/score opinion.
+
+    ICT-SEMANTICS-FIX (Engine Refinement V1, #362 — pre-approved by the
+    operator, "fix must happen now"): premium/discount zone position and
+    killzone session timing are CONTEXT, not trading-event evidence — a
+    price simply being in the "expensive" half of a 20-bar range, or a
+    clock simply reading London-open hours, is not itself proof anything
+    happened. The pre-fix version auto-set bias/score directly off zone
+    position (DISCOUNT->BULLISH, PREMIUM->BEARISH) and off killzone
+    timing alone, conflating context with signal — exactly the "feature
+    != proven evidence weight" pattern flagged for Divergence/SMC
+    full-spec elsewhere in this refinement pass.
+
+    Fixed shape: the only REAL trading-event evidence this engine
+    detects is a Judas swing (a false breakout that reverses — a genuine
+    price-action event, the same class of thing as SMC's spring/upthrust
+    or BOS/CHoCH). Judas swing alone now sets bias/score; zone/killzone/
+    trend become CONFIRMATION-ONLY modifiers on an already-real event —
+    they can strengthen or weaken confidence in a detected Judas swing,
+    but can never manufacture a signal on their own. With no Judas swing,
+    bias is NEUTRAL/score is 0.0 regardless of zone or killzone state.
+    zone/killzone/trend remain fully observable in extract_features()'s
+    output and in EngineOutput.raw either way (unchanged) — this is a
+    scoring-logic fix, not an observability reduction.
+
+    ICT is disabled by default (config/engines.yaml engines.enabled.ict:
+    false) — this changes zero live-decision behavior."""
     session = features["session"]
     zone, pct = features["zone"], features["pct"]
     is_judas, judas_dir = features["is_judas"], features["judas_dir"]
     in_uptrend, in_downtrend = features["in_uptrend"], features["in_downtrend"]
+    in_killzone = session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap")
 
     reasons: list[str] = []
     score = 0.0
     bias = Bias.NEUTRAL
 
-    # --- Premium/Discount zone bias (with trend filter) ---
-    # ICT: sell from premium, buy from discount — BUT only in non-trending markets
-    zone_score = t.get("zone_score", 35.0)
-    if zone == "DISCOUNT":
-        # Buy from discount only if not in a strong downtrend
-        if not in_downtrend:
-            bias = Bias.BULLISH
-            score += zone_score
-            reasons.append(
-                f"Price in DISCOUNT zone ({pct:.0%} of range) — "
-                f"ICT expects bullish move toward equilibrium"
-            )
-        else:
-            # Downtrend: discount is not a reversal signal, stay neutral
-            reasons.append(
-                f"Price in DISCOUNT zone ({pct:.0%}) but H1 downtrend active — "
-                f"no reversal bias (trend filter)"
-            )
-    elif zone == "PREMIUM":
-        # Sell from premium only if not in a strong uptrend
-        if not in_uptrend:
-            bias = Bias.BEARISH
-            score += zone_score
-            reasons.append(
-                f"Price in PREMIUM zone ({pct:.0%} of range) — "
-                f"ICT expects bearish move toward equilibrium"
-            )
-        else:
-            reasons.append(
-                f"Price in PREMIUM zone ({pct:.0%}) but H1 uptrend active — "
-                f"no reversal bias (trend filter)"
-            )
+    # --- Context, always reported, never sets bias/score on its own ---
+    if zone == "PREMIUM":
+        reasons.append(f"Context: price in PREMIUM zone ({pct:.0%} of range) — not itself a signal")
+    elif zone == "DISCOUNT":
+        reasons.append(f"Context: price in DISCOUNT zone ({pct:.0%} of range) — not itself a signal")
     else:
-        reasons.append(f"Price at EQUILIBRIUM ({pct:.0%}) — no zone bias")
+        reasons.append(f"Context: price at EQUILIBRIUM ({pct:.0%})")
 
-    # --- Killzone bonus ---
-    killzone_score = t.get("killzone_score", 20.0)
-    if session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap"):
-        score += killzone_score
+    if in_killzone:
         reasons.append(
-            f"In {session.primary_session} killzone "
-            f"(session hour {session.session_hour} UTC)"
+            f"Context: in {session.primary_session} killzone "
+            f"(session hour {session.session_hour} UTC) — not itself a signal"
         )
+    else:
+        reasons.append("Context: outside a recognized killzone")
 
-    # --- Judas swing confirmation ---
-    judas_confirm_score = t.get("judas_confirm_score", 20.0)
-    judas_conflict_penalty = t.get("judas_conflict_penalty", 10.0)
+    # --- Real trading-event evidence: Judas swing (false breakout + reversal) ---
+    judas_base_score = t.get("judas_base_score", 45.0)
     if is_judas:
-        if judas_dir == "up" and bias == Bias.BEARISH:
-            score += judas_confirm_score
+        if judas_dir == "up":
+            bias = Bias.BEARISH
+            score += judas_base_score
             reasons.append(
-                "Judas swing UP detected — false breakout above range, "
-                "confirms BEARISH reversal"
+                "Judas swing UP detected — false breakout above the pre-session "
+                "range, closed back inside: stop-hunt reversal, BEARISH"
             )
-        elif judas_dir == "down" and bias == Bias.BULLISH:
-            score += judas_confirm_score
+        elif judas_dir == "down":
+            bias = Bias.BULLISH
+            score += judas_base_score
             reasons.append(
-                "Judas swing DOWN detected — false breakout below range, "
-                "confirms BULLISH reversal"
+                "Judas swing DOWN detected — false breakout below the pre-session "
+                "range, closed back inside: stop-hunt reversal, BULLISH"
             )
-        else:
+
+        # --- Zone confirmation: does the statistical context agree? ---
+        zone_confirm_score = t.get("zone_confirm_score", 20.0)
+        zone_conflict_penalty = t.get("zone_conflict_penalty", 10.0)
+        if bias == Bias.BEARISH and zone == "PREMIUM":
+            score += zone_confirm_score
+            reasons.append("Zone confirms: PREMIUM aligns with the BEARISH Judas reversal")
+        elif bias == Bias.BULLISH and zone == "DISCOUNT":
+            score += zone_confirm_score
+            reasons.append("Zone confirms: DISCOUNT aligns with the BULLISH Judas reversal")
+        elif bias == Bias.BEARISH and zone == "DISCOUNT":
+            score = max(0, score - zone_conflict_penalty)
+            reasons.append("Zone conflicts: DISCOUNT disagrees with the BEARISH Judas reversal — reducing confidence")
+        elif bias == Bias.BULLISH and zone == "PREMIUM":
+            score = max(0, score - zone_conflict_penalty)
+            reasons.append("Zone conflicts: PREMIUM disagrees with the BULLISH Judas reversal — reducing confidence")
+
+        # --- Killzone confirmation: institutional-timing reliability ---
+        killzone_confirm_score = t.get("killzone_confirm_score", 15.0)
+        if in_killzone:
+            score += killzone_confirm_score
             reasons.append(
-                f"Judas swing {judas_dir.upper()} detected but "
-                f"conflicts with zone bias — reducing confidence"
+                f"Killzone confirms: reversal detected during {session.primary_session} "
+                f"— higher institutional-flow reliability"
             )
-            score = max(0, score - judas_conflict_penalty)
+
+        # --- Trend filter: penalize a reversal call fighting the H1 trend ---
+        trend_conflict_penalty = t.get("trend_conflict_penalty", 10.0)
+        if bias == Bias.BEARISH and in_uptrend:
+            score = max(0, score - trend_conflict_penalty)
+            reasons.append("H1 uptrend active — countertrend reversal call, reducing confidence")
+        elif bias == Bias.BULLISH and in_downtrend:
+            score = max(0, score - trend_conflict_penalty)
+            reasons.append("H1 downtrend active — countertrend reversal call, reducing confidence")
+    else:
+        reasons.append("No Judas swing detected — no ICT trading-event evidence this bar")
 
     # cap score
     score = min(round(score, 1), t.get("score_cap", 80.0))
@@ -269,16 +297,43 @@ class ICTEngine(BaseEngine):
             },
         }
 
+        # BUG_FIX (#362, same pass as the zone/killzone semantics fix
+        # below): is_killzone previously reported session.is_session_open
+        # alone, which is True for ANY major session's first two hours
+        # (including Asia) — not the London/NewYork/Overlap definition
+        # this engine's own module docstring and decide()'s real killzone
+        # check both use. Corrected to the same definition decide() now
+        # uses, so raw["is_killzone"] can no longer misreport True during
+        # an Asia-session open.
+        in_killzone = session.is_session_open and session.primary_session in ("London", "NewYork", "Overlap")
+
         raw = {
             "timeframe_session": features["tf_session"],
             "timeframe_range": features["tf_range"],
             "session": session.primary_session,
             "active_sessions": session.active_sessions,
-            "is_killzone": session.is_session_open,
+            "is_killzone": in_killzone,
             "zone": features["zone"],
             "zone_pct": features["pct"],
             "dealing_range": {"low": features["range_low"], "high": features["range_high"]},
             "judas_swing": features["judas_dir"] if features["is_judas"] else "none",
+            # ICT-SEMANTICS-FIX (#362): explicit context/event separation
+            # in raw, mirroring decide()'s own fix — premium/discount zone
+            # and killzone timing are CONTEXT (never a signal on their
+            # own); Judas swing is the only real trading-event evidence
+            # this engine detects. Additive grouping — every key above is
+            # unchanged/preserved.
+            "context": {
+                "zone": features["zone"],
+                "zone_pct": features["pct"],
+                "is_killzone": in_killzone,
+                "session": session.primary_session,
+                "in_uptrend": features["in_uptrend"],
+                "in_downtrend": features["in_downtrend"],
+            },
+            "event": {
+                "judas_swing": features["judas_dir"] if features["is_judas"] else "none",
+            },
         }
 
         return EngineOutput(

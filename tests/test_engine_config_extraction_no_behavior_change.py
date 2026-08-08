@@ -69,7 +69,16 @@ _GOLDEN = {
         # engine/scenario combination in this file was re-verified
         # unaffected.
         "Wyckoff": ("BULLISH", 25.0),
-        "ICT": ("NEUTRAL", 10.0),
+        # ICT recaptured (Engine Refinement V1 #362, operator-pre-approved
+        # semantics fix): premium/discount zone position and killzone
+        # session timing used to auto-set bias/score directly (conflating
+        # CONTEXT with trading-event evidence). Now only a detected Judas
+        # swing (a real false-breakout+reversal) sets bias/score; zone/
+        # killzone/trend are confirmation-only modifiers on that event.
+        # ICT is disabled by default (engines.enabled.ict: false) — this
+        # is a deliberate, approved scoring-logic change, not a bug fix
+        # to a live-affecting value.
+        "ICT": ("BULLISH", 70.0),
         "MarketStructure": ("BEARISH", 65.0),
     },
     "B": {
@@ -77,7 +86,7 @@ _GOLDEN = {
         "PriceAction": ("NEUTRAL", 0.0),
         "NNFX": ("BEARISH", 55.0),
         "Wyckoff": ("NEUTRAL", 0.0),
-        "ICT": ("BULLISH", 55.0),
+        "ICT": ("NEUTRAL", 0.0),  # recaptured — see scenario A's ICT comment
         "MarketStructure": ("BULLISH", 40.0),
     },
 }

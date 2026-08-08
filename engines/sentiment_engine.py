@@ -32,6 +32,30 @@ MarketAux news sentiment (H021 — PLANNED, research/results/registry.json):
       test, not a live-behavior change: the Sentiment engine itself stays
       disabled (config/engines.yaml) until H021's pre-registered decision
       rule is applied to that test's result.
+
+Engine Refinement V1 (#367, SENTIMENT-REFINE, CAUSALITY_FIX,
+operator-pre-approved "fix confirmed gap -- no COT vintage/availability
+handling"): confirmed gap (reports/engine_refinement/ENGINE_INVENTORY.md's
+Sentiment entry, refinement plan §16) -- zero hits for report_date/
+publication_date/available_at anywhere in this file, even though the COT
+cache (scripts/download_cot.py) has always written a real `report_date`
+(the CFTC report's own "as of" date) that this engine never once read.
+BUG-005's bar-time gate (_bar_time_is_live) already prevents the vast
+majority of lookahead by skipping COT/MarketAux entirely outside a
+tolerance window around wall-clock "now", but it never checked the
+loaded snapshot's OWN vintage against the bar being evaluated -- a
+report whose as-of date is after the bar's own timestamp could in
+principle still slip through. Fixed: a loaded COT snapshot's report_date
+is now parsed and compared against the bar's own timestamp; a
+snapshot dated AFTER the bar is discarded (never used) exactly like a
+missing snapshot would be, and report_date/report_age_days are surfaced
+in `raw` for transparency, mirroring the Macro engine's `as_of` pattern
+(#366). A snapshot with no parseable report_date (unknown vintage, e.g.
+a test double or a legacy cache) is NOT rejected -- absence of vintage
+information is not evidence of unavailability, matching this refinement
+pass's established "no data -> no opinion changed" convention. Sentiment
+is disabled by default (engines.enabled.sentiment: false) -- zero
+live-trading impact regardless.
 """
 
 from __future__ import annotations
@@ -202,6 +226,21 @@ def _bar_time_is_live(bar_time, tolerance_hours: float = 72.0) -> bool:
         return False
 
 
+def _parse_report_date(report_date: str | None) -> datetime | None:
+    """Parses a COT cache's `report_date` (CFTC's own "as of" date,
+    'YYYY-MM-DD', already written by scripts/download_cot.py but never
+    read by this engine before Engine Refinement V1 #367) into a UTC
+    midnight datetime. Returns None on anything unparseable/absent —
+    callers must treat that as "vintage unknown", never as "unavailable"
+    (see analyze()'s own handling)."""
+    if not report_date:
+        return None
+    try:
+        return datetime.strptime(report_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def _marketaux_sentiment_signal(symbol: str) -> dict | None:
     """MarketAux news sentiment as a signal input (H021).
 
@@ -269,7 +308,36 @@ class SentimentEngine(BaseEngine):
             )
 
         # --- Primary: COT Data ---
-        cot = _load_cot_data(symbol) if is_live else None
+        # Engine Refinement V1 (#367, SENTIMENT-REFINE, CAUSALITY_FIX):
+        # a loaded snapshot's own report_date (the CFTC's real "as of"
+        # date, always written by scripts/download_cot.py but never read
+        # by this engine before this fix) is now checked against the
+        # bar's own timestamp -- a snapshot dated AFTER the bar is
+        # discarded, never used, exactly like a missing snapshot would
+        # be. This is defense-in-depth alongside BUG-005's is_live gate,
+        # not a replacement for it: is_live already blocks nearly every
+        # backtest bar; this closes the residual "the loaded snapshot's
+        # own vintage was never checked at all" gap named in
+        # reports/engine_refinement/ENGINE_INVENTORY.md's Sentiment
+        # entry (refinement plan §16). A snapshot with no parseable
+        # report_date (unknown vintage) is NOT discarded -- absence of
+        # vintage information is not evidence of unavailability.
+        raw_cot = _load_cot_data(symbol) if is_live else None
+        cot_report_date_str: str | None = raw_cot.get("report_date") if raw_cot else None
+        cot_report_date = _parse_report_date(cot_report_date_str)
+        cot_report_age_days: float | None = None
+        cot = raw_cot
+        if raw_cot and cot_report_date is not None and bar_time is not None:
+            bt = bar_time if bar_time.tzinfo is not None else bar_time.replace(tzinfo=timezone.utc)
+            if cot_report_date > bt:
+                reasons.append(
+                    f"COT snapshot as-of {cot_report_date_str} is AFTER this bar's "
+                    f"own timestamp — discarded to avoid using a not-yet-existing "
+                    f"report (vintage/availability check)"
+                )
+                cot = None
+            else:
+                cot_report_age_days = round((bt - cot_report_date).total_seconds() / 86400, 1)
         if cot:
             cot_available = True
             net_pos = cot.get("large_spec_net", 0)
@@ -359,6 +427,8 @@ class SentimentEngine(BaseEngine):
                 "timeframe_used": tf,
                 "is_live": is_live,
                 "cot_available": cot_available,
+                "cot_report_date": cot_report_date_str,
+                "cot_report_age_days": cot_report_age_days,
                 "retail_pct_from_low": retail["pct_from_low"],
                 "retail_contrarian": retail["contrarian_signal"],
                 "retail_strength": retail["strength"],

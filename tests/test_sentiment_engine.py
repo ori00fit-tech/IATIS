@@ -143,3 +143,82 @@ def test_bar_time_is_live_helper_boundary():
     assert _bar_time_is_live(now - timedelta(hours=100), tolerance_hours=72.0) is False
     assert _bar_time_is_live(now - timedelta(days=365 * 3), tolerance_hours=72.0) is False
     assert _bar_time_is_live(None, tolerance_hours=72.0) is False
+
+
+# ── COT vintage/availability check (Engine Refinement V1, #367) ────────────
+# reports/engine_refinement/ENGINE_INVENTORY.md's Sentiment entry: zero hits
+# for report_date/publication_date/available_at anywhere in this file, even
+# though scripts/download_cot.py has always written a real report_date the
+# engine never once read. These tests pin the fix: a loaded COT snapshot's
+# own report_date is now checked against the bar's own timestamp.
+
+def test_parse_report_date_valid_and_invalid():
+    from datetime import timezone as tz
+
+    from engines.sentiment_engine import _parse_report_date
+
+    parsed = _parse_report_date("2024-03-15")
+    assert parsed is not None
+    assert parsed.year == 2024 and parsed.month == 3 and parsed.day == 15
+    assert parsed.tzinfo == tz.utc
+    assert _parse_report_date(None) is None
+    assert _parse_report_date("") is None
+    assert _parse_report_date("not-a-date") is None
+    assert _parse_report_date("2024/03/15") is None
+
+
+def test_cot_snapshot_dated_after_the_bar_is_discarded(monkeypatch):
+    """Authoritative proof of the vintage/availability fix: a COT snapshot
+    whose own as-of date is AFTER the bar being evaluated must never be
+    used, even on a genuinely "live" bar — the engine falls back exactly
+    as if no COT data existed at all."""
+    monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
+    cot = {"large_spec_net": 90000, "net_change_4w": 15000, "report_date": "2099-12-31"}
+    with patch("engines.sentiment_engine._load_cot_data", return_value=cot):
+        out = _engine().analyze({"H1": _flat_df(live=True)})
+    assert out.raw["cot_available"] is False
+    assert out.raw["cot_report_date"] == "2099-12-31"
+    assert out.raw["cot_report_age_days"] is None
+    assert any("discarded" in r.lower() and "2099-12-31" in r for r in out.reasons)
+    # Falls back to the retail proxy (neutral here, per _flat_df's design) —
+    # never the BULLISH verdict this COT snapshot would otherwise produce.
+    assert out.bias != Bias.BULLISH
+
+
+def test_cot_snapshot_with_a_valid_past_report_date_is_used_and_aged(monkeypatch):
+    """Regression pin: a real, past-dated COT snapshot on a live bar is
+    used exactly as before this fix, and its age is now surfaced."""
+    monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
+    cot = {"large_spec_net": 90000, "net_change_4w": 15000, "report_date": "2020-01-07"}
+    with patch("engines.sentiment_engine._load_cot_data", return_value=cot):
+        out = _engine().analyze({"H1": _flat_df(live=True)})
+    assert out.bias == Bias.BULLISH
+    assert out.raw["cot_available"] is True
+    assert out.raw["cot_report_date"] == "2020-01-07"
+    assert out.raw["cot_report_age_days"] is not None
+    assert out.raw["cot_report_age_days"] > 1000  # comfortably years old vs. "now"
+
+
+def test_cot_snapshot_with_no_report_date_is_not_discarded(monkeypatch):
+    """Unknown vintage (a test double, or a cache written before this
+    field existed) must NOT be treated as unavailable -- absence of
+    vintage information is not evidence of unavailability."""
+    monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
+    cot = {"large_spec_net": 90000, "net_change_4w": 15000}  # no report_date key at all
+    with patch("engines.sentiment_engine._load_cot_data", return_value=cot):
+        out = _engine().analyze({"H1": _flat_df(live=True)})
+    assert out.bias == Bias.BULLISH
+    assert out.raw["cot_available"] is True
+    assert out.raw["cot_report_date"] is None
+    assert out.raw["cot_report_age_days"] is None
+
+
+def test_cot_snapshot_with_unparseable_report_date_is_not_discarded(monkeypatch):
+    monkeypatch.delenv("MARKETAUX_API_KEY", raising=False)
+    cot = {"large_spec_net": 90000, "net_change_4w": 15000, "report_date": "garbage"}
+    with patch("engines.sentiment_engine._load_cot_data", return_value=cot):
+        out = _engine().analyze({"H1": _flat_df(live=True)})
+    assert out.bias == Bias.BULLISH
+    assert out.raw["cot_available"] is True
+    assert out.raw["cot_report_date"] == "garbage"
+    assert out.raw["cot_report_age_days"] is None

@@ -415,7 +415,7 @@ versions:
   divergence: "2.0"
   ict: "1.1"
   macro: "2.0"
-  market_structure: "1.0"
+  market_structure: "1.1"
   nnfx: "1.0"
   price_action: "1.0"
   price_action_v2: "2.0"

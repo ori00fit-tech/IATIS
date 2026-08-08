@@ -140,6 +140,26 @@
       "performance_driven": false,
       "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
       "recorded_at": "2026-08-08T17:51:25.482471+00:00"
+    },
+    {
+      "change_id": "MARKET-STRUCTURE-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "market_structure",
+      "description": "_classify_structure() previously assigned last_event (BOS/CHoCH/MSS) purely from a geometric comparison of the last 2-3 swing-pivot VALUES (was the newest swing high/low numerically higher/lower than the previous one?), with no requirement that price ever actually broke a level -- exactly the 'swing pair voting' this module's own header docstring claims this engine improves on over the plain SMC engine ('MSS: identifies specific structural EVENTS (more nuanced)' vs 'SMC: counts swing pairs, votes (simple)'). Audited per the operator's directive table entry ('Market Structure -> audit + fix if needed'), confirmed as a real conflict between the engine's documented design intent and its actual implementation, and fixed: last_event now REQUIRES the current close to have actually closed beyond the most recent confirmed swing high (bullish) or swing low (bearish), mirroring smc_engine.detect_bos_choch's already-established close-beyond-level convention exactly. `trend` (the HH/HL/LH/LL swing-pattern classification) is UNCHANGED -- describing an existing swing sequence as bullish/bearish/ranging is a legitimate geometric fact that doesn't need a break to be true; only the event label (and the strength/scoring it drives) needed the break requirement. Net effect: a clean swing structure with no recent break now scores weak_structure_strength (45) instead of bos_strength (65) -- previously ANY clean HH/HL or LH/LL pattern got BOS-level scoring regardless of whether price had recently broken anything. MarketStructure is disabled by default (engines.enabled.market_structure: false) -- changes zero live-decision behavior. Golden value recaptured in tests/test_engine_config_extraction_no_behavior_change.py (scenario A: BEARISH 65.0 -> BEARISH 45.0, bias unchanged; scenario B unaffected, its H1-only branch doesn't depend on event/break state).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "f1a4e44728f085417423e9057a12b4d1a1cbfb6a",
+      "recorded_at": "2026-08-08T18:27:06.653785+00:00"
+    },
+    {
+      "change_id": "MARKET-STRUCTURE-REFINE-002",
+      "type": "OBSERVABILITY",
+      "engine": "market_structure",
+      "description": "raw gains additive h1_broke_level/h1_break_direction/h1_break_price and h4_broke_level/h4_break_direction/h4_break_price keys -- the level-break fact behind h1_event/h4_trend's own classification, surfaced for both timeframes even when no event fires (broke_level=False) or when the break-check input (close_now) wasn't available. decide()'s own reason strings for the CHoCH/MSS branches now also cite the real break price. Every pre-existing flat raw key is preserved.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "f1a4e44728f085417423e9057a12b4d1a1cbfb6a",
+      "recorded_at": "2026-08-08T18:27:06.654273+00:00"
     }
   ]
 }

@@ -593,6 +593,7 @@ def run_backtest(
     }
     enabled = engine_config.get("engines", {}).get("enabled", {})
     all_thresholds = engine_config.get("engines", {}).get("thresholds", {})
+    all_versions = engine_config.get("engines", {}).get("versions", {})
     variant_selection = engine_config.get("engines", {}).get("variants", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
@@ -618,6 +619,12 @@ def run_backtest(
             # research result meaningless.
             thresholds_key = f"{key}_{variant}" if variant != "v1" else key
             engine.thresholds = all_thresholds.get(thresholds_key, {})
+            # Engine Refinement V1 (2026-08-08) — §5 Engine Versioning.
+            # Same variant-aware key as thresholds_key above — a v2
+            # variant reports ITS OWN version entry (versions.
+            # price_action_v2), never v1's, for the same reason its
+            # thresholds are looked up separately.
+            engine.version = all_versions.get(thresholds_key)
             if key == "smc":
                 # H017 flag parity with main.build_active_engines — the A/B
                 # (scripts/smc_fullspec_ab.py) flips this through the config.

@@ -111,6 +111,7 @@ from execution.routes import (
     news_benchmark,
     outcomes,
     provider_benchmark,
+    provider_scorecard,
     research,
 )
 
@@ -153,6 +154,11 @@ app.include_router(macro_benchmark.router)
 # collision reasoning: GET /research/analytics-benchmark must register
 # before research.router's catch-all.
 app.include_router(analytics_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 5 (2026-08-XX) — identical
+# collision reasoning: GET /research/provider-scorecard and GET
+# /research/best-provider must register before research.router's
+# catch-all.
+app.include_router(provider_scorecard.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

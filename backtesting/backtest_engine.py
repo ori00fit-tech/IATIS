@@ -276,6 +276,21 @@ class BacktestResult:
     # Counting them separately prevents a structurally broken run (e.g. bad
     # input schema) from silently reporting as "0 trades, all NO_TRADE".
     error_count: int = 0
+    # Engine Refinement V1 (2026-08-08) — §4 Error Semantics. A single
+    # engine crashing inside safe_analyze() does NOT raise (by design,
+    # per BaseEngine's "unclear data -> no opinion" contract) — it
+    # returns an honest-looking NEUTRAL/score=0 vote with `crashed=True`,
+    # which flows into tally_votes()/calculate_score() UNCHANGED (this
+    # counter is purely observational; it never alters gating or voting).
+    # Before this, that vote was statistically indistinguishable from a
+    # bar where every engine genuinely had no opinion — a crashed engine
+    # could silently inflate no_trade_count/gate_rejections without any
+    # way to notice. crashed_engine_bars counts bars with >=1 crashed
+    # engine; crashed_engine_totals breaks that down by engine name so a
+    # persistently-crashing engine (e.g. a data-shape bug) is
+    # diagnosable from the run's own statistics, not just live logs.
+    crashed_engine_bars: int = 0
+    crashed_engine_totals: dict = field(default_factory=dict)
     # Which gate rejected how many bars — turns "0/4 CONSISTENT" from a
     # dead end into a diagnosable funnel (mqs / score / votes /
     # contradiction / reversal_veto).
@@ -750,6 +765,23 @@ def run_backtest(
             mtf = build_multi_timeframe_view(window, timeframes)
             outputs = [e.safe_analyze(mtf) for e in engines_list]
 
+            # Engine Refinement V1 (2026-08-08) — §4 Error Semantics.
+            # Observational only: never changes `outputs`, gating, or the
+            # vote — a crashed engine still votes NEUTRAL/score=0 exactly
+            # as before, this only makes that fact countable afterward.
+            crashed_outputs = [o for o in outputs if o.crashed]
+            if crashed_outputs:
+                result.crashed_engine_bars += 1
+                for o in crashed_outputs:
+                    result.crashed_engine_totals[o.engine_name] = (
+                        result.crashed_engine_totals.get(o.engine_name, 0) + 1
+                    )
+                if result.crashed_engine_bars == 1:
+                    logger.warning(
+                        f"First engine crash at bar {i}: "
+                        f"{[(o.engine_name, o.error_type, o.error_message) for o in crashed_outputs]}"
+                    )
+
             # Regime-adaptive weights (same call chain as production).
             active_weights = weights
             if config.use_regime_weights:
@@ -984,7 +1016,8 @@ def run_backtest(
     result.compute()
     logger.info(
         f"Backtest done: {result.execute_count} trades, WR={result.win_rate:.1%}, "
-        f"errors={result.error_count}/{result.total_runs}"
+        f"errors={result.error_count}/{result.total_runs}, "
+        f"crashed_engine_bars={result.crashed_engine_bars}/{result.total_runs}"
     )
     # A structurally broken run must not masquerade as a valid "0 trades"
     # result — that would silently invalidate any walk-forward conclusion.

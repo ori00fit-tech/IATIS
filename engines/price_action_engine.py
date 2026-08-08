@@ -30,14 +30,11 @@ def _candle_pattern(df: pd.DataFrame) -> tuple[str, float]:
 
     c0 = df.iloc[-1]   # current
     c1 = df.iloc[-2]   # previous
-    c2 = df.iloc[-3]   # two bars ago
 
     body0 = abs(float(c0["close"]) - float(c0["open"]))
     wick_top0 = float(c0["high"]) - max(float(c0["close"]), float(c0["open"]))
     wick_bot0 = min(float(c0["close"]), float(c0["open"])) - float(c0["low"])
     range0 = float(c0["high"]) - float(c0["low"]) or 1e-10
-
-    body1 = abs(float(c1["close"]) - float(c1["open"]))
 
     # Hammer / Bullish Pin Bar
     if (wick_bot0 > body0 * 2 and wick_bot0 > wick_top0 * 2
@@ -77,7 +74,16 @@ def extract_features(df: pd.DataFrame, t: dict) -> dict:
     close = df["close"]
 
     rsi = _rsi_series(close, t.get("rsi_period", 14))
-    rsi_val = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+    # rsi() (utils/indicators.py) returns NaN when the lookback period has
+    # zero average loss or zero average gain (RS undefined) — not "no
+    # information." The true value there is 100 (all gains) or 0 (all
+    # losses), not the neutral 50 this engine falls back to; rsi_undefined
+    # makes that fallback distinguishable from a genuine ~50 reading
+    # (OBSERVABILITY only — the fallback value itself is left as-is since
+    # correcting it would change decide()'s RSI-threshold branching, a
+    # strategy-semantics change out of scope for this refinement pass).
+    rsi_undefined = bool(pd.isna(rsi.iloc[-1]))
+    rsi_val = float(rsi.iloc[-1]) if not rsi_undefined else 50.0
     rsi_prev = float(rsi.iloc[-2]) if not pd.isna(rsi.iloc[-2]) else 50.0
 
     upper, mid, lower = bollinger_bands(close, t.get("bb_period", 20), t.get("bb_std", 2.0))
@@ -91,7 +97,13 @@ def extract_features(df: pd.DataFrame, t: dict) -> dict:
 
     pattern, pattern_strength = _candle_pattern(df)
 
-    mom_bars = min(t.get("momentum_bars", 5), len(df) - 1)
+    # Clamped so a configured momentum_bars longer than the available
+    # history never indexes out of range — momentum_bars_used makes a
+    # silent clamp observable instead of a mismatch between the configured
+    # and actually-applied lookback (OBSERVABILITY; the clamp itself is
+    # pre-existing behavior, unchanged).
+    momentum_bars_configured = t.get("momentum_bars", 5)
+    mom_bars = min(momentum_bars_configured, len(df) - 1)
     mom = float(close.iloc[-1]) - float(close.iloc[-1 - mom_bars])
     # range_atr, NOT true ATR — deliberate variant, see utils/indicators.py.
     from utils.indicators import range_atr
@@ -103,12 +115,15 @@ def extract_features(df: pd.DataFrame, t: dict) -> dict:
     return {
         "rsi_val": rsi_val,
         "rsi_prev": rsi_prev,
+        "rsi_undefined": rsi_undefined,
         "last_close": last_close,
         "last_mid": last_mid,
         "bb_pct": bb_pct,
         "pattern": pattern,
         "pattern_strength": pattern_strength,
         "mom_r": mom_r,
+        "momentum_bars_used": mom_bars,
+        "momentum_bars_configured": momentum_bars_configured,
         "is_breakout": is_breakout,
         "breakout_direction": breakout_direction,
     }
@@ -249,9 +264,12 @@ class PriceActionEngine(BaseEngine):
         raw = {
             "timeframe_used": tf,
             "rsi": round(features["rsi_val"], 1),
+            "rsi_undefined": features["rsi_undefined"],
             "bb_pct": round(features["bb_pct"], 3) if features["bb_pct"] is not None else None,
             "pattern": features["pattern"],
             "momentum_atr": round(features["mom_r"], 2),
+            "momentum_bars_used": features["momentum_bars_used"],
+            "momentum_bars_configured": features["momentum_bars_configured"],
             "breakout": features["breakout_direction"] if features["is_breakout"] else "none",
         }
 

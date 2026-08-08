@@ -120,6 +120,14 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # VIX/US10Y/US02Y. Full argv is built per-request in
     # execution/routes/macro_benchmark.py.
     "macro_benchmark": [sys.executable, "-m", "backtest.macro_benchmark"],
+    # Provider Benchmark & Data Quality Lab Phase 4 (2026-08-XX) — same
+    # one-job-slot-per-run model, looping over every (symbol, provider)
+    # point in-process internally (backtest/analytics_benchmark.py).
+    # Deliberately reproducibility-only, single provider (marketaux) — no
+    # predictive/subsequent-outcome dimension (that's a trading hypothesis,
+    # not a provider benchmark; see the module's own docstring). Full argv
+    # built per-request in execution/routes/analytics_benchmark.py.
+    "analytics_benchmark": [sys.executable, "-m", "backtest.analytics_benchmark"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -139,6 +147,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "price_benchmark": "Provider Benchmark & Data Quality Lab (backtest/price_benchmark.py): scores every FX/metals/crypto/indices provider's fetched candles for completeness, per-field correctness vs. a median consensus, timestamp integrity, OHLC integrity, cross-provider agreement, freshness, and latency. Launched via POST /research/provider-benchmark, not this endpoint directly — measurement/advisory only, never auto-changes config.yaml's provider_chains.",
     "news_benchmark": "Provider Benchmark & Data Quality Lab Phase 2 (backtest/news_benchmark.py): scores MarketAux and Finnhub news feeds per symbol for coverage, source diversity, duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider coverage agreement. Launched via POST /research/news-benchmark, not this endpoint directly — measurement/advisory only, never influences H021's own pre-registered process or config.yaml.",
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
+    "analytics_benchmark": "Provider Benchmark & Data Quality Lab Phase 4 (backtest/analytics_benchmark.py): scores MarketAux's sentiment API on reproducibility — fetches the same query twice and checks whether the sentiment value for the same underlying article stays identical — plus coverage, freshness, and latency. Deliberately single-provider (TAAPI's real rate limit rules it out) and reproducibility-only (no predictive/subsequent-outcome-tracking dimension — that's a trading hypothesis, not a provider benchmark). Launched via POST /research/analytics-benchmark, not this endpoint directly — measurement/advisory only, never touches config.yaml.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -162,6 +171,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "price_benchmark": "research",
     "news_benchmark": "research",
     "macro_benchmark": "research",
+    "analytics_benchmark": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -211,6 +221,10 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # profile is 16 series x up to 2 providers = ~18 fetches, most of them
     # single-provider — the cheapest of the three benchmarks in this lab.
     "macro_benchmark": 600,
+    # Provider Benchmark & Data Quality Lab Phase 4 (2026-08-XX) — every
+    # symbol needs 2 fetches (the determinism check), still the cheapest
+    # cost class here: Deep is ~14 symbols x 2 fetches = 28 HTTP calls.
+    "analytics_benchmark": 900,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against

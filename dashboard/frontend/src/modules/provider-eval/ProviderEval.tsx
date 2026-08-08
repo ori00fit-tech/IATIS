@@ -29,6 +29,10 @@ import {
   createMacroBenchmark, getMacroBenchmark, getMacroBenchmarkResults, cancelMacroBenchmark,
   type MacroBenchmarkProfile, type MacroBenchmarkResultRow,
 } from './macroBenchmarkApi'
+import {
+  createAnalyticsBenchmark, getAnalyticsBenchmark, getAnalyticsBenchmarkResults, cancelAnalyticsBenchmark,
+  type AnalyticsBenchmarkProfile, type AnalyticsBenchmarkResultRow,
+} from './analyticsBenchmarkApi'
 
 const POLL_MS = 60_000
 const BENCHMARK_POLL_MS = 2_000
@@ -863,6 +867,179 @@ function MacroBenchmarkPanel() {
   )
 }
 
+function AnalyticsBenchmarkPanel() {
+  const [runId, setRunId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+  const [results, setResults] = useState<AnalyticsBenchmarkResultRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => stopPolling, [])
+
+  const start = async (profile: AnalyticsBenchmarkProfile) => {
+    setStarting(true)
+    setError(null)
+    setResults(null)
+    try {
+      const res = await createAnalyticsBenchmark({ profile })
+      setRunId(res.run_id)
+      setJobStatus(res.status)
+      stopPolling()
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await getAnalyticsBenchmark(res.run_id)
+          setJobStatus(status.job_status)
+          if (status.job_status && !['queued', 'running'].includes(status.job_status)) {
+            stopPolling()
+            const r = await getAnalyticsBenchmarkResults(res.run_id)
+            setResults(r.results)
+          }
+        } catch (e) {
+          stopPolling()
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      }, BENCHMARK_POLL_MS)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const cancel = async () => {
+    if (!runId) return
+    try {
+      await cancelAnalyticsBenchmark(runId)
+    } catch {
+      // best-effort — the poll loop above will surface the real terminal state
+    }
+  }
+
+  const running = jobStatus === 'queued' || jobStatus === 'running'
+
+  const meanOf = (key: 'determinism_score' | 'coverage_score' | 'freshness_score' | 'latency_score'): number | null => {
+    const rows = (results ?? []).filter((r) => r[key] !== null)
+    if (rows.length === 0) return null
+    return Math.round((rows.reduce((s, r) => s + (r[key] ?? 0), 0) / rows.length) * 100) / 100
+  }
+  const meanDeterminism = meanOf('determinism_score')
+  const meanCoverage = meanOf('coverage_score')
+  const meanFreshness = meanOf('freshness_score')
+  const meanLatency = meanOf('latency_score')
+
+  const symbolColumns: Column<AnalyticsBenchmarkResultRow>[] = [
+    { header: 'Symbol', render: (r) => <span className="font-bold text-accent">{r.symbol}</span> },
+    { header: 'Articles', align: 'right', render: (r) => (r.fetch_ok ? r.article_count : '—') },
+    {
+      header: 'Determinism',
+      align: 'right',
+      render: (r) => (r.determinism_score === null ? <span className="text-muted/60">n/a — no overlap</span>
+        : <span className={qualityScoreColor(r.determinism_score)}>{r.determinism_score}</span>),
+    },
+    {
+      header: 'Composite',
+      align: 'right',
+      accessorFn: (r) => r.composite_score ?? -1,
+      render: (r) => (r.composite_score === null ? '—' : <span className={`font-extrabold ${qualityScoreColor(r.composite_score)}`}>{r.composite_score}</span>),
+    },
+    {
+      header: 'Status',
+      render: (r) => (r.fetch_ok ? <span className="text-green">ok</span> : <span className="text-red">{r.error ?? 'FAIL'}</span>),
+    },
+  ]
+
+  return (
+    <Panel title="Analytics Reproducibility Benchmark" right="advisory — reproducibility only, no predictive claim">
+      <div className="p-4 flex flex-col gap-4">
+        <p className="text-[0.78em] text-muted">
+          Scores MarketAux's sentiment API on <b>determinism</b> — the same query, repeated seconds later, must
+          return the same sentiment value for the same underlying article — plus coverage, freshness, and latency.
+          Deliberately single-provider (TAAPI's documented free-tier rate limit rules it out — it rejects a second
+          call made seconds after the first) and deliberately has <b>no predictive or subsequent-outcome-tracking
+          dimension</b>: "does this sentiment predict price moves" is a trading hypothesis, not a provider benchmark,
+          and belongs in Mission Center's own pre-registered-hypothesis pipeline if ever pursued. Measurement layer
+          only — never writes to <code className="text-accent2">config.yaml</code>.
+        </p>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => start('smoke')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.8em] font-bold hover:bg-accent/10 disabled:opacity-50"
+          >
+            Run Smoke
+          </button>
+          <button
+            onClick={() => start('standard')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Standard
+          </button>
+          <button
+            onClick={() => start('deep')}
+            disabled={starting || running}
+            className="px-3 py-1.5 rounded border border-border text-text text-[0.8em] hover:bg-surface disabled:opacity-50"
+          >
+            Run Deep
+          </button>
+          {running && (
+            <>
+              <span className="text-[0.78em] text-muted">
+                {jobStatus} — run {runId}
+              </span>
+              <button
+                onClick={cancel}
+                className="px-2.5 py-1 rounded border border-red/40 text-red text-[0.75em] hover:bg-red/10"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {!running && jobStatus && jobStatus !== 'queued' && jobStatus !== 'running' && (
+            <span className="text-[0.78em] text-muted">last run: {jobStatus}</span>
+          )}
+        </div>
+
+        {error && <div className="text-[0.8em] text-red">{error}</div>}
+
+        {results && results.length === 0 && <Empty>Run finished with zero results.</Empty>}
+
+        {results && results.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                ['Determinism', meanDeterminism], ['Coverage', meanCoverage],
+                ['Freshness', meanFreshness], ['Latency', meanLatency],
+              ].map(([label, value]) => (
+                <div key={label as string} className="border border-border rounded-md p-3 text-center">
+                  <div className="text-[0.68em] text-muted uppercase tracking-[1px] mb-1">{label}</div>
+                  <div className={`text-[1.4em] font-extrabold ${qualityScoreColor(value as number | null)}`}>
+                    {value === null ? '—' : value}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <div className="text-[0.72em] text-muted uppercase tracking-[1px] mb-1.5">Per-Symbol Results</div>
+              <DataTable columns={symbolColumns} rows={results} rowKey={(r) => r.symbol} />
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 export function ProviderEval() {
   const { markUnauthenticated } = useAuth()
   const chains = usePolling(getProviderChains, POLL_MS, markUnauthenticated)
@@ -947,6 +1124,7 @@ export function ProviderEval() {
       <PriceBenchmarkPanel />
       <NewsBenchmarkPanel />
       <MacroBenchmarkPanel />
+      <AnalyticsBenchmarkPanel />
     </div>
   )
 }

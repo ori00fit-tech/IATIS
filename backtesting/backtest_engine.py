@@ -276,6 +276,21 @@ class BacktestResult:
     # Counting them separately prevents a structurally broken run (e.g. bad
     # input schema) from silently reporting as "0 trades, all NO_TRADE".
     error_count: int = 0
+    # Engine Refinement V1 (2026-08-08) — §4 Error Semantics. A single
+    # engine crashing inside safe_analyze() does NOT raise (by design,
+    # per BaseEngine's "unclear data -> no opinion" contract) — it
+    # returns an honest-looking NEUTRAL/score=0 vote with `crashed=True`,
+    # which flows into tally_votes()/calculate_score() UNCHANGED (this
+    # counter is purely observational; it never alters gating or voting).
+    # Before this, that vote was statistically indistinguishable from a
+    # bar where every engine genuinely had no opinion — a crashed engine
+    # could silently inflate no_trade_count/gate_rejections without any
+    # way to notice. crashed_engine_bars counts bars with >=1 crashed
+    # engine; crashed_engine_totals breaks that down by engine name so a
+    # persistently-crashing engine (e.g. a data-shape bug) is
+    # diagnosable from the run's own statistics, not just live logs.
+    crashed_engine_bars: int = 0
+    crashed_engine_totals: dict = field(default_factory=dict)
     # Which gate rejected how many bars — turns "0/4 CONSISTENT" from a
     # dead end into a diagnosable funnel (mqs / score / votes /
     # contradiction / reversal_veto).
@@ -521,7 +536,14 @@ def run_backtest(
     config: BacktestConfig | None = None,
     engine_config: dict | None = None,
 ) -> BacktestResult:
-    """Walk-forward backtest on historical OHLCV data — no lookahead."""
+    """Walk-forward backtest on historical OHLCV data — no lookahead.
+
+    Engine Refinement V1 (2026-08-08) — that claim is now a checked
+    precondition, not just a comment: raises research.guards.
+    causal_guard.LookaheadError if `df` isn't sorted with strictly
+    increasing timestamps, since `window = df.iloc[:i+1]` (below) only
+    means "every bar known as of bar i" when that holds.
+    """
     from utils.helpers import load_config
     from core.timeframe_sync import build_multi_timeframe_view
     from engines.smc_engine import SMCEngine
@@ -544,6 +566,23 @@ def run_backtest(
         config = BacktestConfig()
     if engine_config is None:
         engine_config = load_config()
+
+    # Engine Refinement V1 (2026-08-08) — §6 Causality Hardening. The
+    # docstring above already claims "no lookahead", but nothing checked
+    # the one precondition that claim actually depends on: `window =
+    # df.iloc[:i+1]` (below) only means "every bar known as of bar i" if
+    # `df` is sorted, strictly-increasing, non-duplicate timestamps to
+    # begin with — a shuffled or duplicate-timestamp input (e.g. a
+    # provider merge gone wrong upstream) would silently make "the first
+    # i+1 rows" NOT correspond to "bars up to time T" at all, the exact
+    # failure shape research/guards/causal_guard.py exists to catch.
+    # Cheap (runs once per call, not per bar); real callers (backtest/
+    # runner.py::load_symbol_data, core/data_loader.py::load_synthetic)
+    # already sort_index() before calling this, so this never fires on
+    # correctly-loaded data — only on genuinely broken input, which must
+    # fail loudly rather than produce a silently-meaningless backtest.
+    from research.guards.causal_guard import assert_monotonic_timestamps
+    assert_monotonic_timestamps(df, label=f"{config.symbol} input OHLCV")
 
     weights = engine_config["confluence"]["weights"]
     min_score = engine_config["confluence"]["min_score_to_trade"]
@@ -578,6 +617,7 @@ def run_backtest(
     }
     enabled = engine_config.get("engines", {}).get("enabled", {})
     all_thresholds = engine_config.get("engines", {}).get("thresholds", {})
+    all_versions = engine_config.get("engines", {}).get("versions", {})
     variant_selection = engine_config.get("engines", {}).get("variants", {})
     for key, cls in _ENGINE_MAP.items():
         if enabled.get(key, key in ("smc","price_action","ict","nnfx","quant","wyckoff")):
@@ -603,6 +643,12 @@ def run_backtest(
             # research result meaningless.
             thresholds_key = f"{key}_{variant}" if variant != "v1" else key
             engine.thresholds = all_thresholds.get(thresholds_key, {})
+            # Engine Refinement V1 (2026-08-08) — §5 Engine Versioning.
+            # Same variant-aware key as thresholds_key above — a v2
+            # variant reports ITS OWN version entry (versions.
+            # price_action_v2), never v1's, for the same reason its
+            # thresholds are looked up separately.
+            engine.version = all_versions.get(thresholds_key)
             if key == "smc":
                 # H017 flag parity with main.build_active_engines — the A/B
                 # (scripts/smc_fullspec_ab.py) flips this through the config.
@@ -749,6 +795,23 @@ def run_backtest(
 
             mtf = build_multi_timeframe_view(window, timeframes)
             outputs = [e.safe_analyze(mtf) for e in engines_list]
+
+            # Engine Refinement V1 (2026-08-08) — §4 Error Semantics.
+            # Observational only: never changes `outputs`, gating, or the
+            # vote — a crashed engine still votes NEUTRAL/score=0 exactly
+            # as before, this only makes that fact countable afterward.
+            crashed_outputs = [o for o in outputs if o.crashed]
+            if crashed_outputs:
+                result.crashed_engine_bars += 1
+                for o in crashed_outputs:
+                    result.crashed_engine_totals[o.engine_name] = (
+                        result.crashed_engine_totals.get(o.engine_name, 0) + 1
+                    )
+                if result.crashed_engine_bars == 1:
+                    logger.warning(
+                        f"First engine crash at bar {i}: "
+                        f"{[(o.engine_name, o.error_type, o.error_message) for o in crashed_outputs]}"
+                    )
 
             # Regime-adaptive weights (same call chain as production).
             active_weights = weights
@@ -984,7 +1047,8 @@ def run_backtest(
     result.compute()
     logger.info(
         f"Backtest done: {result.execute_count} trades, WR={result.win_rate:.1%}, "
-        f"errors={result.error_count}/{result.total_runs}"
+        f"errors={result.error_count}/{result.total_runs}, "
+        f"crashed_engine_bars={result.crashed_engine_bars}/{result.total_runs}"
     )
     # A structurally broken run must not masquerade as a valid "0 trades"
     # result — that would silently invalidate any walk-forward conclusion.

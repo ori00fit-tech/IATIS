@@ -131,6 +131,7 @@ def build_active_engines(config: dict) -> list:
     symbol = config.get("data", {}).get("symbol", "")
     smc_full_spec = bool(config.get("engines", {}).get("smc_full_spec", False))
     all_thresholds = config.get("engines", {}).get("thresholds", {})
+    all_versions = config.get("engines", {}).get("versions", {})
     engines = []
     for key, cls in _ALL_ENGINES.items():
         if enabled.get(key, False):
@@ -146,6 +147,11 @@ def build_active_engines(config: dict) -> list:
             # each engine's own self.thresholds.get(key, DEFAULT) falls
             # through to its hardcoded default.
             engine.thresholds = all_thresholds.get(key, {})
+            # Engine Refinement V1 (2026-08-08) — §5 Engine Versioning.
+            # None (never fabricated) for any engine key missing from
+            # versions: — flows through safe_analyze() onto every
+            # EngineOutput.engine_version this engine produces.
+            engine.version = all_versions.get(key)
             if key == "smc":
                 # H017: full-spec SMC (OB+FVG+BOS/CHoCH as internal
                 # confluence) — off by default until the A/B justifies it.

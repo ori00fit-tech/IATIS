@@ -6,11 +6,16 @@
 # CODE READS ONLY: engines.smc_full_spec, engines.crypto_positioning_modulator,
 # engines.enabled.<name> (bool), engines.thresholds.<name> (Confluence
 # Engine Overhaul Phase 1 — pure config extraction, see `thresholds:`
-# below; every value there is unchanged from its prior hardcoded default).
-# `versions` below is metadata for humans only — nothing in main.py,
-# confluence/, or the individual engine modules reads it. It exists so
-# engine iterations can be compared over time without guessing which code
-# version produced which research/results manifest.
+# below; every value there is unchanged from its prior hardcoded default),
+# engines.versions.<name> (Engine Refinement V1, §5 — main.
+# build_active_engines / the backtest engine construction loop set each
+# engine's .version attribute from here; safe_analyze() copies it onto
+# every EngineOutput.engine_version. Purely observational tagging for
+# research traceability — it is never consulted by tally_votes()/the live
+# gate/any scoring logic, exactly like thresholds' own gate/vote parity
+# guarantee). It exists so engine iterations can be compared over time
+# without guessing which code version produced which research/results
+# manifest.
 #
 # Frozen per CLAUDE.md: engines enabled = smc, price_action, nnfx,
 # wyckoff (prod4), kept by burden-of-proof (H015 closed: no robust

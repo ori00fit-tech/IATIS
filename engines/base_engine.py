@@ -18,6 +18,10 @@ from enum import Enum
 
 import pandas as pd
 
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class Bias(str, Enum):
     BULLISH = "BULLISH"
@@ -66,13 +70,80 @@ class EngineOutput:
     # distinguish "no opinion" from "broken" without parsing `reasons`
     # strings. False for every real analyze() call; only safe_analyze()'s
     # except branch ever sets it True.
+    #
+    # Engine Refinement V1 (2026-08-08) — until this pass, `crashed` was
+    # set here but never READ by anything downstream (confirmed by a
+    # repo-wide grep before this change — see reports/engine_refinement/
+    # BASELINE.md §6). backtesting/backtest_engine.py now consumes it to
+    # keep a distinct per-run crash count, so a bar where an engine threw
+    # an exception no longer looks statistically identical to a bar where
+    # every engine genuinely had no opinion.
     crashed: bool = False
+
+    # Engine Refinement V1 (2026-08-08) — base-contract hardening (§3 of
+    # the refinement plan). Five additive fields, all default to "no
+    # information" so every existing engine/caller that never sets them
+    # behaves exactly as before this change.
+    #
+    # score_type answers a DIFFERENT question from evidence_level above:
+    # evidence_level says whether this score has been through real
+    # statistical validation (HEURISTIC | MEASURED); score_type says what
+    # KIND of number `score` itself is. Every engine today emits an
+    # arbitrary 0-100 confidence heuristic, never a calibrated
+    # probability — score_type exists so that fact is explicit and
+    # machine-checkable rather than assumed. A score of 70 must never be
+    # read as "70% probability of being right"; that would require a
+    # PROBABILITY score_type, which no engine sets today.
+    score_type: str = "HEURISTIC"   # HEURISTIC | PROBABILITY (no engine emits PROBABILITY yet)
+
+    # The timestamp of the last bar this decision was causally computed
+    # against (the close time of decision_frame()'s own last row) —
+    # filled in generically by safe_analyze() from the SAME decision_
+    # frame() call every engine already makes, unless an engine's own
+    # analyze() has already set something more specific (respected, never
+    # overwritten). None only when decision_frame() itself couldn't
+    # resolve any frame (e.g. an engine crashed before reaching it).
+    causal_timestamp: str | None = None
+
+    # Best-effort provenance for the input data this decision used —
+    # which timeframe was requested vs. actually used (decision_frame()
+    # falls back to H1 or the first available frame when the configured
+    # decision_tf is missing) and how many bars were available. Filled in
+    # generically by safe_analyze(); an engine's own analyze() may
+    # overwrite with richer detail.
+    data_quality: dict = field(default_factory=dict)
+
+    # Populated ONLY by safe_analyze()'s except branch (mirrors `crashed`
+    # exactly — error_type/error_message are always both None or both
+    # set together with crashed=True). error_type is the exception class
+    # name (e.g. "KeyError"), error_message is str(exc). Exists so
+    # research/backtest tooling can classify and count failures by type
+    # instead of only having crashed=True as an undifferentiated flag.
+    error_type: str | None = None
+    error_message: str | None = None
+
+    # Engine Refinement V1 (2026-08-08) — §5 Engine Versioning. Before
+    # this, `config/engines.yaml`'s `versions:` block was documented as
+    # "metadata for humans only... nothing in main.py, confluence/, or
+    # the individual engine modules reads it" — a version number could
+    # drift out of sync with what a research manifest actually recorded,
+    # with no way to notice. Filled in generically by safe_analyze() from
+    # `self.version` (set by whoever builds the engine — main.
+    # build_active_engines / the backtest engine construction loop —
+    # from that same `versions:` block, keyed by the engine's config key
+    # or, for a Track C variant, its own `<key>_<variant>` version entry).
+    # An engine's own analyze() may set something more specific; that is
+    # respected, never overwritten. None only means no builder set
+    # `self.version` (e.g. a bare zero-arg test construction) — never a
+    # fabricated "1.0" default.
+    engine_version: str | None = None
 
     def to_dict(self) -> dict:
         return {
             "engine": self.engine_name,
             "bias": self.bias.value,
             "score": round(self.score, 2),
+            "score_type": self.score_type,
             "reasons": self.reasons,
             "raw": self.raw,
             "features": self.features,
@@ -83,6 +154,11 @@ class EngineOutput:
             "sample_size": self.sample_size,
             "evidence_level": self.evidence_level,
             "crashed": self.crashed,
+            "causal_timestamp": self.causal_timestamp,
+            "data_quality": self.data_quality,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "engine_version": self.engine_version,
         }
 
 
@@ -108,6 +184,14 @@ class BaseEngine(ABC):
     # self.thresholds.get(key, DEFAULT) — identical behavior to before
     # this attribute existed.
     thresholds: dict = {}
+
+    # Engine Refinement V1 (2026-08-08) — §5 Engine Versioning. Set from
+    # config/engines.yaml's engines.versions.<engine_key> by whoever
+    # builds the engines, mirroring the thresholds attribute-assignment
+    # pattern exactly. None by default so a zero-arg-constructed engine
+    # (every test/script that never sets this) reports no version rather
+    # than a fabricated one.
+    version: str | None = None
 
     def decision_frame(self, mtf_data: dict[str, pd.DataFrame]) -> tuple[str, pd.DataFrame]:
         """Return (label, df) for the configured decision timeframe,
@@ -136,14 +220,59 @@ class BaseEngine(ABC):
         """Wraps analyze() so an engine crashing never takes down the whole
         pipeline — it just abstains (NEUTRAL, score=0) and logs the reason.
         Per IATIS rule: unclear data -> no opinion, never a guess.
+
+        Engine Refinement V1 (2026-08-08) — three changes, all additive,
+        zero change to the live fail-closed contract above:
+        1. A crash is now logged (logger.warning), not just captured as a
+           string inside `reasons` — CLAUDE.md-adjacent research-mode
+           discipline: a failure must be discoverable, never silently
+           swallowed, even though the pipeline still safely abstains.
+        2. causal_timestamp/data_quality are filled in generically here
+           from the SAME decision_frame() call every engine's own
+           analyze() already makes internally — best-effort, computed
+           BEFORE calling analyze() so it's available even on the crash
+           path. An engine's own analyze() may set a more specific value;
+           that is respected, never overwritten.
+        3. engine_version is filled from self.version (set by whoever
+           built this engine, from config/engines.yaml's versions: block)
+           on both the success and crash paths — a crashed engine's
+           version is exactly as diagnostically relevant as a working
+           one's.
         """
+        causal_timestamp: str | None = None
+        data_quality: dict = {}
         try:
-            return self.analyze(mtf_data)
+            tf, df = self.decision_frame(mtf_data)
+            if len(df) > 0:
+                causal_timestamp = str(df.index[-1])
+            data_quality = {
+                "decision_tf_requested": self.decision_tf,
+                "decision_tf_used": tf,
+                "bars_available": len(df),
+            }
+        except Exception:
+            pass  # best-effort metadata only — must never itself crash the wrapper
+
+        try:
+            output = self.analyze(mtf_data)
+            if output.causal_timestamp is None:
+                output.causal_timestamp = causal_timestamp
+            if not output.data_quality:
+                output.data_quality = data_quality
+            if output.engine_version is None:
+                output.engine_version = self.version
+            return output
         except Exception as exc:  # noqa: BLE001 — intentional broad catch at this boundary
+            logger.warning(f"{self.name} engine crashed, abstaining: {type(exc).__name__}: {exc}")
             return EngineOutput(
                 engine_name=self.name,
                 bias=Bias.NEUTRAL,
                 score=0.0,
                 reasons=[f"Engine error, abstaining: {exc}"],
                 crashed=True,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                causal_timestamp=causal_timestamp,
+                data_quality=data_quality,
+                engine_version=self.version,
             )

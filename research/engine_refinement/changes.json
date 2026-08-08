@@ -110,6 +110,36 @@
       "performance_driven": false,
       "commit": "024cb645512e33bd5bd96c1d3cf5bcf537bfe9b6",
       "recorded_at": "2026-08-08T16:33:55.950766+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-001",
+      "type": "SEMANTIC_FIX",
+      "engine": "ict",
+      "description": "decide() previously let premium/discount zone position auto-set bias directly (DISCOUNT->BULLISH, PREMIUM->BEARISH) and let killzone session timing add a fixed score bonus on its own -- conflating CONTEXT (statistical price position, clock time) with actual trading-event evidence. Operator-pre-approved fix (explicit 'fix must happen now' directive): the only real trading-event evidence this engine detects -- a Judas swing (false breakout that reverses) -- is now the sole bias/score source. Zone/killzone/H1-trend are confirmation-only modifiers on an already-real Judas signal; with no Judas swing, bias stays NEUTRAL/score 0.0 regardless of zone/killzone state. New threshold keys (judas_base_score, zone_confirm_score, zone_conflict_penalty, killzone_confirm_score, trend_conflict_penalty) supersede the old zone_score/killzone_score/judas_confirm_score/judas_conflict_penalty set. ICT is disabled by default (engines.enabled.ict: false) -- changes zero live-decision behavior. Golden values recaptured in tests/test_engine_config_extraction_no_behavior_change.py (ICT A: NEUTRAL 10.0 -> BULLISH 70.0, B: BULLISH 55.0 -> NEUTRAL 0.0).",
+      "strategy_semantics_changed": true,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.481773+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-002",
+      "type": "BUG_FIX",
+      "engine": "ict",
+      "description": "raw['is_killzone'] previously reported session.is_session_open alone, which is True during ANY major session's first two hours including Asia -- not the London/NewYork/Overlap-only definition this engine's own module docstring and decide()'s real killzone check both use. Corrected to the same definition decide() now uses. Confirmed via a dedicated test that an Asia-hour bar no longer reports is_killzone=True.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.482244+00:00"
+    },
+    {
+      "change_id": "ICT-REFINE-003",
+      "type": "OBSERVABILITY",
+      "engine": "ict",
+      "description": "raw gains additive context/event grouped keys -- context (zone, zone_pct, is_killzone, session, in_uptrend, in_downtrend) and event (judas_swing) -- mirroring SMC's structure_state/structural_events/zones separation, making the context-vs-evidence distinction driving ICT-REFINE-001 directly visible in the engine's own output shape. Every pre-existing flat raw key is preserved.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "314fad27dbbf5cd5bb522d1232e2226a5d7dabff",
+      "recorded_at": "2026-08-08T17:51:25.482471+00:00"
     }
   ]
 }

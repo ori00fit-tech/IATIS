@@ -92,6 +92,7 @@ from execution.routes.research import (  # noqa: F401
 from execution.routes import (
     ai,
     alerts,
+    analytics_benchmark,
     analyze,
     auth,
     ctrader_auth,
@@ -148,6 +149,10 @@ app.include_router(news_benchmark.router)
 # collision reasoning: GET /research/macro-benchmark must register before
 # research.router's catch-all.
 app.include_router(macro_benchmark.router)
+# Provider Benchmark & Data Quality Lab Phase 4 (2026-08-XX) — identical
+# collision reasoning: GET /research/analytics-benchmark must register
+# before research.router's catch-all.
+app.include_router(analytics_benchmark.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

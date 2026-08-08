@@ -230,11 +230,54 @@ def test_raw_gains_break_observability_keys_and_keeps_flat_keys():
         "h1_event_direction", "h1_strength", "h4_strength", "aligned",
         "h1_structure_hh", "h1_structure_hl", "h1_structure_lh", "h1_structure_ll",
         "last_h1_high", "last_h1_low", "last_high_bar_age", "last_low_bar_age",
+        # Engine Refinement V1 (#369, OBSERVABILITY): H4's own event was
+        # computed identically to h1's but never surfaced before.
+        "h4_event", "h4_event_direction",
     ):
         assert key in out.raw
     for key in ("h1_broke_level", "h1_break_direction", "h1_break_price",
                 "h4_broke_level", "h4_break_direction", "h4_break_price"):
         assert key in out.raw
+
+
+def test_h4_event_matches_h4_structs_own_last_event():
+    """raw['h4_event']/'h4_event_direction' must be the SAME value
+    _classify_structure() computed for h4_struct, not a re-derived or
+    stale copy."""
+    df_cur, df_macro = _mtf(seed=17, bars=600)
+    mtf = {"H1": df_cur, "H4": df_macro}
+    eng = MarketStructureEngine()
+    eng.decision_tf = "H1"
+    out = eng.analyze(mtf)
+    assert out.raw["h4_event"] == out.features["h4_struct"]["last_event"]
+    assert out.raw["h4_event_direction"] == out.features["h4_struct"]["last_event_bias"]
+
+
+def test_h4_event_observability_is_provably_never_scored():
+    """Engine Refinement V1 (#369) load-bearing guarantee: h4_event/
+    h4_event_direction are observability-only. decide() must produce a
+    byte-identical bias/score/reasons regardless of what h4_struct's
+    last_event/last_event_bias contain -- proving the new raw keys can
+    never silently influence the verdict (decide() only ever reads
+    h4_struct's trend/strength, confirmed by direct code read)."""
+    df_cur, df_macro = _mtf(seed=5, bars=600)
+    features = extract_features(df_cur, df_macro, {})
+    base_h4 = dict(features["h4_struct"])
+    variants = [
+        {**base_h4, "last_event": "none", "last_event_bias": "none"},
+        {**base_h4, "last_event": "BOS", "last_event_bias": "bullish"},
+        {**base_h4, "last_event": "CHoCH", "last_event_bias": "bearish"},
+        {**base_h4, "last_event": "MSS", "last_event_bias": "bullish"},
+    ]
+    results = []
+    for h4_variant in variants:
+        varied_features = {**features, "h4_struct": h4_variant}
+        results.append(decide(varied_features, {}))
+    first = results[0]
+    for bias, score, reasons in results[1:]:
+        assert bias == first[0]
+        assert score == first[1]
+        assert reasons == first[2]
 
 
 def test_engine_output_features_json_serializable():

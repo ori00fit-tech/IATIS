@@ -200,6 +200,16 @@
       "performance_driven": false,
       "commit": "60f819e041b9078b1066ca331fad00ae32802a53",
       "recorded_at": "2026-08-08T20:21:07.547379+00:00"
+    },
+    {
+      "change_id": "MARKET-STRUCTURE-REFINE-003",
+      "type": "OBSERVABILITY",
+      "engine": "market_structure",
+      "description": "Engine Refinement V1 (#369, event observability pass across all engines): a systematic review of every engine's raw output found one genuine gap -- _classify_structure() computes last_event/last_event_bias identically for BOTH the H1 and H4 windows, but only H1's event ever reached raw (h1_event/h1_event_direction); H4's own event was silently discarded even though decide() never reads it either way (only h4_bias/h4_trend feed scoring, confirmed by direct code read -- so this is provably informational-only, not a used-but-hidden signal). Fixed, observability-only: raw now also exposes h4_event/h4_event_direction. Proven never-scored by a new dedicated test (test_h4_event_observability_is_provably_never_scored) varying h4_struct's last_event/last_event_bias across none/BOS/CHoCH/MSS and asserting decide()'s bias/score/reasons stay byte-identical. Market Structure is disabled by default (engines.enabled.market_structure: false) -- zero live-trading impact. versions.market_structure 1.1 -> 1.2. All pre-existing tests pass unchanged.",
+      "strategy_semantics_changed": false,
+      "performance_driven": false,
+      "commit": "2a311ae2bb44b70eaf271210f92c03710dc681f5",
+      "recorded_at": "2026-08-08T23:44:23.642608+00:00"
     }
   ]
 }

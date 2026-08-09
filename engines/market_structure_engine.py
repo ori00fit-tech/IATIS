@@ -27,6 +27,17 @@ vs current SMC engine:
   MSS: identifies specific structural EVENTS (more nuanced)
 
 Research status: RESEARCH
+
+Engine Refinement V1 (#369, MARKET-STRUCTURE-REFINE, OBSERVABILITY):
+_classify_structure() computes last_event/last_event_bias identically
+for BOTH the H1 and H4 windows, but only H1's event ever reached `raw`
+(h1_event/h1_event_direction) -- H4's own event was silently discarded
+even though decide() itself never reads it either way (only h4_bias/
+h4_trend feed scoring, confirmed by direct code read). Fixed,
+observability-only: raw now also exposes h4_event/h4_event_direction so
+an operator/researcher can see what H4 independently showed, purely
+informational (never consulted by decide()). Disabled by default
+(engines.enabled.market_structure: false) -- zero live-trading impact.
 """
 
 from __future__ import annotations
@@ -380,6 +391,12 @@ class MarketStructureEngine(BaseEngine):
                 "h1_event_direction": features["h1_struct"]["last_event_bias"],
                 "h1_strength": features["h1_struct"]["strength"],
                 "h4_strength": features["h4_struct"]["strength"],
+                # Engine Refinement V1 (#369, OBSERVABILITY): H4's own
+                # event, computed identically to h1's above but never
+                # exposed before -- informational only, decide() never
+                # reads it (only h4_bias/h4_trend feed scoring).
+                "h4_event": features["h4_struct"]["last_event"],
+                "h4_event_direction": features["h4_struct"]["last_event_bias"],
                 "aligned": features["h1_struct"]["trend"] == features["h4_struct"]["trend"],
                 # Feature Mining Phase 1 (2026-07-30) — additive only, never
                 # consulted by bias/score/control-flow above.

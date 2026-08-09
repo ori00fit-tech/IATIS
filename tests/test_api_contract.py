@@ -631,6 +631,14 @@ def test_scheduler_status_unknown_without_any_log(tmp_path, monkeypatch):
     # chdir — on a host actually running the scheduler it's real and has
     # "Run complete" lines, which would make this assert "running" instead.
     monkeypatch.setattr(h, "_SYSTEMD_SCHEDULER_LOG_PATH", tmp_path / "no-such-scheduler.log")
+    # Same story for the journalctl fallback: on a host where
+    # iatis-scheduler is a real running unit, `journalctl -u
+    # iatis-scheduler` returns real "Run complete" lines from the actual
+    # journal — nothing above isolates a live subprocess call.
+    def fake_run(argv, **kwargs):
+        import subprocess as _sp
+        return _sp.CompletedProcess(argv, 0, stdout="", stderr="")
+    monkeypatch.setattr("subprocess.run", fake_run)
     assert m._scheduler_status()["status"] == "unknown"
 
 

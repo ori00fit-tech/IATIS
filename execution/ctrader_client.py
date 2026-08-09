@@ -107,7 +107,7 @@ class DuplicateSessionError(Exception):
     """Raised when another OS process already holds the cTrader session lock."""
 
 
-def _acquire_process_lock(lock_path: Path = _PROCESS_LOCK_PATH) -> None:
+def _acquire_process_lock(lock_path: Path | None = None) -> None:
     """Acquire the whole-process cTrader session lock, or raise.
 
     Idempotent within a process: a second CTraderClient in the same
@@ -115,7 +115,15 @@ def _acquire_process_lock(lock_path: Path = _PROCESS_LOCK_PATH) -> None:
     singleton) is a no-op here, not an error — this guard is specifically
     about a *different OS process*, which flock's per-open-file-description
     semantics detect even when that other process is this same codebase.
+
+    `lock_path` defaults to the module-global `_PROCESS_LOCK_PATH`,
+    resolved here (not via a mutable default argument) so a monkeypatch of
+    that global — e.g. tests/test_ctrader_client.py's autouse
+    `_reset_process_lock` fixture — is honored by connect()'s no-arg call
+    too, not just by callers that pass it explicitly.
     """
+    if lock_path is None:
+        lock_path = _PROCESS_LOCK_PATH
     global _process_lock_file
     if _process_lock_file is not None:
         return

@@ -99,6 +99,7 @@ from execution.routes import (
     data_providers,
     dashboard_legacy,
     diagnostics,
+    engine_benchmark,
     experience,
     experiments,
     files,
@@ -159,6 +160,10 @@ app.include_router(analytics_benchmark.router)
 # /research/best-provider must register before research.router's
 # catch-all.
 app.include_router(provider_scorecard.router)
+# Engine Benchmark (2026-08-09) — identical collision reasoning: GET
+# /research/engine-benchmark must register before research.router's
+# catch-all.
+app.include_router(engine_benchmark.router)
 app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)

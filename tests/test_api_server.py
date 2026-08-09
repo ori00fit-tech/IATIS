@@ -29,6 +29,15 @@ def client(monkeypatch):
     # (e.g. the VPS) already exports a real production key — which made
     # every authenticated test fail with 401 in that environment.
     monkeypatch.setenv("API_SERVER_KEY", "test-key-123")
+    # Same story for the AI provider keys: config/ai.yaml ships
+    # enabled:true, and a deployment's real .env commonly has a live
+    # GEMINI_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY — ai/ai_analyzer.py's
+    # _build_provider() would then construct a real provider and every
+    # "disabled by default" test below would hit a real (network-guarded
+    # or rate-limited) call instead of degrading to status=disabled.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with TestClient(app) as c:
         yield c
 

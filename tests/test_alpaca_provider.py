@@ -35,7 +35,11 @@ def alpaca_creds(monkeypatch):
     monkeypatch.setenv("ALPACA_API_SECRET", "test-secret")
 
 
-def test_missing_credentials_fall_through():
+def test_missing_credentials_fall_through(monkeypatch):
+    # A deployment's real .env commonly has live ALPACA_API_KEY/SECRET
+    # (e.g. the VPS) — must not leak into this "credentials absent" case.
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
     with pytest.raises(DataFetchError, match="ALPACA_API_KEY"):
         _fetch_alpaca("BTC/USD", "H4", 100)
 

@@ -625,7 +625,12 @@ def test_files_diff_denies_secret_path(client, fake_repo):
 
 def test_scheduler_status_unknown_without_any_log(tmp_path, monkeypatch):
     import execution.api_server as m
+    import execution.api_shared_helpers as h
     monkeypatch.chdir(tmp_path)
+    # The absolute /var/log/iatis-scheduler.log fallback isn't isolated by
+    # chdir — on a host actually running the scheduler it's real and has
+    # "Run complete" lines, which would make this assert "running" instead.
+    monkeypatch.setattr(h, "_SYSTEMD_SCHEDULER_LOG_PATH", tmp_path / "no-such-scheduler.log")
     assert m._scheduler_status()["status"] == "unknown"
 
 

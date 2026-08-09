@@ -58,6 +58,15 @@ _UNIT_KIND: dict[str, str] = {
     "d1_backup": "timer",
 }
 
+# A fixed absolute fallback log path (below) so _scheduler_status still
+# works when logging.file is unset. Named at module level, rather than
+# inlined in _scheduler_status, so tests can monkeypatch it — a relative
+# Path("storage/system.log") is isolated by monkeypatch.chdir(tmp_path),
+# but an absolute path is not, and cwd-only isolation silently read the
+# real, live /var/log/iatis-scheduler.log on a host actually running the
+# service.
+_SYSTEMD_SCHEDULER_LOG_PATH = Path("/var/log/iatis-scheduler.log")
+
 
 def _scheduler_status() -> dict[str, Any]:
     """Last scheduler run, from the run-marker file, a local log file, or
@@ -90,7 +99,7 @@ def _scheduler_status() -> dict[str, Any]:
             logger.debug(f"scheduler run marker unreadable: {exc}")
     log_candidates = [
         Path("storage/system.log"),
-        Path("/var/log/iatis-scheduler.log"),
+        _SYSTEMD_SCHEDULER_LOG_PATH,
     ]
     last_run = None
     last_execute_count = 0

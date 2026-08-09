@@ -128,6 +128,19 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # not a provider benchmark; see the module's own docstring). Full argv
     # built per-request in execution/routes/analytics_benchmark.py.
     "analytics_benchmark": [sys.executable, "-m", "backtest.analytics_benchmark"],
+    # Engine Benchmark (2026-08-09) — a whole benchmark run is ONE
+    # subprocess (same one-job-slot-per-run model as the Provider
+    # Benchmark Lab jobs above), looping over every (engine, symbol)
+    # point in-process internally (backtest/engine_benchmark.py). Each
+    # point is a real standalone single-engine backtest (confluence
+    # quorum overridden to 1 via build_engine_config_override — the same
+    # ephemeral override channel every other ad-hoc run already uses,
+    # never a config.yaml/config/engines.yaml write). Measurement/
+    # advisory only, and deliberately NOT a ranking tool — no composite
+    # score, no auto-selected "best engine" (CLAUDE.md's dead list
+    # already buried "Enabling more engines (any)" twice). Full argv is
+    # built per-request in execution/routes/engine_benchmark.py.
+    "engine_benchmark": [sys.executable, "-m", "backtest.engine_benchmark"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -148,6 +161,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "news_benchmark": "Provider Benchmark & Data Quality Lab Phase 2 (backtest/news_benchmark.py): scores MarketAux and Finnhub news feeds per symbol for coverage, source diversity, duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider coverage agreement. Launched via POST /research/news-benchmark, not this endpoint directly — measurement/advisory only, never influences H021's own pre-registered process or config.yaml.",
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
     "analytics_benchmark": "Provider Benchmark & Data Quality Lab Phase 4 (backtest/analytics_benchmark.py): scores MarketAux's sentiment API on reproducibility — fetches the same query twice and checks whether the sentiment value for the same underlying article stays identical — plus coverage, freshness, and latency. Deliberately single-provider (TAAPI's real rate limit rules it out) and reproducibility-only (no predictive/subsequent-outcome-tracking dimension — that's a trading hypothesis, not a provider benchmark). Launched via POST /research/analytics-benchmark, not this endpoint directly — measurement/advisory only, never touches config.yaml.",
+    "engine_benchmark": "Engine Benchmark (backtest/engine_benchmark.py): runs every confluence engine standalone (confluence quorum overridden to 1) against real local OHLCV history and reports raw per-(engine, symbol) backtest KPIs (trades, win rate, profit factor, Sharpe, drawdown, expectancy). Launched via POST /research/engine-benchmark, not this endpoint directly — measurement/advisory only, deliberately not a ranking tool (no composite score, no auto-selected 'best engine'), never writes config.yaml/config/engines.yaml/registry.json.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -172,6 +186,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "news_benchmark": "research",
     "macro_benchmark": "research",
     "analytics_benchmark": "research",
+    "engine_benchmark": "research",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -225,6 +240,14 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # symbol needs 2 fetches (the determinism check), still the cheapest
     # cost class here: Deep is ~14 symbols x 2 fetches = 28 HTTP calls.
     "analytics_benchmark": 900,
+    # Engine Benchmark (2026-08-09) — each (engine, symbol) point is a
+    # REAL standalone backtest (a walk-forward-style bar loop), not a
+    # network fetch — a much heavier cost class than any Provider
+    # Benchmark Lab job above. A Deep profile (full ~50-symbol universe x
+    # 9 backtest-runnable engines) is ~450 real backtests, the same order
+    # of magnitude as research_mission's own hundreds-of-trials cost
+    # class — same 6h last-resort ceiling, not a measurement.
+    "engine_benchmark": 21_600,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against

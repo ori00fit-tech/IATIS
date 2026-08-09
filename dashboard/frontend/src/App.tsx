@@ -42,6 +42,8 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/ctrader-connect/CtraderConnect').then((m) => ({ default: m.CtraderConnect }))),
   'engine-monitor': lazy(() =>
     import('./modules/engine-monitor/EngineMonitor').then((m) => ({ default: m.EngineMonitor }))),
+  'engine-benchmark': lazy(() =>
+    import('./modules/engine-benchmark/EngineBenchmark').then((m) => ({ default: m.EngineBenchmark }))),
   'ai-decision-center': lazy(() =>
     import('./modules/ai-decision-center/AiDecisionCenter').then((m) => ({ default: m.AiDecisionCenter }))),
   'ai-settings': lazy(() =>

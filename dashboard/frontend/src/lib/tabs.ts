@@ -41,6 +41,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'provider-eval', label: 'Provider Eval', hint: 'Rank data providers for best valid data + advisory chain order', glyph: '⇅', section: 'Data & Providers' },
   { id: 'ctrader-connect', label: 'cTrader Connection', hint: 'OAuth connection status, token expiry, re-authorize', glyph: '🔌', section: 'Data & Providers' },
   { id: 'engine-monitor', label: 'Engine Monitor', hint: 'Per-engine votes, accuracy, weights', glyph: '⚙', section: 'Engines & AI' },
+  { id: 'engine-benchmark', label: 'Engine Benchmark', hint: 'Standalone-engine ablation backtests (exploratory) + live trade attribution', glyph: '⏱', section: 'Engines & AI' },
   { id: 'ai-decision-center', label: 'AI Decision Center', hint: 'Decision anatomy + explain-only AI narration', glyph: '❋', section: 'Engines & AI' },
   { id: 'ai-settings', label: 'AI Settings', hint: 'Provider/model selection for the explanation layer — never the decision path', glyph: '⚗', section: 'Engines & AI' },
   { id: 'system-audit', label: 'System Audit', hint: 'Philosophy audit + research integrity checks', glyph: '✓', section: 'System & Audit' },

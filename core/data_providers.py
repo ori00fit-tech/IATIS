@@ -672,7 +672,14 @@ _NATIVE_TF: dict[str, set] = {
 # verification steps pass on the real VPS.
 DEFAULT_CHAINS: dict[str, list[str]] = {
     "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub"],
-    "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub"],
+    # alpha_vantage added 2026-08-10 (operator override, see config.yaml's
+    # provider_chains.metals comment). dukascopy_jforex is NOT added here
+    # despite the config.yaml override including it — DEFAULT_CHAINS is the
+    # safety fallback used if that override is ever absent, and the
+    # fragile third-party bridge must stay opt-in-only via the explicit
+    # config.yaml override (test_dukascopy_jforex_not_in_default_chains
+    # pins this for every asset class, not just metals).
+    "metals":  ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
     "energy":  ["ctrader", "finnhub"],
     "indices": ["ctrader", "fcs_api", "finnhub"],
     "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],

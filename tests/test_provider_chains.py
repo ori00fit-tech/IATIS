@@ -464,6 +464,15 @@ def test_dukascopy_jforex_inst_id_raises_on_non_6_char_symbol():
         dp._dukascopy_jforex_inst_id("EURUSDX")
 
 
+def test_dukascopy_jforex_inst_id_uses_map_for_non_standard_symbols():
+    # Confirmed live against the operator's own Dukascopy JForex app
+    # (2026-08-10) — these don't follow the 6-char XXX/YYY split.
+    assert dp._dukascopy_jforex_inst_id("USOIL") == "LIGHT.CMD/USD"
+    assert dp._dukascopy_jforex_inst_id("US30") == "USA30.IDX/USD"
+    assert dp._dukascopy_jforex_inst_id("SPX500") == "USA500.IDX/USD"
+    assert dp._dukascopy_jforex_inst_id("NAS100") == "USATECH.IDX/USD"
+
+
 def test_fetch_dukascopy_jforex_raises_on_unmapped_timeframe(monkeypatch):
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
     with pytest.raises(dp.DataFetchError, match="no native timeframe mapping"):

@@ -672,7 +672,14 @@ _NATIVE_TF: dict[str, set] = {
 # verification steps pass on the real VPS.
 DEFAULT_CHAINS: dict[str, list[str]] = {
     "crypto":  ["ccxt", "alpaca", "twelve_data", "finnhub"],
-    "metals":  ["ctrader", "twelve_data", "fcs_api", "finnhub"],
+    # alpha_vantage added 2026-08-10 (operator override, see config.yaml's
+    # provider_chains.metals comment). dukascopy_jforex is NOT added here
+    # despite the config.yaml override including it — DEFAULT_CHAINS is the
+    # safety fallback used if that override is ever absent, and the
+    # fragile third-party bridge must stay opt-in-only via the explicit
+    # config.yaml override (test_dukascopy_jforex_not_in_default_chains
+    # pins this for every asset class, not just metals).
+    "metals":  ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
     "energy":  ["ctrader", "finnhub"],
     "indices": ["ctrader", "fcs_api", "finnhub"],
     "fx":      ["ctrader", "twelve_data", "fcs_api", "alpha_vantage", "finnhub"],
@@ -1107,20 +1114,40 @@ def _dukascopy_jforex_bridge_url() -> str:
     return url.rstrip("/")
 
 
+# Symbols whose JForex instID isn't a clean 3+3 split of the IATIS
+# internal name — confirmed live against the operator's own Dukascopy
+# JForex app (2026-08-10, Commodities CFD tab: "LIGHT.CMD" / "LIGHT.CMD/
+# USD" = Light Sweet Crude Oil; Indices CFD tab: "USA30.IDX/USD" = US 30
+# Index, "USA500.IDX/USD" = US 500 Index, "USATECH.IDX/USD" = US 100
+# Tech Index). Checked before the 6-char rule below.
+_DUKASCOPY_JFOREX_INST_ID_MAP: dict[str, str] = {
+    "USOIL": "LIGHT.CMD/USD",
+    "US30": "USA30.IDX/USD",
+    "SPX500": "USA500.IDX/USD",
+    "NAS100": "USATECH.IDX/USD",
+}
+
+
 def _dukascopy_jforex_inst_id(internal_symbol: str) -> str:
     """The bridge's /api/v1/history calls Instrument.valueOf(instID)
     directly against the real JForex SDK enum, whose constant names are
     slash-separated ("EUR/USD", not IATIS's internal "EURUSD") — confirmed
     live 2026-08-07 both by the bridge's own subscription log
     ("instruments=[BTC/USD, EUR/USD, ...]") and by a real
-    instID=EUR%2FUSD request returning real bars. Every symbol currently
-    mapped through this provider is a clean 3+3 split (FX majors/minors,
+    instID=EUR%2FUSD request returning real bars. Most symbols mapped
+    through this provider are a clean 3+3 split (FX majors/minors,
     metals, and BTC/ETH crosses are all 6 chars), so inserting the slash
-    at position 3 recovers the SDK's own format without a lookup table."""
+    at position 3 recovers the SDK's own format without a lookup table —
+    _DUKASCOPY_JFOREX_INST_ID_MAP above covers the rest (commodities,
+    indices, ...) whose JForex instID doesn't follow that pattern."""
+    mapped = _DUKASCOPY_JFOREX_INST_ID_MAP.get(internal_symbol)
+    if mapped is not None:
+        return mapped
     if len(internal_symbol) != 6:
         raise DataFetchError(
             f"Dukascopy JForex bridge: cannot derive instID for {internal_symbol!r} "
-            f"(expected a 6-char XXXYYY symbol)"
+            f"(expected a 6-char XXXYYY symbol, or an entry in "
+            f"_DUKASCOPY_JFOREX_INST_ID_MAP)"
         )
     return f"{internal_symbol[:3]}/{internal_symbol[3:]}"
 

@@ -26,9 +26,9 @@ from backtest.robustness import (
 from backtesting.backtest_engine import BacktestConfig
 
 
-def _ohlcv(n: int, seed: int = 7, trend: float = 0.06) -> pd.DataFrame:
+def _ohlcv(n: int, seed: int = 7, trend: float = 0.06, freq: str = "h") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz="UTC")
     close = 1.08 + np.linspace(0, trend, n) + np.cumsum(rng.normal(0, 0.0009, n))
     o = np.roll(close, 1)
     o[0] = close[0]
@@ -167,6 +167,55 @@ def test_suite_threads_start_end_into_payload(tmp_path):
     payload = json.loads(next(out_dir.glob("robustness_*.json")).read_text())
     assert payload["start"] == "2024-01-05"
     assert payload["end"] == "2024-01-15"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Data-download M15 support (2026-08-11) — physical_load_timeframe wiring
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_run_robustness_suite_wires_physical_load_timeframe(tmp_path, monkeypatch):
+    """run_robustness_suite must pass physical_load_timeframe(rc.timeframes)
+    into load_symbol_data — proven by spying on the real function, not just
+    asserting the helper's return value in isolation. H4/D1 bases still
+    physically load H1 (pre-existing convention, untouched)."""
+    import backtest.robustness as robustness_mod
+
+    captured_timeframes: list[str] = []
+    real_load = robustness_mod.load_symbol_data
+
+    def spy_load(symbol, data_dir, start=None, end=None, timeframe="H1"):
+        captured_timeframes.append(timeframe)
+        return real_load(symbol, data_dir, start, end, timeframe=timeframe)
+
+    monkeypatch.setattr(robustness_mod, "load_symbol_data", spy_load)
+    _ohlcv(1200).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    rc_default = RobustnessConfig(params=("min_rr",), multipliers=(1.0,), min_trades=1)
+    out = robustness_mod.run_robustness_suite(["EURUSD"], tmp_path, rc_default)
+    assert captured_timeframes == ["H1"]
+    assert "EURUSD" in out
+
+    captured_timeframes.clear()
+    rc_h4 = RobustnessConfig(params=("min_rr",), multipliers=(1.0,), min_trades=1, timeframes=("H4", "D1", "H1"))
+    out = robustness_mod.run_robustness_suite(["EURUSD"], tmp_path, rc_h4)
+    assert captured_timeframes == ["H1"]
+    assert "EURUSD" in out
+
+
+def test_run_robustness_suite_m15_base_loads_the_m15_file(tmp_path):
+    """A timeframes=("M15", ...) override must genuinely load the M15
+    physical file, never silently fall back to H1 even when an H1 file
+    is present."""
+    import backtest.robustness as robustness_mod
+
+    _ohlcv(1200).to_csv(tmp_path / "EURUSD_H1_2y.csv")  # H1 exists, M15 does not yet
+    rc_m15 = RobustnessConfig(params=("min_rr",), multipliers=(1.0,), min_trades=1, timeframes=("M15", "H1"))
+    out = robustness_mod.run_robustness_suite(["EURUSD"], tmp_path, rc_m15)
+    assert "EURUSD" not in out  # M15 requested but absent -> excluded, never substitutes H1
+
+    _ohlcv(1200, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
+    out2 = robustness_mod.run_robustness_suite(["EURUSD"], tmp_path, rc_m15)
+    assert "EURUSD" in out2  # the real M15 file now exists -> succeeds
 
 
 # ─────────────────────────────────────────────────────────────────────────

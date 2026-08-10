@@ -45,7 +45,7 @@ from typing import Protocol
 import pandas as pd
 
 from backtest.metrics import calculate_metrics, json_safe
-from backtest.runner import load_symbol_data, trade_to_record
+from backtest.runner import load_symbol_data, physical_load_timeframe, trade_to_record
 from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
@@ -299,7 +299,7 @@ def run_walk_forward_suite(
     out: dict[str, WalkForwardResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir, start, end)
+            df = load_symbol_data(symbol, data_dir, start, end, timeframe=physical_load_timeframe(wf_config.timeframes))
             out[symbol] = run_walk_forward(symbol, df, wf_config)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: walk-forward failed — {exc}")

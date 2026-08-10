@@ -19,6 +19,7 @@ from backtest.price_benchmark import (
     _in_scope_symbols,
     _is_equity_market_closed,
     _is_forex_week_closure,
+    _is_futures_session_closed,
     build_consensus,
     build_evidence_series,
     classify_gaps,
@@ -122,6 +123,72 @@ def test_completeness_penalizes_real_gap_for_equity():
     del idx[3]  # a real, mid-session missing bar
     df = pd.DataFrame({"open": 150.0, "high": 150.5, "low": 149.5, "close": 150.0, "volume": 100.0}, index=pd.DatetimeIndex(idx))
     score, detail = completeness_score(df, "H1", "equity")
+    assert detail["real_gap"] == 1
+    assert score < 100.0
+
+
+# ── _is_futures_session_closed (energy/indices) ───────────────────────
+# 2026-08-05 is a Wednesday.
+
+def test_futures_session_closed_mid_day_is_open():
+    ts = pd.Timestamp("2026-08-05 12:00", tz="UTC")
+    assert not _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_daily_break_is_closed():
+    ts = pd.Timestamp("2026-08-05 22:00", tz="UTC")  # the daily maintenance break
+    assert _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_just_before_daily_break_is_open():
+    ts = pd.Timestamp("2026-08-05 21:00", tz="UTC")
+    assert not _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_just_after_daily_break_is_open():
+    ts = pd.Timestamp("2026-08-05 23:00", tz="UTC")
+    assert not _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_saturday_is_closed():
+    ts = pd.Timestamp("2026-08-08 15:00", tz="UTC")  # Saturday, not a daily-break hour
+    assert _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_friday_late_is_closed_via_weekly_boundary():
+    ts = pd.Timestamp("2026-08-07 23:00", tz="UTC")
+    assert _is_futures_session_closed(ts, "H1")
+
+
+def test_futures_session_closed_d1_only_checks_weekly_boundary():
+    # The daily maintenance break must not apply to a D1 anchor timestamp
+    # (mirrors _is_equity_market_closed's own D1 reasoning) — a D1 bar
+    # whose anchor happens to fall in the 22:00-23:00 UTC window still
+    # represents a real, fully-open trading day.
+    weekday_in_break_hour = pd.Timestamp("2026-08-05 22:00", tz="UTC")
+    assert not _is_futures_session_closed(weekday_in_break_hour, "D1")
+    saturday = pd.Timestamp("2026-08-08 12:00", tz="UTC")
+    assert _is_futures_session_closed(saturday, "D1")
+
+
+def test_completeness_excludes_daily_break_for_energy():
+    # A full Wednesday of hourly bars, deliberately EXCLUDING the
+    # 22:00-23:00 UTC maintenance-break hour — that missing hour must be
+    # classified as expected closure, not a real gap.
+    idx = list(pd.date_range("2026-08-05 00:00", "2026-08-05 21:00", freq="1h", tz="UTC"))
+    idx += list(pd.date_range("2026-08-05 23:00", "2026-08-06 00:00", freq="1h", tz="UTC"))
+    df = pd.DataFrame({"open": 70.0, "high": 70.5, "low": 69.5, "close": 70.0, "volume": 10.0}, index=pd.DatetimeIndex(idx))
+    score, detail = completeness_score(df, "H1", "energy")
+    assert detail["expected_closure"] > 0
+    assert detail["real_gap"] == 0
+    assert score == 100.0
+
+
+def test_completeness_penalizes_real_gap_for_indices():
+    idx = list(pd.date_range("2026-08-05 10:00", "2026-08-05 15:00", freq="1h", tz="UTC"))  # all mid-day, none in the break window
+    del idx[3]  # a real, mid-session missing bar
+    df = pd.DataFrame({"open": 44000.0, "high": 44050.0, "low": 43950.0, "close": 44000.0, "volume": 1.0}, index=pd.DatetimeIndex(idx))
+    score, detail = completeness_score(df, "H1", "indices")
     assert detail["real_gap"] == 1
     assert score < 100.0
 

@@ -2,37 +2,51 @@
 """
 scripts/download_ctrader_fx_history.py
 ------------------------------------------
-Deep H1 FX history with REAL cTrader tick-volume, for the 7 enabled FX
-symbols. Built specifically because every other historical FX source this
-project has (Yahoo Finance, Twelve Data Free) reports zero volume for
-forex — confirmed empirically 2026-07-23 on the VPS:
+Deep H1/M15 history with REAL cTrader tick-volume, for the full
+`execution.ctrader_client.IATIS_TO_CTRADER` symbol map (20 symbols —
+FX majors/crosses, metals, USOIL, indices, crypto; equities/ETFs are not
+mapped there and stay out of scope for this script). Originally built
+FX-only, because every other historical FX source this project has
+(Yahoo Finance, Twelve Data Free) reports zero volume for forex —
+confirmed empirically 2026-07-23 on the VPS:
 `load_from_csv('data/EURUSD_H1_2y.csv')['volume'].describe()` -> max 0.0.
 That made the H023 Wyckoff-volume-gating A/B (arm A vs arm B, differing
 only in whether FX volume is zeroed) a no-op: both arms already had zero
 FX volume, so dPF=0.0 on every symbol was an artifact of the data source,
 not a real null finding.
 
+Widened (2026-08-11) from the original 7-symbol/H1-only build to the
+full IATIS_TO_CTRADER map and an M15/H1 --timeframe choice, as part of
+the operator's multi-provider (Dukascopy -> cTrader -> twelve_data)
+download-coverage initiative — closing the gaps the Dukascopy public
+feed deliberately leaves (USOIL/indices) via this authenticated feed
+instead. execution/ctrader_client.py::get_trendbars already supports
+M15/H1/H4/D1 generically (ProtoOATrendbarPeriod.Value(period)) — no
+client changes were needed, only this script's own hardcoded symbol
+list and `period="H1"` call.
+
 cTrader's own trendbars (execution/ctrader_client.py::get_trendbars) DO
 carry real tick-volume for FX — that's the live feed's own volume field,
 already trusted elsewhere in this codebase (position tracking,
 reconciliation). This script pages backward through that same API using
-the new `to_timestamp_ms` parameter (additive, 2026-07-24 — every other
-get_trendbars() caller is unaffected) to build a multi-year H1 dataset,
-so H023 can be re-run against data that actually contains the condition
+the `to_timestamp_ms` parameter (additive, 2026-07-24 — every other
+get_trendbars() caller is unaffected) to build a multi-year dataset, so
+H023 can be re-run against data that actually contains the condition
 it's testing.
 
-Output: data/{SYMBOL}_H1_ctrader.csv (distinct filename from the existing
-Yahoo-sourced data/{SYMBOL}_H1_{2y,5y}.csv — nothing is overwritten) plus
-a research/results manifest with SHA256 fingerprints.
+Output: data/{SYMBOL}_{TIMEFRAME}_ctrader.csv (distinct filename from
+the existing Yahoo-sourced data/{SYMBOL}_H1_{2y,5y}.csv — nothing is
+overwritten) plus a research/results manifest with SHA256 fingerprints.
 
 RUN ON THE VPS (cTrader Open API is network-blocked from the sandbox; a
 live cTrader session is required, same credentials as the live trader —
 this reads market history only, never touches positions or orders).
 
 Usage:
-    python3 -m scripts.download_ctrader_fx_history --probe EURUSD   # sanity: prints bar count + volume stats
-    python3 -m scripts.download_ctrader_fx_history --years 3        # all 7 FX symbols, ~3y each
+    python3 -m scripts.download_ctrader_fx_history --probe EURUSD             # sanity: prints bar count + volume stats
+    python3 -m scripts.download_ctrader_fx_history --years 3                  # all 20 mapped symbols, ~3y each, H1
     python3 -m scripts.download_ctrader_fx_history --symbols EURUSD GBPUSD --years 2
+    python3 -m scripts.download_ctrader_fx_history --symbols XAUUSD --timeframe M15 --years 1
 """
 from __future__ import annotations
 
@@ -69,9 +83,22 @@ except PermissionError:
         f"  sudo -u iatis {sys.executable} -m scripts.download_ctrader_fx_history ..."
     )
 
+from execution.ctrader_client import IATIS_TO_CTRADER
+
 DATA_DIR = PROJECT_ROOT / "data"
 
-FX_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "EURJPY", "GBPJPY", "AUDJPY"]
+# Every symbol execution/ctrader_client.py knows how to map to a broker
+# instrument — FX majors/crosses, metals, USOIL, indices, crypto. Single
+# source of truth: don't duplicate the mapping here, and a future addition
+# to IATIS_TO_CTRADER is picked up automatically.
+DEFAULT_SYMBOLS = sorted(IATIS_TO_CTRADER)
+
+# H1 bars/year for the --years -> target-bar-count math below. M15 is 4x
+# as many bars per unit of calendar time — scaled via _TF_MINUTES_PER_BAR,
+# not hardcoded, so a future --timeframe addition (H4/D1) only needs one
+# new table entry, mirroring scripts/download_dukascopy_history.py's own
+# _TF_MINUTES convention.
+_TF_MINUTES_PER_BAR = {"M15": 15, "H1": 60}
 
 # Conservative per-request size and pacing — this is a research download,
 # not latency-sensitive; erring toward fewer/larger requests with pauses
@@ -79,7 +106,7 @@ FX_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "EURJPY", "GBPJPY", "AUDJP
 # window limit aggressively. Adjust down if the VPS run hits errors.
 BARS_PER_REQUEST = 1000
 REQUEST_SLEEP_SEC = 2.0
-MAX_REQUESTS_PER_SYMBOL = 60  # hard stop — ~60k H1 bars (~7 years) even in the worst case
+MAX_REQUESTS_PER_SYMBOL = 60  # hard stop — ~60k bars (~7 years of H1, ~1.75 years of M15) even in the worst case
 
 
 def _connect_client():
@@ -109,18 +136,21 @@ def _connect_client():
 
 
 def download_symbol_deep(client, symbol: str, years: float,
-                         bars_per_request: int = BARS_PER_REQUEST) -> pd.DataFrame:
+                         bars_per_request: int = BARS_PER_REQUEST,
+                         timeframe: str = "H1") -> pd.DataFrame:
     """Page backward from now via get_trendbars(to_timestamp_ms=...) until
-    `years` of H1 history is collected or the server stops returning new
-    (older) bars — whichever comes first. Dedupes and sorts ascending."""
-    target_bars = int(years * 365.25 * 24)  # H1 bars per year, calendar (over-estimates trading hours — fine, it's just a stop condition)
+    `years` of history at `timeframe` is collected or the server stops
+    returning new (older) bars — whichever comes first. Dedupes and sorts
+    ascending."""
+    bars_per_year = int(365.25 * 24 * 60 / _TF_MINUTES_PER_BAR[timeframe])  # calendar bars/year (over-estimates trading hours — fine, it's just a stop condition)
+    target_bars = int(years * bars_per_year)
     all_bars: list[dict] = []
     seen_timestamps: set[int] = set()
     to_ts_ms: int | None = None
     requests_made = 0
 
     while len(all_bars) < target_bars and requests_made < MAX_REQUESTS_PER_SYMBOL:
-        batch = client.get_trendbars(symbol, period="H1", count=bars_per_request,
+        batch = client.get_trendbars(symbol, period=timeframe, count=bars_per_request,
                                      to_timestamp_ms=to_ts_ms)
         requests_made += 1
         if not batch:
@@ -158,6 +188,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", help="single symbol, print bar count + volume stats, no file written")
     parser.add_argument("--symbols", nargs="+", default=None)
+    parser.add_argument("--timeframe", default="H1", choices=sorted(_TF_MINUTES_PER_BAR))
     parser.add_argument("--years", type=float, default=2.0)
     parser.add_argument("--force", action="store_true", help="re-download even if the output file exists")
     args = parser.parse_args()
@@ -165,7 +196,7 @@ def main() -> None:
     client = _connect_client()
 
     if args.probe:
-        df = download_symbol_deep(client, args.probe, years=min(args.years, 0.5))
+        df = download_symbol_deep(client, args.probe, years=min(args.years, 0.5), timeframe=args.timeframe)
         if df.empty:
             print(f"{args.probe}: no bars returned — check symbol name / connection.")
         else:
@@ -175,18 +206,22 @@ def main() -> None:
         client.disconnect()
         return
 
-    symbols = args.symbols or FX_SYMBOLS
+    symbols = args.symbols or DEFAULT_SYMBOLS
+    unknown = [s for s in symbols if s not in IATIS_TO_CTRADER]
+    if unknown:
+        client.disconnect()
+        raise SystemExit(f"No cTrader instrument mapping for: {unknown}. Known symbols: {sorted(IATIS_TO_CTRADER)}")
     DATA_DIR.mkdir(exist_ok=True)
     csvs: list[str] = []
     t0 = time.monotonic()
 
     print("=" * 72)
-    print(f"cTrader deep FX history download — {len(symbols)} symbol(s), "
-          f"target {args.years}y each")
+    print(f"cTrader deep history download — {len(symbols)} symbol(s), "
+          f"target {args.years}y each @ {args.timeframe}")
     print("=" * 72)
 
     for idx, sym in enumerate(symbols, 1):
-        out_path = DATA_DIR / f"{sym}_H1_ctrader.csv"
+        out_path = DATA_DIR / f"{sym}_{args.timeframe}_ctrader.csv"
         print(f"[{idx}/{len(symbols)}] {sym} ... ", end="", flush=True)
         if out_path.exists() and not args.force:
             print(f"exists ({out_path}) — skipped, pass --force to re-download")
@@ -194,7 +229,7 @@ def main() -> None:
             continue
         print()
 
-        df = download_symbol_deep(client, sym, years=args.years)
+        df = download_symbol_deep(client, sym, years=args.years, timeframe=args.timeframe)
         if df.empty:
             print(f"  {sym}: FAILED — no bars downloaded")
             continue
@@ -222,9 +257,9 @@ def main() -> None:
     from utils.helpers import load_config
 
     manifest = build_manifest(
-        kind="ctrader_fx_history_download",
+        kind="ctrader_history_download",
         config=load_config(),
-        params={"symbols": symbols, "years": args.years,
+        params={"symbols": symbols, "timeframe": args.timeframe, "years": args.years,
                 "bars_per_request": BARS_PER_REQUEST},
         datasets=[dataset_fingerprint(Path(c)) for c in csvs],
         results={"files_written": csvs},

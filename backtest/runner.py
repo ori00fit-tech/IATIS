@@ -131,30 +131,45 @@ class SymbolRunResult:
 # Data loading
 # ─────────────────────────────────────────────────────────────────────────
 
-def find_symbol_csv(symbol: str, data_dir: Path) -> Path:
-    """Locate the H1 dataset for ``symbol`` under ``data_dir``.
+def find_symbol_csv(symbol: str, data_dir: Path, timeframe: str = "H1") -> Path:
+    """Locate the ``timeframe`` dataset for ``symbol`` under ``data_dir``.
 
-    Matches the ``{SYMBOL}_H1_*.csv`` pattern written by
-    ``scripts/download_all_symbols.py`` AND ``{SYMBOL}_H1_*.parquet``
-    (Phase 4a upload endpoint, ``execution/routes/research.py``'s
-    ``upload_dataset``) — both extensions are considered together. If
-    several files match (e.g. 1y and 2y downloads, or a CSV and an
-    uploaded Parquet), the largest file is chosen and the choice is
-    logged.
+    ``timeframe`` defaults to "H1" — every pre-2026-08-11 caller omits it
+    and keeps loading exactly the same file it always did (zero behavior
+    change). Only an explicit "M15" request (Backtesting Lab Pro's
+    ``timeframes`` override, when its base is genuinely M15) looks for a
+    real M15-native file instead — see ``scripts/download_dukascopy_
+    history.py``/``download_ctrader_fx_history.py``/``download_twelve_
+    data_history.py`` for M15 producers. H4/D1 are deliberately NOT
+    separate physical timeframes here: they are always derived from the
+    H1 file by resampling (``core/timeframe_sync.py``), matching this
+    project's existing, deliberate "H1 is the only physically-downloaded
+    intraday granularity below H4" convention — requesting
+    ``timeframe="H4"``/``"D1"`` would be wrong (no such file is ever
+    produced) and is never done by any caller.
+
+    Matches the ``{SYMBOL}_{TIMEFRAME}_*.csv`` pattern written by
+    ``scripts/download_all_symbols.py`` (H1) / the M15 download scripts
+    above, AND ``{SYMBOL}_{TIMEFRAME}_*.parquet`` (Phase 4a upload
+    endpoint, ``execution/routes/research.py``'s ``upload_dataset``) —
+    both extensions are considered together. If several files match
+    (e.g. 1y and 2y downloads, or a CSV and an uploaded Parquet), the
+    largest file is chosen and the choice is logged.
 
     Raises:
         FileNotFoundError: with the exact expected pattern, so a missing
             dataset is an actionable error rather than a silent skip.
     """
-    matches = sorted(data_dir.glob(f"{symbol}_H1_*.csv")) + sorted(data_dir.glob(f"{symbol}_H1_*.parquet"))
+    matches = sorted(data_dir.glob(f"{symbol}_{timeframe}_*.csv")) + sorted(data_dir.glob(f"{symbol}_{timeframe}_*.parquet"))
     if not matches:
+        hint = "python scripts/download_all_symbols.py" if timeframe == "H1" else f"an M15 download script for {symbol}"
         raise FileNotFoundError(
-            f"No dataset for {symbol}: expected '{data_dir}/{symbol}_H1_*.csv' "
-            f"(run: python scripts/download_all_symbols.py)"
+            f"No {timeframe} dataset for {symbol}: expected '{data_dir}/{symbol}_{timeframe}_*.csv' "
+            f"(run: {hint})"
         )
     chosen = max(matches, key=lambda p: p.stat().st_size)
     if len(matches) > 1:
-        logger.info(f"{symbol}: {len(matches)} datasets found, using {chosen.name}")
+        logger.info(f"{symbol}: {len(matches)} {timeframe} datasets found, using {chosen.name}")
     return chosen
 
 
@@ -163,8 +178,11 @@ def load_symbol_data(
     data_dir: Path,
     start: str | None = None,
     end: str | None = None,
+    timeframe: str = "H1",
 ) -> pd.DataFrame:
-    """Load and validate one symbol's OHLCV history.
+    """Load and validate one symbol's OHLCV history at ``timeframe``
+    (default "H1" — see ``find_symbol_csv``'s docstring for why H4/D1 are
+    never passed here).
 
     Returns a UTC-indexed, schema-validated DataFrame. Slicing by
     ``start``/``end`` happens BEFORE validation so the validated frame
@@ -173,7 +191,7 @@ def load_symbol_data(
     Raises:
         ValueError: on schema problems or an empty post-slice frame.
     """
-    path = find_symbol_csv(symbol, data_dir)
+    path = find_symbol_csv(symbol, data_dir, timeframe=timeframe)
     # Phase 4a: an uploaded dataset may be Parquet — branch the read call
     # on suffix, everything downstream (tz-localize, sort, validate) is
     # identical for both formats.
@@ -199,6 +217,34 @@ def load_symbol_data(
 
     validate_ohlcv(df)
     return df
+
+
+def physical_load_timeframe(timeframes: tuple[str, ...] | None) -> str:
+    """The REAL on-disk granularity to load for a run, given its
+    (possibly overridden) ``RunnerConfig.timeframes``/``RobustnessConfig.
+    timeframes``/``WalkForwardConfig.timeframes``/``ValidationConfig``-
+    style decision-timeframe list.
+
+    Only an explicit "M15" base changes what gets loaded — H1/H4/D1 (or
+    no override at all, ``timeframes is None``) all still resolve to the
+    H1 file, byte-identical to every call site's behavior before this
+    function existed: H4/D1 backtesting has always been served by
+    resampling H1 (see ``find_symbol_csv``'s docstring), and no producer
+    anywhere in this codebase writes a native H4/D1 file, so requesting
+    either as the physical load timeframe would only ever raise
+    ``FileNotFoundError`` — never done.
+
+    Not wired into ``backtest/mission_runner.py``: Mission Center's
+    Optuna-driven search loads ONE dataframe per symbol and reuses it
+    across every trial in that symbol's study, including trials whose
+    resolved ``timeframes`` differ from each other (e.g. a hypothesis
+    bundle mixing an M15 bundle with an H1 bundle) — supporting per-trial
+    physical-timeframe switching there needs a real redesign (which file
+    each trial's ``evaluate_point`` call reads), not this one-line rule.
+    Left on H1-only for now, a disclosed, separate limitation."""
+    if timeframes and timeframes[0] == "M15":
+        return "M15"
+    return "H1"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -431,7 +477,10 @@ def run_all(config: RunnerConfig) -> dict[str, SymbolRunResult]:
     results: dict[str, SymbolRunResult] = {}
     for symbol in config.symbols:
         try:
-            df = load_symbol_data(symbol, config.data_dir, config.start, config.end)
+            df = load_symbol_data(
+                symbol, config.data_dir, config.start, config.end,
+                timeframe=physical_load_timeframe(config.timeframes),
+            )
             results[symbol] = run_symbol(symbol, df, config)
             m = results[symbol].metrics
             logger.info(

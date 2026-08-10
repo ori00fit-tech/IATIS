@@ -70,7 +70,7 @@ from backtest.monte_carlo import run_monte_carlo
 from backtest.multiple_testing import effective_sample_size, trial_p_value
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
 from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS, RobustnessConfig, run_robustness
-from backtest.runner import find_symbol_csv, load_symbol_data
+from backtest.runner import find_symbol_csv, load_symbol_data, physical_load_timeframe
 from backtest.walk_forward import SymbolVerdict, WalkForwardConfig, run_walk_forward
 from research.manifest import dataset_fingerprint, git_state
 from storage import research_mission_validations, research_missions
@@ -524,7 +524,8 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     research_mission_validation_results — always populated, pass or
     fail, nothing suppressed."""
     started_at = datetime.now(timezone.utc).isoformat()
-    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end)
+    point_timeframes = tuple(point["timeframes"]) if point["timeframes"] else None
+    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end, timeframe=physical_load_timeframe(point_timeframes))
 
     eval_result = evaluate_point(
         symbol, df, point, min_trades=1, objective_metric="profit_factor", return_trades=True,
@@ -550,7 +551,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         min_trades_per_window=vc.wf_min_trades_per_window,
         warmup_bars=vc.wf_warmup_bars,
         engine_overrides=point["risk_overrides"],
-        timeframes=tuple(point["timeframes"]) if point["timeframes"] else None,
+        timeframes=point_timeframes,
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,
@@ -568,7 +569,7 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     rb_result = run_robustness(symbol, df, RobustnessConfig(
         multipliers=vc.rb_multipliers, params=vc.rb_params, min_trades=vc.rb_min_trades,
         engine_overrides=point["risk_overrides"],
-        timeframes=tuple(point["timeframes"]) if point["timeframes"] else None,
+        timeframes=point_timeframes,
         engines=tuple(point["engines"]) if point["engines"] else None,
         indicators=tuple(point["indicators"]) if point["indicators"] else None,
         context_filters=tuple(point["context_filters"]) if point["context_filters"] else None,

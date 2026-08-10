@@ -14,7 +14,7 @@ from __future__ import annotations
 import lzma
 import struct
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -30,11 +30,11 @@ from download_dukascopy_history import (  # noqa: E402
     DukascopyFetchError,
     _PLAUSIBLE_RANGES,
     _POINT_VALUE_CANDIDATES,
+    coarsen_bars,
     detect_point_value,
     download_symbol_hours,
     fetch_hour,
-    resample_h1_to,
-    ticks_to_h1_bar,
+    ticks_to_m15_bars,
 )
 from core.data_validator import validate_ohlcv
 
@@ -160,11 +160,14 @@ def test_candidate_scales_cover_the_documented_set():
 
 
 # ---------------------------------------------------------------------------
-# tick -> OHLCV resampling correctness
+# tick -> M15 OHLCV bucketing correctness
 # ---------------------------------------------------------------------------
 
 
-def test_ticks_to_h1_bar_mid_price_and_ohlc_bounds():
+def test_ticks_to_m15_bars_mid_price_and_ohlc_bounds():
+    # All four ticks fall within ms_offset 0-3000, well inside the first
+    # 15-minute sub-bucket -> exactly one bar, same values the old H1-only
+    # implementation would have produced for this same input.
     hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
     ticks = [
         (0, 108520, 108500, 1.0, 1.0),      # mid 108510
@@ -172,7 +175,9 @@ def test_ticks_to_h1_bar_mid_price_and_ohlc_bounds():
         (2000, 108400, 108380, 0.5, 0.5),   # mid 108390 (low)
         (3000, 108450, 108430, 1.0, 1.0),   # mid 108440 (close)
     ]
-    bar = ticks_to_h1_bar(hour, ticks, point_value=100_000)
+    bars = ticks_to_m15_bars(hour, ticks, point_value=100_000)
+    assert len(bars) == 1
+    bar = bars[0]
     assert bar["datetime"] == hour
     assert bar["open"] == pytest.approx(1.08510)
     assert bar["high"] == pytest.approx(1.08590)
@@ -185,9 +190,51 @@ def test_ticks_to_h1_bar_mid_price_and_ohlc_bounds():
     assert bar["low"] <= min(bar["open"], bar["close"])
 
 
-def test_ticks_to_h1_bar_returns_none_for_empty_ticks():
+def test_ticks_to_m15_bars_returns_empty_list_for_empty_ticks():
     hour = datetime(2024, 1, 6, 3, tzinfo=timezone.utc)  # closed Saturday hour
-    assert ticks_to_h1_bar(hour, [], point_value=100_000) is None
+    assert ticks_to_m15_bars(hour, [], point_value=100_000) == []
+
+
+def test_ticks_to_m15_bars_splits_across_multiple_sub_buckets():
+    hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+    ticks = [
+        (0, 108520, 108500, 1.0, 1.0),                  # bucket 0 (0-15min)
+        (14 * 60 * 1000, 108530, 108510, 1.0, 1.0),     # bucket 0 (0-15min)
+        (15 * 60 * 1000, 108600, 108580, 1.0, 1.0),     # bucket 1 (15-30min)
+        (44 * 60 * 1000, 108610, 108590, 1.0, 1.0),     # bucket 2 (30-45min)
+        (46 * 60 * 1000, 108400, 108380, 1.0, 1.0),     # bucket 3 (45-60min)
+    ]
+    bars = ticks_to_m15_bars(hour, ticks, point_value=100_000)
+    assert len(bars) == 4
+    assert [b["datetime"] for b in bars] == [
+        hour,
+        hour + timedelta(minutes=15),
+        hour + timedelta(minutes=30),
+        hour + timedelta(minutes=45),
+    ]
+    assert bars[0]["volume"] == pytest.approx(4.0)  # 2 ticks in bucket 0
+    assert bars[1]["volume"] == pytest.approx(2.0)  # 1 tick in bucket 1
+    assert bars[2]["volume"] == pytest.approx(2.0)  # 1 tick in bucket 2
+    assert bars[3]["volume"] == pytest.approx(2.0)  # 1 tick in bucket 3
+
+
+def test_ticks_to_m15_bars_clamps_ms_offset_near_hour_boundary():
+    hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+    ticks = [(3_599_999, 108520, 108500, 1.0, 1.0)]  # a hair under 60 min -> bucket 3
+    bars = ticks_to_m15_bars(hour, ticks, point_value=100_000)
+    assert len(bars) == 1
+    assert bars[0]["datetime"] == hour + timedelta(minutes=45)
+
+
+def test_ticks_to_m15_bars_clamps_exact_hour_boundary_ms_offset():
+    # ms_offset=3_600_000 is exactly one hour -> 3_600_000 // 900_000 == 4,
+    # which the min(3, ...) clamp must land in the LAST sub-bucket (3),
+    # never raise or silently drop the tick.
+    hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+    ticks = [(3_600_000, 108520, 108500, 1.0, 1.0)]
+    bars = ticks_to_m15_bars(hour, ticks, point_value=100_000)
+    assert len(bars) == 1
+    assert bars[0]["datetime"] == hour + timedelta(minutes=45)
 
 
 def test_download_symbol_hours_produces_a_validate_ohlcv_clean_frame():
@@ -235,30 +282,30 @@ def test_download_symbol_hours_skips_a_bad_hour_without_aborting():
 
 
 # ---------------------------------------------------------------------------
-# resampling H1 -> H4/D1
+# coarsening M15 (base) -> H1/H4/D1
 # ---------------------------------------------------------------------------
 
 
-def test_resample_h1_to_h1_is_a_passthrough():
-    idx = pd.date_range("2024-01-02", periods=3, freq="h", tz="UTC")
+def test_coarsen_bars_m15_is_a_passthrough():
+    idx = pd.date_range("2024-01-02", periods=3, freq="15min", tz="UTC")
     df = pd.DataFrame(
         {"open": [1.0, 1.1, 1.2], "high": [1.05, 1.15, 1.25], "low": [0.95, 1.05, 1.15],
          "close": [1.02, 1.12, 1.22], "volume": [10, 20, 30]},
         index=idx,
     )
-    out = resample_h1_to(df, "H1")
+    out = coarsen_bars(df, "M15")
     pd.testing.assert_frame_equal(out, df)
 
 
-def test_resample_h1_to_h4_aggregates_correctly():
-    idx = pd.date_range("2024-01-02 00:00", periods=4, freq="h", tz="UTC")
+def test_coarsen_bars_m15_to_h1_aggregates_correctly():
+    idx = pd.date_range("2024-01-02 00:00", periods=4, freq="15min", tz="UTC")
     df = pd.DataFrame(
         {"open": [1.0, 1.1, 1.2, 1.3], "high": [1.05, 1.15, 1.25, 1.35],
          "low": [0.95, 1.05, 1.15, 1.25], "close": [1.02, 1.12, 1.22, 1.32],
          "volume": [10, 20, 30, 40]},
         index=idx,
     )
-    out = resample_h1_to(df, "H4")
+    out = coarsen_bars(df, "H1")
     assert len(out) == 1
     row = out.iloc[0]
     assert row["open"] == 1.0
@@ -267,6 +314,60 @@ def test_resample_h1_to_h4_aggregates_correctly():
     assert row["low"] == 0.95
     assert row["volume"] == 100
     assert validate_ohlcv(out) is True
+
+
+def test_coarsen_bars_m15_to_h4_aggregates_across_16_bars():
+    idx = pd.date_range("2024-01-02 00:00", periods=16, freq="15min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1.0 + 0.01 * i for i in range(16)],
+            "high": [1.05 + 0.01 * i for i in range(16)],
+            "low": [0.95 + 0.01 * i for i in range(16)],
+            "close": [1.02 + 0.01 * i for i in range(16)],
+            "volume": [10] * 16,
+        },
+        index=idx,
+    )
+    out = coarsen_bars(df, "H4")
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["open"] == pytest.approx(df["open"].iloc[0])
+    assert row["close"] == pytest.approx(df["close"].iloc[-1])
+    assert row["high"] == pytest.approx(df["high"].max())
+    assert row["low"] == pytest.approx(df["low"].min())
+    assert row["volume"] == pytest.approx(160)
+    assert validate_ohlcv(out) is True
+
+
+def test_m15_to_h1_coarsening_matches_direct_single_hour_tick_aggregation():
+    """The module docstring's load-bearing correctness claim: building M15
+    bars first, then coarsening to H1, must be mathematically identical to
+    directly aggregating the whole hour's raw ticks into one H1 bar."""
+    hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+    ticks = [
+        (0, 108520, 108500, 1.0, 1.0),                # bucket 0 -> open
+        (5 * 60 * 1000, 108600, 108580, 0.5, 0.5),    # bucket 0 -> overall high
+        (20 * 60 * 1000, 108400, 108380, 0.5, 0.5),   # bucket 1 -> overall low
+        (50 * 60 * 1000, 108450, 108430, 1.0, 1.0),   # bucket 3 -> close
+    ]
+    point_value = 100_000
+
+    m15_bars = ticks_to_m15_bars(hour, ticks, point_value)
+    m15_df = pd.DataFrame(m15_bars).set_index("datetime").sort_index()
+    m15_df.index = pd.DatetimeIndex(m15_df.index, tz="UTC")
+    coarsened = coarsen_bars(m15_df, "H1")
+
+    # Direct single-hour aggregation of the SAME ticks, bypassing M15 entirely.
+    mids = [((ask / point_value) + (bid / point_value)) / 2.0 for _, ask, bid, _, _ in ticks]
+    total_volume = sum(ask_vol + bid_vol for _, _, _, ask_vol, bid_vol in ticks)
+
+    assert len(coarsened) == 1
+    row = coarsened.iloc[0]
+    assert row["open"] == pytest.approx(mids[0])
+    assert row["high"] == pytest.approx(max(mids))
+    assert row["low"] == pytest.approx(min(mids))
+    assert row["close"] == pytest.approx(mids[-1])
+    assert row["volume"] == pytest.approx(total_volume)
 
 
 # ---------------------------------------------------------------------------

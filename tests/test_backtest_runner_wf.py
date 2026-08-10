@@ -33,9 +33,9 @@ from backtesting.backtest_engine import Trade
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────
 
-def _ohlcv(n: int, seed: int = 7, trend: float = 0.06) -> pd.DataFrame:
+def _ohlcv(n: int, seed: int = 7, trend: float = 0.06, freq: str = "h") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz="UTC")
     close = 1.08 + np.linspace(0, trend, n) + np.cumsum(rng.normal(0, 0.0009, n))
     o = np.roll(close, 1)
     o[0] = close[0]
@@ -402,6 +402,106 @@ def test_walk_forward_engine_overrides_warmup_bars_no_collision():
     # sizing field) — this is unaffected by the BacktestConfig-level override,
     # which only controls how many bars the ENGINE itself treats as warmup.
     assert all(w.bars > 0 for w in result.windows)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Data-download M15 support (2026-08-11) — timeframe-parameterized loader
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_find_symbol_csv_m15_finds_the_m15_file(tmp_path):
+    _ohlcv(50, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
+    path = find_symbol_csv("EURUSD", tmp_path, timeframe="M15")
+    assert path.name == "EURUSD_M15_2y.csv"
+
+
+def test_find_symbol_csv_m15_missing_is_actionable_error_even_when_h1_exists(tmp_path):
+    # An H1 file existing must never be silently substituted for a
+    # genuine M15 request — fail loud, matching this function's own
+    # established convention for a missing dataset.
+    _ohlcv(50).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+    with pytest.raises(FileNotFoundError, match="EURUSD_M15_"):
+        find_symbol_csv("EURUSD", tmp_path, timeframe="M15")
+
+
+def test_load_symbol_data_m15_loads_the_m15_file_not_h1(tmp_path):
+    _ohlcv(50, seed=1).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+    _ohlcv(222, seed=2, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="M15")
+    assert len(loaded) == 222  # distinguishable from the 50-bar H1 file -> proves M15 was actually read
+
+
+def test_physical_load_timeframe_defaults_and_h4_d1_still_load_h1():
+    from backtest.runner import physical_load_timeframe
+
+    assert physical_load_timeframe(None) == "H1"
+    assert physical_load_timeframe(("H1",)) == "H1"
+    assert physical_load_timeframe(("H4", "D1", "H1")) == "H1"
+    assert physical_load_timeframe(("D1",)) == "H1"
+
+
+def test_physical_load_timeframe_m15_base_returns_m15():
+    from backtest.runner import physical_load_timeframe
+
+    assert physical_load_timeframe(("M15",)) == "M15"
+    assert physical_load_timeframe(("M15", "H1", "H4", "D1")) == "M15"
+    # M15 only matters as the FIRST (base) entry — elsewhere it's inert.
+    assert physical_load_timeframe(("H1", "M15")) == "H1"
+
+
+def test_run_all_with_m15_override_loads_the_m15_file(tmp_path):
+    """End-to-end proof that RunnerConfig.timeframes genuinely selects
+    the M15 physical file through physical_load_timeframe -> load_symbol_
+    data, not just that the helper function works in isolation."""
+    _ohlcv(1200, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")  # only an M15 file exists, no H1 file
+
+    cfg_default = RunnerConfig(symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False)
+    results_default = run_all(cfg_default)
+    assert "EURUSD" not in results_default  # default (H1) can't find any H1 file -> isolated, not raised
+
+    cfg_m15 = RunnerConfig(
+        symbols=("EURUSD",), data_dir=tmp_path, run_mc=False, write_html=False,
+        timeframes=("M15", "H1", "H4", "D1"),
+    )
+    results_m15 = run_all(cfg_m15)
+    assert "EURUSD" in results_m15  # the M15 override correctly finds and uses the M15 file
+
+
+def test_walk_forward_suite_wires_physical_load_timeframe(tmp_path, monkeypatch):
+    import backtest.walk_forward as wf_mod
+
+    captured_timeframes: list[str] = []
+    real_load = wf_mod.load_symbol_data
+
+    def spy_load(symbol, data_dir, start=None, end=None, timeframe="H1"):
+        captured_timeframes.append(timeframe)
+        return real_load(symbol, data_dir, start, end, timeframe=timeframe)
+
+    monkeypatch.setattr(wf_mod, "load_symbol_data", spy_load)
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default)
+    assert captured_timeframes == ["H1"]
+    assert "EURUSD" in out
+
+    captured_timeframes.clear()
+    wf_h4 = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1, timeframes=("H4", "D1", "H1"))
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_h4)
+    assert captured_timeframes == ["H1"]
+    assert "EURUSD" in out
+
+
+def test_walk_forward_suite_m15_base_loads_the_m15_file(tmp_path):
+    import backtest.walk_forward as wf_mod
+
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")  # H1 exists, M15 does not yet
+    wf_m15 = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1, timeframes=("M15", "H1"))
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_m15)
+    assert "EURUSD" not in out  # M15 requested but absent -> excluded, never substitutes H1
+
+    _ohlcv(2400, trend=0.10, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
+    out2 = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_m15)
+    assert "EURUSD" in out2  # the real M15 file now exists -> succeeds
 
 
 # ─────────────────────────────────────────────────────────────────────────

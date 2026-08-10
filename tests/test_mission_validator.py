@@ -42,9 +42,9 @@ CONFIG_YAML_PATH = REPO_ROOT / "config.yaml"
 ENGINES_YAML_PATH = REPO_ROOT / "config" / "engines.yaml"
 
 
-def _ohlcv(n: int, seed: int = 7, trend: float = 0.10) -> pd.DataFrame:
+def _ohlcv(n: int, seed: int = 7, trend: float = 0.10, freq: str = "h") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz="UTC")
     close = 1.08 + np.linspace(0, trend, n) + np.cumsum(rng.normal(0, 0.0009, n))
     o = np.roll(close, 1)
     o[0] = close[0]
@@ -216,6 +216,61 @@ def test_run_validation_reconstructs_hypothesis_bundle_mode_trial_correctly(tmp_
     # got a real evaluated result (not silently skipped/errored).
     for r in results:
         assert r["error"] is None
+
+
+# ── Data-download M15 support (2026-08-11) ────────────────────────────────
+
+def test_run_validation_m15_base_loads_the_m15_physical_file(tmp_path):
+    """A trial whose resolved point.timeframes[0] == 'M15' must genuinely
+    load the M15 physical file in _evaluate_symbol, never silently fall
+    back to H1 — proven end-to-end via run_validation, not just via
+    physical_load_timeframe in isolation."""
+    space_m15 = MissionSearchSpace(
+        timeframes_choices=(("M15", "H1", "H4", "D1"),),
+        engine_set_choices=(("nnfx", "price_action"),),
+        indicator_set_choices=((),),
+        risk_param_ranges={"sl_atr_multiplier": (1.5, 2.5)},
+    )
+    raw_params = {_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0}
+
+    def _seed(mission_id: str) -> None:
+        research_missions.upsert_mission(
+            mission_id=mission_id, name="test-m15-mission", sampler="random", objective_metric="profit_factor",
+            symbols=["EURUSD"], n_trials_per_symbol=1, min_trades=1, seed=42,
+            search_space=mission_runner._search_space_dict(space_m15), config={}, status="finished",
+        )
+        research_missions.record_trial(
+            mission_id=mission_id, trial_number=0, symbol="EURUSD", state="COMPLETE",
+            objective_value=1.2, params=raw_params, metrics={"profit_factor": 1.2}, trades=50,
+            error=None, started_at="t", finished_at="t",
+        )
+
+    def _vc(validation_id: str, mission_id: str) -> ValidationConfig:
+        return ValidationConfig(
+            validation_id=validation_id, mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+            validation_symbols=("EURUSD",), data_dir=tmp_path, start=None, end=None,
+            validation_mode=SAME_SYMBOL,
+            wf_windows=2, wf_min_trades_per_window=1, wf_warmup_bars=50,
+            rb_multipliers=(0.8, 1.0, 1.2), rb_params=("sl_atr_multiplier",), rb_min_trades=1,
+            mc_n_simulations=50, mc_seed=1, output_dir=tmp_path / "reports",
+        )
+
+    # No dataset at all yet -> the M15 request must fail loudly and be
+    # recorded as a per-symbol error, never silently substitute H1.
+    _seed("val-m15-missing")
+    run_validation(_vc("v-m15-missing", "val-m15-missing"))
+    results = research_mission_validations.validation_results("v-m15-missing")
+    assert len(results) == 1
+    assert results[0]["error"] is not None
+    assert "M15" in results[0]["error"]
+
+    # Now write ONLY the M15 file (no H1 file at all) -> must succeed.
+    _ohlcv(2400, seed=1, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
+    _seed("val-m15-present")
+    run_validation(_vc("v-m15-present", "val-m15-present"))
+    results2 = research_mission_validations.validation_results("v-m15-present")
+    assert len(results2) == 1
+    assert results2[0]["error"] is None
 
 
 # ── confluence_overrides end-to-end audit (2026-08-XX) ──────────────────────

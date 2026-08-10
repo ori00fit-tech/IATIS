@@ -37,10 +37,24 @@ confirms the backtest engine applies spread cost separately on top of a
 single-price OHLCV series — so tick-to-bar resampling here uses
 mid = (bid + ask) / 2, matching every other provider in this codebase.
 
-Output: data/{SYMBOL}_H1_dukascopy.csv (H1-only — backtest/runner.py's
-find_symbol_csv() only ever globs `{SYMBOL}_H1_*.csv`/`.parquet`; other
-timeframes are resampled internally via core/timeframe_sync.py, they
-are never separately downloaded/discovered).
+Timeframe support (2026-08-11, generalized from the original H1-only
+build): ticks within every fetched hour are ALWAYS bucketed to M15
+granularity first (4 sub-buckets by ms_offset, at most 4 bars/hour) —
+M15 is the finest granularity backtest/runner.py's loader ever asks
+for, so building it once and coarsening upward for every other
+--timeframe is both the minimal common base and mathematically
+lossless: OHLC/volume aggregation is associative, so coarsening 4 real
+M15 bars into an H1 bar produces byte-identical results to the old
+direct-per-hour aggregation this script originally shipped with — H1/
+H4/D1 output is unchanged, M15 output is new. Output: data/
+{SYMBOL}_{TIMEFRAME}_dukascopy.csv — backtest/runner.py's find_symbol_
+csv() only ever loads the H1 file by default, or the M15 file when a
+run's own timeframes override explicitly requests M15 as the base
+(see backtest/runner.py::physical_load_timeframe); H4/D1 are never
+loaded as separate physical files by anything in this codebase (always
+derived from H1 via resampling) — this script's own --timeframe H4/D1
+output exists for direct inspection/other tooling, not because the
+backtest loader ever reads it.
 
 NETWORK NOTE: this sandbox's outbound network policy blocks
 datafeed.dukascopy.com (confirmed: a direct curl returns 403 through
@@ -50,9 +64,17 @@ documented, stable, third-party-verified prior art, and --probe exists
 specifically so the operator can run the real live check on their own
 VPS before trusting a bulk download.
 
+Depth: --years defaults to 10.0 (the operator's own "at least 10 years"
+requirement) — Dukascopy's real tick archive genuinely extends this far
+back for FX majors/crosses and metals (confirmed by public documentation
+of the feed, not verified live from this sandbox); 10 years of hourly
+fetches is ~87,600 HTTP requests per symbol, expensive but bounded by
+--workers concurrency, same as any --years value.
+
 Usage:
-    python3 -m scripts.download_dukascopy_history --probe EURUSD                 # single hour, no file written
-    python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD --years 2
+    python3 -m scripts.download_dukascopy_history --probe EURUSD                     # single hour, no file written
+    python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD            # 10y H1, default
+    python3 -m scripts.download_dukascopy_history --symbols EURUSD --timeframe M15   # 10y M15
     python3 -m scripts.download_dukascopy_history --symbols BTCUSD --years 1 --workers 16
 """
 from __future__ import annotations
@@ -126,7 +148,8 @@ DEFAULT_SYMBOLS = [
     "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD",
 ]
 
-_TF_MINUTES = {"H1": 60, "H4": 240, "D1": 1440}
+_TF_MINUTES = {"M15": 15, "H1": 60, "H4": 240, "D1": 1440}
+_BASE_TIMEFRAME = "M15"  # every tick fetch is aggregated to this granularity first; all other timeframes coarsen from it
 
 
 class DukascopyFetchError(Exception):
@@ -202,24 +225,41 @@ def detect_point_value(raw_prices: list[int], symbol: str) -> int:
     )
 
 
-def ticks_to_h1_bar(day: datetime, hour_ticks: list[tuple], point_value: int) -> dict | None:
-    """Mid-price ((bid+ask)/2) OHLCV for one hour's ticks. None if the
-    hour had zero ticks (a legitimately closed market hour)."""
+def ticks_to_m15_bars(hour_start: datetime, hour_ticks: list[tuple], point_value: int) -> list[dict]:
+    """Mid-price ((bid+ask)/2) OHLCV bars at M15 granularity from one
+    hour's raw ticks — up to 4 bars (one per 15-minute sub-bucket of the
+    hour), determined by each tick's own ms_offset (the first element of
+    the unpacked tuple, previously discarded entirely by the old H1-only
+    single-bucket implementation). A sub-bucket with zero ticks produces
+    no bar (a genuinely quiet 15 minutes, not a fabricated one) — matches
+    the pre-existing "no bar for a legitimately empty period" convention
+    this function's H1-only predecessor already had for whole empty
+    hours."""
     if not hour_ticks:
-        return None
-    mids = [
-        ((ask_raw / point_value) + (bid_raw / point_value)) / 2.0
-        for _, ask_raw, bid_raw, _, _ in hour_ticks
-    ]
-    volume = sum(ask_vol + bid_vol for _, _, _, ask_vol, bid_vol in hour_ticks)
-    return {
-        "datetime": day,
-        "open": mids[0],
-        "high": max(mids),
-        "low": min(mids),
-        "close": mids[-1],
-        "volume": volume,
-    }
+        return []
+    buckets: dict[int, list[tuple]] = {}
+    for tick in hour_ticks:
+        ms_offset = tick[0]
+        bucket_idx = min(3, ms_offset // (15 * 60 * 1000))  # clamp: a tick at exactly ms_offset=3_600_000 would be bucket 4, belongs in the last (3rd) sub-bucket instead
+        buckets.setdefault(bucket_idx, []).append(tick)
+
+    bars: list[dict] = []
+    for bucket_idx in sorted(buckets):
+        bucket_ticks = buckets[bucket_idx]
+        mids = [
+            ((ask_raw / point_value) + (bid_raw / point_value)) / 2.0
+            for _, ask_raw, bid_raw, _, _ in bucket_ticks
+        ]
+        volume = sum(ask_vol + bid_vol for _, _, _, ask_vol, bid_vol in bucket_ticks)
+        bars.append({
+            "datetime": hour_start + timedelta(minutes=15 * bucket_idx),
+            "open": mids[0],
+            "high": max(mids),
+            "low": min(mids),
+            "close": mids[-1],
+            "volume": volume,
+        })
+    return bars
 
 
 def download_symbol_hours(
@@ -253,9 +293,7 @@ def download_symbol_hours(
                 point_value = detect_point_value([t[1] for t in ticks], symbol)
                 print(f"    detected point value: {point_value} (from {hour.date()} {hour.hour:02d}h)")
 
-            bar = ticks_to_h1_bar(hour, ticks, point_value)
-            if bar is not None:
-                bars.append(bar)
+            bars.extend(ticks_to_m15_bars(hour, ticks, point_value))
 
             if done % 200 == 0:
                 print(f"    ...{done}/{len(hours)} hours checked, {len(bars)} bars so far")
@@ -278,8 +316,12 @@ def _hour_range(years: float) -> list[datetime]:
     return [start + timedelta(hours=i) for i in range(total_hours)]
 
 
-def resample_h1_to(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    if timeframe == "H1":
+def coarsen_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Coarsens M15-base bars up to the requested timeframe. Identity
+    when timeframe == _BASE_TIMEFRAME (M15) — every other target
+    (H1/H4/D1) is a valid coarsen-only resample, never an upsample,
+    since M15 is the finest granularity this script ever builds."""
+    if timeframe == _BASE_TIMEFRAME:
         return df
     minutes = _TF_MINUTES[timeframe]
     rule = f"{minutes}min"
@@ -294,7 +336,7 @@ def main() -> None:
     parser.add_argument("--probe", help="single symbol, fetch a handful of recent hours, print result, no file written")
     parser.add_argument("--symbols", nargs="+", default=None)
     parser.add_argument("--timeframe", default="H1", choices=sorted(_TF_MINUTES))
-    parser.add_argument("--years", type=float, default=2.0)
+    parser.add_argument("--years", type=float, default=10.0)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--force", action="store_true", help="re-download even if the output file exists")
     args = parser.parse_args()
@@ -341,16 +383,16 @@ def main() -> None:
 
         instrument = SYMBOL_MAP[sym]
         try:
-            h1_df = download_symbol_hours(instrument, sym, hours, workers=args.workers)
+            base_df = download_symbol_hours(instrument, sym, hours, workers=args.workers)
         except DukascopyFetchError as exc:
             print(f"  {sym}: FAILED — {exc}")
             continue
 
-        if h1_df.empty:
+        if base_df.empty:
             print(f"  {sym}: FAILED — no bars downloaded")
             continue
 
-        out_df = resample_h1_to(h1_df, args.timeframe)
+        out_df = coarsen_bars(base_df, args.timeframe)
         if out_df.empty:
             print(f"  {sym}: FAILED — resample to {args.timeframe} produced zero bars")
             continue

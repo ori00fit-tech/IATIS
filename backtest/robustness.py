@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backtest.metrics import calculate_metrics, json_safe
-from backtest.runner import load_symbol_data, trade_to_record
+from backtest.runner import load_symbol_data, physical_load_timeframe, trade_to_record
 from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
@@ -226,7 +226,7 @@ def run_robustness_suite(
     out: dict[str, RobustnessResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir, start, end)
+            df = load_symbol_data(symbol, data_dir, start, end, timeframe=physical_load_timeframe(rc.timeframes))
             out[symbol] = run_robustness(symbol, df, rc)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: robustness sweep failed — {exc}")

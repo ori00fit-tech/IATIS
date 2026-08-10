@@ -130,8 +130,20 @@ def test_create_rejects_unknown_symbol(client):
     assert "Unknown symbol" in r.json()["detail"]
 
 
-def test_create_rejects_out_of_scope_asset_class(client):
-    # AAPL is asset_class=equity in config/symbols.yaml — outside Phase 1 scope.
+def test_create_rejects_out_of_scope_asset_class(client, monkeypatch):
+    # equity/etf/energy moved in-scope 2026-08-10 — no real symbol in
+    # config/symbols.yaml is out of scope anymore, so this shrinks the
+    # scope set just for this test to keep exercising the actual
+    # rejection code path (still real, defensive code: it protects
+    # against a future asset_class added to symbols.yaml without a
+    # matching _IN_SCOPE_ASSET_CLASSES update). The import inside
+    # provider_benchmark_create is `from backtest.price_benchmark import
+    # _IN_SCOPE_ASSET_CLASSES` executed at call time, so patching the
+    # module attribute here is picked up by the next request.
+    import backtest.price_benchmark as pb
+    monkeypatch.setattr(pb, "_IN_SCOPE_ASSET_CLASSES", {"fx_major", "fx_minor", "metals", "crypto", "indices"})
+    # AAPL is asset_class=equity in config/symbols.yaml — outside the
+    # shrunk scope above.
     r = client.post("/research/provider-benchmark", json={**_VALID_BODY, "symbols": ["AAPL"]}, headers=HDR)
     assert r.status_code == 400
     assert "outside Phase 1" in r.json()["detail"]

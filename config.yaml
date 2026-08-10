@@ -90,16 +90,28 @@ data:
     # left for XAG/USD. Watch GET /data-confidence for divergence on
     # XAU/USD and XAG/USD now that dukascopy_jforex is live here unverified.
     metals:  [ctrader, dukascopy_jforex, twelve_data, fcs_api, alpha_vantage, finnhub]
-    energy:  [ctrader, finnhub]
-    indices: [ctrader, fcs_api, finnhub]
+    # energy/indices (2026-08-10, same operator override as metals):
+    # USOIL -> LIGHT.CMD/USD, US30 -> USA30.IDX/USD, SPX500 ->
+    # USA500.IDX/USD, NAS100 -> USATECH.IDX/USD, confirmed live against
+    # the operator's own Dukascopy JForex app (Commodities CFD / Indices
+    # CFD tabs) — see core/data_providers.py's
+    # _DUKASCOPY_JFOREX_INST_ID_MAP. NOT yet fetch-verified through the
+    # bridge itself: the bridge's own dukascopy.subscription-instruments
+    # property (a separate config file on the VPS, outside this repo)
+    # still needs these 4 instrument codes added and the bridge
+    # restarted before any of these actually return data instead of a
+    # cheap, fast-failing 500 — same class of gap the fx entry already
+    # has for 9 of its 12 pairs (see below).
+    energy:  [ctrader, dukascopy_jforex, finnhub]
+    indices: [ctrader, dukascopy_jforex, fcs_api, finnhub]
     # dukascopy_jforex (2026-08-07): opted into fx first (right after
     # ctrader, never first) — per docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md's
     # own recommended rollout, live-verified end-to-end on the operator's
-    # VPS for EUR/USD only. Extended to metals on 2026-08-10 (see the
-    # metals entry above) WITHOUT the same live-fetch verification for
-    # XAU/USD or XAG/USD — an explicit operator override, not a completed
-    # rollout step. crypto (BTC/USD, ETH/USD) the bridge also subscribes to
-    # is still NOT added anywhere; ccxt already covers crypto reliably.
+    # VPS for EUR/USD only. Extended to metals/energy/indices on
+    # 2026-08-10 (see entries above) WITHOUT the same live-fetch
+    # verification — an explicit operator override, not a completed
+    # rollout step. crypto (BTC/USD, ETH/USD) the bridge also subscribes
+    # to is still NOT added anywhere; ccxt already covers crypto reliably.
     # Still unofficial, third-party bridge code — see the setup doc's
     # "Known fragility" section before expanding scope further.
     fx:      [ctrader, dukascopy_jforex, twelve_data, fcs_api, alpha_vantage, finnhub]

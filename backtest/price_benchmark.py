@@ -158,6 +158,49 @@ def _is_equity_market_closed(ts: pd.Timestamp, interval: str) -> bool:
     return not (9 * 60 + 30 <= minutes_since_midnight < 16 * 60)
 
 
+def _is_futures_session_closed(ts: pd.Timestamp, interval: str) -> bool:
+    """Energy (USOIL) / indices (US30, SPX500, NAS100) here are CFDs
+    tracking CME/ICE-linked futures (WTI crude, Dow/S&P/Nasdaq) — not
+    Forex, and not 24/7 like crypto either. Before this fix (2026-08-11,
+    reported live by the operator against the just-shipped equity fix),
+    classify_gaps() routed energy/indices through _is_forex_week_closure
+    alone via the generic else branch: the WEEKLY boundary (Fri>=22:00
+    UTC close / Sat closed / Sun<22:00 UTC open) happens to already be
+    correct for these instruments too — CME/ICE Globex's own weekly
+    session boundary matches the same convention this codebase already
+    assumes for FX — but that branch has zero concept of the DAILY
+    maintenance break every CME/ICE Globex-linked market observes on
+    every trading day (~1h, the industry-standard "5-6pm ET" halt
+    virtually every US-futures-tracking broker publishes). That ~1h/
+    weekday gap was being counted entirely as real_gap against USOIL/
+    US30/SPX500/NAS100's H1/H4 completeness — a smaller instance of the
+    exact bug class _is_equity_market_closed fixed for equities.
+
+    22:00-23:00 UTC is used as the fixed daily-break window (matching
+    the SAME 22:00 UTC reference point _is_forex_week_closure already
+    uses for its own Friday-close boundary — i.e. this codebase's
+    existing working assumption for where "5pm ET" falls, not a new
+    independent guess). Like every other closure classifier in this
+    file: no holiday calendar, no DST adjustment, no broker-specific
+    calibration — an explicitly documented approximation, NOT verified
+    against real cTrader/Dukascopy session data from this sandbox (no
+    live network access here) — the operator's own live-benchmark run
+    against USOIL/US30/SPX500/NAS100 is the real verification of this
+    exact window.
+
+    D1 only checks the weekly boundary, mirroring
+    _is_equity_market_closed's own reasoning: a D1 anchor timestamp
+    represents the whole session, not a literal intraday clock time, so
+    checking it against an intraday break window would wrongly flag a
+    legitimate trading day's D1 bar as "closed"."""
+    if _is_forex_week_closure(ts):
+        return True
+    if interval == "D1":
+        return False
+    ts = ts.tz_convert("UTC") if getattr(ts, "tzinfo", None) else ts.tz_localize("UTC")
+    return 22 <= ts.hour < 23
+
+
 def classify_gaps(df: pd.DataFrame, interval: str, asset_class: str) -> dict[str, int]:
     freq = _TF_TO_PANDAS_FREQ.get(interval)
     if freq is None or df.empty or len(df) < 2:
@@ -170,6 +213,9 @@ def classify_gaps(df: pd.DataFrame, interval: str, asset_class: str) -> dict[str
         real = len(missing.index)
     elif asset_class in ("equity", "etf"):
         expected = sum(1 for ts in missing.index if _is_equity_market_closed(ts, interval))
+        real = len(missing.index) - expected
+    elif asset_class in ("energy", "indices"):
+        expected = sum(1 for ts in missing.index if _is_futures_session_closed(ts, interval))
         real = len(missing.index) - expected
     else:
         expected = sum(1 for ts in missing.index if _is_forex_week_closure(ts))

@@ -113,3 +113,51 @@ def test_output_has_expected_ohlcv_columns_and_datetime_index():
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert isinstance(df.index, pd.DatetimeIndex)
     assert df["volume"].iloc[0] == 42
+
+
+# ---------------------------------------------------------------------------
+# symbol-map coverage + --timeframe generalization (widened from 7 FX
+# symbols/H1-only to the full IATIS_TO_CTRADER map, 2026-08-11)
+# ---------------------------------------------------------------------------
+
+
+def test_default_symbols_come_from_iatis_to_ctrader_map():
+    # Single source of truth: the script must never hand-maintain a second,
+    # driftable copy of execution/ctrader_client.py's symbol map.
+    assert m.DEFAULT_SYMBOLS == sorted(m.IATIS_TO_CTRADER)
+
+
+def test_default_symbols_cover_fx_metals_usoil_indices_and_crypto():
+    covered = set(m.DEFAULT_SYMBOLS)
+    for expected in ("EURUSD", "USDJPY", "XAUUSD", "XAGUSD", "USOIL", "US30", "NAS100", "SPX500", "BTCUSD", "ETHUSD"):
+        assert expected in covered
+
+
+def test_timeframe_defaults_to_h1_and_is_forwarded_to_get_trendbars():
+    batch = [_bar(100)]
+    client = _FakeClient([batch, []])
+    download_symbol_deep(client, "EURUSD", years=1000 / (365.25 * 24))
+    assert client.calls[0]["period"] == "H1"
+
+
+def test_m15_timeframe_is_forwarded_to_get_trendbars():
+    batch = [_bar(100)]
+    client = _FakeClient([batch, []])
+    download_symbol_deep(client, "EURUSD", years=1000 / (365.25 * 24 * 4), timeframe="M15")
+    assert client.calls[0]["period"] == "M15"
+
+
+def test_m15_target_bar_count_is_4x_h1_for_the_same_years():
+    # M15 has 4x as many bars/year as H1 (60/15) — for an identical `years`
+    # budget, an M15 download must need 4x as many bars (and here, batches)
+    # to satisfy its target than the same request at H1 would.
+    years = 100 / (365.25 * 24)  # H1 target = 100 bars; M15 target = 400 bars
+    batches = [[_bar(k * 1_000_000 + i * 60) for i in range(100)] for k in range(5)] + [[]]
+
+    client_h1 = _FakeClient(list(batches))
+    download_symbol_deep(client_h1, "EURUSD", years=years, timeframe="H1")
+    assert len(client_h1.calls) == 1  # 100 bars from batch 1 alone already meets the H1 target
+
+    client_m15 = _FakeClient(list(batches))
+    download_symbol_deep(client_m15, "EURUSD", years=years, timeframe="M15")
+    assert len(client_m15.calls) == 4  # needs 400 bars -> 4 batches of 100

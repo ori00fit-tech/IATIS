@@ -50,7 +50,12 @@ if str(PROJECT_ROOT) not in sys.path:
 # deliberately distinct from core.data_providers.symbol_class()'s coarser
 # crypto/metals/energy/indices/fx/stocks/etf bucket, used for PROVIDER
 # CHAIN resolution — both taxonomies are correct in their own place.
-_IN_SCOPE_ASSET_CLASSES = {"fx_major", "fx_minor", "metals", "crypto", "indices"}
+# energy/equity/etf added 2026-08-10 (previously silently excluded — a
+# --symbols-less run skipped USOIL/AAPL/NVDA/SPY/QQQ, 5 of 24 configured
+# symbols, without any warning that they weren't covered).
+_IN_SCOPE_ASSET_CLASSES = {
+    "fx_major", "fx_minor", "metals", "crypto", "indices", "energy", "equity", "etf",
+}
 
 _SMOKE_SYMBOL_CAP = 10
 
@@ -125,6 +130,34 @@ def _is_forex_week_closure(ts: pd.Timestamp) -> bool:
     return False
 
 
+def _is_equity_market_closed(ts: pd.Timestamp, interval: str) -> bool:
+    """NYSE regular session: 09:30-16:00 America/New_York, Mon-Fri.
+    Missing entirely before this fix (2026-08-10): classify_gaps only had
+    _is_forex_week_closure, so every equity night/weekend was counted as
+    a "real gap" — a 24/7 classifier applied to a market open ~6.5h/day,
+    5 days/week. That crushed AAPL/NVDA/SPY/QQQ H1/H4 completeness to
+    ~31-33 regardless of actual data quality (confirmed live, 2026-08-10
+    deep-profile benchmark run: ~5989/5576 "gaps" logged at H1/H4 for
+    every equity symbol).
+
+    D1 only checks the weekday: a daily bar represents the whole session,
+    its index timestamp is an anchor (e.g. midnight), not a literal
+    intraday clock time — checking the anchor against the 09:30-16:00
+    window would wrongly flag every legitimate trading-day D1 gap as
+    "closed" too. Intraday timeframes (M15/H1/H4) also check the anchor
+    falls within the regular session, treating pre-market/after-hours as
+    expected closure. Like _is_forex_week_closure above, deliberately
+    weekday/hour-only — no holiday calendar, the same known
+    simplification that function already carries."""
+    et = ts.tz_convert("America/New_York") if getattr(ts, "tzinfo", None) else ts.tz_localize("UTC").tz_convert("America/New_York")
+    if et.weekday() >= 5:  # Sat=5, Sun=6
+        return True
+    if interval == "D1":
+        return False
+    minutes_since_midnight = et.hour * 60 + et.minute
+    return not (9 * 60 + 30 <= minutes_since_midnight < 16 * 60)
+
+
 def classify_gaps(df: pd.DataFrame, interval: str, asset_class: str) -> dict[str, int]:
     freq = _TF_TO_PANDAS_FREQ.get(interval)
     if freq is None or df.empty or len(df) < 2:
@@ -135,6 +168,9 @@ def classify_gaps(df: pd.DataFrame, interval: str, asset_class: str) -> dict[str
     if asset_class == "crypto":
         expected = 0
         real = len(missing.index)
+    elif asset_class in ("equity", "etf"):
+        expected = sum(1 for ts in missing.index if _is_equity_market_closed(ts, interval))
+        real = len(missing.index) - expected
     else:
         expected = sum(1 for ts in missing.index if _is_forex_week_closure(ts))
         real = len(missing.index) - expected

@@ -17,6 +17,7 @@ import pytest
 from backtest.price_benchmark import (
     _IN_SCOPE_ASSET_CLASSES,
     _in_scope_symbols,
+    _is_equity_market_closed,
     _is_forex_week_closure,
     build_consensus,
     build_evidence_series,
@@ -65,6 +66,64 @@ def test_forex_week_closure_sunday_late_is_open():
 
 def test_forex_week_closure_weekday_is_open():
     assert not _is_forex_week_closure(pd.Timestamp("2026-08-05 12:00", tz="UTC"))  # Wednesday
+
+
+# ── _is_equity_market_closed ──────────────────────────────────────────
+# 2026-08-05 is a Wednesday; America/New_York is on EDT (UTC-4) in August.
+
+def test_equity_market_closed_during_session_is_open():
+    ts = pd.Timestamp("2026-08-05 14:00", tz="UTC")  # 10:00 EDT
+    assert not _is_equity_market_closed(ts, "H1")
+
+
+def test_equity_market_closed_before_open_is_closed():
+    ts = pd.Timestamp("2026-08-05 12:00", tz="UTC")  # 08:00 EDT, pre-market
+    assert _is_equity_market_closed(ts, "H1")
+
+
+def test_equity_market_closed_after_close_is_closed():
+    ts = pd.Timestamp("2026-08-05 21:00", tz="UTC")  # 17:00 EDT, after-hours
+    assert _is_equity_market_closed(ts, "H1")
+
+
+def test_equity_market_closed_weekend_is_closed_regardless_of_hour():
+    ts = pd.Timestamp("2026-08-08 15:00", tz="UTC")  # Saturday
+    assert _is_equity_market_closed(ts, "H1")
+
+
+def test_equity_market_closed_d1_only_checks_weekday():
+    # A D1 bar's index is an anchor (e.g. midnight), not a literal clock
+    # time — the intraday session-hour check must not apply to it.
+    weekday_midnight = pd.Timestamp("2026-08-05 00:00", tz="UTC")
+    assert not _is_equity_market_closed(weekday_midnight, "D1")
+    # Noon UTC, not midnight: midnight UTC on a Saturday is still Friday
+    # evening in America/New_York (UTC-4 in August) — this timestamp is
+    # unambiguously Saturday in both UTC and ET.
+    saturday_noon = pd.Timestamp("2026-08-08 12:00", tz="UTC")
+    assert _is_equity_market_closed(saturday_noon, "D1")
+
+
+def test_completeness_excludes_after_hours_closure_for_equity():
+    # Wednesday 10:00-15:00 EDT (14:00-19:00 UTC, last full in-session
+    # hour before the 16:00 EDT close) -> Thursday 10:00 EDT reopen
+    # (14:00 UTC): every hour in between (after-hours, overnight,
+    # pre-market) is expected closure, not a real gap.
+    idx = list(pd.date_range("2026-08-05 14:00", "2026-08-05 19:00", freq="1h", tz="UTC"))
+    idx += list(pd.date_range("2026-08-06 14:00", "2026-08-06 15:00", freq="1h", tz="UTC"))
+    df = pd.DataFrame({"open": 150.0, "high": 150.5, "low": 149.5, "close": 150.0, "volume": 100.0}, index=pd.DatetimeIndex(idx))
+    score, detail = completeness_score(df, "H1", "equity")
+    assert detail["expected_closure"] > 0
+    assert detail["real_gap"] == 0
+    assert score == 100.0
+
+
+def test_completeness_penalizes_real_gap_for_equity():
+    idx = list(pd.date_range("2026-08-05 14:00", "2026-08-05 19:00", freq="1h", tz="UTC"))  # 10:00-15:00 EDT, all in-session
+    del idx[3]  # a real, mid-session missing bar
+    df = pd.DataFrame({"open": 150.0, "high": 150.5, "low": 149.5, "close": 150.0, "volume": 100.0}, index=pd.DatetimeIndex(idx))
+    score, detail = completeness_score(df, "H1", "equity")
+    assert detail["real_gap"] == 1
+    assert score < 100.0
 
 
 # ── completeness / gap classification ───────────────────────────────
@@ -317,9 +376,13 @@ def _fake_config(entries):
 
 
 def test_in_scope_symbols_filters_by_asset_class():
+    # "equity" moved in-scope 2026-08-10 (see _IN_SCOPE_ASSET_CLASSES);
+    # "bonds" is a genuinely unsupported class (no bonds symbols exist
+    # anywhere in config/symbols.yaml) — a stable choice to keep exercising
+    # the actual filtering behavior.
     config = _fake_config([
         {"internal": "EURUSD", "asset_class": "fx_major", "status": "ACTIVE"},
-        {"internal": "AAPL", "asset_class": "equity", "status": "WATCHLIST"},
+        {"internal": "US10Y", "asset_class": "bonds", "status": "WATCHLIST"},
     ])
     assert _in_scope_symbols(config) == ["EURUSD"]
 
@@ -334,7 +397,9 @@ def test_in_scope_symbols_excludes_retired_by_default():
 
 
 def test_in_scope_asset_classes_matches_expected_set():
-    assert _IN_SCOPE_ASSET_CLASSES == {"fx_major", "fx_minor", "metals", "crypto", "indices"}
+    assert _IN_SCOPE_ASSET_CLASSES == {
+        "fx_major", "fx_minor", "metals", "crypto", "indices", "energy", "equity", "etf",
+    }
 
 
 # ── score_symbol_timeframe: never silently drops a failed fetch ──────

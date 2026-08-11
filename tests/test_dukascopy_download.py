@@ -99,12 +99,15 @@ def test_fetch_hour_raises_on_truncated_record_size():
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
 
 
-def test_fetch_hour_raises_on_request_exception():
+def test_fetch_hour_raises_after_exhausting_network_retries():
     import requests
+    import download_dukascopy_history as m
 
-    with patch("download_dukascopy_history.requests.get", side_effect=requests.ConnectionError("boom")):
-        with pytest.raises(DukascopyFetchError, match="request failed"):
+    with patch("download_dukascopy_history.requests.get", side_effect=requests.ConnectionError("boom")), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        with pytest.raises(DukascopyFetchError, match="request failed after"):
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert mock_sleep.call_count == m.MAX_NETWORK_RETRIES
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +167,50 @@ def test_fetch_hour_still_treats_404_as_market_closed_not_a_retry_target():
     assert ticks is None
     assert mock_get.call_count == 1  # no retry for a 404 — it's an expected closed-market response
     mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Connect-timeout / network-exception retry (2026-08-11 — confirmed live on
+# the VPS immediately after the 429 fix: with 429s gone, some hours instead
+# failed with a plain requests.RequestException (ConnectTimeoutError),
+# 10/24 in one probe window — previously raised immediately, zero retry)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hour_retries_a_network_exception_then_succeeds():
+    import requests
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    with patch(
+        "download_dukascopy_history.requests.get",
+        side_effect=[requests.ConnectTimeout("timed out"), requests.ConnectTimeout("timed out"), _fake_response(200, body)],
+    ), patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == 2
+
+
+def test_fetch_hour_network_retry_budget_is_independent_of_429_budget():
+    """A request that alternates between a network exception and a 429
+    must be able to exhaust BOTH retry budgets independently before
+    giving up — proves the two retry loops don't share (or prematurely
+    consume) each other's attempt counters."""
+    import requests
+    import download_dukascopy_history as m
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = (
+        [requests.ConnectTimeout("timed out")] * m.MAX_NETWORK_RETRIES
+        + [_fake_response(429)] * m.MAX_429_RETRIES
+        + [_fake_response(200, body)]
+    )
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == m.MAX_NETWORK_RETRIES + m.MAX_429_RETRIES
 
 
 # ---------------------------------------------------------------------------

@@ -44,10 +44,11 @@ def _compress_records(records: list[tuple]) -> bytes:
     return lzma.compress(raw)
 
 
-def _fake_response(status_code: int = 200, content: bytes = b""):
+def _fake_response(status_code: int = 200, content: bytes = b"", headers: dict | None = None):
     resp = Mock()
     resp.status_code = status_code
     resp.content = content
+    resp.headers = headers or {}
     return resp
 
 
@@ -104,6 +105,65 @@ def test_fetch_hour_raises_on_request_exception():
     with patch("download_dukascopy_history.requests.get", side_effect=requests.ConnectionError("boom")):
         with pytest.raises(DukascopyFetchError, match="request failed"):
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# 429 retry/backoff (2026-08-11 — confirmed live on the VPS: all 24 probe
+# hours returned HTTP 429 with the pre-fix code, zero retry/resilience)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hour_retries_429_then_succeeds():
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(429), _fake_response(429), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == 2  # one sleep per 429 before the eventual success
+
+
+def test_fetch_hour_raises_after_exhausting_429_retries():
+    import download_dukascopy_history as m
+
+    responses = [_fake_response(429)] * (m.MAX_429_RETRIES + 1)
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        with pytest.raises(DukascopyFetchError, match="HTTP 429"):
+            fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert mock_sleep.call_count == m.MAX_429_RETRIES  # sleeps between attempts, not after the final failed one
+
+
+def test_fetch_hour_honors_numeric_retry_after_header():
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(429, headers={"Retry-After": "7"}), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    mock_sleep.assert_called_once_with(7.0)
+
+
+def test_fetch_hour_falls_back_to_exponential_backoff_on_malformed_retry_after():
+    import download_dukascopy_history as m
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(429, headers={"Retry-After": "not-a-number"}), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    mock_sleep.assert_called_once_with(m._429_BACKOFF_BASE_SECONDS)  # attempt=0 -> base * 2**0
+
+
+def test_fetch_hour_still_treats_404_as_market_closed_not_a_retry_target():
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)) as mock_get, \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 6, 10, tzinfo=timezone.utc))
+    assert ticks is None
+    assert mock_get.call_count == 1  # no retry for a 404 — it's an expected closed-market response
+    mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

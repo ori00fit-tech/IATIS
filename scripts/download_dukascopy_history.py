@@ -20,6 +20,21 @@ symbol's download — matches this project's established
 per-item-isolation pattern, e.g. the Experiment Comparison resilience
 fix and run_robustness_suite's per-point isolation).
 
+Rate limiting (2026-08-11, confirmed live on the VPS — a 24-hour probe
+window returned HTTP 429 on every single request): fetch_hour() now
+retries a 429 response with exponential backoff (mirrors
+download_twelve_data_history.py's own _td_get() 429-handling — a
+minute-rate-exceeded response there gets the same "wait, then retry"
+treatment, not an immediate failure), honoring a numeric Retry-After
+header when the server sends one. DEFAULT_WORKERS was also lowered
+from 12 to 4 — Dukascopy's public feed appears to rate-limit on
+concurrent request volume, not just total throughput, so fewer
+simultaneous in-flight requests reduces how often the retry path is
+needed in the first place. A 429 that still fails after every retry is
+recorded as a real failure (not silently treated as a closed-market
+404) — download_symbol_hours()'s existing "N/M hour(s) failed" summary
+surfaces it.
+
 Price scaling: Dukascopy's raw int32 values are price * a per-instrument
 point value (100, 1000, 10000, or 100000 depending on the instrument's
 usual decimal precision) with NO published, authoritative table. Rather
@@ -98,9 +113,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 REQUEST_TIMEOUT = 15
-DEFAULT_WORKERS = 12
+DEFAULT_WORKERS = 4  # lowered from 12 (2026-08-11) — see module docstring's "Rate limiting" note
 TICK_RECORD_STRUCT = struct.Struct(">iiiff")  # ms_offset, ask_raw, bid_raw, ask_vol, bid_vol
 TICK_RECORD_SIZE = TICK_RECORD_STRUCT.size
+
+# 429 retry/backoff — see module docstring's "Rate limiting" note.
+MAX_429_RETRIES = 5
+_429_BACKOFF_BASE_SECONDS = 4.0
+_429_BACKOFF_MAX_SECONDS = 60.0
 
 # Candidate point values tried, in this order, against each instrument's
 # plausible price range below. Covers every precision Dukascopy actually
@@ -164,16 +184,40 @@ def _hour_url(instrument: str, dt: datetime) -> str:
     )
 
 
+def _retry_after_seconds(resp: "requests.Response", attempt: int) -> float:
+    """Honors a numeric Retry-After header when the server sends one;
+    otherwise exponential backoff capped at _429_BACKOFF_MAX_SECONDS."""
+    header = resp.headers.get("Retry-After")
+    if header:
+        try:
+            return max(0.0, float(header))
+        except ValueError:
+            pass
+    return min(_429_BACKOFF_MAX_SECONDS, _429_BACKOFF_BASE_SECONDS * (2 ** attempt))
+
+
 def fetch_hour(instrument: str, dt: datetime) -> list[tuple[int, float, float, float, float]] | None:
     """One hour's raw ticks as (ms_offset, ask_raw, bid_raw, ask_vol,
     bid_vol) tuples. Returns None (not an error) on 404 — a closed
-    market hour (weekend/holiday) is expected, not a fetch failure."""
+    market hour (weekend/holiday) is expected, not a fetch failure.
+    Retries a 429 (rate-limited) response with backoff — see module
+    docstring's "Rate limiting" note — before giving up as a real
+    failure."""
     url = _hour_url(instrument, dt)
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-    except requests.RequestException as exc:
-        raise DukascopyFetchError(f"{url}: request failed: {exc}") from exc
+    resp: "requests.Response | None" = None
+    for attempt in range(MAX_429_RETRIES + 1):
+        try:
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as exc:
+            raise DukascopyFetchError(f"{url}: request failed: {exc}") from exc
 
+        if resp.status_code != 429:
+            break
+        if attempt == MAX_429_RETRIES:
+            raise DukascopyFetchError(f"{url}: HTTP 429 (rate limited) after {MAX_429_RETRIES + 1} attempts")
+        time.sleep(_retry_after_seconds(resp, attempt))
+
+    assert resp is not None
     if resp.status_code == 404:
         return None
     if resp.status_code != 200:

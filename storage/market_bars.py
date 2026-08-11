@@ -325,12 +325,32 @@ def _print_status_table() -> int:
 
 if __name__ == "__main__":
     import sys
+    from pathlib import Path
+
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        # Explicit path, not bare load_dotenv() — the no-arg form locates
+        # .env by walking up from the CALLING file's own directory
+        # (stack-frame inspection, not os.getcwd()), which is ambiguous
+        # depending on how this module is invoked. Anchoring to the repo
+        # root removes that ambiguity, but NOT a genuine OS permission
+        # error (.env is 600, owned by the iatis service user) — that's
+        # a real "wrong user" condition, caught explicitly below with an
+        # actionable message instead of a raw traceback (confirmed live
+        # on the VPS 2026-08-11 — see scripts/download_ctrader_fx_history.py
+        # for the pattern this mirrors).
+        load_dotenv(_PROJECT_ROOT / ".env")
     except ImportError:
         pass
+    except PermissionError:
+        raise SystemExit(
+            f"Permission denied reading {_PROJECT_ROOT / '.env'} as the current user. "
+            f".env is owned by the iatis service user (600) — run this as "
+            f"that user instead:\n"
+            f"  sudo -u iatis {sys.executable} -m storage.market_bars ..."
+        )
 
     if "--status" in sys.argv:
         raise SystemExit(_print_status_table())

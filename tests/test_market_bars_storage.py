@@ -8,10 +8,33 @@ transport).
 """
 from __future__ import annotations
 
+import runpy
+import sys
+from unittest.mock import patch
+
 import pandas as pd
 import pytest
 
 from storage import market_bars
+
+
+# ---------------------------------------------------------------------------
+# CLI (__main__ block): .env PermissionError -> actionable SystemExit, not a
+# raw traceback (2026-08-11 — confirmed live on the VPS: this crashed with
+# the raw PermissionError traceback instead of the friendly message
+# scripts/download_ctrader_fx_history.py already has). The CLI block only
+# runs under `if __name__ == "__main__":`, so it's exercised here via
+# runpy.run_module(..., run_name="__main__"), which re-executes the module
+# fresh without touching the already-imported storage.market_bars in
+# sys.modules.
+# ---------------------------------------------------------------------------
+
+
+def test_cli_reports_actionable_message_on_env_permission_error(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["market_bars.py", "--status"])
+    with patch("dotenv.load_dotenv", side_effect=PermissionError("denied")):
+        with pytest.raises(SystemExit, match="sudo -u iatis"):
+            runpy.run_module("storage.market_bars", run_name="__main__")
 
 
 def _ohlcv(n: int = 10, start: str = "2024-01-02", freq: str = "15min", seed: float = 1.10) -> pd.DataFrame:

@@ -167,9 +167,22 @@ def main() -> None:
 
     try:
         from dotenv import load_dotenv
+        # Explicit path, not bare load_dotenv() — see
+        # scripts/download_ctrader_fx_history.py for why bare load_dotenv()
+        # is ambiguous, and why a PermissionError (.env is 600, owned by
+        # the iatis service user) needs an actionable message instead of
+        # a raw traceback (confirmed live on the VPS 2026-08-11).
         load_dotenv(PROJECT_ROOT / ".env")
     except ImportError:
         pass
+    except PermissionError:
+        _env_path = PROJECT_ROOT / ".env"
+        raise SystemExit(
+            f"Permission denied reading {_env_path} as the current user. "
+            f".env is owned by the iatis service user (600) — run this as "
+            f"that user instead:\n"
+            f"  sudo -u iatis {sys.executable} -m scripts.push_bars_to_d1 ..."
+        )
 
     from utils.helpers import load_config
     cfg = load_config()

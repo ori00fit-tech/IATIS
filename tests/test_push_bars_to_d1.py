@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -25,6 +26,21 @@ from push_bars_to_d1 import (
     resample_ohlcv,
 )
 from storage import market_bars
+
+
+# ---------------------------------------------------------------------------
+# main(): .env PermissionError -> actionable SystemExit, not a raw traceback
+# (2026-08-11 — confirmed live on the VPS this crashed with the raw
+# PermissionError traceback instead of the friendly message
+# scripts/download_ctrader_fx_history.py already has).
+# ---------------------------------------------------------------------------
+
+
+def test_main_reports_actionable_message_on_env_permission_error(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["push_bars_to_d1.py"])
+    with patch("dotenv.load_dotenv", side_effect=PermissionError("denied")):
+        with pytest.raises(SystemExit, match="sudo -u iatis"):
+            m.main()
 
 
 def _write_csv(path: Path, n: int = 20, freq: str = "1h", seed: float = 1.10) -> pd.DataFrame:

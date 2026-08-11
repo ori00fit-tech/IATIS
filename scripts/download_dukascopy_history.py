@@ -145,6 +145,21 @@ MAX_NETWORK_RETRIES = 3
 _NETWORK_BACKOFF_BASE_SECONDS = 2.0
 _NETWORK_BACKOFF_MAX_SECONDS = 15.0
 
+# Initial-burst stagger (2026-08-11, confirmed live on the VPS: two
+# consecutive probe runs, both after the retry fixes above, still saw
+# 429s survive every retry — but ONLY on the first `workers` hours
+# submitted; everything after succeeded cleanly). download_symbol_hours()
+# used to submit every future to the ThreadPoolExecutor in one tight
+# dict-comprehension loop, so with max_workers=4 the first 4 HTTP
+# connections fired within milliseconds of each other — exactly the
+# synchronized burst a rate limiter is built to catch. Once the pool is
+# actually running, later requests are already naturally staggered by
+# each task's own completion timing, so only the initial fill needs
+# spacing out, not the whole run (staggering every submission would
+# throttle steady-state throughput on a 10-year/~87,600-hour run for no
+# benefit).
+_INITIAL_SUBMIT_STAGGER_SECONDS = 0.75
+
 # Candidate point values tried, in this order, against each instrument's
 # plausible price range below. Covers every precision Dukascopy actually
 # uses across FX/metals/crypto (JPY pairs @ 1000, most FX/metals @
@@ -345,13 +360,19 @@ def download_symbol_hours(
     """Bounded-concurrency fetch of every hour in `hours` (one HTTP
     request per hour — Dukascopy has no batch-of-N-bars API, unlike
     MT5/cTrader, hence the ThreadPoolExecutor here instead of the
-    sequential-with-sleep pattern those scripts use)."""
+    sequential-with-sleep pattern those scripts use). Staggers only the
+    initial fill of the worker pool — see the module-level
+    _INITIAL_SUBMIT_STAGGER_SECONDS comment for why."""
     bars: list[dict] = []
     point_value: int | None = None
     failures = 0
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        future_to_hour = {pool.submit(fetch_hour, instrument, h): h for h in hours}
+        future_to_hour: dict = {}
+        for i, h in enumerate(hours):
+            if 0 < i < workers:
+                time.sleep(_INITIAL_SUBMIT_STAGGER_SECONDS)
+            future_to_hour[pool.submit(fetch_hour, instrument, h)] = h
         done = 0
         for future in as_completed(future_to_hour):
             hour = future_to_hour[future]

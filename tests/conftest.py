@@ -143,9 +143,28 @@ def fake_d1(monkeypatch: pytest.MonkeyPatch):
     con = sqlite3.connect(":memory:", check_same_thread=False)
     con.row_factory = sqlite3.Row
 
+    # 2026-08-11 — confirmed live on the VPS: storage/market_bars.py's
+    # upsert_bars() batched 100 rows/statement (900 bound params, 9/row)
+    # assuming SQLite's usual 999/32766-param ceiling, but Cloudflare D1's
+    # REAL, documented limit is 100 bound params TOTAL per statement —
+    # crashed every real push with "D1_ERROR: too many SQL variables"
+    # (fixed separately by lowering the batch size). This bug shipped
+    # past the full test suite because the fake below executed against a
+    # real sqlite3 connection, whose own default limit (999+) never
+    # caught it. Enforcing D1's real, lower limit here means any future
+    # over-sized statement fails a test locally instead of only failing
+    # live against real D1.
+    _D1_MAX_BOUND_PARAMS = 100
+
     def _exec_one(sql: str, params) -> dict:
+        params = list(params or [])
+        if len(params) > _D1_MAX_BOUND_PARAMS:
+            return {
+                "success": False,
+                "error": f"D1_ERROR: too many SQL variables (got {len(params)}, D1's real limit is {_D1_MAX_BOUND_PARAMS})",
+            }
         try:
-            cur = con.execute(sql, list(params or []))
+            cur = con.execute(sql, params)
             con.commit()
         except sqlite3.Error as exc:
             return {"success": False, "error": str(exc)}

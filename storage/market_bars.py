@@ -78,7 +78,15 @@ CREATE TABLE IF NOT EXISTS dataset_manifest (
 # be measuring an edge partly made of data artifacts.
 MIN_COVERAGE_PCT_FOR_READY = 95.0
 
-_INSERT_BATCH_ROWS_DEFAULT = 100  # conservative vs. D1's per-statement bound-parameter ceiling (9 params/row)
+# 2026-08-11 — confirmed live on the VPS: batch_rows=100 (900 bound
+# params/statement, 9 params/row) crashed every real push with
+# "D1_ERROR: too many SQL variables at offset 376". The original
+# comment's assumption (SQLite's usual 999/32766-param ceiling) was
+# wrong for Cloudflare D1 specifically — D1's real, documented limit is
+# 100 TOTAL bound parameters per statement, independent of the
+# underlying SQLite engine's own default. At 9 params/row that's a
+# maximum of 11 rows/statement; 10 leaves a safety margin.
+_INSERT_BATCH_ROWS_DEFAULT = 10
 
 
 def _init(con) -> None:

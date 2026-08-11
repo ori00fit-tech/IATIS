@@ -35,6 +35,15 @@ recorded as a real failure (not silently treated as a closed-market
 404) — download_symbol_hours()'s existing "N/M hour(s) failed" summary
 surfaces it.
 
+A second, real live finding immediately after the 429 fix: with 429s
+gone, some fraction of hourly requests instead failed with a plain
+requests.RequestException (ConnectTimeoutError specifically — 10/24
+hours in one live probe window) — a transient network condition, not a
+rate-limit response, so it needed its own retry path rather than being
+folded into the 429 handling. fetch_hour() retries these too, with a
+separate, shorter exponential backoff (MAX_NETWORK_RETRIES / _NETWORK_
+BACKOFF_*), independent of the 429 retry budget.
+
 Price scaling: Dukascopy's raw int32 values are price * a per-instrument
 point value (100, 1000, 10000, or 100000 depending on the instrument's
 usual decimal precision) with NO published, authoritative table. Rather
@@ -122,6 +131,20 @@ MAX_429_RETRIES = 5
 _429_BACKOFF_BASE_SECONDS = 4.0
 _429_BACKOFF_MAX_SECONDS = 60.0
 
+# Network-level retry/backoff (2026-08-11, confirmed live on the VPS
+# immediately after the 429 fix landed: with 429s gone, some fraction of
+# hourly requests instead failed with a requests.RequestException —
+# ConnectTimeoutError specifically, 10/24 hours in one probe window —
+# which fetch_hour() previously raised immediately with zero retry. A
+# connect timeout to a public feed under concurrent load is exactly the
+# kind of transient failure this project's other providers already
+# retry (e.g. download_twelve_data_history.py's _td_get()) — distinct
+# from the 429 case, so a separate, shorter/faster backoff and its own
+# retry budget, not reuse of MAX_429_RETRIES.
+MAX_NETWORK_RETRIES = 3
+_NETWORK_BACKOFF_BASE_SECONDS = 2.0
+_NETWORK_BACKOFF_MAX_SECONDS = 15.0
+
 # Candidate point values tried, in this order, against each instrument's
 # plausible price range below. Covers every precision Dukascopy actually
 # uses across FX/metals/crypto (JPY pairs @ 1000, most FX/metals @
@@ -200,22 +223,32 @@ def fetch_hour(instrument: str, dt: datetime) -> list[tuple[int, float, float, f
     """One hour's raw ticks as (ms_offset, ask_raw, bid_raw, ask_vol,
     bid_vol) tuples. Returns None (not an error) on 404 — a closed
     market hour (weekend/holiday) is expected, not a fetch failure.
-    Retries a 429 (rate-limited) response with backoff — see module
-    docstring's "Rate limiting" note — before giving up as a real
-    failure."""
+    Retries a 429 (rate-limited) response and a transient network
+    exception (connect timeout, connection error) each with their own
+    backoff/retry budget — see module docstring's "Rate limiting" note —
+    before giving up as a real failure."""
     url = _hour_url(instrument, dt)
     resp: "requests.Response | None" = None
-    for attempt in range(MAX_429_RETRIES + 1):
+    network_attempt = 0
+    attempt_429 = 0
+    while True:
         try:
             resp = requests.get(url, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
-            raise DukascopyFetchError(f"{url}: request failed: {exc}") from exc
+            if network_attempt >= MAX_NETWORK_RETRIES:
+                raise DukascopyFetchError(
+                    f"{url}: request failed after {MAX_NETWORK_RETRIES + 1} attempts: {exc}"
+                ) from exc
+            time.sleep(min(_NETWORK_BACKOFF_MAX_SECONDS, _NETWORK_BACKOFF_BASE_SECONDS * (2 ** network_attempt)))
+            network_attempt += 1
+            continue
 
         if resp.status_code != 429:
             break
-        if attempt == MAX_429_RETRIES:
+        if attempt_429 == MAX_429_RETRIES:
             raise DukascopyFetchError(f"{url}: HTTP 429 (rate limited) after {MAX_429_RETRIES + 1} attempts")
-        time.sleep(_retry_after_seconds(resp, attempt))
+        time.sleep(_retry_after_seconds(resp, attempt_429))
+        attempt_429 += 1
 
     assert resp is not None
     if resp.status_code == 404:

@@ -362,7 +362,8 @@ def test_download_symbol_hours_produces_a_validate_ohlcv_clean_frame():
         ]
         return _fake_response(200, _compress_records(records))
 
-    with patch("download_dukascopy_history.requests.get", side_effect=fake_get):
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"):
         df = download_symbol_hours("EURUSD", "EURUSD", hours, workers=2)
 
     assert len(df) == 2  # the weekend hour contributed no bar
@@ -382,10 +383,28 @@ def test_download_symbol_hours_skips_a_bad_hour_without_aborting():
             return _fake_response(500)  # a genuine, non-404 failure
         return _fake_response(200, good_body)
 
-    with patch("download_dukascopy_history.requests.get", side_effect=fake_get):
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"):
         df = download_symbol_hours("EURUSD", "EURUSD", hours, workers=2)
 
     assert len(df) == 1  # the bad hour was skipped, not fatal to the whole download
+
+
+def test_download_symbol_hours_staggers_only_the_initial_worker_pool_fill():
+    """2026-08-11 — confirmed live on the VPS, twice: with all-429s and
+    connect-timeouts fixed, the ONLY hours that still exhausted their
+    full retry budget were the first `workers` submitted — the initial
+    ThreadPoolExecutor fill firing near-simultaneously. Proves the
+    stagger applies exactly workers-1 times (submissions 1..workers-1),
+    never once the pool is already running (submissions workers..N-1)."""
+    import download_dukascopy_history as m
+
+    hours = [datetime(2024, 1, 2, h, tzinfo=timezone.utc) for h in range(10)]
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=3)
+    assert mock_sleep.call_count == 2  # workers - 1
+    mock_sleep.assert_called_with(m._INITIAL_SUBMIT_STAGGER_SECONDS)
 
 
 # ---------------------------------------------------------------------------

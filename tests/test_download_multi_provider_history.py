@@ -30,6 +30,21 @@ from download_multi_provider_history import (
 )
 
 
+# ---------------------------------------------------------------------------
+# main(): .env PermissionError -> actionable SystemExit, not a raw traceback
+# (2026-08-11 — confirmed live on the VPS this crashed with the raw
+# PermissionError traceback instead of the friendly message
+# scripts/download_ctrader_fx_history.py already has).
+# ---------------------------------------------------------------------------
+
+
+def test_main_reports_actionable_message_on_env_permission_error(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["download_multi_provider_history.py"])
+    with patch("dotenv.load_dotenv", side_effect=PermissionError("denied")):
+        with pytest.raises(SystemExit, match="sudo -u iatis"):
+            m.main()
+
+
 def _ohlcv(n: int = 6, freq: str = "15min") -> pd.DataFrame:
     idx = pd.date_range("2024-01-02", periods=n, freq=freq, tz="UTC")
     return pd.DataFrame(

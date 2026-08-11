@@ -11,6 +11,7 @@ of manual, operator-run download script.
 """
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -36,6 +37,28 @@ def _no_real_sleep(monkeypatch):
     """fetch_td_history()/_td_get() sleep between/after real requests to be
     polite to Twelve Data's rate limit — irrelevant and slow in tests."""
     monkeypatch.setattr(m.time, "sleep", lambda *_: None)
+
+
+# ---------------------------------------------------------------------------
+# module import: .env PermissionError -> actionable SystemExit, not a raw
+# traceback (2026-08-11 — confirmed live on the VPS: this module's
+# module-level, unguarded load_dotenv() call crashed at IMPORT time — even
+# before main() ever ran — with the raw PermissionError traceback instead
+# of the friendly message scripts/download_ctrader_fx_history.py already
+# has). Loaded at module scope (not inside main()), so this is exercised
+# via importlib.reload() with dotenv.load_dotenv patched, then reloaded
+# again afterward to restore the module's normal, already-imported state
+# for every other test in this file.
+# ---------------------------------------------------------------------------
+
+
+def test_module_import_reports_actionable_message_on_env_permission_error():
+    try:
+        with patch("dotenv.load_dotenv", side_effect=PermissionError("denied")):
+            with pytest.raises(SystemExit, match="sudo -u iatis"):
+                importlib.reload(m)
+    finally:
+        importlib.reload(m)  # restore normal module state for the rest of this file
 
 
 def _bar(dt: str, close: float = 1.1, volume: float = 100) -> dict:

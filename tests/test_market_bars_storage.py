@@ -97,8 +97,33 @@ def test_upsert_bars_empty_dataframe_writes_nothing():
 
 
 def test_upsert_bars_batches_large_pushes_without_dropping_rows():
-    df = _ohlcv(250)  # forces multiple batches at the default 100-rows/statement chunk size
-    written = market_bars.upsert_bars("XAUUSD", "M15", df, source="dukascopy", batch_rows=37)
+    # batch_rows=9 * 9 params/row = 81 bound params/statement — real,
+    # confirmed-live D1 ceiling is 100 total (tests/conftest.py's fake_d1
+    # now enforces this; the pre-2026-08-11 default of 100 rows/statement
+    # = 900 params crashed every real push with "too many SQL variables").
+    df = _ohlcv(250)  # forces multiple batches
+    written = market_bars.upsert_bars("XAUUSD", "M15", df, source="dukascopy", batch_rows=9)
+    assert written == 250
+    assert market_bars.bar_count("XAUUSD", "M15") == 250
+
+
+def test_upsert_bars_default_batch_size_respects_d1s_real_param_ceiling():
+    """Drift guard (2026-08-11): market_bars.py has 9 bound params per
+    row (symbol, timeframe, timestamp, o, h, l, c, volume, source) — the
+    PRODUCTION default batch_rows must keep 9*batch_rows under D1's real,
+    confirmed-live 100-param ceiling, with margin. Fails loudly if
+    someone ever bumps _INSERT_BATCH_ROWS_DEFAULT back up without
+    re-deriving this math."""
+    assert market_bars._INSERT_BATCH_ROWS_DEFAULT * 9 <= 100
+
+
+def test_upsert_bars_at_default_batch_size_works_against_the_real_d1_param_ceiling():
+    # Exercises the PRODUCTION default (no explicit batch_rows override)
+    # against fake_d1's enforced 100-param ceiling — the exact path that
+    # crashed live before this fix, now proven to actually work end to
+    # end, not just proven not to exceed the limit on paper.
+    df = _ohlcv(250)
+    written = market_bars.upsert_bars("XAUUSD", "M15", df, source="dukascopy")
     assert written == 250
     assert market_bars.bar_count("XAUUSD", "M15") == 250
 

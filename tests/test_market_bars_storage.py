@@ -1,0 +1,263 @@
+"""
+tests/test_market_bars_storage.py
+------------------------------------
+Round-trip tests for storage/market_bars.py — the D1-backed historical
+OHLCV warehouse. tests/conftest.py's autouse fake_d1 fixture gives every
+test an isolated, in-memory D1 stand-in (real SQL semantics, faked
+transport).
+"""
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from storage import market_bars
+
+
+def _ohlcv(n: int = 10, start: str = "2024-01-02", freq: str = "15min", seed: float = 1.10) -> pd.DataFrame:
+    idx = pd.date_range(start, periods=n, freq=freq, tz="UTC")
+    return pd.DataFrame(
+        {"open": [seed + 0.0001 * i for i in range(n)],
+         "high": [seed + 0.0002 * i + 0.0001 for i in range(n)],
+         "low": [seed + 0.0001 * i - 0.0001 for i in range(n)],
+         "close": [seed + 0.0001 * i for i in range(n)],
+         "volume": [10.0 + i for i in range(n)]},
+        index=idx,
+    )
+
+
+# ---------------------------------------------------------------------------
+# upsert_bars / load_bars round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_and_load_bars_round_trip():
+    df = _ohlcv(5)
+    written = market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    assert written == 5
+
+    loaded = market_bars.load_bars("EURUSD", "M15")
+    assert len(loaded) == 5
+    assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
+    assert loaded.index.tz is not None
+    assert loaded.index.is_monotonic_increasing
+    pd.testing.assert_series_equal(loaded["close"], df["close"], check_names=False, check_freq=False)
+
+
+def test_load_bars_returns_empty_frame_with_expected_columns_when_nothing_stored():
+    loaded = market_bars.load_bars("NOTHING_HERE", "M15")
+    assert loaded.empty
+    assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
+
+
+def test_upsert_bars_is_idempotent_on_replay():
+    df = _ohlcv(5)
+    market_bars.upsert_bars("GBPUSD", "H1", df, source="ctrader")
+    market_bars.upsert_bars("GBPUSD", "H1", df, source="ctrader")  # same rows, re-pushed
+    assert market_bars.bar_count("GBPUSD", "H1") == 5  # not 10 — INSERT OR REPLACE, not duplicated
+
+
+def test_upsert_bars_updates_values_on_replay_with_different_source():
+    df1 = _ohlcv(3, seed=1.0)
+    df2 = _ohlcv(3, seed=2.0)  # same timestamps, different prices — a real re-fetch scenario
+    market_bars.upsert_bars("USDJPY", "H1", df1, source="dukascopy")
+    market_bars.upsert_bars("USDJPY", "H1", df2, source="twelve_data")
+    loaded = market_bars.load_bars("USDJPY", "H1")
+    assert len(loaded) == 3
+    assert loaded["close"].iloc[0] == pytest.approx(2.0)  # overwritten, not appended
+
+
+def test_upsert_bars_empty_dataframe_writes_nothing():
+    written = market_bars.upsert_bars("EURUSD", "M15", pd.DataFrame(), source="dukascopy")
+    assert written == 0
+    assert market_bars.bar_count("EURUSD", "M15") == 0
+
+
+def test_upsert_bars_batches_large_pushes_without_dropping_rows():
+    df = _ohlcv(250)  # forces multiple batches at the default 100-rows/statement chunk size
+    written = market_bars.upsert_bars("XAUUSD", "M15", df, source="dukascopy", batch_rows=37)
+    assert written == 250
+    assert market_bars.bar_count("XAUUSD", "M15") == 250
+
+
+def test_load_bars_respects_start_and_end_range():
+    df = _ohlcv(10, start="2024-01-01", freq="1h")
+    market_bars.upsert_bars("EURUSD", "H1", df, source="dukascopy")
+    loaded = market_bars.load_bars("EURUSD", "H1", start="2024-01-01 03:00", end="2024-01-01 06:00")
+    assert len(loaded) == 3  # 03:00, 04:00, 05:00 — end is exclusive
+    assert loaded.index[0] == pd.Timestamp("2024-01-01 03:00", tz="UTC")
+
+
+def test_different_symbols_and_timeframes_do_not_collide():
+    market_bars.upsert_bars("EURUSD", "M15", _ohlcv(4), source="dukascopy")
+    market_bars.upsert_bars("EURUSD", "H1", _ohlcv(3), source="dukascopy")
+    market_bars.upsert_bars("XAUUSD", "M15", _ohlcv(2), source="ctrader")
+    assert market_bars.bar_count("EURUSD", "M15") == 4
+    assert market_bars.bar_count("EURUSD", "H1") == 3
+    assert market_bars.bar_count("XAUUSD", "M15") == 2
+
+
+def test_bar_range_reports_real_min_max_and_none_when_empty():
+    assert market_bars.bar_range("NOTHING", "M15") == (None, None)
+    df = _ohlcv(5, start="2024-06-01", freq="1h")
+    market_bars.upsert_bars("EURUSD", "H1", df, source="dukascopy")
+    lo, hi = market_bars.bar_range("EURUSD", "H1")
+    assert lo == int(df.index[0].timestamp())
+    assert hi == int(df.index[-1].timestamp())
+
+
+# ---------------------------------------------------------------------------
+# compute_manifest / upsert_manifest / get_manifest / is_ready
+# ---------------------------------------------------------------------------
+
+
+def test_compute_manifest_reports_empty_status_when_no_bars_stored():
+    manifest = market_bars.compute_manifest("NOTHING_HERE", "M15", source="dukascopy", asset_class="fx_major")
+    assert manifest["status"] == "EMPTY"
+    assert manifest["row_count"] == 0
+    assert manifest["error"]
+
+
+def test_compute_manifest_reports_ready_for_clean_dense_data():
+    # A dense, gapless intraday M15 series with no weekend/session in it —
+    # completeness_score should read ~100, status READY.
+    df = _ohlcv(50, start="2024-01-02 00:00", freq="15min")  # a Tuesday, no weekend crossed
+    market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    manifest = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    assert manifest["status"] == "READY"
+    assert manifest["row_count"] == 50
+    assert manifest["coverage_pct"] == pytest.approx(100.0)
+    assert manifest["duplicate_count"] == 0
+    assert manifest["invalid_ohlc_count"] == 0
+    assert manifest["start_ts"] is not None and manifest["end_ts"] is not None
+
+
+def test_compute_manifest_reports_invalid_on_structural_ohlc_violation():
+    df = _ohlcv(10)
+    df.loc[df.index[0], "high"] = df.loc[df.index[0], "low"] - 0.01  # break high >= low
+    market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    manifest = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    assert manifest["status"] == "INVALID"
+    assert manifest["invalid_ohlc_count"] == 10
+    assert manifest["error"]
+    assert manifest["coverage_pct"] is None  # never fabricated once OHLC integrity already failed
+
+
+def test_compute_manifest_reports_incomplete_below_coverage_threshold():
+    # Real, non-weekend gaps: an H1 series missing every other hour on a
+    # weekday is a genuine data-quality problem, not a market closure.
+    idx = pd.to_datetime(
+        [f"2024-01-02 {h:02d}:00" for h in range(0, 20, 2)], utc=True
+    )  # every 2 hours instead of every 1 hour -> 50% real coverage
+    df = pd.DataFrame(
+        {"open": [1.1] * len(idx), "high": [1.11] * len(idx), "low": [1.09] * len(idx),
+         "close": [1.1] * len(idx), "volume": [10.0] * len(idx)},
+        index=idx,
+    )
+    market_bars.upsert_bars("EURUSD", "H1", df, source="dukascopy")
+    manifest = market_bars.compute_manifest("EURUSD", "H1", source="dukascopy", asset_class="fx_major")
+    assert manifest["status"] == "INCOMPLETE"
+    assert manifest["coverage_pct"] < market_bars.MIN_COVERAGE_PCT_FOR_READY
+    assert manifest["gap_count"] > 0
+
+
+def test_compute_manifest_crypto_asset_class_never_penalizes_weekend_gaps():
+    # A crypto series with a real weekend gap must NOT be classified
+    # incomplete the way an fx_major one legitimately would be — crypto
+    # trades 24/7, so classify_gaps() must treat the whole gap as real,
+    # while an fx_major series over the identical timestamps is exempted
+    # by the weekly-closure classifier. This proves compute_manifest()
+    # actually threads asset_class through to backtest.price_benchmark,
+    # not a hardcoded assumption.
+    idx = pd.to_datetime(["2024-01-05 20:00", "2024-01-08 02:00"], utc=True)  # spans a real weekend
+    df = pd.DataFrame({"open": [1.0, 1.0], "high": [1.0, 1.0], "low": [1.0, 1.0],
+                       "close": [1.0, 1.0], "volume": [1.0, 1.0]}, index=idx)
+    market_bars.upsert_bars("BTCUSD", "H1", df, source="ctrader")
+    manifest_crypto = market_bars.compute_manifest("BTCUSD", "H1", source="ctrader", asset_class="crypto")
+    manifest_fx = market_bars.compute_manifest("BTCUSD", "H1", source="ctrader", asset_class="fx_major")
+    assert manifest_crypto["gap_count"] > manifest_fx["gap_count"]
+
+
+def test_upsert_manifest_and_get_manifest_round_trip():
+    manifest = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    market_bars.upsert_manifest(manifest, checksum="abc123")
+    stored = market_bars.get_manifest("EURUSD", "M15")
+    assert stored is not None
+    assert stored["status"] == manifest["status"]
+    assert stored["checksum"] == "abc123"
+    assert stored["last_updated"]
+
+
+def test_upsert_manifest_is_idempotent_and_updates_in_place():
+    df = _ohlcv(20, start="2024-01-02 00:00", freq="15min")
+    market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    m1 = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    market_bars.upsert_manifest(m1)
+
+    # More bars arrive later — recompute and re-upsert must UPDATE, not duplicate.
+    market_bars.upsert_bars(
+        "EURUSD", "M15",
+        _ohlcv(20, start="2024-01-02 05:00", freq="15min"),  # extends the series forward
+        source="dukascopy",
+    )
+    m2 = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    market_bars.upsert_manifest(m2)
+
+    all_manifests = market_bars.list_manifests()
+    matching = [m for m in all_manifests if m["symbol"] == "EURUSD" and m["timeframe"] == "M15"]
+    assert len(matching) == 1
+    assert matching[0]["row_count"] == m2["row_count"]
+
+
+def test_get_manifest_returns_none_when_never_computed():
+    assert market_bars.get_manifest("NEVER_TOUCHED", "M15") is None
+
+
+def test_list_manifests_covers_every_symbol_timeframe_pushed():
+    for sym, tf in (("EURUSD", "M15"), ("EURUSD", "H1"), ("XAUUSD", "M15")):
+        m = market_bars.compute_manifest(sym, tf, source="dukascopy", asset_class="fx_major")
+        market_bars.upsert_manifest(m)
+    rows = market_bars.list_manifests()
+    pairs = {(r["symbol"], r["timeframe"]) for r in rows}
+    assert pairs == {("EURUSD", "M15"), ("EURUSD", "H1"), ("XAUUSD", "M15")}
+
+
+def test_is_ready_reflects_stored_manifest_status():
+    assert market_bars.is_ready("EURUSD", "M15") is False  # never computed yet
+
+    df = _ohlcv(50, start="2024-01-02 00:00", freq="15min")
+    market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    manifest = market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major")
+    market_bars.upsert_manifest(manifest)
+    assert market_bars.is_ready("EURUSD", "M15") is True
+
+
+# ---------------------------------------------------------------------------
+# --status CLI table
+# ---------------------------------------------------------------------------
+
+
+def test_status_table_returns_nonzero_when_empty(capsys):
+    exit_code = market_bars._print_status_table()
+    assert exit_code == 1
+    assert "nothing pushed yet" in capsys.readouterr().out
+
+
+def test_status_table_returns_zero_only_when_every_dataset_is_ready(capsys):
+    df = _ohlcv(50, start="2024-01-02 00:00", freq="15min")
+    market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    market_bars.upsert_manifest(market_bars.compute_manifest("EURUSD", "M15", source="dukascopy", asset_class="fx_major"))
+    assert market_bars._print_status_table() == 0
+
+    # A second, incomplete dataset flips the overall exit code to non-zero.
+    idx = pd.to_datetime([f"2024-01-02 {h:02d}:00" for h in range(0, 20, 2)], utc=True)
+    sparse = pd.DataFrame({"open": [1.1] * len(idx), "high": [1.11] * len(idx), "low": [1.09] * len(idx),
+                           "close": [1.1] * len(idx), "volume": [1.0] * len(idx)}, index=idx)
+    market_bars.upsert_bars("GBPUSD", "H1", sparse, source="ctrader")
+    market_bars.upsert_manifest(market_bars.compute_manifest("GBPUSD", "H1", source="ctrader", asset_class="fx_major"))
+
+    exit_code = market_bars._print_status_table()
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "EURUSD" in out and "GBPUSD" in out
+    assert "1/2 READY" in out

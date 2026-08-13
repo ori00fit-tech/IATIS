@@ -83,14 +83,28 @@ def build_multi_timeframe_view(df_base: pd.DataFrame, timeframes: list[str]) -> 
     of finer frames anyway — each timeframe is fetched natively; this
     matters for the synthetic/injected/backtest paths, e.g. a [D1, H4, H1]
     config over daily bars yields a D1-only view.
+
+    Every label in `timeframes` must be in SUPPORTED_TIMEFRAMES. This used
+    to fall through _TF_MINUTES.get(tf, 60)'s 60-minute default for an
+    unsupported label (e.g. "M1"/"M30"/"W1") — a real correctness bug
+    (2026-08-13 forensic pass): a M30 base could be silently misjudged
+    "not finer than H1" and resampled as if it were H1-based, producing
+    wrong-cadence candles with no error anywhere. Fail loud instead.
     """
+    unsupported = [tf for tf in timeframes if tf not in SUPPORTED_TIMEFRAMES]
+    if unsupported:
+        raise ValueError(
+            f"Unsupported timeframe(s) {unsupported} — build_multi_timeframe_view "
+            f"only understands {SUPPORTED_TIMEFRAMES}."
+        )
+
     views: dict[str, pd.DataFrame] = {}
     base_label = timeframes[0]
     views[base_label] = df_base
-    base_minutes = _TF_MINUTES.get(base_label, 60)
+    base_minutes = _TF_MINUTES[base_label]
 
     for tf in timeframes[1:]:
-        if _TF_MINUTES.get(tf, 60) < base_minutes:
+        if _TF_MINUTES[tf] < base_minutes:
             logger.debug(f"Skipping {tf}: finer than base {base_label}, cannot upsample")
             continue
         views[tf] = resample(df_base, tf, base_minutes=base_minutes)

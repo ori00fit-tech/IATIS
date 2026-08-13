@@ -156,7 +156,9 @@ def _split_train_holdout(df, holdout_fraction: float):
     return df.iloc[:split_idx], df.iloc[split_idx:]
 
 
-def _compute_fingerprint(symbol: str, data_dir: Path, df, timeframe: str = "H1") -> dict:
+def _compute_fingerprint(
+    symbol: str, data_dir: Path, df, timeframe: str = "H1", origin: dict | None = None,
+) -> dict:
     """Diagnostic Infrastructure Phase 1 (2026-08-02) — a reproducibility
     snapshot (git commit/dirty + dataset SHA256/bar-count/date-range),
     computed ONCE per distinct physical timeframe used by a symbol's
@@ -171,14 +173,76 @@ def _compute_fingerprint(symbol: str, data_dir: Path, df, timeframe: str = "H1")
     timeframes``/the ``dfs`` loading loop in ``_run_symbol``), so the
     recorded fingerprint's dataset checksum genuinely corresponds to the
     data a trial ran against, not always the H1 file regardless of what
-    was really loaded."""
+    was really loaded.
+
+    ``origin`` (Trusted Data Center Phase 2, 2026-08-13) — when the data
+    came from the D1 market_bars warehouse instead of a local CSV (see
+    ``_load_from_warehouse``), ``dataset`` is built directly from the
+    warehouse manifest (no CSV file exists to hash) and carries
+    ``origin="warehouse"`` plus ``native``/``coverage_pct``/``status`` so a
+    later reader can tell "this trial's data was quality-gated and
+    resampled from H1" apart from "raw, unchecked CSV" at a glance."""
+    if origin is not None and origin.get("dataset_origin") == "warehouse":
+        dataset = {k: v for k, v in origin.items() if k != "dataset_origin"}
+        dataset["origin"] = "warehouse"
+        return {"git": git_state(), "dataset": dataset}
     try:
         csv_path = find_symbol_csv(symbol, data_dir, timeframe=timeframe)
         dataset = dataset_fingerprint(csv_path, df)
+        dataset["origin"] = "csv"
     except (FileNotFoundError, OSError) as exc:
         logger.debug(f"{symbol}: fingerprint dataset lookup failed (non-fatal): {exc}")
         dataset = None
     return {"git": git_state(), "dataset": dataset}
+
+
+def _load_from_warehouse(symbol: str, timeframe: str, start: str | None, end: str | None) -> tuple[pd.DataFrame, dict] | None:
+    """Trusted Data Center Phase 2 (2026-08-13) — tries the D1
+    market_bars warehouse (storage/market_bars.py) before falling back to
+    the local CSV path. Only trusts a dataset the warehouse itself has
+    certified READY (market_bars.is_ready) — a PENDING/INCOMPLETE/INVALID
+    manifest is treated exactly like "not in the warehouse," never
+    partially trusted.
+
+    Returns None (never raises) on ANY failure — an unconfigured/
+    unreachable D1 connection, a missing manifest, or an empty result all
+    silently degrade to the existing CSV path, matching this module's own
+    "a D1 hiccup must never abort real research work" convention (see
+    _is_cancelled's docstring for the same fail-open contract applied
+    elsewhere in this file).
+
+    Honest limitation, recorded in the fingerprint below, not hidden:
+    scripts/push_bars_to_d1.py's own docstring confirms the warehouse's
+    H4/D1 rows are themselves ALWAYS derived by resampling H1 — no native
+    H4/D1 downloader exists anywhere in this codebase yet. Wiring the
+    warehouse in does not yet give Mission Center genuinely native H4/D1
+    data; what it gives is one quality-gated source of truth with real
+    provenance (native vs. "{provider}_resampled") and coverage recorded,
+    instead of an unchecked ad-hoc CSV file."""
+    try:
+        from storage import market_bars
+        if not market_bars.is_ready(symbol, timeframe):
+            return None
+        df = market_bars.load_bars(symbol, timeframe, start=start, end=end)
+        if df.empty:
+            return None
+        manifest = market_bars.get_manifest(symbol, timeframe) or {}
+        source = manifest.get("source") or ""
+        info = {
+            "dataset_origin": "warehouse",
+            "warehouse_source": source,
+            "native": bool(source) and not source.endswith("_resampled"),
+            "row_count": len(df),
+            "coverage_pct": manifest.get("coverage_pct"),
+            "status": manifest.get("status"),
+            "checksum": manifest.get("checksum"),
+            "start_ts": manifest.get("start_ts"),
+            "end_ts": manifest.get("end_ts"),
+        }
+        return df, info
+    except Exception as exc:  # noqa: BLE001 — D1 unreachable/unconfigured must never abort a mission
+        logger.debug(f"{symbol}/{timeframe}: warehouse lookup unavailable, falling back to CSV — {exc}")
+        return None
 
 
 def _distinct_physical_timeframes(space: MissionSearchSpace) -> set[str]:
@@ -273,16 +337,27 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
     # below instead of always the same one.
     phys_tfs = _distinct_physical_timeframes(mc.search_space)
     dfs: dict[str, pd.DataFrame] = {}
+    origins: dict[str, dict] = {}
     for phys_tf in sorted(phys_tfs):
+        # Trusted Data Center Phase 2 (2026-08-13) — prefer the quality-
+        # gated D1 warehouse over the local CSV when it has a READY
+        # dataset for this (symbol, timeframe); fall through to the exact
+        # pre-existing CSV path otherwise (unchanged behavior for every
+        # symbol/timeframe not yet pushed to the warehouse).
+        warehouse_result = _load_from_warehouse(symbol, phys_tf, mc.start, mc.end)
+        if warehouse_result is not None:
+            dfs[phys_tf], origins[phys_tf] = warehouse_result
+            continue
         try:
             dfs[phys_tf] = load_symbol_data(symbol, mc.data_dir, mc.start, mc.end, timeframe=phys_tf)
+            origins[phys_tf] = {"dataset_origin": "csv"}
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: mission sweep failed to load {phys_tf} data — {exc}")
     if not dfs:
         return
 
     fingerprints = {
-        phys_tf: _compute_fingerprint(symbol, mc.data_dir, phys_df, timeframe=phys_tf)
+        phys_tf: _compute_fingerprint(symbol, mc.data_dir, phys_df, timeframe=phys_tf, origin=origins.get(phys_tf))
         for phys_tf, phys_df in dfs.items()
     }
 

@@ -115,3 +115,22 @@ def test_build_multi_timeframe_view_h1_base_drops_partial_h4_and_d1():
 
 def test_supported_timeframes_matches_resample_rule_keys():
     assert set(SUPPORTED_TIMEFRAMES) == {"M15", "H1", "H4", "D1"}
+
+
+def test_build_multi_timeframe_view_rejects_unsupported_base_timeframe():
+    """2026-08-13 forensic fix: an unsupported base label used to silently
+    fall through _TF_MINUTES.get(base_label, 60) as if it were H1 — no
+    error, wrong-cadence resampling downstream. Must raise instead."""
+    df = _h4_df(1)
+    with pytest.raises(ValueError, match="Unsupported timeframe"):
+        build_multi_timeframe_view(df, ["M30", "H4"])
+
+
+def test_build_multi_timeframe_view_rejects_unsupported_requested_timeframe():
+    """Same fix, applied to a non-base entry in the requested list — this
+    one used to fall through _TF_MINUTES.get(tf, 60) inside the finer-than-
+    base comparison, silently skipping or mis-resampling it instead of
+    raising."""
+    df = _h4_df(1)
+    with pytest.raises(ValueError, match="Unsupported timeframe"):
+        build_multi_timeframe_view(df, ["H4", "W1"])

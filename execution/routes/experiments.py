@@ -461,6 +461,55 @@ def _configured_symbol_universe() -> set[str]:
     }
 
 
+# Trusted Data Center Phase 1 (2026-08-13) — the only physically
+# downloaded intraday timeframes (H4/D1 are always derived, see
+# backtest/runner.py::find_symbol_csv's own docstring), so checking these
+# two local-CSV/Parquet slots covers every possible on-disk dataset.
+_DATA_READINESS_CHECK_TIMEFRAMES: tuple[str, ...] = ("M15", "H1")
+
+
+def _symbol_has_any_data(symbol: str) -> bool:
+    """Pre-flight dataset-readiness check: does ANY usable data exist for
+    this symbol at all — a local CSV/Parquet for M15 or H1 (backtest.
+    runner.find_symbol_csv, the same loader backtest/robustness/walk_
+    forward/mission_runner all actually use), or a READY D1 warehouse
+    dataset for any timeframe (storage.market_bars.is_ready, the Trusted
+    Data Center Phase 2 warehouse Mission Center already prefers when
+    present)?
+
+    Returns True whenever EITHER source is unreachable/misconfigured —
+    this check exists to turn a *guaranteed* future failure (today: a
+    bare FileNotFoundError raised deep inside the subprocess, often
+    minutes into a mission after Optuna/D1 setup) into an immediate,
+    clear one — never to introduce a NEW way to block a run that would
+    otherwise have succeeded. Only a clean, unambiguous "not found
+    anywhere" from both checks returns False."""
+    from pathlib import Path
+
+    from backtest.runner import find_symbol_csv
+
+    data_dir = Path("data")
+    for tf in _DATA_READINESS_CHECK_TIMEFRAMES:
+        try:
+            find_symbol_csv(symbol, data_dir, timeframe=tf)
+            return True
+        except FileNotFoundError:
+            continue
+        except Exception:
+            return True  # a lookup error is not evidence of "no data" — don't block on it
+
+    try:
+        from storage import market_bars
+
+        for tf in ("M15", "H1", "H4", "D1"):
+            if market_bars.is_ready(symbol, tf):
+                return True
+    except Exception:
+        return True  # D1 unconfigured/unreachable — advisory-only, never blocks
+
+    return False
+
+
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -617,6 +666,14 @@ async def experiments_run(
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown symbol(s) {unknown} — must be in the configured universe.",
+            )
+        no_data = sorted(s for s in symbols if not _symbol_has_any_data(s))
+        if no_data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No downloaded data found for {no_data} (checked local CSV/Parquet and the D1 "
+                       f"warehouse) — download it first (see scripts/download_*_history.py) before running "
+                       f"'{body.job}'.",
             )
         argv += ["--symbols", *symbols]
     elif body.symbols:

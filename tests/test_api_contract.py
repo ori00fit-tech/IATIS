@@ -16,6 +16,7 @@ import os
 import sys
 import time
 
+import pandas as pd
 import pytest
 
 os.environ.setdefault("ENV", "development")
@@ -40,6 +41,12 @@ def client(monkeypatch):
     import execution.api_server as m
     m._ENV = "development"
     monkeypatch.setenv("API_SERVER_KEY", "test-key-123")
+    # Trusted Data Center Phase 1's pre-flight readiness check has no real
+    # CSVs/D1 data in this sandboxed suite — default it to "available" so
+    # every existing argv/validation test here (which isn't testing data
+    # readiness) is unaffected; tests that specifically exercise the new
+    # check override this locally.
+    monkeypatch.setattr("execution.routes.experiments._symbol_has_any_data", lambda symbol: True)
     # https base_url: the session cookie is set with secure=True, so the
     # test client must speak "https" for the cookie jar to send it back.
     with TestClient(app, base_url="https://testserver") as c:
@@ -991,6 +998,81 @@ def test_experiments_run_parameterized_jobs_reject_unknown_symbol(client, job):
     r = client.post("/experiments/run", json={"job": job, "symbols": ["ZZZFAKE"]}, headers=HDR)
     assert r.status_code == 400, r.text
     assert "Unknown symbol" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Trusted Data Center Phase 1 — pre-flight dataset-readiness check
+# ---------------------------------------------------------------------------
+
+
+def test_experiments_run_rejects_symbol_with_no_downloaded_data(client, monkeypatch):
+    monkeypatch.setattr("execution.routes.experiments._symbol_has_any_data", lambda symbol: False)
+    r = client.post("/experiments/run", json={"job": "backtest", "symbols": ["EURUSD"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "No downloaded data found for ['EURUSD']" in r.json()["detail"]
+
+
+def test_experiments_run_readiness_check_reports_only_the_symbols_missing_data(client, monkeypatch):
+    monkeypatch.setattr(
+        "execution.routes.experiments._symbol_has_any_data",
+        lambda symbol: symbol != "XAUUSD",
+    )
+    r = client.post("/experiments/run", json={"job": "backtest", "symbols": ["EURUSD", "XAUUSD"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "['XAUUSD']" in r.json()["detail"]
+    assert "EURUSD" not in r.json()["detail"]
+
+
+def test_experiments_run_readiness_check_runs_before_symbol_availability_used_by_argv(client, monkeypatch):
+    # Ready symbols still pass through to a real argv build unaffected.
+    monkeypatch.setattr("execution.routes.experiments._symbol_has_any_data", lambda symbol: True)
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    r = client.post("/experiments/run", json={"job": "backtest", "symbols": ["eurusd"]}, headers=HDR)
+    assert r.status_code == 200, r.text
+
+
+def test_symbol_has_any_data_finds_local_csv(tmp_path, monkeypatch):
+    import execution.routes.experiments as m
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "EURUSD_H1_dukascopy.csv").write_text("open,high,low,close,volume\n1,1,1,1,1\n")
+    monkeypatch.chdir(tmp_path)
+    assert m._symbol_has_any_data("EURUSD") is True
+
+
+def test_symbol_has_any_data_finds_d1_warehouse_ready_dataset(tmp_path, monkeypatch):
+    import execution.routes.experiments as m
+    from storage import market_bars
+
+    monkeypatch.chdir(tmp_path)
+    idx = pd.date_range("2024-01-02", periods=300, freq="1h", tz="UTC")
+    df = pd.DataFrame(
+        {"open": 1.1, "high": 1.11, "low": 1.09, "close": 1.1, "volume": 10.0}, index=idx
+    )
+    market_bars.upsert_bars("EURUSD", "H1", df, source="dukascopy")
+    manifest = market_bars.compute_manifest("EURUSD", "H1", source="dukascopy", asset_class="fx_major")
+    market_bars.upsert_manifest(manifest)
+    assert m._symbol_has_any_data("EURUSD") is True
+
+
+def test_symbol_has_any_data_returns_false_when_nothing_exists_anywhere(tmp_path, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.chdir(tmp_path)
+    assert m._symbol_has_any_data("ZZZNODATA") is False
 
 
 def test_experiments_run_non_parameterized_job_rejects_symbols(client):

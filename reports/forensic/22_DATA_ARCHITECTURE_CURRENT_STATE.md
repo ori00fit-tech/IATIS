@@ -92,3 +92,56 @@ the registry, a not-READY dataset's exact behavior per the confirmed
 policy, native-flag correctness, and a regression test pinning
 `load_symbol_data`'s pre-existing local-CSV behavior for every symbol not
 yet in the warehouse.
+
+## Phase 1 — resolved (2026-08-13)
+
+Re-scoped against the current state, since the item this report labeled
+"Target flow (Phase 1 scope)" had already been implemented under commit
+`e0dfd8f` ("Trusted Data Center Phase 2 slice") — a numbering artifact,
+not a missing feature: `mission_runner.py::_run_symbol()` already prefers
+`storage/market_bars.py`'s D1 warehouse (`is_ready()` + `load_bars()`)
+over the local CSV, records native/derived provenance in the trial
+fingerprint, and degrades silently to the CSV path on any D1 failure —
+exactly what this report's "Target flow" section described. The
+`storage/data_registry.py`/`TrustedDataRegistry` wrapper and a persisted
+`dataset_manifest.native` column were **not** built separately — the
+inline `_load_from_warehouse()` helper in `mission_runner.py` already
+covers the same need without a new module, and the native/derived flag
+is already correctly derived from `manifest["source"]` (ending in
+`"_resampled"` or not) at read time rather than needing its own stored
+column.
+
+The operator confirmed (via `AskUserQuestion`, 2026-08-13) the two real,
+still-open gaps to close as this repo's actual "Phase 1":
+
+- **A — `push_bars_to_d1.py` always derived H4/D1 by resampling H1**,
+  even when a genuinely native H4/D1 file existed on disk
+  (`download_dukascopy_history.py --timeframe H4`/`D1` aggregates real
+  tick data, confirmed by direct read of that script — it was never
+  consulted). Fixed: `push_symbol()` now calls `find_source_csv()` for
+  H4/D1 too, pushing a native file as-is (tagged with its real
+  provider source, not `"{source}_resampled"`) and falling back to the
+  H1-resample path unchanged when no native file exists. 3 new
+  regression tests in `tests/test_push_bars_to_d1.py` (native-H4-wins,
+  native-D1-wins, no-native-file-falls-back-exactly-as-before).
+- **B — no pre-flight dataset-readiness check** before launching a
+  mission/backtest/walk_forward/robustness job — a missing dataset
+  previously surfaced only as a bare `FileNotFoundError` deep inside the
+  subprocess, often minutes into Optuna/D1 setup. Fixed: a new
+  `execution/routes/experiments.py::_symbol_has_any_data()` helper
+  (checks a local CSV/Parquet for M15 or H1 via `backtest.runner.
+  find_symbol_csv`, or a READY D1-warehouse manifest for any timeframe
+  via `storage.market_bars.is_ready`) is now called for every requested
+  symbol in both `POST /experiments/run` (parameterized jobs) and
+  `POST /research/missions`, rejecting with a clear 400 naming exactly
+  which symbol(s) have no data anywhere — before a job slot/subprocess
+  is even claimed. Deliberately advisory-in-spirit-but-hard-in-practice:
+  it never introduces a NEW way to block a run that would otherwise
+  have succeeded (any check failure — unreadable data dir, unconfigured/
+  unreachable D1 — degrades to "assume available"), it only makes an
+  otherwise-inevitable failure immediate instead of deferred.
+
+Both are additive, symbol-availability-only changes — no change to
+`storage/market_bars.py`'s own schema, `core/timeframe_sync.py`'s
+downsample-only guard, or the D1-preferred-over-CSV logic already
+shipped in `e0dfd8f`.

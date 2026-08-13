@@ -12,15 +12,18 @@ canonical historical data source, one unified market_bars table, a
 manifest recording real coverage/gap/integrity state so a caller can
 check readiness before trusting a dataset for research.
 
-M15 and H1 are the two NATIVELY fetched timeframes (this codebase's
-download scripts never fetch H4/D1 directly — see download_dukascopy_
-history.py's own module docstring: H4/D1 are always derived from H1 by
-resampling). This script follows that exact convention: it pushes
-whatever M15/H1 CSVs it finds on disk as-is, then DERIVES H4 and D1 by
-resampling the pushed H1 series (never from M15 — H1 is this codebase's
-canonical resample base everywhere else too) and pushes those as their
-own market_bars rows, tagged with a "{source}_resampled" source label
-so a manifest reader can tell native from derived at a glance.
+M15 and H1 are always pushed as-is from whatever CSV is on disk. For H4
+and D1, this script prefers a genuinely NATIVE H4/D1 CSV when one exists
+on disk (download_dukascopy_history.py's --timeframe H4/D1 aggregates
+real tick data, not a resample of H1 candles — see its own module
+docstring) — pushed with its real source label, same as M15/H1. Only
+when no native H4/D1 file is found does it fall back to DERIVING H4/D1
+by resampling the pushed H1 series (never from M15 — H1 is this
+codebase's canonical resample base everywhere else too), tagged with a
+"{source}_resampled" source label so a manifest reader can tell native
+from derived at a glance. Trusted Data Center Phase 1 (2026-08-13):
+before this, H4/D1 were ALWAYS resampled from H1 even when a native
+Dukascopy H4/D1 file was sitting right there on disk, unused.
 
 For each symbol, source CSVs are looked up by suffix, in priority order
 (mirrors the operator's own Dukascopy > cTrader > Twelve Data priority,
@@ -116,10 +119,13 @@ def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 
 def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str, Any]]:
-    """Pushes both native timeframes (whichever CSVs exist) then derives
-    H4/D1 from the native H1 series. Every one of the 4 timeframes gets a
-    result entry, even a total miss (NO_SOURCE_FILE) — never silently
-    dropped from the return value."""
+    """Pushes both native timeframes (whichever CSVs exist). For H4/D1,
+    prefers a genuinely native CSV on disk over deriving from the pushed
+    H1 series by resampling (Trusted Data Center Phase 1, 2026-08-13) —
+    falls back to the resample-from-H1 path exactly as before when no
+    native H4/D1 file exists. Every one of the 4 timeframes gets a result
+    entry, even a total miss (NO_SOURCE_FILE) — never silently dropped
+    from the return value."""
     from storage import market_bars
 
     asset_class = _asset_class_for_symbol(symbol, config)
@@ -141,20 +147,28 @@ def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str
         if tf == "H1":
             h1_df, h1_source = df, source
 
-    if h1_df is not None and not h1_df.empty:
-        for tf in _DERIVED_TIMEFRAMES:
-            derived_df = resample_ohlcv(h1_df, tf)
-            if derived_df.empty:
-                results[tf] = {"status": "NO_SOURCE_FILE", "rows": 0, "source": None}
-                continue
-            derived_source = f"{h1_source}_resampled"
-            written = market_bars.upsert_bars(symbol, tf, derived_df, source=derived_source)
-            manifest = market_bars.compute_manifest(symbol, tf, source=derived_source, asset_class=asset_class)
+    for tf in _DERIVED_TIMEFRAMES:
+        native_found = find_source_csv(symbol, tf, data_dir)
+        if native_found is not None:
+            path, source = native_found
+            df = load_csv(path)
+            written = market_bars.upsert_bars(symbol, tf, df, source=source)
+            manifest = market_bars.compute_manifest(symbol, tf, source=source, asset_class=asset_class)
             market_bars.upsert_manifest(manifest)
-            results[tf] = {"status": manifest["status"], "rows": written, "source": derived_source}
-    else:
-        for tf in _DERIVED_TIMEFRAMES:
+            results[tf] = {"status": manifest["status"], "rows": written, "source": source}
+            continue
+        if h1_df is None or h1_df.empty:
             results[tf] = {"status": "NO_SOURCE_FILE", "rows": 0, "source": None}
+            continue
+        derived_df = resample_ohlcv(h1_df, tf)
+        if derived_df.empty:
+            results[tf] = {"status": "NO_SOURCE_FILE", "rows": 0, "source": None}
+            continue
+        derived_source = f"{h1_source}_resampled"
+        written = market_bars.upsert_bars(symbol, tf, derived_df, source=derived_source)
+        manifest = market_bars.compute_manifest(symbol, tf, source=derived_source, asset_class=asset_class)
+        market_bars.upsert_manifest(manifest)
+        results[tf] = {"status": manifest["status"], "rows": written, "source": derived_source}
 
     return results
 

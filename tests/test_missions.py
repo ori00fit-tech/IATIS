@@ -43,6 +43,16 @@ def client(monkeypatch):
     import execution.api_server as m
     m._ENV = "development"
     monkeypatch.setenv("API_SERVER_KEY", "test-key-123")
+    # Trusted Data Center Phase 1's pre-flight readiness check has no real
+    # CSVs/D1 data in this sandboxed suite — default it to "available" so
+    # every existing mission-creation test here (which isn't testing data
+    # readiness) is unaffected; tests that specifically exercise the new
+    # check override this locally.
+    # missions.py imports the name directly (from execution.routes.
+    # experiments import _symbol_has_any_data), so the local binding in
+    # missions.py's own module namespace is what must be patched — patching
+    # experiments._symbol_has_any_data alone would not affect it.
+    monkeypatch.setattr("execution.routes.missions._symbol_has_any_data", lambda symbol: True)
     with TestClient(app, base_url="https://testserver") as c:
         yield c
 
@@ -141,6 +151,28 @@ def test_missions_create_rejects_unknown_symbol(client):
 def test_missions_create_rejects_empty_symbols(client):
     r = client.post("/research/missions", json={**_VALID_BODY, "symbols": []}, headers=HDR)
     assert r.status_code == 400
+
+
+def test_missions_create_rejects_symbol_with_no_downloaded_data(client, monkeypatch):
+    monkeypatch.setattr("execution.routes.missions._symbol_has_any_data", lambda symbol: False)
+    r = client.post("/research/missions", json=_VALID_BODY, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "No downloaded data found for ['EURUSD']" in r.json()["detail"]
+
+
+def test_missions_create_readiness_check_reports_only_symbols_missing_data(client, monkeypatch):
+    monkeypatch.setattr(
+        "execution.routes.missions._symbol_has_any_data",
+        lambda symbol: symbol != "XAUUSD",
+    )
+    r = client.post(
+        "/research/missions",
+        json={**_VALID_BODY, "symbols": ["EURUSD", "XAUUSD"]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "['XAUUSD']" in r.json()["detail"]
+    assert "EURUSD" not in r.json()["detail"]
 
 
 def test_missions_create_rejects_bad_sampler(client):

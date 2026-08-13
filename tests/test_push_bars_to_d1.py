@@ -216,6 +216,41 @@ def test_push_symbol_is_idempotent_on_replay(tmp_path):
     assert market_bars.bar_count("EURUSD", "H4") == 6
 
 
+def test_push_symbol_prefers_native_h4_file_over_deriving_from_h1(tmp_path):
+    # A genuinely native H4 CSV (e.g. Dukascopy's tick-aggregated
+    # --timeframe H4 output) must win over resampling the pushed H1
+    # series — Trusted Data Center Phase 1.
+    _write_csv(tmp_path / "EURUSD_H1_dukascopy.csv", n=48, freq="1h")
+    native_h4 = _write_csv(tmp_path / "EURUSD_H4_dukascopy.csv", n=5, freq="4h")
+    result = push_symbol("EURUSD", tmp_path, _CFG)
+    assert result["H4"]["source"] == "dukascopy"  # not "dukascopy_resampled"
+    assert result["H4"]["rows"] == len(native_h4)  # 5, not the 12 a resample of 48 H1 bars would give
+    assert market_bars.bar_count("EURUSD", "H4") == 5
+    # D1 had no native file, so it still falls back to resampling H1 exactly as before.
+    assert result["D1"]["source"] == "dukascopy_resampled"
+
+
+def test_push_symbol_prefers_native_d1_file_over_deriving_from_h1(tmp_path):
+    _write_csv(tmp_path / "EURUSD_H1_ctrader.csv", n=48, freq="1h")
+    native_d1 = _write_csv(tmp_path / "EURUSD_D1_dukascopy.csv", n=3, freq="1D")
+    result = push_symbol("EURUSD", tmp_path, _CFG)
+    assert result["D1"]["source"] == "dukascopy"
+    assert result["D1"]["rows"] == len(native_d1)
+    # H4 had no native file, so it still falls back to resampling H1.
+    assert result["H4"]["source"] == "ctrader_resampled"
+
+
+def test_push_symbol_falls_back_to_resample_when_no_native_h4_d1_file(tmp_path):
+    # Regression pin: the pre-Phase-1 behavior (always derive H4/D1 from
+    # H1) must be unchanged when no native H4/D1 file exists on disk.
+    _write_csv(tmp_path / "EURUSD_H1_dukascopy.csv", n=48, freq="1h")
+    result = push_symbol("EURUSD", tmp_path, _CFG)
+    assert result["H4"]["source"] == "dukascopy_resampled"
+    assert result["H4"]["rows"] == 12
+    assert result["D1"]["source"] == "dukascopy_resampled"
+    assert result["D1"]["rows"] == 2
+
+
 def test_push_symbol_reports_ready_status_for_clean_dense_data(tmp_path):
     # Gapless weekday M15/H1 series — should compute a real READY manifest.
     _write_csv(tmp_path / "EURUSD_M15_dukascopy.csv", n=96, freq="15min")   # one full day

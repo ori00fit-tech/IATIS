@@ -38,6 +38,12 @@ def client(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Trusted Data Center Phase 1's pre-flight readiness check has no real
+    # CSVs/D1 data in this sandboxed suite — default it to "available" so
+    # every existing job-submission test here (which isn't testing data
+    # readiness) is unaffected; tests that specifically exercise the new
+    # check override this locally.
+    monkeypatch.setattr("execution.routes.experiments._symbol_has_any_data", lambda symbol: True)
     with TestClient(app) as c:
         yield c
 

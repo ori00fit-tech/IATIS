@@ -41,6 +41,7 @@ from execution.routes.experiments import (
     _jobs,
     _jobs_lock,
     _run_job,
+    _symbol_has_any_data,
     _validate_iso_date,
 )
 
@@ -139,6 +140,18 @@ async def missions_create(
     unknown = sorted(set(symbols) - universe)
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown symbol(s) {unknown} — must be in the configured universe.")
+    # Trusted Data Center Phase 1 (2026-08-13) — a mission previously
+    # discovered a missing dataset only via a bare FileNotFoundError deep
+    # inside the subprocess, often minutes into Optuna/D1 setup. Fail
+    # fast, before a job slot is even claimed.
+    no_data = sorted(s for s in symbols if not _symbol_has_any_data(s))
+    if no_data:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No downloaded data found for {no_data} (checked local CSV/Parquet and the D1 "
+                   f"warehouse) — download it first (see scripts/download_*_history.py) before launching "
+                   f"a mission.",
+        )
 
     if body.name is not None and not _NAME_SAFE_RE.match(body.name):
         raise HTTPException(status_code=400, detail="name must be 1-80 chars (letters/digits/space/._- only).")

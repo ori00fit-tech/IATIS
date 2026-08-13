@@ -798,3 +798,105 @@ def test_run_symbol_fails_only_the_trials_whose_timeframe_has_no_physical_datase
     assert all(t["state"] != "FAIL" for t in by_bundle[0]), "H1 bundle must not fail — its data is available"
     assert all(t["state"] == "FAIL" for t in by_bundle[1])
     assert all("unavailable" in (t["error"] or "") for t in by_bundle[1])
+
+
+# ── Trusted Data Center Phase 2 (2026-08-13): warehouse-first loading ──────
+
+def _push_warehouse_dataset(symbol: str, timeframe: str, df: pd.DataFrame, source: str, status: str = "READY") -> None:
+    """Writes bars + a hand-built manifest directly, bypassing
+    market_bars.compute_manifest()'s real session-aware completeness
+    scoring — these tests only need control over is_ready()'s status/
+    source fields, not a real coverage computation."""
+    from storage import market_bars
+
+    market_bars.upsert_bars(symbol, timeframe, df, source=source)
+    market_bars.upsert_manifest({
+        "symbol": symbol, "timeframe": timeframe, "source": source,
+        "row_count": len(df), "status": status, "coverage_pct": 99.5,
+    })
+
+
+def test_load_from_warehouse_returns_none_when_no_manifest_exists():
+    from backtest.mission_runner import _load_from_warehouse
+
+    assert _load_from_warehouse("EURUSD", "H1", None, None) is None
+
+
+def test_load_from_warehouse_returns_none_when_status_not_ready():
+    df = _ohlcv(300, seed=5)
+    _push_warehouse_dataset("EURUSD", "H1", df, source="dukascopy", status="INCOMPLETE")
+    from backtest.mission_runner import _load_from_warehouse
+
+    assert _load_from_warehouse("EURUSD", "H1", None, None) is None
+
+
+def test_load_from_warehouse_marks_native_source_as_native():
+    df = _ohlcv(300, seed=5)
+    _push_warehouse_dataset("EURUSD", "H1", df, source="dukascopy", status="READY")
+    from backtest.mission_runner import _load_from_warehouse
+
+    result = _load_from_warehouse("EURUSD", "H1", None, None)
+    assert result is not None
+    warehouse_df, info = result
+    assert len(warehouse_df) == 300
+    assert info["dataset_origin"] == "warehouse"
+    assert info["native"] is True
+    assert info["warehouse_source"] == "dukascopy"
+
+
+def test_load_from_warehouse_marks_resampled_source_as_derived():
+    df = _ohlcv(300, seed=5, freq="4h")
+    _push_warehouse_dataset("EURUSD", "H4", df, source="dukascopy_resampled", status="READY")
+    from backtest.mission_runner import _load_from_warehouse
+
+    result = _load_from_warehouse("EURUSD", "H4", None, None)
+    assert result is not None
+    _, info = result
+    assert info["native"] is False
+    assert info["warehouse_source"] == "dukascopy_resampled"
+
+
+def test_load_from_warehouse_degrades_gracefully_on_backend_error(monkeypatch):
+    from backtest import mission_runner as mr
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("D1 unreachable")
+
+    monkeypatch.setattr("storage.market_bars.is_ready", _boom)
+    assert mr._load_from_warehouse("EURUSD", "H1", None, None) is None
+
+
+def test_run_symbol_prefers_warehouse_over_csv_when_ready(tmp_path):
+    # CSV on disk (would be used if the warehouse weren't consulted) and a
+    # genuinely different, READY warehouse dataset for the same (symbol,
+    # timeframe) — the mission's recorded fingerprint must reflect the
+    # warehouse origin, proving it was preferred, not just present.
+    _write_dataset(tmp_path)
+    warehouse_df = _ohlcv(500, seed=123, trend=0.9)
+    _push_warehouse_dataset("EURUSD", "H1", warehouse_df, source="ctrader", status="READY")
+
+    mc = _small_config(tmp_path, "mission-warehouse-preferred", n_trials=2)
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-warehouse-preferred", "EURUSD")
+    assert trials
+    fp = json.loads(trials[0]["fingerprint_json"])
+    assert fp["dataset"]["origin"] == "warehouse"
+    assert fp["dataset"]["native"] is True
+    assert fp["dataset"]["warehouse_source"] == "ctrader"
+
+
+def test_run_symbol_falls_back_to_csv_when_warehouse_not_ready(tmp_path):
+    # No warehouse data pushed at all — exact pre-existing CSV-only
+    # behavior must be unchanged (regression pin for every deployment
+    # that hasn't populated the D1 warehouse yet).
+    _write_dataset(tmp_path)
+
+    mc = _small_config(tmp_path, "mission-warehouse-absent", n_trials=2)
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-warehouse-absent", "EURUSD")
+    assert trials
+    fp = json.loads(trials[0]["fingerprint_json"])
+    assert fp["dataset"]["origin"] == "csv"
+    assert fp["dataset"]["file"].endswith("_H1_2y.csv")

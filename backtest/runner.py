@@ -558,6 +558,10 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
 # ─────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
 
     parser = argparse.ArgumentParser(description="IATIS full backtest runner")

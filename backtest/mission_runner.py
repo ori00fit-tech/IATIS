@@ -647,6 +647,10 @@ def _write_report(mc: MissionConfig) -> None:
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="IATIS AI Research Lab — mission runner")
     parser.add_argument("--mission-id", default=None, help="auto-generated if omitted")
     parser.add_argument("--name", default=None)

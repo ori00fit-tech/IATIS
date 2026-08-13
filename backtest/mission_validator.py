@@ -760,6 +760,10 @@ def _write_report(
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="IATIS AI Research Lab — mission trial validator")
     parser.add_argument("--validation-id", required=True)
     parser.add_argument("--mission-id", required=True)

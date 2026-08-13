@@ -25,9 +25,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import (
+    BacktestConfig, build_engine_config_override, run_backtest,
+)
 from engines.base_engine import BaseEngine
 from research.guards.causal_guard import LookaheadError, assert_no_future_rows
+
+# _ohlcv() below is genuinely H1-cadence (freq="h"). Declaring that
+# explicitly avoids relying on config.yaml's H4 default, which (post-
+# BUG-006 fix) now really resamples mismatched data down to ~1/4 the bars
+# instead of silently mislabeling it — at n=600 that would otherwise land
+# below warmup_bars=210 and produce an empty result.
+_H1_ENGINE_CONFIG = build_engine_config_override(timeframes=["H1"])
 
 
 def _ohlcv(n: int, seed: int = 7, trend: float = 0.06) -> pd.DataFrame:
@@ -73,7 +82,9 @@ def test_run_backtest_accepts_correctly_sorted_input():
     # correctly-loaded data (every real caller already sort_index()s).
     df = _ohlcv(600)
     assert df.index.is_monotonic_increasing
-    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    result = run_backtest(
+        df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+    )
     assert result.total_runs > 0
 
 
@@ -90,7 +101,9 @@ def test_no_engine_ever_receives_a_future_bar_across_a_real_run(monkeypatch):
     monkeypatch.setattr(BaseEngine, "safe_analyze", _capturing_safe_analyze)
 
     df = _ohlcv(600)
-    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    result = run_backtest(
+        df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+    )
     assert result.total_runs > 0
     assert len(captured) > 0, "no engine calls captured — test fixture is broken"
 
@@ -129,7 +142,9 @@ def test_decision_timeframe_last_bar_is_always_the_true_current_bar(monkeypatch)
     monkeypatch.setattr(BaseEngine, "safe_analyze", _capturing_safe_analyze)
 
     df = _ohlcv(600)
-    run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    run_backtest(
+        df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+    )
     assert len(seen_last_bars) > 0
     # Every observed "current bar" must itself be a real, present row in
     # the original data — never a fabricated or out-of-range timestamp.

@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import (
+    BacktestConfig, build_engine_config_override, run_backtest,
+)
 from engines.base_engine import BaseEngine, Bias, EngineOutput
 from main import _ALL_ENGINES, build_active_engines
 from utils.helpers import load_config
@@ -111,7 +113,12 @@ def test_build_active_engines_sets_version_from_config_versions_block():
 
 def test_run_backtest_populates_engine_version_on_real_trade_decisions():
     df = _ohlcv(600)
-    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    # _ohlcv() is genuinely H1-cadence (freq="h") — declare that explicitly
+    # rather than relying on config.yaml's H4 default, which (post-BUG-006
+    # fix) now really resamples mismatched data down to ~1/4 the bars
+    # instead of silently mislabeling it.
+    engine_config = build_engine_config_override(timeframes=["H1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=engine_config)
     assert len(result.trades) > 0, "need at least one trade to assert on"
     config = load_config()
     versions = config.get("engines", {}).get("versions", {})

@@ -234,14 +234,18 @@ def physical_load_timeframe(timeframes: tuple[str, ...] | None) -> str:
     either as the physical load timeframe would only ever raise
     ``FileNotFoundError`` — never done.
 
-    Not wired into ``backtest/mission_runner.py``: Mission Center's
-    Optuna-driven search loads ONE dataframe per symbol and reuses it
-    across every trial in that symbol's study, including trials whose
-    resolved ``timeframes`` differ from each other (e.g. a hypothesis
-    bundle mixing an M15 bundle with an H1 bundle) — supporting per-trial
-    physical-timeframe switching there needs a real redesign (which file
-    each trial's ``evaluate_point`` call reads), not this one-line rule.
-    Left on H1-only for now, a disclosed, separate limitation."""
+    BUG-020 fix (2026-08-12, ``reports/forensic/13_CONFIRMED_BUGS.md``):
+    now wired into ``backtest/mission_runner.py`` too — Mission Center's
+    Optuna-driven search calls this once per DISTINCT ``timeframes``
+    combination in the search space (a mission may mix, e.g., an M15
+    hypothesis bundle with an H1 one), loads one physical dataframe per
+    result, and picks the correct one per trial via this function applied
+    to that trial's own resolved ``point["timeframes"]`` — see
+    ``mission_runner._distinct_physical_timeframes``/``_run_symbol``.
+    Previously every trial silently reused whichever single H1 dataframe
+    was loaded once per symbol regardless of its own declared timeframe,
+    making any research that varied timeframe across trials produce
+    identical results no matter what was requested."""
     if timeframes and timeframes[0] == "M15":
         return "M15"
     return "H1"

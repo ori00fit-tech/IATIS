@@ -49,6 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import optuna
+import pandas as pd
 
 from backtest import meta_analysis
 from backtest.metrics import json_safe
@@ -65,7 +66,7 @@ from backtest.optimizer import (
     resolve_point,
     suggest_point,
 )
-from backtest.runner import find_symbol_csv, load_symbol_data
+from backtest.runner import find_symbol_csv, load_symbol_data, physical_load_timeframe
 from research.manifest import dataset_fingerprint, git_state
 from storage import research_missions
 from utils.logger import get_logger
@@ -155,21 +156,45 @@ def _split_train_holdout(df, holdout_fraction: float):
     return df.iloc[:split_idx], df.iloc[split_idx:]
 
 
-def _compute_fingerprint(symbol: str, data_dir: Path, df) -> dict:
+def _compute_fingerprint(symbol: str, data_dir: Path, df, timeframe: str = "H1") -> dict:
     """Diagnostic Infrastructure Phase 1 (2026-08-02) — a reproducibility
     snapshot (git commit/dirty + dataset SHA256/bar-count/date-range),
-    computed ONCE per symbol (not per trial — identical across every
-    trial of one symbol within a single mission run) and attached to
-    every research_missions.record_trial() call for that symbol. Never
-    raises — a missing/unreadable dataset file degrades to a partial
-    fingerprint rather than aborting the whole symbol's trials."""
+    computed ONCE per distinct physical timeframe used by a symbol's
+    mission (not per trial — identical across every trial that shares the
+    same physical dataset) and attached to every research_missions.
+    record_trial() call for a trial that used it. Never raises — a
+    missing/unreadable dataset file degrades to a partial fingerprint
+    rather than aborting the whole symbol's trials.
+
+    ``timeframe`` (2026-08-12, BUG-020 fix) — must match whichever
+    physical dataset ``df`` actually is (see ``_distinct_physical_
+    timeframes``/the ``dfs`` loading loop in ``_run_symbol``), so the
+    recorded fingerprint's dataset checksum genuinely corresponds to the
+    data a trial ran against, not always the H1 file regardless of what
+    was really loaded."""
     try:
-        csv_path = find_symbol_csv(symbol, data_dir)
+        csv_path = find_symbol_csv(symbol, data_dir, timeframe=timeframe)
         dataset = dataset_fingerprint(csv_path, df)
     except (FileNotFoundError, OSError) as exc:
         logger.debug(f"{symbol}: fingerprint dataset lookup failed (non-fatal): {exc}")
         dataset = None
     return {"git": git_state(), "dataset": dataset}
+
+
+def _distinct_physical_timeframes(space: MissionSearchSpace) -> set[str]:
+    """BUG-020 (reports/forensic/13_CONFIRMED_BUGS.md) — every physical
+    on-disk timeframe (per backtest.runner.physical_load_timeframe: only
+    "H1" or "M15" are ever real — H4/D1 are always resampled from H1, see
+    find_symbol_csv's own docstring) this search space's trials could
+    possibly need, across every timeframes_choices entry or hypothesis
+    bundle. Pure function of the search space, never touches disk itself
+    — _run_symbol uses this to decide which physical dataset(s) to load
+    up front, once per symbol, before any trial runs."""
+    if space.hypothesis_bundle_choices:
+        combos = [tuple(b.get("timeframes", [])) for b in space.hypothesis_bundle_choices]
+    else:
+        combos = [tuple(c) for c in space.timeframes_choices]
+    return {physical_load_timeframe(c or None) for c in combos} or {"H1"}
 
 
 def run_mission(mc: MissionConfig) -> None:
@@ -234,18 +259,41 @@ def run_mission(mc: MissionConfig) -> None:
 
 
 def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, t0: float) -> None:
-    try:
-        df = load_symbol_data(symbol, mc.data_dir, mc.start, mc.end)
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
-        logger.error(f"{symbol}: mission sweep failed to load data — {exc}")
+    # BUG-020 (reports/forensic/13_CONFIRMED_BUGS.md, 2026-08-12) — a
+    # mission's search space can vary the declared base timeframe per
+    # trial (hypothesis bundles, or timeframes_choices with >1 entry),
+    # but this function used to load ONE physical dataframe per symbol
+    # (always the H1 file, since load_symbol_data was never given a
+    # timeframe= argument) and reuse it for every trial regardless of
+    # what that trial actually declared — physical_load_timeframe()'s
+    # own docstring already disclosed this as a known, deferred
+    # limitation. Fixed: load one dataframe PER DISTINCT PHYSICAL
+    # TIMEFRAME the search space could need (only "H1"/"M15" are ever
+    # real, see find_symbol_csv), and pick the correct one per trial
+    # below instead of always the same one.
+    phys_tfs = _distinct_physical_timeframes(mc.search_space)
+    dfs: dict[str, pd.DataFrame] = {}
+    for phys_tf in sorted(phys_tfs):
+        try:
+            dfs[phys_tf] = load_symbol_data(symbol, mc.data_dir, mc.start, mc.end, timeframe=phys_tf)
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            logger.error(f"{symbol}: mission sweep failed to load {phys_tf} data — {exc}")
+    if not dfs:
         return
 
-    fingerprint = _compute_fingerprint(symbol, mc.data_dir, df)
+    fingerprints = {
+        phys_tf: _compute_fingerprint(symbol, mc.data_dir, phys_df, timeframe=phys_tf)
+        for phys_tf, phys_df in dfs.items()
+    }
 
     if mc.oos_holdout_fraction:
-        train_df, holdout_df = _split_train_holdout(df, mc.oos_holdout_fraction)
+        train_dfs: dict[str, pd.DataFrame] = {}
+        holdout_dfs: dict[str, pd.DataFrame | None] = {}
+        for phys_tf, phys_df in dfs.items():
+            train_dfs[phys_tf], holdout_dfs[phys_tf] = _split_train_holdout(phys_df, mc.oos_holdout_fraction)
     else:
-        train_df, holdout_df = df, None
+        train_dfs = dfs
+        holdout_dfs = {phys_tf: None for phys_tf in dfs}
 
     sampler = make_sampler(mc.sampler, mc.seed, mc.search_space, grid_mode)
     study = optuna.create_study(sampler=sampler, direction="maximize")
@@ -317,6 +365,34 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
         point = resolve_point(mc.search_space, raw_params)
         started_at = _now_iso()
 
+        # BUG-020 fix — select the physical dataset matching THIS trial's
+        # own declared base timeframe (may differ trial-to-trial in
+        # hypothesis-bundle/multi-choice-timeframes missions), never the
+        # same one for every trial regardless of what it asked for.
+        phys_tf = physical_load_timeframe(tuple(point["timeframes"]) if point["timeframes"] else None)
+        if phys_tf not in train_dfs:
+            # The physical dataset for this trial's declared timeframe
+            # failed to load earlier for this symbol (see the per-
+            # timeframe try/except in the loading loop above) — fail this
+            # trial explicitly rather than silently substituting a
+            # different timeframe's data.
+            _tell_safely(study, trial, state=optuna.trial.TrialState.FAIL)
+            err = f"physical dataset for timeframe {phys_tf!r} unavailable for {symbol}"
+            try:
+                research_missions.record_trial(
+                    mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
+                    state="FAIL", objective_value=None, params=raw_params, metrics=None,
+                    trades=0, error=err, started_at=started_at, finished_at=_now_iso(),
+                    fingerprint=fingerprints.get(phys_tf) or {"git": git_state(), "dataset": None},
+                )
+            except Exception as record_exc:  # noqa: BLE001 — see the PRUNED branch's comment below
+                logger.warning(f"{symbol} trial {trial.number}: record_trial (FAIL) failed — {record_exc}")
+            logger.warning(f"{symbol} trial {trial.number}: {err}")
+            continue
+        train_df = train_dfs[phys_tf]
+        holdout_df = holdout_dfs.get(phys_tf)
+        trial_fingerprint = fingerprints[phys_tf]
+
         fp = meta_analysis._effective_config_fingerprint(symbol, point)
         if fp in seen:
             # Skip the backtest entirely — a repeat of an already-
@@ -335,7 +411,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                     state="DUPLICATE", objective_value=cached_value, params=raw_params,
                     metrics=None, trades=cached_trades,
                     error="duplicate configuration (same as an earlier trial)",
-                    started_at=started_at, finished_at=_now_iso(), fingerprint=fingerprint,
+                    started_at=started_at, finished_at=_now_iso(), fingerprint=trial_fingerprint,
                 )
             except Exception as exc:  # noqa: BLE001 — see the PRUNED branch's comment below
                 logger.warning(f"{symbol} trial {trial.number}: record_trial (DUPLICATE) failed — {exc}")
@@ -361,7 +437,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                     mission_id=mc.mission_id, trial_number=trial.number, symbol=symbol,
                     state="FAIL", objective_value=None, params=raw_params, metrics=None,
                     trades=0, error=str(exc), started_at=started_at, finished_at=_now_iso(),
-                    fingerprint=fingerprint,
+                    fingerprint=trial_fingerprint,
                 )
             except Exception as record_exc:  # noqa: BLE001 — a D1 write hiccup recording
                 # a FAIL must not itself abort the mission either (see the
@@ -414,7 +490,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                     state="PRUNED", objective_value=None, params=raw_params,
                     metrics=metrics_payload, trades=result.trades, error=None,
                     started_at=started_at, finished_at=_now_iso(),
-                    fingerprint=fingerprint,
+                    fingerprint=trial_fingerprint,
                 )
             except Exception as exc:  # noqa: BLE001 — a transient D1 write hiccup on
                 # ONE trial must never abort a whole mission (150+ trials,
@@ -436,7 +512,7 @@ def _run_symbol(mc: MissionConfig, symbol: str, n_target: int, grid_mode: bool, 
                     state="COMPLETE", objective_value=result.objective_value, params=raw_params,
                     metrics=metrics_payload, trades=result.trades, error=None,
                     started_at=started_at, finished_at=_now_iso(),
-                    fingerprint=fingerprint,
+                    fingerprint=trial_fingerprint,
                 )
             except Exception as exc:  # noqa: BLE001 — see the PRUNED branch's comment above
                 logger.warning(f"{symbol} trial {trial.number}: record_trial (COMPLETE) failed — {exc}")

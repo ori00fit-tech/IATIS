@@ -336,6 +336,10 @@ def run_walk_forward_suite(
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     from backtesting.backtest_engine import RISK_OVERRIDE_FIELDS
 
     # warmup_bars is deliberately its own dedicated flag, not folded into

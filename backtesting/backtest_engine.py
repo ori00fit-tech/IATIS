@@ -545,7 +545,7 @@ def run_backtest(
     means "every bar known as of bar i" when that holds.
     """
     from utils.helpers import load_config
-    from core.timeframe_sync import build_multi_timeframe_view
+    from core.timeframe_sync import SUPPORTED_TIMEFRAMES, build_multi_timeframe_view, resample
     from engines.smc_engine import SMCEngine
     from engines.price_action_engine import PriceActionEngine
     from engines.ict_engine import ICTEngine
@@ -590,6 +590,51 @@ def run_backtest(
     # Axis-8 gate parity with main.py (0.0 = disabled).
     min_info_share = engine_config["confluence"].get("min_informative_weight_share", 0.0)
     timeframes = engine_config["data"]["timeframes"]
+
+    # 2026-08-13 forensic fix — a real, live-confirmed bug distinct from
+    # BUG-020 (which was about loading the wrong PHYSICAL FILE). Here the
+    # correct physical file IS loaded (H1 — the only real downloader for
+    # H4/D1, per backtest/runner.py::physical_load_timeframe's own
+    # docstring), but `df` is still H1-CADENCE data. build_multi_timeframe_
+    # view()'s base-label branch (`views[timeframes[0]] = df_base`) does
+    # NOT resample — it trusts the caller that df_base's granularity
+    # already matches timeframes[0]. Every prior caller in this codebase
+    # satisfied that trust (live pipeline: each timeframe is fetched
+    # natively; backtests: timeframes[0] was always the same as the
+    # physical file's own cadence). Mission Center's per-trial timeframe
+    # override is the first caller that can violate it — a trial declaring
+    # timeframes=["H4"] alone gets the H1 physical dataframe, and without
+    # this step every engine would silently analyze H1-cadence bars
+    # mislabeled "H4" (a decision every H1 bar, not every 4 hours) — the
+    # exact "H4 trial secretly uses an H1 dataframe relabeled as H4"
+    # failure class flagged in the operator's own timeframe-provenance
+    # audit. Resample the WHOLE frame here, once, before the per-bar loop,
+    # whenever df's own observed cadence is finer than the declared base —
+    # a no-op for every caller whose df already matches (multi-tf lists
+    # with the base first, or a base timeframe with a genuinely native
+    # physical file).
+    if timeframes and timeframes[0] in SUPPORTED_TIMEFRAMES:
+        from core.timeframe_sync import base_timeframe_minutes, infer_bar_minutes
+
+        actual_minutes = infer_bar_minutes(df)
+        base_minutes = base_timeframe_minutes(timeframes[0])
+        if actual_minutes is not None and actual_minutes < base_minutes:
+            df = resample(df, timeframes[0], base_minutes=int(round(actual_minutes)))
+
+    if len(df) <= config.warmup_bars + 1:
+        logger.warning(
+            f"{config.symbol}: only {len(df)} bar(s) at timeframe "
+            f"{timeframes[0] if timeframes else 'base'} (after any resample) — "
+            f"below warmup_bars={config.warmup_bars}; returning an empty result "
+            f"instead of indexing past the end of the data."
+        )
+        return BacktestResult(
+            config=config, symbol=config.symbol,
+            start_date=str(df.index[0].date()) if len(df) else "",
+            end_date=str(df.index[-1].date()) if len(df) else "",
+            total_bars=len(df),
+            timeframe=timeframes[0] if timeframes else "D1",
+        )
 
     engines_list = []
 

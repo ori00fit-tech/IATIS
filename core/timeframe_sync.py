@@ -74,6 +74,33 @@ _TF_MINUTES = {"M15": 15, "H1": 60, "H4": 240, "D1": 1440}
 SUPPORTED_TIMEFRAMES: tuple[str, ...] = tuple(_TF_MINUTES.keys())
 
 
+def base_timeframe_minutes(tf: str) -> int:
+    """Public accessor for _TF_MINUTES — minutes spanned by one `tf`-label
+    candle. Raises ValueError for anything outside SUPPORTED_TIMEFRAMES,
+    same fail-loud contract as build_multi_timeframe_view."""
+    if tf not in _TF_MINUTES:
+        raise ValueError(f"Unsupported timeframe: {tf!r} — choose from {SUPPORTED_TIMEFRAMES}.")
+    return _TF_MINUTES[tf]
+
+
+def infer_bar_minutes(df: pd.DataFrame) -> float | None:
+    """Median minutes between consecutive bars in `df`'s own index — the
+    dataframe's REAL, observed cadence, independent of whatever label a
+    caller has attached to it. None when there are fewer than 2 rows (no
+    interval to measure). Used to detect when a df's actual granularity is
+    finer than a caller's declared base timeframe (2026-08-13 forensic
+    finding: a Mission Center trial whose only physical dataset is H1 but
+    whose declared base timeframe is H4/D1 must not just relabel the H1
+    bars as H4/D1 without ever aggregating them — see
+    run_backtest()'s use of this function)."""
+    if len(df.index) < 2:
+        return None
+    deltas = df.index.to_series().diff().dropna()
+    if deltas.empty:
+        return None
+    return float(deltas.median() / pd.Timedelta(minutes=1))
+
+
 def build_multi_timeframe_view(df_base: pd.DataFrame, timeframes: list[str]) -> dict[str, pd.DataFrame]:
     """Build a dict of {timeframe_label: DataFrame} from a single base series.
 

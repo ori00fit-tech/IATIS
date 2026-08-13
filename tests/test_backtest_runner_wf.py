@@ -683,6 +683,109 @@ def test_timeframes_override_reaches_run_backtest_without_crashing():
         assert len(t.decision["engines"]) > 0
 
 
+def test_h4_only_override_resamples_h1_physical_data_to_real_h4_candles():
+    """2026-08-13 forensic fix — distinct from BUG-020. Confirmed live on
+    the VPS: a Mission Center trial declaring timeframes=["H4"] alone gets
+    the H1 physical dataset (H4 has no native downloader — see
+    backtest/runner.py::physical_load_timeframe). Before this fix,
+    build_multi_timeframe_view's base-label branch just relabeled the raw
+    H1-cadence df as "H4" with zero resampling — every engine analyzed a
+    decision every H1 bar, not every 4 hours. run_backtest must now
+    resample the WHOLE frame to real H4 candles before the per-bar loop,
+    so total_bars/timeframe genuinely reflect H4 cadence, not H1 count."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)  # H1-cadence, per _ohlcv's default freq="h"
+    override_config = build_engine_config_override(["H4"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.timeframe == "H4"
+    # 2400 H1 bars -> ~600 real H4 candles, nowhere near the original 2400.
+    assert 550 <= result.total_bars <= 601
+    assert result.error_count == 0
+    assert result.total_runs > 0  # real decision points were actually evaluated
+
+
+def test_h4_only_override_produces_fewer_decision_points_than_h1_alone():
+    """The direct proof the fix changes DECISION CADENCE, not just a
+    reported label: the same physical H1 dataframe run with an H4-only
+    override must reach roughly 1/4 the total_runs of the identical df
+    run with an H1-only override (step_bars held equal in both, via
+    BacktestConfig.from_profile's own default)."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    cfg = BacktestConfig.from_profile("EURUSD")
+
+    result_h1 = run_backtest(df, cfg, engine_config=build_engine_config_override(["H1"]))
+    result_h4 = run_backtest(df, cfg, engine_config=build_engine_config_override(["H4"]))
+
+    assert result_h1.total_runs > 0
+    assert result_h4.total_runs > 0
+    ratio = result_h1.total_runs / result_h4.total_runs
+    assert 3.0 <= ratio <= 5.0  # ~4x fewer decision points at H4 vs H1
+
+
+def test_d1_only_override_resamples_h1_physical_data_to_real_d1_candles():
+    """Same fix, D1 side — needs a much longer H1 window (D1 has no
+    native downloader either) so the resampled D1 series clears
+    warmup_bars and the new insufficient-data guard doesn't short-circuit
+    the whole run before it proves anything."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(7000, trend=0.15)  # ~291 days of H1 bars -> ~292 D1 candles
+    override_config = build_engine_config_override(["D1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.timeframe == "D1"
+    assert 280 <= result.total_bars <= 292
+    assert result.error_count == 0
+
+
+def test_insufficient_bars_after_resample_returns_empty_result_not_indexerror():
+    """A short H1 window resampled down to D1 can legitimately fall below
+    warmup_bars (210) — must degrade to an empty BacktestResult, never
+    raise IndexError indexing past the resampled frame's end."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(500, trend=0.05)  # ~20 days of H1 bars -> ~20 D1 candles, well under warmup_bars
+    override_config = build_engine_config_override(["D1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.timeframe == "D1"
+    assert len(result.trades) == 0
+    assert result.total_runs == 0
+
+
+def test_h1_only_override_on_h1_physical_data_is_unchanged_by_the_resample_fix():
+    """Regression pin: the exact pre-existing case (base timeframe already
+    matches the physical file's real cadence) must be a complete no-op —
+    total_bars stays exactly len(df), nothing resampled away."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    override_config = build_engine_config_override(["H1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.total_bars == len(df)
+    assert result.timeframe == "H1"
+
+
+def test_multi_tf_override_with_h1_base_is_unchanged_by_the_resample_fix():
+    """Regression pin: a multi-timeframe override with H1 declared FIRST
+    (the existing, already-correct convention) must also be untouched —
+    H1 stays the base cadence, H4/D1 are still derived via the existing
+    build_multi_timeframe_view coarser-resample path, not this new one."""
+    from backtesting.backtest_engine import BacktestConfig, build_engine_config_override, run_backtest
+
+    df = _ohlcv(2400, trend=0.10)
+    override_config = build_engine_config_override(["H1", "H4", "D1"])
+    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"), engine_config=override_config)
+
+    assert result.total_bars == len(df)
+    assert result.timeframe == "H1"
+
+
 def test_runner_cli_wires_engines_override(monkeypatch, tmp_path):
     import sys
     import backtest.runner as runner_mod

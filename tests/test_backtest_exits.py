@@ -111,7 +111,9 @@ def test_run_backtest_checks_exit_on_the_entry_bar_itself():
 
     import numpy as np
 
-    from backtesting.backtest_engine import BacktestConfig, run_backtest
+    from backtesting.backtest_engine import (
+        BacktestConfig, build_engine_config_override, run_backtest,
+    )
 
     logging.disable(logging.CRITICAL)
     try:
@@ -137,7 +139,12 @@ def test_run_backtest_checks_exit_on_the_entry_bar_itself():
         cfg = BacktestConfig.from_profile(
             "EURUSD", warmup_bars=60, step_bars=1, sl_atr_multiplier=0.3,
         )
-        result = run_backtest(df, cfg)
+        # This test's synthetic df is genuinely H1-cadence (freq="h") — declare
+        # that explicitly rather than relying on config.yaml's H4 default,
+        # which (post-BUG-006 fix) would now really resample this data down
+        # to ~1/4 the bars instead of silently mislabeling it as H4.
+        engine_config = build_engine_config_override(timeframes=["H1"])
+        result = run_backtest(df, cfg, engine_config=engine_config)
     finally:
         logging.disable(logging.NOTSET)
 
@@ -206,7 +213,9 @@ def test_same_bar_exit_updates_equity_curve_immediately_not_one_bar_late():
 
     import numpy as np
 
-    from backtesting.backtest_engine import BacktestConfig, run_backtest
+    from backtesting.backtest_engine import (
+        BacktestConfig, build_engine_config_override, run_backtest,
+    )
 
     logging.disable(logging.CRITICAL)
     try:
@@ -229,7 +238,11 @@ def test_same_bar_exit_updates_equity_curve_immediately_not_one_bar_late():
         cfg = BacktestConfig.from_profile(
             "EURUSD", warmup_bars=60, step_bars=1, sl_atr_multiplier=0.3,
         )
-        result = run_backtest(df, cfg)
+        # Genuinely H1-cadence synthetic df — declare it explicitly (see the
+        # same note on test_run_backtest_checks_exit_on_the_entry_bar_itself
+        # above) instead of relying on config.yaml's H4 default.
+        engine_config = build_engine_config_override(timeframes=["H1"])
+        result = run_backtest(df, cfg, engine_config=engine_config)
     finally:
         logging.disable(logging.NOTSET)
 

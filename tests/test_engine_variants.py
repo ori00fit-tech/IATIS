@@ -157,7 +157,14 @@ def test_variant_thresholds_key_resolves_to_v2_block_not_v1():
         price_action_engine_v2.PriceActionEngineV2 = _SpyPriceActionV2
         df = _ohlcv(400, seed=5)
         cfg = BacktestConfig.from_profile("EURUSD")
+        # _ohlcv() is genuinely H1-cadence (freq="h") — declare that
+        # explicitly, matching this test file's other run_backtest() calls'
+        # tolerance for an empty result, but THIS test needs PriceActionEngineV2
+        # to actually be invoked, which needs enough post-resample bars to
+        # clear warmup_bars (post-BUG-006 fix, an implicit H4 default would
+        # really resample 400 H1 bars down to ~100, below the 210 default).
         engine_config = build_engine_config_override(
+            timeframes=["H1"],
             engines_enabled={"price_action": True, "smc": False, "nnfx": False, "wyckoff": False},
             engine_variants={"price_action": "v2"},
         )

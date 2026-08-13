@@ -16,9 +16,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backtesting.backtest_engine import BacktestConfig, run_backtest
+from backtesting.backtest_engine import (
+    BacktestConfig, build_engine_config_override, run_backtest,
+)
 from engines.smc_engine import SMCEngine
 from engines.wyckoff_engine import WyckoffEngine
+
+# _ohlcv() below is genuinely H1-cadence (freq="h"). Declaring that
+# explicitly avoids relying on config.yaml's H4 default, which (post-
+# BUG-006 fix) now really resamples mismatched data down to ~1/4 the bars
+# instead of silently mislabeling it — at n=600 that would otherwise land
+# below warmup_bars=210 and produce an empty result.
+_H1_ENGINE_CONFIG = build_engine_config_override(timeframes=["H1"])
 
 
 def _ohlcv(n: int, seed: int = 7, trend: float = 0.06) -> pd.DataFrame:
@@ -54,7 +63,9 @@ def test_engine_crash_is_counted_without_changing_gating(monkeypatch):
         raise KeyError("missing_column")
 
     monkeypatch.setattr(SMCEngine, "analyze", _boom)
-    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    result = run_backtest(
+        df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+    )
 
     assert result.total_runs > 0
     # Every crashed bar is attributed to SMC by name, not silently dropped.
@@ -81,7 +92,9 @@ def test_crashed_engine_totals_tracks_per_engine_breakdown(monkeypatch):
 
     monkeypatch.setattr(SMCEngine, "analyze", _boom_smc)
     monkeypatch.setattr(WyckoffEngine, "analyze", _boom_wyckoff)
-    result = run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+    result = run_backtest(
+        df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+    )
 
     assert set(result.crashed_engine_totals.keys()) == {"SMC", "Wyckoff"}
     assert result.crashed_engine_totals["SMC"] > 0
@@ -101,7 +114,9 @@ def test_first_engine_crash_is_logged_at_warning_once(monkeypatch, caplog):
 
     monkeypatch.setattr(SMCEngine, "analyze", _boom)
     with caplog.at_level(logging.WARNING, logger="backtesting.backtest_engine"):
-        run_backtest(df, BacktestConfig.from_profile("EURUSD"))
+        run_backtest(
+            df, BacktestConfig.from_profile("EURUSD"), engine_config=_H1_ENGINE_CONFIG,
+        )
 
     first_crash_logs = [
         r for r in caplog.records if r.message.startswith("First engine crash at bar")

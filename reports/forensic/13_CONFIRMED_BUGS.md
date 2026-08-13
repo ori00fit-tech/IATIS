@@ -2462,3 +2462,124 @@ genuine mid-session token-expiry event on the real VPS) was NOT possible
 from this sandbox (no cTrader credentials, no network egress) — same
 disclosed limitation as BUG-018 and every other external-API feature
 built this session.
+
+
+## BUG-020
+
+**Severity:** P0 (silently invalidates any Mission Center research that
+varies the base timeframe across trials — the exact "unreliable, timeframes
+don't differentiate trials" symptom the operator reported live from a real
+mission).
+
+**Category:** Mission Center data loading (`backtest/mission_runner.py`).
+
+**Claim:** A mission whose search space varies the declared base timeframe
+per trial (hypothesis bundles mixing e.g. M15/H1/H4 bundles, or a flat
+`timeframes_choices` dimension with more than one entry) never actually
+evaluated different trials against different underlying bars — every trial
+for a symbol silently ran on the exact same physically-loaded H1 dataset,
+with only a cosmetic "timeframe" label differing between trials.
+
+**Observed (confirmed live by the operator, then root-caused by direct code
+read):** a real Mission Center run (mission `b9c8e8a10545`) showed a
+"divergence M15" trial (#2) and a "divergence H4" trial (#3) with
+byte-identical `objective=0.790` and `trades=71` — statistically implausible
+if the two trials genuinely ran on different timeframe data, and exactly
+what would happen if they silently ran on the same data. Confirmed the
+mechanism: `backtest/mission_runner.py::_run_symbol()` called
+`load_symbol_data(symbol, mc.data_dir, mc.start, mc.end)` with no
+`timeframe=` argument — defaulting to `"H1"` — exactly ONCE per symbol,
+before any trial ran, and reused that same DataFrame for every trial via
+`evaluate_point(symbol, train_df, point, ...)` regardless of that trial's
+own resolved `point["timeframes"]`. `backtest/runner.py::physical_load_
+timeframe()`'s own docstring already disclosed this as a known, deferred
+limitation: *"Not wired into backtest/mission_runner.py... Left on
+H1-only for now, a disclosed, separate limitation."* — flagged when the
+timeframe-aware loader was built (2026-08-11) but never picked up.
+
+**Expected:** a trial declaring a genuinely different base timeframe (M15
+vs H1) must evaluate against the correct physical dataset for that
+timeframe, not always the same one.
+
+**File/Line:** `backtest/mission_runner.py::_run_symbol()` (data-loading
+section, previously lines 236-248).
+
+**Execution path:** any Mission Center mission using Hypothesis Bundles
+(or the flat `timeframes_choices` dimension) with more than one distinct
+declared base timeframe.
+
+**Reproduction:** `tests/test_mission_runner.py` (+6 new tests):
+`test_distinct_physical_timeframes_flat_mode`/`..._defaults_to_h1_with_no_
+override`/`..._hypothesis_bundle_mode` (pure unit tests on the new
+`_distinct_physical_timeframes()` helper); `test_run_symbol_loads_a_
+separate_physical_dataset_per_declared_timeframe` (monkeypatches
+`load_symbol_data` to record every `timeframe=` it's called with across a
+2-bundle H1/M15 mission — asserts both `"H1"` and `"M15"` are loaded, each
+exactly once, never once-per-trial); `test_run_symbol_trials_use_
+genuinely_different_physical_data_per_bundle` (the authoritative live-run
+proof — a real 12-trial mission with an H1 bundle and an M15 bundle over
+genuinely different synthetic datasets, asserting every recorded trial's
+`fingerprint_json.dataset.file` for the two bundle groups reference
+disjoint files — proves the fix, not just the mechanism);
+`test_compute_fingerprint_uses_the_matching_timeframe_file`;
+`test_run_symbol_fails_the_trial_when_its_timeframe_has_no_physical_
+dataset` (a bundle declaring M15 with no M15 file on disk → the trial
+`FAIL`s with a clear "unavailable" reason, never silently substitutes the
+H1 data).
+
+**Root cause:** `mission_runner.py` was built (2026-07-27) as a
+generalization of `backtest/robustness.py`/`backtest/walk_forward.py`'s
+per-run evaluation primitives (`evaluate_point()`'s own docstring says so
+explicitly) — but those two files only ever have ONE FIXED `timeframes`
+config per whole run, so loading the physical dataset once, up front, was
+correct for them. Mission Center's Optuna-driven search introduced the
+ability for `timeframes` to vary PER TRIAL (hypothesis bundles, or a
+multi-entry flat dimension) — a capability `robustness.py`/`walk_
+forward.py` never had — and the "load once, reuse forever" pattern was
+carried over without adapting it to that new per-trial variability.
+
+**Impact:** Any research this session (or by the operator) that used
+Hypothesis Bundles or `timeframes_choices` with more than one distinct
+base timeframe produced misleading results — trials appearing to test
+different timeframes were, in fact, testing the identical underlying
+price data with only a cosmetic MTF-confirmation-label difference.
+Missions that only ever used a single timeframe throughout (the vast
+majority built and tested this session, including every `_small_config`-
+based test fixture) were unaffected — this bug requires genuine per-trial
+timeframe variation to manifest.
+
+**Fix (CONFIRMED, applied same phase):** `_run_symbol()` now calls a new
+`_distinct_physical_timeframes(space)` helper up front to enumerate every
+DISTINCT physical timeframe (only `"H1"`/`"M15"` are ever real — H4/D1 are
+always resampled from H1, see `find_symbol_csv`'s own docstring) the whole
+search space could need, loads one DataFrame per distinct physical
+timeframe (`dfs: dict[str, pd.DataFrame]`), and — per trial, right after
+`point = resolve_point(...)` — selects the correct one via
+`physical_load_timeframe(tuple(point["timeframes"]))`. A trial whose
+declared timeframe has no successfully-loaded physical dataset (e.g. an
+M15 file simply doesn't exist for that symbol) is recorded as `FAIL` with
+an explicit "unavailable" reason, never silently substituted with a
+different timeframe's data. The per-symbol reproducibility fingerprint
+(`_compute_fingerprint`) is now computed once per distinct physical
+timeframe too (not once per symbol overall), and each trial's recorded
+`fingerprint_json` matches the actual dataset it evaluated against —
+previously it always referenced the H1 file regardless of what a trial
+really used. `physical_load_timeframe()`'s own docstring updated to
+reflect it's now genuinely wired in, closing the gap it had disclosed
+since 2026-08-11.
+
+**Regression tests:** `tests/test_mission_runner.py` (+6, all passing).
+Full project suite re-run with zero regressions outside this file —
+existing fixtures (`_small_config`, every prior hypothesis-bundle/engine-
+variant/confluence-override test) all declare only a single timeframe
+throughout their search space, so `_distinct_physical_timeframes()`
+correctly collapses to `{"H1"}` for every one of them and the fix is a
+no-op for their behavior (confirmed via `test_trials_carry_a_real_
+fingerprint_computed_once_per_symbol`'s existing `call_count["n"] == 1`
+assertion still holding unmodified).
+
+**Status:** FIXED, tested, regression-pinned. Reported live by the
+operator from a real VPS mission (`b9c8e8a10545`) — this is the second
+bug this session diagnosed directly from an operator-supplied screenshot
+of unexpected live behavior (BUG-006's PK-collision class of issue was
+the first), not from a code-review pass alone.

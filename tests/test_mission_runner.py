@@ -29,9 +29,9 @@ CONFIG_YAML_PATH = REPO_ROOT / "config.yaml"
 ENGINES_YAML_PATH = REPO_ROOT / "config" / "engines.yaml"
 
 
-def _ohlcv(n: int, seed: int = 7, trend: float = 0.10) -> pd.DataFrame:
+def _ohlcv(n: int, seed: int = 7, trend: float = 0.10, freq: str = "h") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    idx = pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=n, freq=freq, tz="UTC")
     close = 1.08 + np.linspace(0, trend, n) + np.cumsum(rng.normal(0, 0.0009, n))
     o = np.roll(close, 1)
     o[0] = close[0]
@@ -44,6 +44,13 @@ def _ohlcv(n: int, seed: int = 7, trend: float = 0.10) -> pd.DataFrame:
 
 def _write_dataset(tmp_path: Path, symbol: str = "EURUSD", n: int = 2400) -> None:
     _ohlcv(n).to_csv(tmp_path / f"{symbol}_H1_2y.csv")
+
+
+def _write_m15_dataset(tmp_path: Path, symbol: str = "EURUSD", n: int = 4000) -> None:
+    # Deliberately a different seed/trend from _write_dataset's H1 file (not
+    # just a different freq) so a BUG-020 regression test can prove the two
+    # physical datasets are genuinely distinct content, not just relabeled.
+    _ohlcv(n, seed=99, trend=0.35, freq="15min").to_csv(tmp_path / f"{symbol}_M15_2y.csv")
 
 
 def _small_config(tmp_path: Path, mission_id: str, n_trials: int = 2, symbols=("EURUSD",)) -> MissionConfig:
@@ -605,3 +612,189 @@ def test_mission_run_with_hypothesis_bundles_uses_both_bundles(tmp_path):
     import json as _json
     seen_bundle_indices = {_json.loads(t["params_json"])["__hypothesis_idx"] for t in trials}
     assert seen_bundle_indices == {0, 1}  # both hypotheses actually got tried
+
+
+# ── BUG-020: mission_runner used to load H1 data for every trial ────────
+# regardless of that trial's own declared base timeframe (reports/
+# forensic/13_CONFIRMED_BUGS.md). Confirmed live: a real Mission Center run
+# showed a "divergence M15" trial and a "divergence H4" trial with
+# byte-identical objective/trade counts — because both silently ran on the
+# same physical H1 bars, only the label differed.
+
+def test_distinct_physical_timeframes_flat_mode():
+    from backtest.mission_runner import _distinct_physical_timeframes
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",), ("M15",), ("H4", "D1")),
+        engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+    )
+    # H1 and (H4,D1) both physically resolve to "H1" (see
+    # backtest.runner.physical_load_timeframe — only an explicit M15 base
+    # ever changes what's loaded); only the M15 entry adds "M15".
+    assert _distinct_physical_timeframes(space) == {"H1", "M15"}
+
+
+def test_distinct_physical_timeframes_defaults_to_h1_with_no_override():
+    from backtest.mission_runner import _distinct_physical_timeframes
+
+    space = MissionSearchSpace(
+        timeframes_choices=((),), engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+    )
+    assert _distinct_physical_timeframes(space) == {"H1"}
+
+
+def test_distinct_physical_timeframes_hypothesis_bundle_mode():
+    from backtest.mission_runner import _distinct_physical_timeframes
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "A", "timeframes": ["M15"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+            {"name": "B", "timeframes": ["H4"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+            {"name": "C", "timeframes": [], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+        ),
+    )
+    assert _distinct_physical_timeframes(space) == {"H1", "M15"}
+
+
+def test_run_symbol_loads_a_separate_physical_dataset_per_declared_timeframe(tmp_path, monkeypatch):
+    # Deterministic proof of the LOADING mechanism itself: record every
+    # timeframe= argument load_symbol_data is actually called with, across
+    # a mission whose search space needs both H1 and M15 physical data.
+    _write_dataset(tmp_path)
+    _write_m15_dataset(tmp_path)
+
+    calls: list[str] = []
+    real_load = mission_runner.load_symbol_data
+
+    def _tracking_load(symbol, data_dir, start, end, timeframe="H1"):
+        calls.append(timeframe)
+        return real_load(symbol, data_dir, start, end, timeframe=timeframe)
+
+    monkeypatch.setattr(mission_runner, "load_symbol_data", _tracking_load)
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "H1 base", "timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+            {"name": "M15 base", "timeframes": ["M15"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+        ),
+    )
+    mc = MissionConfig(
+        mission_id="mission-bug006-load-check", name="test-bug006-load",
+        symbols=("EURUSD",), data_dir=tmp_path, start=None, end=None,
+        sampler="random", n_trials_per_symbol=1, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    # Loaded once per distinct physical timeframe (not once per trial, not
+    # always "H1" regardless of what the search space needed).
+    assert sorted(calls) == ["H1", "M15"]
+
+
+def test_run_symbol_trials_use_genuinely_different_physical_data_per_bundle(tmp_path):
+    # The authoritative live-run proof, mirroring the operator's own
+    # reported symptom: with an H1-based and an M15-based hypothesis
+    # bundle in the same mission, their recorded trials' reproducibility
+    # fingerprints must reference DIFFERENT dataset files/checksums — never
+    # the same H1 file relabeled, which is exactly what silently made
+    # every timeframe-varying trial "unreliable" before this fix.
+    _write_dataset(tmp_path)
+    _write_m15_dataset(tmp_path)
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "H1 base", "timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+            {"name": "M15 base", "timeframes": ["M15"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+        ),
+    )
+    mc = MissionConfig(
+        mission_id="mission-bug006-fingerprint-check", name="test-bug006-fingerprint",
+        symbols=("EURUSD",), data_dir=tmp_path, start=None, end=None,
+        sampler="random", n_trials_per_symbol=12, objective_metric="profit_factor",
+        min_trades=1, seed=7, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-bug006-fingerprint-check", "EURUSD")
+    by_bundle: dict[int, list[dict]] = {0: [], 1: []}
+    for t in trials:
+        idx = json.loads(t["params_json"])["__hypothesis_idx"]
+        by_bundle[idx].append(t)
+    assert by_bundle[0] and by_bundle[1]  # both bundles actually got tried
+
+    def _dataset_paths(rows: list[dict]) -> set[str]:
+        paths = set()
+        for row in rows:
+            fp = json.loads(row["fingerprint_json"])
+            dataset = fp.get("dataset") or {}
+            if dataset.get("file"):
+                paths.add(dataset["file"])
+        return paths
+
+    h1_paths = _dataset_paths(by_bundle[0])
+    m15_paths = _dataset_paths(by_bundle[1])
+    assert h1_paths, "H1-bundle trials must carry a real dataset fingerprint"
+    assert m15_paths, "M15-bundle trials must carry a real dataset fingerprint"
+    assert h1_paths.isdisjoint(m15_paths), (
+        f"H1 and M15 hypothesis-bundle trials referenced the SAME physical "
+        f"dataset file(s) — {h1_paths & m15_paths} — the exact BUG-020 "
+        f"symptom (every trial silently ran on the same H1 data regardless "
+        f"of its declared timeframe)."
+    )
+
+
+def test_compute_fingerprint_uses_the_matching_timeframe_file(tmp_path):
+    from backtest.mission_runner import _compute_fingerprint
+
+    _write_dataset(tmp_path)
+    _write_m15_dataset(tmp_path)
+    h1_df = mission_runner.load_symbol_data("EURUSD", tmp_path, None, None, timeframe="H1")
+    m15_df = mission_runner.load_symbol_data("EURUSD", tmp_path, None, None, timeframe="M15")
+
+    fp_h1 = _compute_fingerprint("EURUSD", tmp_path, h1_df, timeframe="H1")
+    fp_m15 = _compute_fingerprint("EURUSD", tmp_path, m15_df, timeframe="M15")
+
+    assert fp_h1["dataset"]["file"].endswith("_H1_2y.csv")
+    assert fp_m15["dataset"]["file"].endswith("_M15_2y.csv")
+    assert fp_h1["dataset"]["sha256"] != fp_m15["dataset"]["sha256"]
+
+
+def test_run_symbol_fails_only_the_trials_whose_timeframe_has_no_physical_dataset(tmp_path):
+    # Only an H1 file exists on disk. A mission mixing an H1 bundle (data
+    # available) with an M15 bundle (data unavailable) must FAIL exactly
+    # the M15 trials with a clear reason, while the H1 trials proceed
+    # completely normally — never silently substituting the H1 data for
+    # the M15 bundle's trials.
+    _write_dataset(tmp_path)  # H1 only — no M15 file written
+
+    space = MissionSearchSpace(
+        timeframes_choices=(("H1",),), engine_set_choices=(("nnfx",),), indicator_set_choices=((),),
+        hypothesis_bundle_choices=(
+            {"name": "H1 base", "timeframes": ["H1"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+            {"name": "M15 base", "timeframes": ["M15"], "engines": ["nnfx"], "indicators": [], "context_filters": []},
+        ),
+    )
+    mc = MissionConfig(
+        mission_id="mission-bug020-missing-tf", name="test-bug020-missing-tf",
+        symbols=("EURUSD",), data_dir=tmp_path, start=None, end=None,
+        sampler="random", n_trials_per_symbol=12, objective_metric="profit_factor",
+        min_trades=1, seed=42, search_space=space, oos_holdout_fraction=None,
+        max_wall_clock_seconds=None, output_dir=tmp_path / "reports",
+    )
+    run_mission(mc)
+
+    trials = research_missions.existing_trials("mission-bug020-missing-tf", "EURUSD")
+    assert trials, "trials must still be recorded, not silently dropped"
+    by_bundle: dict[int, list[dict]] = {0: [], 1: []}
+    for t in trials:
+        by_bundle[json.loads(t["params_json"])["__hypothesis_idx"]].append(t)
+    assert by_bundle[0], "H1-bundle trials must have run"
+    assert by_bundle[1], "M15-bundle trials must have been attempted"
+    assert all(t["state"] != "FAIL" for t in by_bundle[0]), "H1 bundle must not fail — its data is available"
+    assert all(t["state"] == "FAIL" for t in by_bundle[1])
+    assert all("unavailable" in (t["error"] or "") for t in by_bundle[1])

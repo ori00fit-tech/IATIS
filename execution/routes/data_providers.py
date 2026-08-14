@@ -129,6 +129,37 @@ async def provider_chains_endpoint(
 
 
 
+@router.get("/warehouse-manifest")
+async def warehouse_manifest(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Trusted Data Center warehouse inspector — the D1 `market_bars`/
+    `dataset_manifest` historical research warehouse (storage/market_bars.py),
+    a DIFFERENT concept from /data-health's live-decision-pipeline cache
+    health above: this reports what's actually been deepened/pushed via
+    scripts/push_bars_to_d1.py and is READY for Mission Center/backtests to
+    read, per (symbol, timeframe) — status, row_count, coverage_pct,
+    native-vs-derived source, date range, last_updated. Read-only; never
+    triggers a download or push.
+    """
+    _check_auth(x_api_key, iatis_session)
+    try:
+        from storage import market_bars
+
+        manifests = market_bars.list_manifests()
+    except Exception as exc:
+        logger.error(f"Warehouse manifest error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal error.")
+    for m in manifests:
+        source = m.get("source") or ""
+        m["native"] = bool(source) and not source.endswith("_resampled")
+    return {
+        "datasets": manifests,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/data-health")
 async def data_health(
     x_api_key: str | None = Header(default=None),

@@ -63,6 +63,37 @@ def test_provider_chains_reports_classes_and_availability(client):
     assert "H4" not in body["native_timeframes"]["yahoo_finance"]
 
 
+def test_warehouse_manifest_requires_auth(client):
+    assert client.get("/warehouse-manifest").status_code == 401
+
+
+def test_warehouse_manifest_empty_when_nothing_pushed(client, fake_d1):
+    r = client.get("/warehouse-manifest", headers=HDR)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["datasets"] == []
+    assert "checked_at" in body
+
+
+def test_warehouse_manifest_reports_real_pushed_datasets(client, fake_d1):
+    from storage import market_bars
+
+    market_bars.upsert_manifest({
+        "symbol": "EURUSD", "timeframe": "H1", "source": "dukascopy",
+        "row_count": 1000, "status": "READY", "coverage_pct": 99.5,
+    })
+    market_bars.upsert_manifest({
+        "symbol": "EURUSD", "timeframe": "H4", "source": "dukascopy_resampled",
+        "row_count": 250, "status": "READY", "coverage_pct": 99.5,
+    })
+    r = client.get("/warehouse-manifest", headers=HDR)
+    assert r.status_code == 200
+    datasets = {(d["symbol"], d["timeframe"]): d for d in r.json()["datasets"]}
+    assert datasets[("EURUSD", "H1")]["status"] == "READY"
+    assert datasets[("EURUSD", "H1")]["native"] is True
+    assert datasets[("EURUSD", "H4")]["native"] is False  # "_resampled" suffix
+
+
 def test_research_includes_trust_audit(client):
     r = client.get("/research", headers=HDR)
     assert r.status_code == 200

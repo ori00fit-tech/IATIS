@@ -2729,13 +2729,181 @@ files touched. Not verified live against a real broker/data provider from
 this sandboxed session (no live credentials here) — same disclosed
 limitation as every other broker/provider-facing fix this session.
 
-**Not remediated in this pass** (tracked in the same audit report, deferred
-as their own future work): the remaining HIGH/MEDIUM findings from the
-same audit — winner's-curse capping covering only `profit_factor`
-(MC-1), Bonferroni correction never gating the Mission Center verdict
-(MC-2), the candidate-lock false-positive for warehouse-origin trials
-(MC-4), validation defaulting to the trial's own training window (MC-5),
-non-deterministic dataset-file selection (MC-6), the D1 warehouse's
-in-place overwrite with no versioning (MC-7), the dashboard's "Passed" KPI
-overstating trust (MC-10), and the full list of MEDIUM/LOW findings in the
-audit report — remain open.
+**Not remediated in this pass:** see BUG-022 below, which supersedes this
+stale note — MC-1, MC-10, MC-4, and MC-5 are now FIXED; MC-2 and MC-6 are
+resolved by pre-existing design/code, not new work; MC-7 remains the one
+genuinely open item, deferred with reasoning.
+
+---
+
+## BUG-022
+
+**Claim:** the research-validity (MEDIUM) findings from the same
+red-team audit BUG-021 covers — MC-1, MC-2, MC-4, MC-5, MC-6, MC-7, MC-10
+— were listed as "remain open" in BUG-021's own closing note. This entry
+is the P1 follow-up pass resolving that list: 4 are now fixed, 2 were
+already resolved by design/code that postdated the audit finding, and 1
+remains genuinely open.
+
+### MC-1 — Winner's-curse objective capping covered only `profit_factor`
+
+**Claim:** `backtest/optimizer.py`'s `_OBJECTIVE_CAP_BY_METRIC` capped
+only `profit_factor` before feeding a trial's objective value to Optuna's
+sampler, on the stated (but false) assumption that `recovery_factor`,
+`calmar_ratio`, and `sqn` were "already naturally bounded." All three
+divide by a quantity (`max_drawdown_usd`/`max_drawdown`/`rr_std`) guarded
+only against being exactly zero, not against being arbitrarily close to
+it — a handful of trades with a tiny drawdown or near-identical
+R-multiples can produce a huge-but-finite value that dominates the
+sampler's acquisition function exactly like an uncapped PF would.
+
+**File/Line:** `backtest/optimizer.py` (`_OBJECTIVE_CAP_BY_METRIC`).
+
+**Fix:** extended the cap table to `recovery_factor: 20.0`,
+`calmar_ratio: 20.0`, `sqn: 7.0` (Van Tharp's own "Holy Grail" ceiling —
+an independent reference scale, not an arbitrary number).
+`sharpe_ratio`/`sortino_ratio`/`expectancy_r`/`win_rate` stay uncapped
+(genuinely bounded by their own formulas) but keep the existing
+trade-count reliability discount. Never touches `EvalResult.metrics`/the
+real report value — only what the sampler sees.
+
+**Regression tests:** `tests/test_optimizer.py::test_reliability_
+adjusted_objective_leaves_genuinely_bounded_metrics_uncapped` (renamed/
+reparametrized), `..._caps_the_newly_bounded_metrics`, `..._a_lucky_few_
+trade_sqn_never_beats_a_well_sampled_moderate_sqn`.
+
+### MC-10 — Dashboard "Passed" KPI counted trust-flagged hypotheses as passed
+
+**Claim:** `execution/routes/research.py`'s `hypothesis_summary.passed`
+was a raw `status == "PASSED"` count, ignoring the same `trusted` field
+computed a few lines earlier in the same response (H009 is `PASSED` but
+fails `research/edge_gate.py`'s codified promotion criteria) — the KPI
+tile could show a hypothesis as "passed" while the Trust Audit panel
+right below it flagged the same hypothesis untrusted.
+
+**File/Line:** `execution/routes/research.py` (`hypothesis_summary`
+construction).
+
+**Fix:** `passed` now requires `status == "PASSED" and trusted`; new
+`passed_untrusted` field counts the rest, surfaced separately (never
+silently folded in). Frontend: `ResearchBacktests.tsx` renders an amber
+banner naming the untrusted count whenever `passed_untrusted > 0`,
+pointing at the Trust Audit table below.
+
+**Regression tests:** `tests/test_dashboard_endpoints.py::test_research_
+includes_trust_audit` (extended with `passed`/`passed_untrusted`
+assertions against the real registry, confirming H009 never counts
+toward `passed`).
+
+### MC-4 — Candidate-lock check always false-positived on warehouse-origin trials
+
+**Claim:** `backtest/mission_validator.py::_compute_candidate_lock()`
+always re-derived a CSV fingerprint (`find_symbol_csv`/`dataset_
+fingerprint`) to compare against a trial's stored fingerprint,
+regardless of whether that trial's original data came from the D1
+`market_bars` warehouse (Trusted Data Center Phase 2). A warehouse-origin
+fingerprint has no `sha256` field at all (it carries `checksum` from the
+warehouse manifest instead) — comparing it against a freshly-derived CSV
+fingerprint produced a spurious "dataset file content changed" mismatch
+on every single warehouse-origin trial, regardless of whether the
+underlying data had actually changed.
+
+**File/Line:** `backtest/mission_validator.py::_compute_candidate_lock()`;
+`backtest/mission_runner.py::_load_from_warehouse()` (origin info dict).
+
+**Fix:** `_compute_candidate_lock()` now branches on the original
+fingerprint's `dataset.origin`: a `"warehouse"` origin re-checks against
+a fresh `storage.market_bars.get_manifest(symbol, timeframe)` checksum
+(never touching `find_symbol_csv`), everything else keeps the existing
+CSV-fingerprint path. `_load_from_warehouse()`'s origin info now also
+records `timeframe`, so the candidate-lock check knows which warehouse
+manifest to re-fetch. New `_dataset_content_id()` helper normalizes the
+two origins' differently-named content-hash fields (`sha256` vs.
+`checksum`) into one comparison.
+
+**Regression tests:** `tests/test_mission_validator.py::test_compute_
+candidate_lock_warehouse_origin_matches_when_checksum_unchanged`,
+`..._detects_checksum_drift`, `..._never_falls_through_to_csv`, `..._
+degrades_gracefully_on_d1_failure`; `tests/test_mission_runner.py::test_
+load_from_warehouse_marks_native_source_as_native` extended to assert
+`info["timeframe"]`.
+
+### MC-5 — SAME_SYMBOL validation silently defaulted to the trial's own training window
+
+**Claim:** a `SAME_SYMBOL` validation run with no explicit `start`
+override passed `None` straight through to `load_symbol_data`, which
+reads `None` as "no lower bound" — silently loading the ENTIRE dataset,
+including the mission's own training window, rather than genuinely
+out-of-sample data. `_compute_date_overlap()` (Diagnostic Infrastructure
+Phase 1) already flagged this after the fact as an informational
+diagnostic, but nothing changed the actual data window being evaluated.
+
+**File/Line:** `backtest/mission_validator.py::run_validation()`.
+
+**Fix:** new `_default_same_symbol_start()`, called right after the
+mission is loaded and before `_compute_date_overlap()`/the symbol loop:
+for `SAME_SYMBOL` mode only, when `vc.start` is `None`, defaults it to
+the day after the mission's own recorded training `end` date (from
+`mission["config_json"]`). An explicit operator-supplied `start` always
+wins — this only ever fires when it's unset. `CROSS_SYMBOL` mode is
+untouched (a different symbol is already that mode's out-of-sample
+safeguard, by design).
+
+**Regression tests:** `tests/test_mission_validator.py::test_default_
+same_symbol_start_fills_in_day_after_training_end`, `..._never_overrides_
+an_explicit_start`, `..._leaves_cross_symbol_mode_untouched`, `..._
+degrades_gracefully_when_mission_has_no_end`, `..._degrades_gracefully_
+on_unparseable_config`, `test_run_validation_same_symbol_defaults_start_
+and_reports_no_overlap` (end-to-end).
+
+### MC-2 — Bonferroni/significance correction never gates the Mission Center verdict
+
+**Status: RESOLVED BY DESIGN, not new work.** Since the original audit,
+Mission Center Research Rigor Phase 2 added
+`_compute_effective_sample_size_diagnostic()` — an autocorrelation-
+adjusted, Bonferroni-aware significance check — computed and persisted
+(`significance_json`) for every validation. It is explicitly, repeatedly
+documented as "Diagnostic only, never a `VALIDATION_CRITERIA` entry,"
+matching CLAUDE.md's own "the promotion bar is code" principle: folding
+an opinion-weighted multiple-testing penalty into `VALIDATION_CRITERIA`'s
+fixed threshold table would itself be exactly the kind of un-pre-
+registered, ad hoc rule-change that discipline exists to prevent. No
+code change made here — confirmed via direct read of `backtest/
+mission_validator.py` that this is a deliberate, already-reasoned
+decision, not an oversight.
+
+### MC-6 — Non-deterministic dataset-file selection
+
+**Status: RESOLVED, pre-existing.** `backtest/runner.py::find_symbol_csv()`
+wraps its glob results in `sorted()` before selecting the largest file
+by size (`matches = sorted(data_dir.glob(...)) + sorted(data_dir.glob(...))`,
+`chosen = max(matches, key=...)`) — Python's `max()` returns the first
+maximal element on a tie, so ties among same-size files resolve
+deterministically by filename, not by filesystem iteration order. This
+already closes the non-determinism the original finding named; no
+further change needed. Confirmed by direct code read, not assumed.
+
+### MC-7 — D1 warehouse in-place overwrite, no versioning
+
+**Status: OPEN, explicitly deferred.** `storage/market_bars.py::upsert_
+bars()` (`INSERT OR REPLACE`) and `upsert_manifest()`
+(`ON CONFLICT ... DO UPDATE`) both overwrite in place — no history table,
+no version column, no way to reconstruct what a symbol's warehouse data
+looked like at an earlier point in time. This is a real, unaddressed gap
+confirmed by direct code read. Not fixed in this pass: a proper fix needs
+its own versioned-dataset-store design (new table shape, retention
+policy, migration path for every existing `market_bars` reader) —
+materially larger in scope than this P1 batch's other items, and rushing
+it risks a half-designed schema. Flagged for a dedicated future session.
+
+**Status:** MC-1/MC-10/MC-4/MC-5 FIXED, tested, regression-pinned.
+MC-2/MC-6 resolved by pre-existing design/code, confirmed not new bugs.
+MC-7 remains open, deferred with reasoning above. Full project suite
+re-run with zero regressions outside the files touched (see commit for
+exact count). Not verified live against real D1/warehouse data from this
+sandboxed session (no live credentials here) — same disclosed limitation
+as every other D1-facing fix this session.
+
+**Not remediated in this pass:** MC-7 (see above), plus the full list of
+MEDIUM/LOW findings from the original audit report not already covered
+by BUG-021/BUG-022 — remain open, tracked in the audit report itself.

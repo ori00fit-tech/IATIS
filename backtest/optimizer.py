@@ -559,13 +559,35 @@ def _finite_objective(raw_value: float) -> float:
 # unbounded metric fed straight to a sampler's acquisition function lets
 # a handful of lucky/unlucky trades dominate: PF=inf (or a huge-but-finite
 # PF) from 11 trades would otherwise look "better" than PF=2.4 from 120
-# trades, dragging TPE/NSGA-II toward tiny-sample configurations. Only
-# profit_factor gets a cap today — it's the one OPTIMIZABLE_METRICS entry
-# genuinely prone to an inf/huge-from-few-trades blowup (sharpe/sortino/
-# calmar/expectancy_r/sqn/recovery_factor/win_rate are already naturally
-# bounded). This NEVER touches EvalResult.metrics/the real report value —
-# only what the sampler sees.
-_OBJECTIVE_CAP_BY_METRIC: dict[str, float] = {"profit_factor": 5.0}
+# trades, dragging TPE/NSGA-II toward tiny-sample configurations. This
+# NEVER touches EvalResult.metrics/the real report value — only what the
+# sampler sees.
+#
+# 2026-08-15 red-team audit (MC-1): this comment used to claim "only
+# profit_factor... sharpe/sortino/calmar/expectancy_r/sqn/recovery_factor/
+# win_rate are already naturally bounded" — false for recovery_factor/
+# calmar_ratio/sqn, which all divide by a quantity (max_drawdown_usd/
+# max_drawdown/rr_std) only guarded against being EXACTLY zero, not
+# against being arbitrarily close to it — producing a huge-but-finite
+# value from a handful of trades with a tiny drawdown/near-identical
+# R-multiples, the exact failure mode this capping exists to prevent,
+# just never tripping the literal inf check. sharpe_ratio/sortino_ratio/
+# expectancy_r/win_rate genuinely ARE bounded by their own formulas
+# (win_rate in [0,100]; the others don't divide by a quantity that can
+# independently approach zero the way these three do) and stay uncapped,
+# only trade-count-discounted — see
+# test_reliability_adjusted_objective_only_caps_profit_factor_and_the_
+# newly_added_metrics.
+_OBJECTIVE_CAP_BY_METRIC: dict[str, float] = {
+    "profit_factor": 5.0,
+    "recovery_factor": 20.0,
+    "calmar_ratio": 20.0,
+    # Van Tharp's SQN interpretive scale: 7+ is "Holy Grail" territory, a
+    # ceiling almost no genuinely well-sampled system reaches — capping
+    # here matches an established, independent reference scale rather
+    # than an arbitrarily chosen number.
+    "sqn": 7.0,
+}
 # Trades at/above this get zero reliability discount; below it, the
 # capped value is scaled down toward a small floor fraction of its
 # magnitude as trades -> 0, so a lucky few-trade outlier can never

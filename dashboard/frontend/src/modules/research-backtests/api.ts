@@ -21,7 +21,16 @@ export interface TrustAudit {
 }
 
 export interface ResearchResponse {
-  hypothesis_summary: { total: number; passed: number; failed: number; research: number; needs_data: number }
+  hypothesis_summary: {
+    total: number
+    /** PASSED and clearing the codified promotion bar (research/edge_gate.py) — trust-adjusted, not a raw status count. */
+    passed: number
+    /** PASSED but flagged untrusted by the same trust audit — surfaced separately, never silently folded into `passed`. */
+    passed_untrusted: number
+    failed: number
+    research: number
+    needs_data: number
+  }
   hypotheses: Hypothesis[]
   trust_audit?: TrustAudit
   latest_backtest: {

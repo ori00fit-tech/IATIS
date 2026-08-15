@@ -847,6 +847,13 @@ export function ResearchBacktests() {
           color="amber"
         />
       </div>
+      {!!hs?.passed_untrusted && (
+        <div className="text-[0.78em] text-amber bg-amber/10 border border-amber/30 rounded px-3 py-2">
+          "Passed" above excludes {hs.passed_untrusted} hypothes{hs.passed_untrusted === 1 ? 'is' : 'es'} marked
+          PASSED in the registry but flagged untrusted by the trust audit below — see the Hypothesis Registry
+          table and Trust Audit warnings for which ones.
+        </div>
+      )}
 
       <BacktestRunner />
 

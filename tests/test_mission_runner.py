@@ -842,6 +842,10 @@ def test_load_from_warehouse_marks_native_source_as_native():
     assert info["dataset_origin"] == "warehouse"
     assert info["native"] is True
     assert info["warehouse_source"] == "dukascopy"
+    # MC-4 (2026-08-15 red-team audit) — the candidate-lock check at
+    # validation time needs to know which timeframe's warehouse manifest
+    # to re-check; without this the fix would have nothing to key off of.
+    assert info["timeframe"] == "H1"
 
 
 def test_load_from_warehouse_marks_resampled_source_as_derived():

@@ -107,6 +107,16 @@ def test_research_includes_trust_audit(client):
     trusted_map = {h["id"]: h.get("trusted") for h in body["hypotheses"]}
     assert trusted_map.get("H001") is True  # FAILED entries are honestly labeled, not "untrusted"
 
+    # 2026-08-15 red-team audit (MC-10): the KPI "passed" count must be
+    # trust-adjusted, not a raw status count — H009 is PASSED but
+    # untrusted, so it must count toward passed_untrusted, never passed.
+    hs = body["hypothesis_summary"]
+    assert hs["passed"] == sum(1 for h in body["hypotheses"] if h["status"] == "PASSED" and h["trusted"])
+    assert hs["passed_untrusted"] == sum(1 for h in body["hypotheses"] if h["status"] == "PASSED" and not h["trusted"])
+    assert hs["passed_untrusted"] >= 1  # H009 alone guarantees this on the real registry
+    passed_ids = {h["id"] for h in body["hypotheses"] if h["status"] == "PASSED" and h["trusted"]}
+    assert "H009" not in passed_ids
+
 
 def test_data_health_v2_from_provenance(client, fake_d1):
     """data-health derives from decision provenance (the live feed's

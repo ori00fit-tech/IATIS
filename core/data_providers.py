@@ -1324,6 +1324,20 @@ def fetch_with_failover(
                     f"{provider}: only bar returned was still forming — no closed bar yet"
                 )
 
+            # Structural OHLC sanity check (2026-08-15 red-team audit
+            # finding C2): previously this whole file had zero calls to
+            # validate_ohlcv — malformed data from any provider (high<low,
+            # nulls, unsorted/duplicate timestamps) reached every consumer
+            # of fetch_with_failover unfiltered, with main.py's own single
+            # downstream validate_ohlcv(df_base) call the only backstop,
+            # applied AFTER failover-chain selection had already happened.
+            # A DataValidationError here is caught by the except Exception
+            # block below exactly like an empty-DataFrame failure — the
+            # provider is treated as failed and the chain falls through to
+            # the next one, never silently returning bad data.
+            from core.data_validator import validate_ohlcv
+            validate_ohlcv(df)
+
             logger.info(f"Data fetched via {provider}: {len(df)} bars for {symbol} ({latency}ms)")
             return df, provider
 
@@ -1459,11 +1473,24 @@ def fetch_multi_timeframe_with_failover(
             best_base_label = tf
 
     # Resample whatever is still missing from the best fetched base.
+    # base_minutes is passed so resample() can drop a still-forming last
+    # bar (see core/timeframe_sync.py::resample docstring) — without it, a
+    # live fetch mid-way through the current H4/D1 period would silently
+    # include a partial, still-changing candle in the resampled view that
+    # confluence/mtf_confirmation.py then scores against (2026-08-15
+    # red-team audit finding C1). Natively-fetched frames already get this
+    # protection via _drop_still_forming_bar() below; this closes the gap
+    # for the resample-from-a-finer-base construction path.
     if best_base_df is not None:
+        from core.timeframe_sync import base_timeframe_minutes
+        try:
+            base_minutes_for_resample = base_timeframe_minutes(best_base_label)
+        except ValueError:
+            base_minutes_for_resample = None
         for tf in timeframes:
             if tf not in views:
                 try:
-                    views[tf] = resample(best_base_df, tf)
+                    views[tf] = resample(best_base_df, tf, base_minutes=base_minutes_for_resample)
                     views[tf].attrs["provider"] = (
                         f"resampled:{best_base_label}"
                         f"({best_base_df.attrs.get('provider', '?')})"

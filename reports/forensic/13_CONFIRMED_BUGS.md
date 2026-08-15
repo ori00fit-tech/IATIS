@@ -2583,3 +2583,159 @@ operator from a real VPS mission (`b9c8e8a10545`) — this is the second
 bug this session diagnosed directly from an operator-supplied screenshot
 of unexpected live behavior (BUG-006's PK-collision class of issue was
 the first), not from a code-review pass alone.
+
+
+---
+
+## BUG-021
+
+**Severity:** P0 (fail-open no-trade governance directly contradicting
+CLAUDE.md's own rule; live data-integrity gap in the multi-provider fetch
+layer; missing duplicate-order guard on the cTrader execution path).
+
+**Category:** Full Adversarial Red-Team Audit (2026-08-15) — this session's
+own 8-subagent audit of data integrity, risk/no-trade governance, and
+execution reliability. This entry consolidates the P0 findings from that
+audit's report; each sub-finding below has its own File/Line/Fix/
+Regression-test, grouped here because all seven were remediated together
+in one pass.
+
+### C1 — Unprotected resample in the live multi-timeframe fetch layer
+
+**Claim:** `fetch_multi_timeframe_with_failover()`'s resample-from-a-finer-
+base construction path had no still-forming-bar guard, unlike every
+natively-fetched frame (which already gets one via `_drop_still_forming_
+bar`). A live fetch mid-way through the current H4/D1 period could
+silently include a partial, still-changing candle in the resampled view.
+
+**File/Line:** `core/data_providers.py:1461-1474` (the `resample(...)`
+call inside `fetch_multi_timeframe_with_failover`).
+
+**Fix:** pass `base_minutes` (derived via `core.timeframe_sync.
+base_timeframe_minutes(best_base_label)`) into the `resample()` call,
+matching the pattern `backtesting/backtest_engine.py`'s own resample path
+already used correctly.
+
+**Regression tests:** `tests/test_provider_chains.py::test_multi_tf_
+resample_drops_a_still_forming_h4_bucket` (+2 more for C2, see below).
+
+### C2 — Zero OHLC validation in the provider fetch layer
+
+**Claim:** `core/data_providers.py` had no `validate_ohlcv()` calls
+anywhere — malformed data (high&lt;low, nulls, unsorted timestamps) from
+any of 9 providers reached every consumer of `fetch_with_failover()`
+unfiltered; `main.py`'s own single downstream `validate_ohlcv(df_base)`
+call was the only backstop, applied AFTER failover-chain provider
+selection had already happened.
+
+**File/Line:** `core/data_providers.py::fetch_with_failover()`, inside the
+per-provider `try:` block.
+
+**Fix:** call `core.data_validator.validate_ohlcv(df)` immediately after
+`_drop_still_forming_bar`; a `DataValidationError` is caught by the
+existing `except Exception` block exactly like an empty-DataFrame
+failure, so a malformed provider is treated as failed and the chain falls
+through to the next provider.
+
+**Regression tests:** `tests/test_provider_chains.py::test_fetch_with_
+failover_rejects_malformed_ohlc_and_falls_through`, `..._raises_when_
+every_provider_returns_malformed_ohlc`, `..._passes_through_valid_ohlc_
+unaffected`.
+
+### RE-F1 — Symbol Health gate fails open on exception
+
+**File/Line:** `scheduler.py` (Symbol Health block in `run_once()`).
+
+**Fix:** an exception from `get_symbol_health()` now produces an explicit
+`NO_TRADE` report (`health_check_failed: True`) instead of silently
+falling through to `run_pipeline()`.
+
+**Regression test:** `tests/test_scheduler.py::test_run_once_blocks_
+when_symbol_health_check_raises`.
+
+### RE-F2 — News-blackout gate fails open on exception
+
+**File/Line:** `main.py::_news_gate()`.
+
+**Fix:** `news_blocked` now defaults to `True` (not the pre-existing
+`False`) when `assess_news_risk()` raises.
+
+**Regression tests:** `tests/test_news_risk.py::test_news_gate_blocks_
+when_assess_news_risk_raises`, `..._stays_unblocked_when_confluence_
+already_failed`, `..._passes_through_when_assess_news_risk_succeeds`.
+
+### RE-F3 — Correlation-filter seeding fails open on exception
+
+**File/Line:** `scheduler.py` (`execute_signals` seeding block in
+`run_once()`).
+
+**Fix:** a failure reading already-open positions from
+`storage.outcome_tracker.get_open_signals()` now blocks every new
+EXECUTE candidate for that tick (`correlation_blocked: True`, only when
+the correlation filter itself is enabled) instead of silently proceeding
+with an empty seed list.
+
+**Regression tests:** `tests/test_scheduler.py::test_run_once_
+correlation_seed_failure_blocks_every_new_execute`, `..._does_not_
+block_when_filter_disabled`.
+
+### RE-F5 — Meta Decision veto fails open on exception
+
+**File/Line:** `main.py::_final_verdict()`.
+
+**Fix:** an exception from `evaluate_meta_decision()` now downgrades
+`EXECUTE` to `NO_TRADE` (when `meta_decision_gate` is active) instead of
+silently leaving the verdict unchanged.
+
+**Regression tests:** `tests/test_axis8_and_downgrade.py::test_meta_
+decision_exception_blocks_when_gate_active`, `..._stays_execute_when_
+gate_explicitly_disabled`.
+
+### EXEC-DUP — Missing duplicate-position guard on the cTrader execution path
+
+**Claim:** OANDA and Dukascopy JForex execution branches in
+`TradeExecutor.execute_from_report()` both call `client.has_open_
+position(symbol)` before placing an order; the cTrader branch did not,
+despite `CTraderClient.has_open_position()` being fully implemented and
+broker-truth (rebuilt from `ProtoOAReconcileRes` on connect, kept current
+by execution events). Combined with `place_market_order()`'s 15s
+confirmation timeout being reported as unconditional failure with no
+broker-truth follow-up, a timed-out-but-actually-filled order could never
+be detected internally, and the next tick's `symbol_already_open` check
+(sourced from `storage.outcome_tracker`, which a timed-out order never
+populates) provided no protection either — leaving a real duplicate-order
+risk on the one broker path with no independent backstop.
+
+**File/Line:** `execution/trade_executor.py` (cTrader branch of
+`execute_from_report()`, before the account-info/sizing call).
+
+**Fix:** added `if client.has_open_position(symbol): return
+ExecutionResult(executed=False, ...)` to the cTrader branch, matching the
+OANDA/Dukascopy JForex branches exactly. Because a late execution event
+(arriving after a previous order's confirmation timeout) still updates
+`client._positions`, this check is a genuine backstop independent of the
+`outcome_tracker`-derived duplicate check upstream.
+
+**Regression tests:** `tests/test_oanda_execution.py::test_ctrader_
+refuses_duplicate_position`, `..._duplicate_check_runs_before_account_
+lookup` (+ fixed 2 pre-existing tests, `test_ctrader_places_on_demo_
+account`/`test_ctrader_live_allowed_when_flag_set`, whose bare `MagicMock()`
+clients previously relied on an unset `has_open_position` attribute being
+implicitly truthy-by-mock — now explicitly set `return_value=False`).
+
+**Status:** FIXED, tested, regression-pinned. Full project suite
+(3185 passed, 2 skipped) re-run with zero regressions outside the seven
+files touched. Not verified live against a real broker/data provider from
+this sandboxed session (no live credentials here) — same disclosed
+limitation as every other broker/provider-facing fix this session.
+
+**Not remediated in this pass** (tracked in the same audit report, deferred
+as their own future work): the remaining HIGH/MEDIUM findings from the
+same audit — winner's-curse capping covering only `profit_factor`
+(MC-1), Bonferroni correction never gating the Mission Center verdict
+(MC-2), the candidate-lock false-positive for warehouse-origin trials
+(MC-4), validation defaulting to the trial's own training window (MC-5),
+non-deterministic dataset-file selection (MC-6), the D1 warehouse's
+in-place overwrite with no versioning (MC-7), the dashboard's "Passed" KPI
+overstating trust (MC-10), and the full list of MEDIUM/LOW findings in the
+audit report — remain open.

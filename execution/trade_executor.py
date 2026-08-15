@@ -232,6 +232,28 @@ class TradeExecutor:
                         dry_run=False,
                     )
 
+                # Duplicate-position guard (2026-08-15 red-team audit,
+                # EXEC-DUP): the OANDA and Dukascopy JForex branches both
+                # already had this check; the cTrader branch was missing
+                # it. client._positions is rebuilt from ProtoOAReconcileRes
+                # on every (re)connect and kept current by execution
+                # events while connected — so even when a PREVIOUS order's
+                # confirmation event arrived late (past place_market_
+                # order()'s own ORDER_TIMEOUT, making that call return
+                # success=False even though the broker had actually filled
+                # it), that late event still updates _positions, and this
+                # check catches it before a second real order is placed on
+                # the same symbol. This is independent of, and a backstop
+                # for, storage.outcome_tracker-derived duplicate checks
+                # upstream (risk/risk_engine.py's symbol_already_open),
+                # which a timed-out order never populates.
+                if client.has_open_position(symbol):
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Already have open position for {symbol}",
+                        dry_run=False,
+                    )
+
                 # Get account info for position sizing
                 account = client.get_account_info()
                 if not account:

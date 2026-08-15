@@ -463,7 +463,14 @@ def _risk_gate(config: dict, df_base, conf: _ConfluenceEval):
 
 def _news_gate(config: dict, confluence_passed: bool):
     """Stage 5: news blackout veto. Only runs when confluence passed
-    (saves API calls on NO_TRADE). Returns (news_risk, news_blocked)."""
+    (saves API calls on NO_TRADE). Returns (news_risk, news_blocked).
+
+    2026-08-15 red-team audit (RE-F2): news_blocked used to be initialized
+    False before the try block, so an exception evaluating this gate (e.g.
+    the calendar API being unreachable) silently left it False — the one
+    check meant to veto trading ahead of high-impact news defaulted to
+    ALLOWING the trade on its own failure. Per CLAUDE.md's fail-closed
+    rule, an unverifiable news-risk check must block, not skip."""
     news_risk = None
     news_blocked = False
     if confluence_passed and config.get("fundamentals", {}).get("news_filter_enabled", True):
@@ -481,7 +488,10 @@ def _news_gate(config: dict, confluence_passed: bool):
                     f"score={news_risk.news_risk_score} reason={news_risk.blackout_reason}"
                 )
         except Exception as exc:
-            logger.warning(f"News risk check failed (non-fatal): {exc}")
+            news_blocked = True
+            logger.warning(
+                f"News risk check failed — blocking (fail-closed, RE-F2): {exc}"
+            )
     return news_risk, news_blocked
 
 
@@ -565,7 +575,20 @@ def _final_verdict(
                 downgrade_reason = f"Meta Decision blocked: {meta.reason}"
                 logger.info(f"Meta Decision BLOCKED: {meta.reason}")
         except Exception as exc:
-            logger.warning(f"Meta Decision failed (non-fatal): {exc}")
+            # 2026-08-15 red-team audit (RE-F5): an exception here used to
+            # be swallowed with only a warning log, leaving `meta` None and
+            # final_verdict unchanged (still EXECUTE) — the one veto meant
+            # to catch low-confidence/unstable decisions silently defaulted
+            # to ALLOWING the trade when its own evaluation failed. Per
+            # CLAUDE.md's fail-closed rule, an unverifiable confidence
+            # check must block, not skip — but only when the gate itself is
+            # actually enabled (meta_decision_gate=False already means an
+            # operator has explicitly chosen not to let this layer affect
+            # verdicts at all, so a failure there is correctly still inert).
+            if meta_decision_gate:
+                final_verdict = "NO_TRADE"
+                downgrade_reason = f"Meta Decision check failed — blocking (fail-closed, RE-F5): {exc}"
+            logger.warning(f"Meta Decision failed: {exc}")
 
     return final_verdict, meta, downgrade_reason
 

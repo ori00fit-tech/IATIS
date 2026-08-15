@@ -128,3 +128,52 @@ def test_currency_symbols_mapping():
     assert "XAUUSD" in CURRENCY_SYMBOLS["USD"]
     assert "GBPUSD" in CURRENCY_SYMBOLS["GBP"]
     assert "USDJPY" in CURRENCY_SYMBOLS["JPY"]
+
+
+# --- RE-F2 (2026-08-15 red-team audit): main.py's _news_gate() must fail
+# CLOSED when assess_news_risk() raises — previously news_blocked stayed
+# at its initial False value, silently allowing the trade through the
+# exact check meant to veto it. ---
+
+def test_news_gate_blocks_when_assess_news_risk_raises(monkeypatch):
+    import main as main_mod
+    monkeypatch.setattr(
+        main_mod, "assess_news_risk",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("calendar API unreachable")),
+    )
+    config = {"data": {"symbol": "EURUSD"}, "fundamentals": {"news_filter_enabled": True}}
+    news_risk, news_blocked = main_mod._news_gate(config, confluence_passed=True)
+    assert news_risk is None
+    assert news_blocked is True
+
+
+def test_news_gate_stays_unblocked_when_confluence_already_failed(monkeypatch):
+    """The gate is skipped entirely (by design, saves API calls) when
+    confluence already failed — must not be affected by the fail-closed
+    fix, since there's no EXECUTE candidate for it to protect."""
+    import main as main_mod
+    monkeypatch.setattr(
+        main_mod, "assess_news_risk",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("should never be called")),
+    )
+    config = {"data": {"symbol": "EURUSD"}, "fundamentals": {"news_filter_enabled": True}}
+    news_risk, news_blocked = main_mod._news_gate(config, confluence_passed=False)
+    assert news_risk is None
+    assert news_blocked is False
+
+
+def test_news_gate_passes_through_when_assess_news_risk_succeeds(monkeypatch):
+    """Regression pin: a normal, successful check is completely unaffected
+    by the fail-closed exception path."""
+    import main as main_mod
+
+    class _StubResult:
+        should_block = False
+        news_risk_score = 5
+        blackout_reason = "No upcoming events"
+
+    monkeypatch.setattr(main_mod, "assess_news_risk", lambda **kw: _StubResult())
+    config = {"data": {"symbol": "EURUSD"}, "fundamentals": {"news_filter_enabled": True}}
+    news_risk, news_blocked = main_mod._news_gate(config, confluence_passed=True)
+    assert news_risk is not None
+    assert news_blocked is False

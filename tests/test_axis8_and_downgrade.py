@@ -243,6 +243,47 @@ def test_meta_decision_gate_false_does_not_affect_a_pass_verdict(monkeypatch):
         assert verdict == "EXECUTE" and reason is None
 
 
+# ── RE-F5 (2026-08-15 red-team audit): an exception evaluating the Meta
+# Decision layer must fail CLOSED (block) when the gate is active, not
+# silently leave the verdict at EXECUTE — the previous behavior was
+# indistinguishable from the gate simply never having run. ──
+
+def test_meta_decision_exception_blocks_when_gate_active(monkeypatch):
+    monkeypatch.setattr(
+        main_mod, "evaluate_meta_decision",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("meta layer unreachable")),
+    )
+    verdict, meta, reason = _final_verdict(
+        _pipeline_config(), _passing_conf(),
+        risk_pass=True, news_blocked=False, regime_state="TRENDING",
+        mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+    )
+    assert verdict == "NO_TRADE"
+    assert meta is None
+    assert reason is not None and "Meta Decision check failed" in reason
+
+
+def test_meta_decision_exception_stays_execute_when_gate_explicitly_disabled(monkeypatch):
+    """meta_decision_gate=False is an explicit operator choice that this
+    whole layer must never affect verdicts — a failure inside a layer the
+    operator has deliberately opted out of correctly stays inert, matching
+    test_meta_decision_gate_false_lets_block_through_but_still_computes_meta's
+    own precedent for a BLOCK (not just an exception) being ignored."""
+    monkeypatch.setattr(
+        main_mod, "evaluate_meta_decision",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("meta layer unreachable")),
+    )
+    cfg = _pipeline_config()
+    cfg["features"] = {"meta_decision_gate": False}
+    verdict, meta, reason = _final_verdict(
+        cfg, _passing_conf(),
+        risk_pass=True, news_blocked=False, regime_state="TRENDING",
+        mqs_result=_StubMQS(), outputs=HEALTHY_PANEL,
+    )
+    assert verdict == "EXECUTE"
+    assert reason is None
+
+
 def test_downgrade_reason_persisted_as_fail_reason(fake_d1):
     report = {
         "symbol": "EURUSD",

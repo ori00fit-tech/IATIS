@@ -1,4 +1,10 @@
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
+import {
+  getJobDetail, cancelJob, type JobDetail, type JobStatus, type JobSummary,
+} from '../experiment-runner/api'
+
+export { getJobDetail, cancelJob }
+export type { JobDetail, JobStatus, JobSummary }
 
 export type CacheStatus = 'OK' | 'STALE' | 'GAPS' | 'STARVED' | 'MISSING'
 
@@ -54,3 +60,48 @@ export interface DataConfidenceHistory {
 export function getDataConfidence(): Promise<DataConfidenceHistory> {
   return apiGet<DataConfidenceHistory>('/data-confidence')
 }
+
+// Trusted Data Center warehouse inspector (storage/market_bars.py) — a
+// DIFFERENT concept from DataHealthResponse above (live-decision-pipeline
+// cache health): this is the D1 dataset_manifest table, what's actually
+// been deepened/pushed via scripts/push_bars_to_d1.py and is READY for
+// Mission Center/backtests to read.
+export type DatasetStatus = 'PENDING' | 'READY' | 'INCOMPLETE' | 'INVALID' | 'EMPTY'
+
+export interface WarehouseManifestEntry {
+  symbol: string
+  timeframe: string
+  source: string | null
+  start_ts: number | null
+  end_ts: number | null
+  row_count: number
+  expected_rows: number | null
+  coverage_pct: number | null
+  gap_count: number | null
+  duplicate_count: number | null
+  invalid_ohlc_count: number | null
+  status: DatasetStatus
+  error: string | null
+  last_updated: string | null
+  /** true = a genuinely native file (never derived by resampling H1). */
+  native: boolean
+}
+
+export interface WarehouseManifestResponse {
+  datasets: WarehouseManifestEntry[]
+  checked_at: string
+}
+
+export const getWarehouseManifest = () => apiGet<WarehouseManifestResponse>('/warehouse-manifest')
+
+// Data Center "Deepen a symbol" action — two whitelisted jobs
+// (download_history via Dukascopy, push_to_warehouse) run via the shared
+// experiment-runner job engine. Dukascopy only, never cTrader — see
+// execution/routes/experiments.py's _JOB_COMMANDS comment for why.
+export const DOWNLOAD_TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'] as const
+
+export const runDownloadHistoryJob = (symbols: string[], timeframe: string, years: number) =>
+  apiPost<JobSummary>('/experiments/run', { job: 'download_history', symbols, timeframe, years })
+
+export const runPushToWarehouseJob = (symbols: string[]) =>
+  apiPost<JobSummary>('/experiments/run', { job: 'push_to_warehouse', symbols })

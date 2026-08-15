@@ -953,20 +953,27 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # engine_benchmark.py) — full argv built per-request there, not
     # user-shaped. Deliberately NOT a ranking tool — see backtest/
     # engine_benchmark.py's own module docstring.
+    # download_history/push_to_warehouse added 2026-08-14 (Data Center UI):
+    # the two manual VPS-CLI "deepen a symbol" steps exposed as ordinary
+    # whitelisted jobs — --symbols/--timeframe/--years all server-validated
+    # before reaching argv (see _WAREHOUSE_JOBS in execution/routes/
+    # experiments.py), never user-shaped.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
         "walk_forward", "robustness", "research_mission", "mission_validate",
         "price_benchmark", "news_benchmark", "macro_benchmark", "analytics_benchmark",
-        "engine_benchmark",
+        "engine_benchmark", "download_history", "push_to_warehouse",
     }
 
 
 def test_experiment_job_catalog_requires_symbols_matches_parameterized_set(client):
     r = client.get("/experiments/jobs", headers=HDR)
     requires_symbols = {j["id"] for j in r.json()["jobs"] if j["requires_symbols"]}
-    assert requires_symbols == {"backtest", "walk_forward", "robustness"}
+    assert requires_symbols == {
+        "backtest", "walk_forward", "robustness", "download_history", "push_to_warehouse",
+    }
 
 
 def test_experiment_job_catalog_categorizes_ops_vs_research(client):
@@ -1191,6 +1198,162 @@ def test_experiments_run_non_robustness_job_rejects_params_and_multipliers(clien
     )
     assert r.status_code == 400, r.text
     assert "takes no params/multipliers" in r.json()["detail"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Data Center UI — download_history / push_to_warehouse job kinds
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_experiments_run_download_history_builds_expected_argv(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "download_history": ["echo", "dl"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["eurusd"], "timeframe": "M15", "years": 2.5},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == [
+        "echo", "dl", "--symbols", "EURUSD", "--timeframe", "M15", "--years", "2.5",
+    ]
+
+
+def test_experiments_run_download_history_requires_symbols(client):
+    r = client.post("/experiments/run", json={"job": "download_history"}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "requires at least one symbol" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_rejects_unknown_symbol(client):
+    r = client.post("/experiments/run", json={"job": "download_history", "symbols": ["ZZZNOPE"]}, headers=HDR)
+    assert r.status_code == 400, r.text
+    assert "Unknown symbol" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_rejects_unknown_timeframe(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "timeframe": "W1"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown timeframe" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_rejects_years_out_of_bounds(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "years": 50.0},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "years must be between" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_does_not_require_predownloaded_data(client, monkeypatch):
+    """download_history is the "get the data" action itself — unlike
+    _PARAMETERIZED_JOBS, it must never be blocked by
+    _symbol_has_any_data(). Overrides the client fixture's default-True
+    stub with a hard failure so this test actually proves the readiness
+    check is never consulted, not just that it happens to pass."""
+    import execution.routes.experiments as m
+
+    def _boom(symbol):
+        raise AssertionError("download_history must never call _symbol_has_any_data")
+
+    monkeypatch.setattr(m, "_symbol_has_any_data", _boom)
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "download_history": ["echo", "dl"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+    r = client.post("/experiments/run", json={"job": "download_history", "symbols": ["EURUSD"]}, headers=HDR)
+    assert r.status_code == 200, r.text
+
+
+def test_experiments_run_push_to_warehouse_builds_expected_argv(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "push_to_warehouse": ["echo", "push"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run", json={"job": "push_to_warehouse", "symbols": ["eurusd", "gbpusd"]}, headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", "push", "--symbols", "EURUSD", "GBPUSD"]
+
+
+def test_experiments_run_push_to_warehouse_rejects_timeframe_and_years(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "push_to_warehouse", "symbols": ["EURUSD"], "timeframe": "H1"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no timeframe/years" in r.json()["detail"]
+
+
+def test_experiments_run_warehouse_jobs_reject_too_many_symbols(client):
+    # The >10 bound check runs before the universe check, so 11 distinct
+    # (even unknown) symbols is enough to prove the "too many" 400 fires.
+    r = client.post(
+        "/experiments/run",
+        json={"job": "push_to_warehouse", "symbols": [f"SYM{i}" for i in range(11)]},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "at most 10 symbols" in r.json()["detail"]
+
+
+def test_experiments_run_non_warehouse_job_rejects_timeframe(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "timeframe": "H1"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no timeframe/years" in r.json()["detail"]
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -141,6 +141,18 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # already buried "Enabling more engines (any)" twice). Full argv is
     # built per-request in execution/routes/engine_benchmark.py.
     "engine_benchmark": [sys.executable, "-m", "backtest.engine_benchmark"],
+    # Trusted Data Center — Data Center UI (2026-08-14) — the two manual
+    # VPS-CLI steps an operator previously had to run by hand to "deepen" a
+    # symbol (scripts/download_dukascopy_history.py then
+    # scripts/push_bars_to_d1.py) exposed as ordinary whitelisted jobs, same
+    # one-job-slot-per-run model as every job above. Dukascopy only (never
+    # cTrader): cTrader enforces a single-session-per-account limit, so a
+    # second, ad-hoc dashboard-triggered connection would race the live
+    # scheduler's own session (see reports/forensic/22_DATA_ARCHITECTURE_
+    # CURRENT_STATE.md) — cTrader-sourced deepening stays a VPS CLI-only
+    # operation (stop the scheduler first), deliberately not exposed here.
+    "download_history": [sys.executable, "-m", "scripts.download_dukascopy_history"],
+    "push_to_warehouse": [sys.executable, "-m", "scripts.push_bars_to_d1"],
 }
 _JOB_DESCRIPTIONS: dict[str, str] = {
     "verify_data_integrity": "Audit every historical CSV for completeness/corruption/synthetic-data heuristics. Local file read, no network.",
@@ -162,6 +174,8 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
     "analytics_benchmark": "Provider Benchmark & Data Quality Lab Phase 4 (backtest/analytics_benchmark.py): scores MarketAux's sentiment API on reproducibility — fetches the same query twice and checks whether the sentiment value for the same underlying article stays identical — plus coverage, freshness, and latency. Deliberately single-provider (TAAPI's real rate limit rules it out) and reproducibility-only (no predictive/subsequent-outcome-tracking dimension — that's a trading hypothesis, not a provider benchmark). Launched via POST /research/analytics-benchmark, not this endpoint directly — measurement/advisory only, never touches config.yaml.",
     "engine_benchmark": "Engine Benchmark (backtest/engine_benchmark.py): runs every confluence engine standalone (confluence quorum overridden to 1) against real local OHLCV history and reports raw per-(engine, symbol) backtest KPIs (trades, win rate, profit factor, Sharpe, drawdown, expectancy). Launched via POST /research/engine-benchmark, not this endpoint directly — measurement/advisory only, deliberately not a ranking tool (no composite score, no auto-selected 'best engine'), never writes config.yaml/config/engines.yaml/registry.json.",
+    "download_history": "Data Center — deepen a symbol's history via Dukascopy's free, credential-free tick feed (scripts/download_dukascopy_history.py), writing data/{SYMBOL}_{TIMEFRAME}_dukascopy.csv. Does not push to the D1 warehouse by itself — run push_to_warehouse afterward.",
+    "push_to_warehouse": "Data Center — push already-downloaded local CSVs into the D1 market_bars/dataset_manifest warehouse (scripts/push_bars_to_d1.py), preferring a genuinely native H4/D1 file over deriving one by resampling H1.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
 # shows "research", VPS Operations shows "ops") — same underlying
@@ -187,6 +201,8 @@ _JOB_CATEGORIES: dict[str, str] = {
     "macro_benchmark": "research",
     "analytics_benchmark": "research",
     "engine_benchmark": "research",
+    "download_history": "ops",
+    "push_to_warehouse": "ops",
 }
 _JOB_TIMEOUT_SECONDS = 600  # default; kills a runaway process rather than leaking it forever
 _JOB_TIMEOUTS: dict[str, int] = {
@@ -248,12 +264,29 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # of magnitude as research_mission's own hundreds-of-trials cost
     # class — same 6h last-resort ceiling, not a measurement.
     "engine_benchmark": 21_600,
+    # Data Center UI (2026-08-14) — Dukascopy fetches one HTTP request per
+    # hour with no batch API (unlike cTrader/MT5's 1000-bar requests); a
+    # multi-year, multi-symbol deepen can legitimately take tens of minutes
+    # even with the existing 429-retry/backoff and worker-pool concurrency.
+    "download_history": 3_600,
+    # push_to_warehouse is a local CSV read + D1 write per symbol — fast,
+    # but generous enough for several symbols in one request.
+    "push_to_warehouse": 900,
 }
 
 # Jobs that take a --symbols argv extension, validated server-side against
 # the configured universe before being appended (security-equivalent to a
 # whitelist member, per `backtest`'s original 2026-07-16 precedent).
 _PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
+
+# Data Center UI (2026-08-14) — a different symbols shape than
+# _PARAMETERIZED_JOBS above: these two are the "get/store data" actions
+# themselves, so a pre-flight _symbol_has_any_data() check would be
+# backwards for download_history (the whole point is fetching data that
+# may not exist yet), and neither takes start/end/risk_overrides/
+# timeframes(MTF)/engines/indicators — those are backtest-run concepts.
+_WAREHOUSE_JOBS = frozenset({"download_history", "push_to_warehouse"})
+_DOWNLOAD_TIMEFRAMES = ("M15", "H1", "H4", "D1")  # mirrors scripts/download_dukascopy_history.py's _TF_MINUTES keys
 
 # AI Research Lab / Mission Center Phase 2 (2026-07-28): bumped 2->3.
 # Phase 3 (2026-07-30): bumped 3->4 — an operator now often wants to run
@@ -448,6 +481,12 @@ class _RunJobRequest(BaseModel):
     # only veto/nudge a decision the engine vote already produced, never
     # set direction itself. Ephemeral — see _indicators_argv below.
     indicators: list[_IndicatorFilterSpec] | None = None
+    # Data Center UI (2026-08-14) — download_history only. `timeframe`
+    # (singular; distinct from the Phase B `timeframes` MTF-override list
+    # above, which is a backtest concept) selects which of Dukascopy's 4
+    # genuinely native timeframes to fetch; `years` bounds how far back.
+    timeframe: str | None = None
+    years: float | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -636,7 +675,7 @@ async def experiment_job_catalog(
                 "category": _JOB_CATEGORIES.get(k, "research"),
                 # The frontend needs to know to collect symbols BEFORE
                 # posting — running "backtest" bare is a guaranteed 400.
-                "requires_symbols": k in _PARAMETERIZED_JOBS,
+                "requires_symbols": k in _PARAMETERIZED_JOBS or k in _WAREHOUSE_JOBS,
             }
             for k in _JOB_COMMANDS
         ]
@@ -676,8 +715,37 @@ async def experiments_run(
                        f"'{body.job}'.",
             )
         argv += ["--symbols", *symbols]
+    elif body.job in _WAREHOUSE_JOBS:
+        symbols = [str(s).upper().strip() for s in (body.symbols or []) if str(s).strip()]
+        if not symbols:
+            raise HTTPException(status_code=400, detail=f"{body.job} requires at least one symbol.")
+        if len(symbols) > 10:
+            raise HTTPException(status_code=400, detail=f"{body.job}: at most 10 symbols per run.")
+        universe = _configured_symbol_universe()
+        unknown = sorted(set(symbols) - universe)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown symbol(s) {unknown} — must be in the configured universe.",
+            )
+        argv += ["--symbols", *symbols]
     elif body.symbols:
         raise HTTPException(status_code=400, detail=f"'{body.job}' takes no symbols.")
+
+    if body.job == "download_history":
+        if body.timeframe is not None:
+            if body.timeframe not in _DOWNLOAD_TIMEFRAMES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown timeframe '{body.timeframe}' — choose from {list(_DOWNLOAD_TIMEFRAMES)}.",
+                )
+            argv += ["--timeframe", body.timeframe]
+        if body.years is not None:
+            if not (0.1 <= body.years <= 20.0):
+                raise HTTPException(status_code=400, detail="years must be between 0.1 and 20.0.")
+            argv += ["--years", str(body.years)]
+    elif body.timeframe is not None or body.years is not None:
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no timeframe/years.")
 
     if body.job in _PARAMETERIZED_JOBS:
         if body.start is not None:
@@ -779,6 +847,12 @@ async def experiments_run(
             detail += f" engines={body.engines}"
         if body.indicators is not None:
             detail += f" indicators={[s.model_dump() for s in body.indicators]}"
+    if body.job in _WAREHOUSE_JOBS:
+        detail += f" symbols={body.symbols}"
+        if body.timeframe:
+            detail += f" timeframe={body.timeframe}"
+        if body.years is not None:
+            detail += f" years={body.years}"
     if body.job == "robustness":
         if body.params is not None:
             detail += f" params={body.params}"

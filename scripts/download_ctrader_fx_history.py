@@ -114,11 +114,21 @@ def _connect_client():
     exact same credential/connect path as live trading
     (execution/ctrader_client.py) — nothing broker-specific is
     reimplemented here. read_only=True: this script only ever calls
-    get_trendbars()/get_account_info() (never places an order), so it
-    can safely run alongside the live scheduler's own session — the
-    single-session process lock (P0-3) exists specifically to prevent
-    duplicate REAL ORDER submission, which a read_only client is
-    hard-blocked from doing (see CTraderClient.place_market_order)."""
+    get_trendbars()/get_account_info() (never places an order), so it is
+    hard-blocked from duplicate REAL ORDER submission (see
+    CTraderClient.place_market_order) — the concern the internal
+    single-session process lock (P0-3) exists to prevent.
+
+    THIS DOES NOT MEAN IT CAN SAFELY RUN ALONGSIDE THE LIVE SCHEDULER,
+    despite an earlier version of this docstring claiming so. Confirmed
+    live on the VPS (2026-08-13): cTrader's own server enforces a
+    single-session-per-account limit at the broker/protocol level — a
+    second connection attempt (read_only or not) simply hangs and times
+    out while the scheduler's own session holds the account, it is not
+    rejected cleanly. If this raises the SystemExit below while
+    iatis-scheduler is running, that is almost certainly why — stop the
+    scheduler first (`sudo systemctl stop iatis-scheduler`), run this
+    script, then restart it (`sudo systemctl start iatis-scheduler`)."""
     import os
     from execution.ctrader_client import CTraderClient
 
@@ -131,7 +141,12 @@ def _connect_client():
         read_only=True,
     )
     if not client.connect(timeout=30):
-        raise SystemExit("Could not connect to cTrader — check .env credentials and network.")
+        raise SystemExit(
+            "Could not connect to cTrader — check .env credentials and network. "
+            "If iatis-scheduler is running, cTrader's single-session-per-account "
+            "limit is the likely cause: stop it first "
+            "(sudo systemctl stop iatis-scheduler), retry, then restart it."
+        )
     return client
 
 

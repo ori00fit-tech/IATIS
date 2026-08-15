@@ -482,8 +482,10 @@ def test_engine_flips_bias_for_usdjpy_vs_eurusd_on_identical_dxy_data(monkeypatc
 
 
 def test_engine_without_symbol_attribute_defaults_to_non_usd_base(monkeypatch):
-    """Every existing zero-arg construction site (tests, the backtest
-    engine-construction loop, which does not set _symbol) must keep
+    """A bare zero-arg construction (e.g. a standalone script/test, or
+    every real invocation today — MacroEngine is never constructed by
+    backtesting/backtest_engine.py's engine loop at all, deliberately
+    excluded from ENGINE_KEYS with no runnable backtest path) must keep
     producing today's original mapping — no AttributeError, no behavior
     change when _symbol was never set."""
     import core.alt_data_loader as adl

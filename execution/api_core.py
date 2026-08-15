@@ -95,6 +95,22 @@ _docs_url = "/docs" if _ENV == "development" else None
 async def lifespan(application: FastAPI):
     """Startup/shutdown lifecycle handler."""
     # Startup
+    # 2026-08-15 red-team audit (DB-3): storage/migrations.py's
+    # apply_migrations_safe() was previously called only from
+    # scheduler.py's run_loop() boot path — never from `scheduler.py
+    # --once` and never from the API server, so a fresh/updated D1
+    # schema was never guaranteed unless the long-running scheduler had
+    # already booted at least once. Lazy import (matches this file's own
+    # convention below of importing storage lazily where it's used) and
+    # non-fatal by construction (apply_migrations_safe() never raises).
+    try:
+        from storage.migrations import apply_migrations_safe
+
+        applied = apply_migrations_safe()
+        if applied:
+            logger.info(f"Schema migrations applied at API boot: {applied}")
+    except Exception as exc:  # noqa: BLE001 — boot path must survive anything
+        logger.error(f"schema migrations skipped at API boot (non-fatal): {exc}")
     for path in ["storage/sessions.json"]:
         p = Path(path)
         if p.exists():

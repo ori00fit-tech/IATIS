@@ -604,6 +604,36 @@ def test_dashboard(client):
     r = client.get("/dashboard", headers=HDR)
     assert r.status_code == 200
     assert "IATIS" in r.text
+    assert "Total Decisions" in r.text  # confirms this IS the dashboard page, not a login-page coincidence
+
+
+def test_dashboard_requires_auth_redirects_to_login(client):
+    r = client.get("/dashboard", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+def test_dashboard_accepts_valid_session_cookie(client):
+    from execution.api_core import _active_sessions
+    import time
+    _active_sessions["sess-valid"] = time.time()
+    r = client.get("/dashboard", cookies={"iatis_session": "sess-valid"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "Total Decisions" in r.text
+
+
+def test_dashboard_rejects_expired_session_cookie(client):
+    # SEC-1 regression pin: the old code checked bare dict membership,
+    # never purging expired entries first — an expired-but-not-yet-purged
+    # session would have passed and had its TTL silently refreshed. Now it
+    # must be rejected exactly like every other endpoint's _check_auth.
+    from execution.api_core import _active_sessions, _SESSION_TTL
+    import time
+    _active_sessions["sess-expired"] = time.time() - _SESSION_TTL - 1
+    r = client.get("/dashboard", cookies={"iatis_session": "sess-expired"}, follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+    assert "sess-expired" not in _active_sessions  # purged, not silently kept alive
 
 
 def test_data_health(client):

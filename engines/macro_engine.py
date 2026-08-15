@@ -392,9 +392,13 @@ class MacroEngine(BaseEngine):
         BUG-005's precedent) IS consulted here, for exactly one purpose:
         BUG-008's fix — inverting the DXY->bias mapping for USD-base
         pairs (USDJPY/USDCHF/USDCAD). Absent (e.g. every existing
-        zero-arg test construction, or the backtest engine-construction
-        loop, which does not set it) defaults to `usd_is_base=False`,
-        i.e. today's original, unchanged mapping."""
+        zero-arg test construction) defaults to `usd_is_base=False`,
+        i.e. today's original, unchanged mapping. Note: MacroEngine is
+        never constructed by backtesting/backtest_engine.py's engine
+        loop at all (deliberately excluded from ENGINE_KEYS — no
+        runnable path there), so this only ever fires on the live
+        path — the TE-3 fix (2026-08-15) to that loop's `._symbol`
+        wiring reaches SentimentEngine, not this class."""
         t = self.thresholds
         usd_is_base = is_usd_base_symbol(getattr(self, "_symbol", ""))
         try:

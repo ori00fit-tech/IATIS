@@ -551,6 +551,19 @@ def main() -> None:
             "or set system.mode to something other than 'live' in config.yaml."
         )
 
+    # 2026-08-15 red-team audit (DB-3): apply_migrations_safe() was
+    # previously only reached via run_loop() below — `--once` mode
+    # (used by external cron per this file's own module docstring)
+    # skipped it entirely, so a `--once`-only deployment could run
+    # indefinitely on a stale D1 schema. Calling it here too (in
+    # addition to run_loop()'s own call, harmless since it's idempotent
+    # — it checks the current schema version before doing any work)
+    # covers both paths from one call site.
+    from storage.migrations import apply_migrations_safe
+    applied = apply_migrations_safe()
+    if applied:
+        logger.info(f"Schema migrations applied at boot: {applied}")
+
     if args.once:
         reports = run_once(config, args.symbols)
         for r in reports:

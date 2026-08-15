@@ -9,12 +9,10 @@ docs/FULL_INSTITUTIONAL_AUDIT_2026-07-23.md P2-1).
 """
 from __future__ import annotations
 
-import time
-
-from fastapi import APIRouter, Cookie, Request
+from fastapi import APIRouter, Cookie, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from execution.api_core import _active_sessions, _save_sessions
+from execution.api_core import _check_auth
 
 router = APIRouter()
 
@@ -22,15 +20,27 @@ router = APIRouter()
 @router.get("/dashboard")
 async def dashboard(
     request: Request,
+    x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
 ):
-    """Dashboard — requires valid session, redirects to login if not authenticated."""
-    # Server-side session check — no JS required
-    if not iatis_session or iatis_session not in _active_sessions:
+    """Dashboard — requires valid session, redirects to login if not authenticated.
+
+    2026-08-15 red-team audit (SEC-1): previously checked `iatis_session in
+    _active_sessions` directly, bypassing `_check_auth`'s expiry-purge step,
+    then UNCONDITIONALLY refreshed the session's TTL on every visit — so a
+    stolen session cookie could be kept alive indefinitely (past the
+    intended 30-day expiry) just by periodically re-visiting this one page,
+    and even an already-expired-but-not-yet-purged entry would pass. Now
+    routes through the same `_check_auth` every other endpoint uses (purge-
+    expired-then-check, no membership-only shortcut, no sliding-window
+    refresh, and — same as every other endpoint — X-API-Key is honored too,
+    not just the cookie) — same session-lifetime semantics as the rest of
+    the app.
+    """
+    try:
+        _check_auth(x_api_key, iatis_session)
+    except HTTPException:
         return RedirectResponse(url="/login", status_code=302)
-    # Refresh session TTL
-    _active_sessions[iatis_session] = time.time()
-    _save_sessions(_active_sessions)
     return HTMLResponse("""<!DOCTYPE html>
 <html lang="en">
 <head>

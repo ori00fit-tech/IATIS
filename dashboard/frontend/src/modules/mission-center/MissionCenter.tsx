@@ -857,8 +857,16 @@ function StatusBadge({ status }: { status: string }) {
 
 function VerdictBadge({ verdict }: { verdict: Verdict | null }) {
   if (!verdict) return <Badge tone="neutral">pending</Badge>
-  const tone = verdict === 'STRONG_LEAD' || verdict === 'SAME_SYMBOL_CONFIRMED' ? 'good'
-    : verdict === 'WEAK_LEAD' ? 'marginal'
+  // 2026-08-15 red-team audit (MC-3): SAME_SYMBOL_CONFIRMED must never
+  // render with the same tone as STRONG_LEAD — it's a narrower, weaker
+  // claim (confirms only the trial's own training symbol, not
+  // cross-symbol generalization), and backend/mission_validator.py's own
+  // comment says exactly this: "must never be presented with the same
+  // tokens." Amber (marginal), matching WEAK_LEAD's own tone, signals
+  // "real but limited evidence" without implying it's on par with a
+  // genuine cross-symbol STRONG_LEAD.
+  const tone = verdict === 'STRONG_LEAD' ? 'good'
+    : verdict === 'WEAK_LEAD' || verdict === 'SAME_SYMBOL_CONFIRMED' ? 'marginal'
     : 'poor'
   return <Badge tone={tone}>{verdict}</Badge>
 }
@@ -1656,7 +1664,15 @@ function ValidationStatusBadge({ validation }: { validation: ValidationRow | nul
   if (!validation) return <span className="text-muted text-[0.75em]">not validated yet</span>
   if (validation.status !== 'finished') return <StatusBadge status={validation.status} />
   const verdict = validation.overall_verdict
-  const tone = verdict === 'STRONG_LEAD' ? 'exec' : verdict === 'WEAK_LEAD' ? 'marginal' : 'no-trade'
+  // 2026-08-15 red-team audit (MC-3, consistency fix): SAME_SYMBOL_
+  // CONFIRMED is a real, positive (if narrower) result — grouping it with
+  // NO_EDGE/SAME_SYMBOL_NOT_CONFIRMED under 'no-trade' (red) mislabels a
+  // confirmation as a failure. Mirrors VerdictBadge's own tone mapping
+  // above so the same verdict never renders two different colors
+  // depending on which panel shows it.
+  const tone = verdict === 'STRONG_LEAD' ? 'exec'
+    : verdict === 'WEAK_LEAD' || verdict === 'SAME_SYMBOL_CONFIRMED' ? 'marginal'
+    : 'no-trade'
   return (
     <Badge tone={tone}>
       {`${verdict ?? 'unknown'} (${validation.passing_symbols ?? 0}/${validation.total_symbols ?? 0})`}

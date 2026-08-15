@@ -31,6 +31,7 @@ from execution.routes.experiments import (
     _job_summary,
     _jobs,
     _jobs_lock,
+    _prune_old_jobs,
     _run_job,
 )
 
@@ -105,6 +106,7 @@ async def engine_benchmark_create(
         argv += ["--end", body.end]
 
     with _jobs_lock:
+        _prune_old_jobs()
         job = _Job(run_id, "engine_benchmark", argv=argv)
         _jobs[run_id] = job
 

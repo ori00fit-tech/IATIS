@@ -2907,3 +2907,199 @@ as every other D1-facing fix this session.
 **Not remediated in this pass:** MC-7 (see above), plus the full list of
 MEDIUM/LOW findings from the original audit report not already covered
 by BUG-021/BUG-022 — remain open, tracked in the audit report itself.
+
+---
+
+## BUG-023
+
+**Claim:** the P2 batch of the same red-team audit (BUG-021/BUG-022's
+own source report) — six items spanning security hardening, a UI
+correctness contradiction, a dependency-pinning gap, a deploy-script
+gap, a schema-migration gap, and a research/live parity gap. All six
+fixed, tested, and regression-pinned in this pass.
+
+### SEC-1 — Dashboard route bypassed session-TTL expiry
+
+**Claim:** `execution/routes/dashboard_legacy.py`'s `/dashboard` route
+checked session presence in `_active_sessions` directly rather than
+going through `execution/api_core.py`'s `_check_auth()` — the one place
+lazy TTL-purge of expired sessions actually happens. An expired session
+whose entry hadn't yet been purged by an unrelated request elsewhere
+could still render the dashboard.
+
+**File/Line:** `execution/routes/dashboard_legacy.py`.
+
+**Fix:** route now accepts both `X-API-Key` and the session cookie and
+calls the shared `_check_auth(x_api_key, iatis_session)` exactly like
+every other endpoint, redirecting to `/login` on `HTTPException` instead
+of hand-rolling its own session-dict lookup.
+
+**Regression tests:** `tests/test_api_server.py::test_dashboard`
+(extended), `..._requires_auth_redirects_to_login`,
+`..._accepts_valid_session_cookie`,
+`..._rejects_expired_session_cookie` (the key pin — proves an expired
+session is now purged-and-rejected, not silently kept alive).
+
+### SEC-2 — Unbounded `_jobs` dict growth
+
+**Claim:** `execution/routes/experiments.py`'s in-memory `_jobs: dict[str,
+_Job]` (including each job's full accumulated stdout in `log_lines`) had
+no eviction, TTL, or max-size — every job record from a long-running
+`iatis-api` process's whole lifetime stayed resident, unlike
+`_active_sessions`' own lazy-pruning precedent, risking unbounded memory
+growth toward `iatis-api.service`'s documented `MemoryMax=1G` OOM-kill.
+
+**File/Line:** `execution/routes/experiments.py` (`_jobs`, job-creation
+block); mirrored into all 6 downstream job-creation sites
+(`missions.py` ×2, `analytics_benchmark.py`, `macro_benchmark.py`,
+`engine_benchmark.py`, `news_benchmark.py`, `provider_benchmark.py`).
+
+**Fix:** new `_prune_old_jobs()` — evicts only TERMINAL jobs
+(finished/failed/timeout/cancelled) older than `_JOB_RETENTION_SECONDS`
+(24h), plus an independent hard `_JOB_MAX_RETAINED` (200) ceiling that
+also only ever evicts terminal jobs (running/queued jobs are never
+touched, even if the ceiling can't be fully satisfied from terminal jobs
+alone). Called under `_jobs_lock` at every one of the 8 job-creation call
+sites across 7 route files, mirroring `_active_sessions`' own
+lazy-prune-on-access pattern.
+
+**Regression tests:** `tests/test_api_contract.py::test_prune_old_jobs_
+evicts_stale_terminal_jobs`, `..._never_evicts_running_or_queued_jobs_
+regardless_of_age`, `..._respects_hard_max_retained_ceiling`, `..._max_
+retained_ceiling_never_evicts_active_jobs`, `..._ceiling_evicts_only_
+enough_terminal_jobs`, `..._called_via_real_job_submission_evicts_old_
+terminal_job` (end-to-end, through the real HTTP endpoint).
+
+### MC-3 — `SAME_SYMBOL_CONFIRMED` rendered with the same badge color as `STRONG_LEAD`
+
+**Claim:** Mission Center's `VerdictBadge` (and a second, independent
+`ValidationStatusBadge` in the same file) both mapped
+`SAME_SYMBOL_CONFIRMED` to a tone visually indistinguishable from a
+genuine cross-symbol `STRONG_LEAD` (or, in the second badge, to the same
+"failure" red as `NO_EDGE`) — directly contradicting
+`backtest/mission_validator.py`'s own comment: same-symbol confirmation
+"must never be presented with the same tokens" as cross-symbol evidence.
+
+**File/Line:** `dashboard/frontend/src/modules/mission-center/
+MissionCenter.tsx` (`VerdictBadge`, `ValidationStatusBadge`).
+
+**Fix:** both badges now map `SAME_SYMBOL_CONFIRMED` to the amber
+"marginal" tone (matching `WEAK_LEAD`'s own tone — "real but limited
+evidence") — visually distinct from `STRONG_LEAD`'s green in
+`VerdictBadge` and from `NO_EDGE`'s red in `ValidationStatusBadge`,
+consistent between the two badges for the first time.
+
+**Regression tests:** none added (pure presentational/tone-mapping
+change, no new backend contract) — verified via `tsc -b`/`oxlint` clean.
+
+### DEP-1 — `ctrader-open-api` version pin had no ceiling
+
+**Claim:** `requirements-ctrader.txt` pinned `ctrader-open-api>=0.9.2`
+with no upper bound, unlike every other dependency's floor+ceiling
+convention in this codebase — an unreviewed future major version (a
+real protocol/API break risk for a live broker client) could install
+silently on a fresh deploy or `pip install -U`.
+
+**File/Line:** `requirements-ctrader.txt`.
+
+**Fix:** confirmed via PyPI (0.9.2, 2024-06-26, is the latest real
+release — the only later release, 0.9.3, was yanked by the maintainer)
+and pinned `>=0.9.2,<1.0.0` with a dated rationale comment matching this
+file's own established convention.
+
+**Regression tests:** none — no test asserts on this file's content
+(confirmed by grep); the fix is a plain version-pin correction.
+
+### OPS-6 — Missing collector systemd units in the non-root migration script
+
+**Claim:** `scripts/setup_service_user.sh`'s `UNITS` array omitted
+`iatis-marketaux-collect.service`/`.timer` and
+`iatis-orderflow-collector.service` (both real, already-written unit
+files at the repo root) — a non-root migration (`/root/IATIS` →
+`/opt/iatis`) silently left both research collectors uninstalled at the
+new path, with no error or warning.
+
+**File/Line:** `scripts/setup_service_user.sh` (`UNITS`).
+
+**Fix:** added all 3 units to `UNITS` (installed/path-corrected like
+every other unit) but deliberately left un-auto-enabled — each starts a
+real, ongoing research data-accumulation clock (H021/H104) and
+marketaux additionally needs `MARKETAUX_API_KEY` — documented in the
+script's own "NOT done automatically" comment block with the exact
+`systemctl enable --now` commands an operator runs when ready.
+
+**Regression tests:** `bash -n` syntax check only — this script has no
+existing test coverage (confirmed by grep) and is not run in CI.
+
+### DB-3 — D1 schema migrations never applied outside the scheduler's long-running boot path
+
+**Claim:** `storage/migrations.py::apply_migrations_safe()` was called
+only from `scheduler.py::run_loop()` — never from `scheduler.py --once`
+(the mode this file's own docstring names for external cron) and never
+from the API server at all. A deployment running only `--once`/only the
+API server could run indefinitely on a stale D1 schema.
+
+**File/Line:** `scheduler.py` (`main()`), `execution/api_core.py`
+(`lifespan()`).
+
+**Fix:** added the same non-fatal `apply_migrations_safe()` call (1) in
+`scheduler.py::main()` before the `--once`/`run_loop` branch (so both
+paths are covered from one call site; `run_loop()`'s own existing call
+stays, harmless since migrations are idempotent) and (2) in
+`execution/api_core.py`'s `lifespan()` startup, wrapped in the same
+"boot path must survive anything" try/except convention as
+`apply_migrations_safe()` itself.
+
+**Regression tests:** `tests/test_scheduler.py`, `tests/
+test_api_server.py`, `tests/test_migrations.py` (94 tests, all still
+passing — no dedicated new test added since `fake_d1`'s autouse fixture
+already exercises the new call sites on every existing test that
+constructs the API app or calls `scheduler.main()`/equivalents; a
+migration failure is non-fatal by construction, confirmed by direct
+code read of `apply_migrations_safe()`).
+
+### TE-3 — `backtesting/backtest_engine.py`'s engine-construction loop never set `engine._symbol`
+
+**Claim:** `main.py`'s live engine-construction loop
+(`build_active_engines`) sets `engine._symbol = symbol` on every
+constructed engine; `backtesting/backtest_engine.py::run_backtest()`'s
+own construction loop set `decision_tf`/`thresholds` for gate/vote
+parity but never `_symbol` — `SentimentEngine`'s per-symbol COT cache
+lookup silently resolved to `"UNKNOWN"` in every backtest instead of the
+real symbol under test, unlike live.
+
+**File/Line:** `backtesting/backtest_engine.py::run_backtest()` (engine
+construction loop, ~line 678).
+
+**Note on scope, confirmed by direct code read before fixing:**
+`MacroEngine` also reads `self._symbol` (BUG-008's USD-base DXY-inversion),
+but `MacroEngine` is never constructed by this loop at all — deliberately
+excluded from `ENGINE_KEYS`/`_ENGINE_MAP` (no runnable class wired into
+the backtest path, per that constant's own comment) — so this fix reaches
+`SentimentEngine` only, not `MacroEngine`. Separately, `SentimentEngine`'s
+own bar-time gate (BUG-005) already skips COT/MarketAux lookups whenever
+`bar_time` is far from wall-clock now — true for almost every bar in a
+genuinely historical backtest regardless of `_symbol` — so this fix's
+practical effect today is narrow (a backtest run against very recent
+bars) but the wiring itself is a real, direct gate/vote-parity gap worth
+closing on its own terms, matching every other field this loop already
+mirrors from the live path.
+
+**Fix:** `engine._symbol = config.symbol` added to the construction
+loop, alongside the existing `decision_tf`/`thresholds` assignments.
+
+**Regression tests:** new `tests/test_backtest_engine_symbol_wiring.py`
+— `test_run_backtest_sets_symbol_on_every_constructed_engine`,
+`test_run_backtest_symbol_wiring_matches_config_symbol_for_a_different_
+symbol` (both spy on `SentimentEngine.analyze()` through a real
+`run_backtest()` call and assert `self._symbol` matches `config.symbol`;
+confirmed to fail without the fix by temporarily reverting it and
+re-running before restoring).
+
+**Status:** all 6 P2 items FIXED, tested, regression-pinned (SEC-2/TE-3)
+or verified by existing/static checks (MC-3/DEP-1/OPS-6/DB-3, per each
+item's own reasoning above for why a new test wasn't warranted). Full
+project suite re-run with zero regressions (see commit for exact count).
+Not verified live against a real VPS/systemd/D1 deployment from this
+sandboxed session — same disclosed limitation as every other
+deploy/D1-facing fix in this audit.

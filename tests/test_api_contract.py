@@ -1989,6 +1989,163 @@ def test_experiments_cancel_already_terminal_job_409s(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# SEC-2 (2026-08-15 red-team audit): _prune_old_jobs() — _jobs previously
+# had no eviction/TTL/max-size, unlike _active_sessions' own lazy pruning.
+# Unit-level tests against execution.routes.experiments' module state
+# directly (mirrors test_experiments_list_includes_started_jobs' own
+# "import m, patch its state" convention) since _prune_old_jobs() is a
+# pure function of _jobs, not an HTTP-observable behavior on its own.
+# ---------------------------------------------------------------------------
+
+def _make_job(m, job_id, status, finished_at=None):
+    job = m._Job(job_id, "prune_test_job", argv=[sys.executable, "-c", "pass"])
+    job.status = status
+    job.finished_at = finished_at
+    return job
+
+
+def test_prune_old_jobs_evicts_stale_terminal_jobs(monkeypatch):
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_jobs", {})
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=m._JOB_RETENTION_SECONDS + 60)).isoformat()
+    fresh_ts = datetime.now(timezone.utc).isoformat()
+
+    m._jobs["stale"] = _make_job(m, "stale", "finished", finished_at=stale_ts)
+    m._jobs["fresh"] = _make_job(m, "fresh", "finished", finished_at=fresh_ts)
+
+    with m._jobs_lock:
+        m._prune_old_jobs()
+
+    assert "stale" not in m._jobs
+    assert "fresh" in m._jobs
+
+
+def test_prune_old_jobs_never_evicts_running_or_queued_jobs_regardless_of_age(monkeypatch):
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_jobs", {})
+    ancient_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    # A running/queued job has no finished_at yet — even if somehow set
+    # (e.g. a stale value from a prior state), non-terminal status alone
+    # must be enough to protect it.
+    m._jobs["running"] = _make_job(m, "running", "running", finished_at=None)
+    m._jobs["queued"] = _make_job(m, "queued", "queued", finished_at=None)
+    m._jobs["running_with_stale_ts"] = _make_job(m, "running_with_stale_ts", "running", finished_at=ancient_ts)
+
+    with m._jobs_lock:
+        m._prune_old_jobs()
+
+    assert set(m._jobs) == {"running", "queued", "running_with_stale_ts"}
+
+
+def test_prune_old_jobs_respects_hard_max_retained_ceiling(monkeypatch):
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_jobs", {})
+    monkeypatch.setattr(m, "_JOB_MAX_RETAINED", 5)
+    now = datetime.now(timezone.utc)
+
+    # 8 terminal jobs, all well within the retention window (never evicted
+    # by the age-based pass alone) — only the hard ceiling should trim
+    # them, oldest-finished-first, down to exactly _JOB_MAX_RETAINED.
+    for i in range(8):
+        ts = (now - timedelta(seconds=8 - i)).isoformat()  # job 0 finished earliest
+        m._jobs[f"job{i}"] = _make_job(m, f"job{i}", "finished", finished_at=ts)
+
+    with m._jobs_lock:
+        m._prune_old_jobs()
+
+    assert len(m._jobs) == 5
+    # The 3 oldest-finished (job0, job1, job2) must be the ones evicted.
+    assert set(m._jobs) == {"job3", "job4", "job5", "job6", "job7"}
+
+
+def test_prune_old_jobs_max_retained_ceiling_never_evicts_active_jobs(monkeypatch):
+    """overflow = len(_jobs) - _JOB_MAX_RETAINED is computed against the
+    TOTAL dict size (active + terminal), but the eviction pool is only
+    ever terminal jobs — so when active jobs alone already exceed the
+    ceiling (or terminal jobs can't cover the full overflow), the ceiling
+    is best-effort: it evicts every terminal job it can and never touches
+    running/queued, even if the final size still exceeds the nominal cap."""
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_jobs", {})
+    monkeypatch.setattr(m, "_JOB_MAX_RETAINED", 2)
+    now = datetime.now(timezone.utc)
+
+    m._jobs["running"] = _make_job(m, "running", "running", finished_at=None)
+    m._jobs["queued"] = _make_job(m, "queued", "queued", finished_at=None)
+    for i in range(4):
+        ts = (now - timedelta(seconds=4 - i)).isoformat()
+        m._jobs[f"term{i}"] = _make_job(m, f"term{i}", "finished", finished_at=ts)
+
+    with m._jobs_lock:
+        m._prune_old_jobs()
+
+    # overflow = 6 - 2 = 4, and there are exactly 4 terminal jobs, so all
+    # 4 get evicted (the ceiling can't fully satisfy itself from terminal
+    # jobs alone once active jobs already occupy the budget) — but the 2
+    # active jobs are never touched.
+    assert "running" in m._jobs
+    assert "queued" in m._jobs
+    assert not any(jid.startswith("term") for jid in m._jobs)
+    assert len(m._jobs) == 2
+
+
+def test_prune_old_jobs_max_retained_ceiling_evicts_only_enough_terminal_jobs(monkeypatch):
+    """A more typical case: overflow is fully coverable by terminal jobs
+    alone, so exactly that many oldest-finished terminal jobs are evicted
+    and active jobs are left completely alone."""
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_jobs", {})
+    monkeypatch.setattr(m, "_JOB_MAX_RETAINED", 4)
+    now = datetime.now(timezone.utc)
+
+    m._jobs["running"] = _make_job(m, "running", "running", finished_at=None)
+    m._jobs["queued"] = _make_job(m, "queued", "queued", finished_at=None)
+    for i in range(5):
+        ts = (now - timedelta(seconds=5 - i)).isoformat()  # term0 finished earliest
+        m._jobs[f"term{i}"] = _make_job(m, f"term{i}", "finished", finished_at=ts)
+
+    with m._jobs_lock:
+        m._prune_old_jobs()
+
+    # overflow = 7 - 4 = 3 -> evict the 3 oldest-finished terminal jobs.
+    assert "running" in m._jobs
+    assert "queued" in m._jobs
+    assert set(jid for jid in m._jobs if jid.startswith("term")) == {"term3", "term4"}
+    assert len(m._jobs) == 4
+
+
+def test_prune_old_jobs_called_via_real_job_submission_evicts_old_terminal_job(client, monkeypatch):
+    """End-to-end: a real, already-terminal, retention-expired job present
+    in _jobs before a NEW job is submitted through the real HTTP endpoint
+    gets pruned as a side effect of that submission (the actual call site,
+    execution/routes/experiments.py's job-creation block)."""
+    import execution.routes.experiments as m
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {"e2e_prune_job": [sys.executable, "-c", "print('x')"]})
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=m._JOB_RETENTION_SECONDS + 60)).isoformat()
+    with m._jobs_lock:
+        m._jobs["already_stale"] = _make_job(m, "already_stale", "finished", finished_at=stale_ts)
+
+    r = client.post("/experiments/run", json={"job": "e2e_prune_job"}, headers=HDR)
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+
+    assert "already_stale" not in m._jobs
+
+
+# ---------------------------------------------------------------------------
 # VPS Operations (module 12) — deliberately narrow: config-cache reload
 # only here; "diagnostics" reuses /health/full, "backup" reuses the
 # Experiment Runner's "backup_d1" job. No service-restart endpoint exists.

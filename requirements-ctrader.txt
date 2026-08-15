@@ -24,4 +24,12 @@
 # requirements.txt:
 #   pip install -r requirements.txt
 #   pip install -r requirements-ctrader.txt
-ctrader-open-api>=0.9.2
+#
+# 2026-08-15 red-team audit (DEP-1): floor had no ceiling at all, unlike
+# every other pinned dependency in this codebase's own convention. 0.9.2
+# (2024-06-26) is confirmed the latest real release on PyPI as of this
+# pin — the only other 0.9.x release, 0.9.3, was yanked by the maintainer.
+# Ceiling set at the next major so an unreviewed future 1.x (a real
+# protocol/API break for a broker client, not a routine patch) can never
+# silently install on a `pip install -U`/fresh deploy.
+ctrader-open-api>=0.9.2,<1.0.0

@@ -1297,6 +1297,119 @@ def test_experiments_run_download_history_does_not_require_predownloaded_data(cl
     assert r.status_code == 200, r.text
 
 
+def test_experiments_run_download_history_twelve_data_builds_expected_argv(client, monkeypatch):
+    """A `provider: 'twelve_data'` request must swap the underlying job
+    command to scripts.download_twelve_data_history's own module — proves
+    the provider selection actually changes which script runs, not just
+    that it's accepted."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_DOWNLOAD_PROVIDER_COMMANDS", {"twelve_data": ["echo", "td"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["eurusd"], "provider": "twelve_data", "timeframe": "M15"},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", "td", "--symbols", "EURUSD", "--timeframe", "M15"]
+
+
+def test_experiments_run_download_history_provider_defaults_to_dukascopy(client, monkeypatch):
+    """Omitting `provider` entirely must keep using _JOB_COMMANDS'
+    dukascopy default byte-for-byte — the exact same argv the pre-
+    existing test above already pins, re-asserted here to make the
+    default explicit rather than merely incidental."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "download_history": ["echo", "dukas"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "dukascopy"},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == ["echo", "dukas", "--symbols", "EURUSD"]
+
+
+def test_experiments_run_download_history_rejects_unknown_provider(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "ctrader"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown provider" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_rejects_years_for_twelve_data(client):
+    """Twelve Data has no configurable lookback (it always pages back to
+    its own free-plan floor) — years must be rejected outright, never
+    silently dropped."""
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "twelve_data", "years": 2.0},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "not supported for provider 'twelve_data'" in r.json()["detail"]
+
+
+def test_experiments_run_download_history_rejects_unsupported_timeframe_for_provider(client):
+    """Twelve Data only ever fetches M15/H1 — D1 is a real Dukascopy
+    timeframe but must be rejected for twelve_data specifically, not
+    silently allowed through the shared global timeframe set."""
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "twelve_data", "timeframe": "D1"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown timeframe" in r.json()["detail"]
+    assert "twelve_data" in r.json()["detail"]
+
+
+def test_experiments_run_rejects_provider_for_non_download_history_job(client):
+    r = client.post(
+        "/experiments/run",
+        json={"job": "backtest", "symbols": ["EURUSD"], "provider": "dukascopy"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "takes no provider" in r.json()["detail"]
+
+
 def test_experiments_run_push_to_warehouse_builds_expected_argv(client, monkeypatch):
     import execution.routes.experiments as m
 

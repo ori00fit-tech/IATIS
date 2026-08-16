@@ -95,13 +95,38 @@ export interface WarehouseManifestResponse {
 export const getWarehouseManifest = () => apiGet<WarehouseManifestResponse>('/warehouse-manifest')
 
 // Data Center "Deepen a symbol" action — two whitelisted jobs
-// (download_history via Dukascopy, push_to_warehouse) run via the shared
-// experiment-runner job engine. Dukascopy only, never cTrader — see
-// execution/routes/experiments.py's _JOB_COMMANDS comment for why.
-export const DOWNLOAD_TIMEFRAMES = ['M15', 'H1', 'H4', 'D1'] as const
+// (download_history, push_to_warehouse) run via the shared experiment-
+// runner job engine. `download_history` supports two providers, both
+// free/credential-free and safe to trigger ad-hoc from the API-server
+// process; cTrader/MT5/dukascopy_jforex are never offered here — see
+// execution/routes/experiments.py's _JOB_COMMANDS/_DOWNLOAD_PROVIDERS
+// comments (single-session-per-account limit, would race the live
+// scheduler's own connection).
+export interface DownloadProviderSpec {
+  id: 'dukascopy' | 'twelve_data'
+  label: string
+  timeframes: readonly string[]
+  supportsYears: boolean
+}
 
-export const runDownloadHistoryJob = (symbols: string[], timeframe: string, years: number) =>
-  apiPost<JobSummary>('/experiments/run', { job: 'download_history', symbols, timeframe, years })
+export const DOWNLOAD_PROVIDERS: readonly DownloadProviderSpec[] = [
+  { id: 'dukascopy', label: 'Dukascopy', timeframes: ['M15', 'H1', 'H4', 'D1'], supportsYears: true },
+  { id: 'twelve_data', label: 'Twelve Data', timeframes: ['M15', 'H1'], supportsYears: false },
+]
+
+export const runDownloadHistoryJob = (
+  symbols: string[],
+  timeframe: string,
+  years: number | undefined,
+  provider: DownloadProviderSpec['id'],
+) =>
+  apiPost<JobSummary>('/experiments/run', {
+    job: 'download_history',
+    symbols,
+    timeframe,
+    provider,
+    ...(years !== undefined ? { years } : {}),
+  })
 
 export const runPushToWarehouseJob = (symbols: string[]) =>
   apiPost<JobSummary>('/experiments/run', { job: 'push_to_warehouse', symbols })

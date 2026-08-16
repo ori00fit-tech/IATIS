@@ -4,10 +4,10 @@ import { useAuth } from '../../lib/auth'
 import { KpiCard } from '../../components/KpiCard'
 import { Panel, Empty } from '../../components/Panel'
 import { Badge } from '../../components/Badge'
-import type { CacheStatus, DataConfidenceCheck, WarehouseManifestEntry } from './api'
+import type { CacheStatus, DataConfidenceCheck, DownloadProviderSpec, WarehouseManifestEntry } from './api'
 import {
   getDataConfidence, getDataHealth, getWarehouseManifest,
-  runDownloadHistoryJob, runPushToWarehouseJob, DOWNLOAD_TIMEFRAMES,
+  runDownloadHistoryJob, runPushToWarehouseJob, DOWNLOAD_PROVIDERS,
 } from './api'
 import { DataTable, type Column } from '../../components/DataTable'
 import { getProviderChains } from '../system-audit/api'
@@ -162,8 +162,18 @@ function DeepenAction({ onPushed }: { onPushed: () => void }) {
   const { markUnauthenticated } = useAuth()
   const symbolsCatalog = usePolling(getResearchSymbols, POLL_MS, markUnauthenticated)
   const [symbols, setSymbols] = useState<string[]>([])
+  const [provider, setProvider] = useState<DownloadProviderSpec['id']>('dukascopy')
+  const providerSpec = DOWNLOAD_PROVIDERS.find((p) => p.id === provider) ?? DOWNLOAD_PROVIDERS[0]
   const [timeframe, setTimeframe] = useState<string>('H1')
   const [years, setYears] = useState<number>(2)
+
+  const changeProvider = (next: DownloadProviderSpec['id']) => {
+    setProvider(next)
+    const nextSpec = DOWNLOAD_PROVIDERS.find((p) => p.id === next)
+    if (nextSpec && !nextSpec.timeframes.includes(timeframe)) {
+      setTimeframe(nextSpec.timeframes[0])
+    }
+  }
   const [downloadJob, setDownloadJob] = useState<JobDetail | null>(null)
   const [pushJob, setPushJob] = useState<JobDetail | null>(null)
   const [starting, setStarting] = useState<'download' | 'push' | null>(null)
@@ -191,7 +201,7 @@ function DeepenAction({ onPushed }: { onPushed: () => void }) {
     setStarting('download')
     setError(null)
     try {
-      const summary = await runDownloadHistoryJob(symbols, timeframe, years)
+      const summary = await runDownloadHistoryJob(symbols, timeframe, providerSpec.supportsYears ? years : undefined, provider)
       setDownloadJob({ ...summary, log: [] })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -222,25 +232,41 @@ function DeepenAction({ onPushed }: { onPushed: () => void }) {
       <div className="flex items-center gap-2 flex-wrap">
         <DeepenSymbolPicker value={symbols} onChange={setSymbols} symbolsData={symbolsCatalog.data} />
         <select
+          value={provider}
+          onChange={(e) => changeProvider(e.target.value as DownloadProviderSpec['id'])}
+          title="download provider"
+          className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text"
+        >
+          {DOWNLOAD_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        <select
           value={timeframe}
           onChange={(e) => setTimeframe(e.target.value)}
           className="bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text"
         >
-          {DOWNLOAD_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+          {providerSpec.timeframes.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
         </select>
-        <input
-          type="number" min={0.1} max={20} step={0.5} value={years}
-          onChange={(e) => setYears(Number(e.target.value))}
-          title="years of history to fetch"
-          className="w-20 bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text"
-        />
-        <span className="text-muted text-[0.75em]">years</span>
+        {providerSpec.supportsYears ? (
+          <>
+            <input
+              type="number" min={0.1} max={20} step={0.5} value={years}
+              onChange={(e) => setYears(Number(e.target.value))}
+              title="years of history to fetch"
+              className="w-20 bg-surface border border-border rounded px-2 py-1.5 text-[0.78em] text-text"
+            />
+            <span className="text-muted text-[0.75em]">years</span>
+          </>
+        ) : (
+          <span className="text-muted text-[0.75em]" title="Twelve Data has no configurable lookback — it always fetches its full available history for the selected timeframe">
+            full available history
+          </span>
+        )}
         <button
           onClick={download}
           disabled={symbols.length === 0 || starting === 'download' || downloadRunning}
           className="px-3 py-1.5 text-[0.78em] rounded border border-accent text-accent bg-transparent cursor-pointer hover:bg-accent/10 disabled:opacity-50"
         >
-          {downloadRunning ? 'Downloading…' : '1. Download (Dukascopy)'}
+          {downloadRunning ? 'Downloading…' : `1. Download (${providerSpec.label})`}
         </button>
         <button
           onClick={push}
@@ -254,10 +280,12 @@ function DeepenAction({ onPushed }: { onPushed: () => void }) {
         {error && <span className="text-red text-[0.78em]">{error}</span>}
       </div>
       <p className="text-[0.7em] text-muted">
-        Dukascopy only — free, credential-free historical feed. cTrader enforces a single-session-per-account
+        Dukascopy (all 4 timeframes, choose your own lookback) or Twelve Data (M15/H1 only, always fetches its
+        full available history) — both free, credential-free feeds. cTrader enforces a single-session-per-account
         limit and would race the live scheduler's own connection, so cTrader-sourced deepening stays a VPS
-        CLI-only operation (stop the scheduler first). Download writes a local CSV; Push writes it into the
-        D1 warehouse (native H4/D1 files are preferred over resampling H1) — run Download, then Push.
+        CLI-only operation (stop the scheduler first) and is never offered here. Download writes a local CSV;
+        Push writes it into the D1 warehouse (native H4/D1 files are preferred over resampling H1) — run
+        Download, then Push.
       </p>
       {(downloadJob?.log.length ?? 0) > 0 && (
         <pre className="p-3 bg-bg/60 rounded text-[0.72em] overflow-auto max-h-[160px] whitespace-pre-wrap break-words font-mono">

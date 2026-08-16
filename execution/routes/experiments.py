@@ -174,7 +174,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
     "analytics_benchmark": "Provider Benchmark & Data Quality Lab Phase 4 (backtest/analytics_benchmark.py): scores MarketAux's sentiment API on reproducibility — fetches the same query twice and checks whether the sentiment value for the same underlying article stays identical — plus coverage, freshness, and latency. Deliberately single-provider (TAAPI's real rate limit rules it out) and reproducibility-only (no predictive/subsequent-outcome-tracking dimension — that's a trading hypothesis, not a provider benchmark). Launched via POST /research/analytics-benchmark, not this endpoint directly — measurement/advisory only, never touches config.yaml.",
     "engine_benchmark": "Engine Benchmark (backtest/engine_benchmark.py): runs every confluence engine standalone (confluence quorum overridden to 1) against real local OHLCV history and reports raw per-(engine, symbol) backtest KPIs (trades, win rate, profit factor, Sharpe, drawdown, expectancy). Launched via POST /research/engine-benchmark, not this endpoint directly — measurement/advisory only, deliberately not a ranking tool (no composite score, no auto-selected 'best engine'), never writes config.yaml/config/engines.yaml/registry.json.",
-    "download_history": "Data Center — deepen a symbol's history via Dukascopy's free, credential-free tick feed (scripts/download_dukascopy_history.py), writing data/{SYMBOL}_{TIMEFRAME}_dukascopy.csv. Does not push to the D1 warehouse by itself — run push_to_warehouse afterward.",
+    "download_history": "Data Center — deepen a symbol's history via a free, credential-free provider (Dukascopy, all 4 native timeframes; or Twelve Data, M15/H1 only — see the `provider` field, default dukascopy), writing data/{SYMBOL}_{TIMEFRAME}_{provider}.csv. cTrader/MT5/dukascopy_jforex are deliberately not offered here (single-session-per-account limit — would race the live scheduler's own connection). Does not push to the D1 warehouse by itself — run push_to_warehouse afterward.",
     "push_to_warehouse": "Data Center — push already-downloaded local CSVs into the D1 market_bars/dataset_manifest warehouse (scripts/push_bars_to_d1.py), preferring a genuinely native H4/D1 file over deriving one by resampling H1.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
@@ -286,7 +286,26 @@ _PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
 # may not exist yet), and neither takes start/end/risk_overrides/
 # timeframes(MTF)/engines/indicators — those are backtest-run concepts.
 _WAREHOUSE_JOBS = frozenset({"download_history", "push_to_warehouse"})
-_DOWNLOAD_TIMEFRAMES = ("M15", "H1", "H4", "D1")  # mirrors scripts/download_dukascopy_history.py's _TF_MINUTES keys
+
+# Data Center UI — Warehouse provider picker. Only providers safe to
+# trigger ad-hoc from the API-server process (no live-session conflict)
+# are offered: cTrader/MT5/dukascopy_jforex are broker bridges with a
+# single-session-per-account limit (see the _JOB_COMMANDS comment above)
+# and stay VPS CLI-only, never exposed here. `timeframes`/`supports_years`
+# mirror each script's own real, verified capability — Twelve Data's
+# free-plan history has no configurable lookback window (it always pages
+# back to the plan's own floor) and only ever fetches M15/H1 (see
+# scripts/download_twelve_data_history.py's own docstring).
+_DOWNLOAD_PROVIDERS: dict[str, dict[str, Any]] = {
+    "dukascopy": {"timeframes": ("M15", "H1", "H4", "D1"), "supports_years": True},
+    "twelve_data": {"timeframes": ("M15", "H1"), "supports_years": False},
+}
+# "dukascopy" deliberately absent here — it's the pre-existing default and
+# stays sourced from _JOB_COMMANDS["download_history"] (see experiments_run),
+# so a test monkeypatching that dict keeps working unchanged.
+_DOWNLOAD_PROVIDER_COMMANDS: dict[str, list[str]] = {
+    "twelve_data": [sys.executable, "-m", "scripts.download_twelve_data_history"],
+}
 
 # AI Research Lab / Mission Center Phase 2 (2026-07-28): bumped 2->3.
 # Phase 3 (2026-07-30): bumped 3->4 — an operator now often wants to run
@@ -524,10 +543,19 @@ class _RunJobRequest(BaseModel):
     indicators: list[_IndicatorFilterSpec] | None = None
     # Data Center UI (2026-08-14) — download_history only. `timeframe`
     # (singular; distinct from the Phase B `timeframes` MTF-override list
-    # above, which is a backtest concept) selects which of Dukascopy's 4
-    # genuinely native timeframes to fetch; `years` bounds how far back.
+    # above, which is a backtest concept) selects which of the chosen
+    # provider's native timeframes to fetch; `years` bounds how far back.
     timeframe: str | None = None
     years: float | None = None
+    # Data Center UI — Warehouse provider picker. Omitted/None = "dukascopy"
+    # (the original, only option, preserving every existing caller's exact
+    # behavior). cTrader is deliberately never offered here: it enforces a
+    # single-session-per-account limit and an ad-hoc dashboard-triggered
+    # connection would race the live scheduler's own session (see
+    # reports/forensic/22_DATA_ARCHITECTURE_CURRENT_STATE.md) — stays a
+    # VPS CLI-only operation, same as the _JOB_COMMANDS comment above
+    # already documents.
+    provider: str | None = None
 
 
 def _configured_symbol_universe() -> set[str]:
@@ -734,6 +762,19 @@ async def experiments_run(
         raise HTTPException(status_code=400, detail=f"Unknown job '{body.job}'. See /experiments/jobs.")
 
     argv = list(_JOB_COMMANDS[body.job])
+    download_provider = "dukascopy"
+    if body.job == "download_history":
+        download_provider = body.provider or "dukascopy"
+        if download_provider not in _DOWNLOAD_PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown provider '{download_provider}' — choose from {sorted(_DOWNLOAD_PROVIDERS)}.",
+            )
+        if download_provider != "dukascopy":
+            argv = list(_DOWNLOAD_PROVIDER_COMMANDS[download_provider])
+    elif body.provider is not None:
+        raise HTTPException(status_code=400, detail=f"'{body.job}' takes no provider.")
+
     if body.job in _PARAMETERIZED_JOBS:
         symbols = [str(s).upper().strip() for s in (body.symbols or []) if str(s).strip()]
         if not symbols:
@@ -774,14 +815,22 @@ async def experiments_run(
         raise HTTPException(status_code=400, detail=f"'{body.job}' takes no symbols.")
 
     if body.job == "download_history":
+        provider_spec = _DOWNLOAD_PROVIDERS[download_provider]
         if body.timeframe is not None:
-            if body.timeframe not in _DOWNLOAD_TIMEFRAMES:
+            if body.timeframe not in provider_spec["timeframes"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unknown timeframe '{body.timeframe}' — choose from {list(_DOWNLOAD_TIMEFRAMES)}.",
+                    detail=f"Unknown timeframe '{body.timeframe}' for provider '{download_provider}' — "
+                           f"choose from {list(provider_spec['timeframes'])}.",
                 )
             argv += ["--timeframe", body.timeframe]
         if body.years is not None:
+            if not provider_spec["supports_years"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'years' is not supported for provider '{download_provider}' — it always fetches "
+                           f"its full available history for the requested timeframe.",
+                )
             if not (0.1 <= body.years <= 20.0):
                 raise HTTPException(status_code=400, detail="years must be between 0.1 and 20.0.")
             argv += ["--years", str(body.years)]

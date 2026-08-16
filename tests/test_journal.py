@@ -254,11 +254,30 @@ def test_journal_annotate_endpoint(client):
                        json={"notes": "x"}).status_code == 404
 
 
-def test_journal_annotate_endpoint_409s_on_no_op(client):
+def test_journal_annotate_endpoint_409s_on_no_op(monkeypatch):
     """P2-5: tags-only request with no migration applied must not report
-    200/success:true for a write that didn't happen."""
-    sid = _seed_closed_trade()  # tags column absent — no apply_migrations()
-    res = client.post(f"/journal/{sid}/annotate", headers=HDR, json={"tags": ["x"]})
+    200/success:true for a write that didn't happen.
+
+    2026-08-15 red-team audit (DB-3): execution/api_core.py's lifespan()
+    now calls apply_migrations_safe() on every real app boot — including
+    the shared `client` fixture's own TestClient construction, which
+    would silently add the tags column before this test runs and make
+    the "no migration applied" scenario unreachable through the app's
+    normal startup. Bypass DB-3's own new call here, on purpose, to keep
+    exercising the underlying no-op/409 code path this test actually
+    pins — this is the one legitimate place in the suite that needs the
+    pre-migration state, everywhere else benefits from the real fix.
+    """
+    import execution.api_server as m
+    from fastapi.testclient import TestClient
+
+    m._ENV = "development"
+    monkeypatch.setenv("API_SERVER_KEY", "test-key-123")
+    monkeypatch.setattr("storage.migrations.apply_migrations_safe", lambda: [])
+
+    with TestClient(m.app, base_url="https://testserver") as client:
+        sid = _seed_closed_trade()  # tags column absent — no migration applied
+        res = client.post(f"/journal/{sid}/annotate", headers=HDR, json={"tags": ["x"]})
     assert res.status_code == 409
 
 

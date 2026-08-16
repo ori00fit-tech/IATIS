@@ -59,8 +59,8 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -164,13 +164,34 @@ def _criterion(actual: Any, threshold: Any, passed: bool) -> dict:
     return {"actual": actual, "threshold": threshold, "passed": bool(passed)}
 
 
+def _dataset_content_id(dataset: dict) -> str | None:
+    """2026-08-15 red-team audit (MC-4) — the one field that identifies a
+    dataset's actual content, regardless of origin: ``sha256`` for a
+    local CSV (research.manifest.dataset_fingerprint) or ``checksum`` for
+    a D1 warehouse dataset (storage.market_bars manifest). The two
+    origins were never comparable to each other before this helper — a
+    warehouse-origin trial's stored fingerprint has no ``sha256`` key at
+    all, so comparing it against a freshly re-derived CSV fingerprint
+    always reported a spurious mismatch."""
+    return dataset.get("sha256") or dataset.get("checksum")
+
+
 def _compute_candidate_lock(trial: dict, symbol: str, data_dir: Path) -> dict:
     """Diagnostic Infrastructure Phase 1 (2026-08-02) — compares the
     trial's stored fingerprint (recorded once at trial time by
     mission_runner.py) against a freshly computed one for the SAME
     symbol, right now. Informational only — never blocks a validation
     run; a legitimately growing dataset (new bars appended since the
-    trial ran) shows as dataset drift without invalidating anything."""
+    trial ran) shows as dataset drift without invalidating anything.
+
+    2026-08-15 red-team audit (MC-4) — a trial whose original fingerprint
+    came from the D1 market_bars warehouse (dataset.origin == "warehouse",
+    Trusted Data Center Phase 2) is now re-checked against a FRESH
+    warehouse manifest for the same symbol/timeframe, never re-derived
+    from a local CSV — CSV re-derivation has no comparable content hash
+    for warehouse-origin data and would always report a false "dataset
+    changed" mismatch regardless of whether anything actually changed.
+    """
     original_raw = trial.get("fingerprint_json")
     if not original_raw:
         return {"available": False, "note": "Trial predates fingerprint tracking."}
@@ -179,11 +200,31 @@ def _compute_candidate_lock(trial: dict, symbol: str, data_dir: Path) -> dict:
     except (TypeError, ValueError):
         return {"available": False, "note": "Trial fingerprint could not be parsed."}
 
-    try:
-        csv_path = find_symbol_csv(symbol, data_dir)
-        current_dataset = dataset_fingerprint(csv_path)
-    except (FileNotFoundError, OSError):
-        current_dataset = None
+    orig_ds = original.get("dataset") or {}
+    origin = orig_ds.get("origin")
+
+    if origin == "warehouse":
+        timeframe = orig_ds.get("timeframe") or "H1"
+        try:
+            from storage import market_bars
+            manifest = market_bars.get_manifest(symbol, timeframe)
+            current_dataset = {
+                "origin": "warehouse",
+                "warehouse_source": manifest.get("source"),
+                "checksum": manifest.get("checksum"),
+                "row_count": manifest.get("row_count"),
+                "coverage_pct": manifest.get("coverage_pct"),
+                "status": manifest.get("status"),
+            } if manifest else None
+        except Exception as exc:  # noqa: BLE001 — a D1 hiccup must never abort a validation run
+            logger.debug(f"{symbol}: warehouse manifest lookup failed for candidate lock (non-fatal): {exc}")
+            current_dataset = None
+    else:
+        try:
+            csv_path = find_symbol_csv(symbol, data_dir)
+            current_dataset = dataset_fingerprint(csv_path)
+        except (FileNotFoundError, OSError):
+            current_dataset = None
     current = {"git": git_state(), "dataset": current_dataset}
 
     diffs: list[str] = []
@@ -191,10 +232,13 @@ def _compute_candidate_lock(trial: dict, symbol: str, data_dir: Path) -> dict:
         diffs.append("code changed (different git commit)")
     if current["git"]["dirty"]:
         diffs.append("current working tree is dirty (uncommitted changes)")
-    orig_ds = original.get("dataset") or {}
     cur_ds = current["dataset"] or {}
-    if orig_ds.get("sha256") != cur_ds.get("sha256"):
-        diffs.append("dataset file content changed (different SHA256)")
+    if _dataset_content_id(orig_ds) != _dataset_content_id(cur_ds):
+        diffs.append(
+            "warehouse dataset checksum changed (D1 market_bars manifest)"
+            if origin == "warehouse" else
+            "dataset file content changed (different SHA256)"
+        )
 
     return {
         "available": True, "original": original, "current": current,
@@ -623,6 +667,35 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     }
 
 
+def _default_same_symbol_start(vc: ValidationConfig, mission: dict) -> ValidationConfig:
+    """2026-08-15 red-team audit (MC-5) — SAME_SYMBOL validation previously
+    left `start` as None whenever the operator didn't explicitly override
+    it, and load_symbol_data(symbol, data_dir, None, end) reads a None
+    start as "load the whole file" — silently INCLUDING the mission's own
+    training window rather than genuinely testing out-of-sample data.
+    _compute_date_overlap() already flags this after the fact
+    (informational only, never blocking); this closes the underlying gap
+    by defaulting `start` to the day AFTER the mission's own training end
+    date, for SAME_SYMBOL mode specifically — CROSS_SYMBOL mode is
+    untouched (a different symbol is already that mode's out-of-sample
+    safeguard, by design). An explicit operator-supplied start always
+    wins; this only ever fires when vc.start is None."""
+    if vc.validation_mode != SAME_SYMBOL or vc.start is not None:
+        return vc
+    try:
+        mission_config = json.loads(mission.get("config_json") or "{}")
+    except (TypeError, ValueError):
+        return vc
+    original_end = mission_config.get("end")
+    if not original_end:
+        return vc
+    try:
+        default_start = (datetime.strptime(original_end, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    except ValueError:
+        return vc
+    return replace(vc, start=default_start)
+
+
 def run_validation(vc: ValidationConfig) -> None:
     mission = research_missions.get_mission(vc.mission_id)
     research_mission_validations.upsert_validation(
@@ -637,6 +710,10 @@ def run_validation(vc: ValidationConfig) -> None:
         research_mission_validations.set_validation_status(
             vc.validation_id, "failed", error=f"Mission {vc.mission_id} not found.", finished=True)
         return
+    # MC-5 fix — must happen before _compute_date_overlap()/the symbol
+    # loop below so both the diagnostic and the actual data window it
+    # describes reflect the same effective start date.
+    vc = _default_same_symbol_start(vc, mission)
     trial = research_missions.get_trial(vc.mission_id, vc.trial_number, vc.trial_symbol)
     if trial is None:
         research_mission_validations.set_validation_status(

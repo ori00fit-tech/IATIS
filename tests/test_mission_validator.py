@@ -31,6 +31,7 @@ from backtest.mission_validator import (
     ValidationConfig,
     _compute_candidate_lock,
     _compute_date_overlap,
+    _default_same_symbol_start,
     run_validation,
 )
 from backtest.optimizer import MissionSearchSpace, _ENGINES_IDX_KEY, _INDICATORS_IDX_KEY, _TF_IDX_KEY
@@ -964,6 +965,89 @@ def test_compute_candidate_lock_survives_unparseable_json():
     assert result["available"] is False
 
 
+# ── MC-4 (2026-08-15 red-team audit): warehouse-origin candidate lock ──────
+# A warehouse-origin trial's fingerprint has no CSV to re-derive a sha256
+# from — the old code always fell through to find_symbol_csv/dataset_
+# fingerprint, which produced a spurious "dataset changed" mismatch on
+# EVERY warehouse-origin trial regardless of whether anything really
+# changed. These pin the fix: a warehouse-origin fingerprint is compared
+# against a FRESH warehouse manifest checksum, never a CSV re-derivation.
+
+def test_compute_candidate_lock_warehouse_origin_matches_when_checksum_unchanged(monkeypatch):
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+    fingerprint = {
+        "git": {"commit": "abc123", "dirty": False},
+        "dataset": {"origin": "warehouse", "warehouse_source": "dukascopy", "checksum": "deadbeef",
+                    "row_count": 500, "coverage_pct": 99.5, "status": "READY", "timeframe": "H4"},
+    }
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+    monkeypatch.setattr(
+        "storage.market_bars.get_manifest",
+        lambda symbol, timeframe: {"source": "dukascopy", "checksum": "deadbeef",
+                                    "row_count": 500, "coverage_pct": 99.5, "status": "READY"},
+    )
+    result = _compute_candidate_lock(trial, "EURUSD", Path("data"))
+    assert result["available"] is True
+    assert result["matches"] is True
+    assert result["diffs"] == []
+    assert result["current"]["dataset"]["origin"] == "warehouse"
+
+
+def test_compute_candidate_lock_warehouse_origin_detects_checksum_drift(monkeypatch):
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+    fingerprint = {
+        "git": {"commit": "abc123", "dirty": False},
+        "dataset": {"origin": "warehouse", "checksum": "old-checksum", "timeframe": "H4"},
+    }
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+    monkeypatch.setattr(
+        "storage.market_bars.get_manifest",
+        lambda symbol, timeframe: {"source": "dukascopy", "checksum": "new-checksum"},
+    )
+    result = _compute_candidate_lock(trial, "EURUSD", Path("data"))
+    assert result["matches"] is False
+    assert "warehouse dataset checksum changed (D1 market_bars manifest)" in result["diffs"]
+    # Never the CSV-branch message — the whole point of the fix.
+    assert "dataset file content changed (different SHA256)" not in result["diffs"]
+
+
+def test_compute_candidate_lock_warehouse_origin_never_falls_through_to_csv(monkeypatch, tmp_path):
+    """A warehouse-origin trial must never call find_symbol_csv/
+    dataset_fingerprint — even when a same-symbol CSV happens to exist on
+    disk, the CSV path is irrelevant to a warehouse-origin comparison."""
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+
+    def _boom(*a, **kw):
+        raise AssertionError("find_symbol_csv must not be called for a warehouse-origin trial")
+
+    monkeypatch.setattr(mission_validator, "find_symbol_csv", _boom)
+    fingerprint = {
+        "git": {"commit": "abc123", "dirty": False},
+        "dataset": {"origin": "warehouse", "checksum": "cs1", "timeframe": "H4"},
+    }
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+    monkeypatch.setattr("storage.market_bars.get_manifest", lambda symbol, timeframe: {"checksum": "cs1"})
+    result = _compute_candidate_lock(trial, "EURUSD", tmp_path)
+    assert result["matches"] is True
+
+
+def test_compute_candidate_lock_warehouse_origin_degrades_gracefully_on_d1_failure(monkeypatch):
+    monkeypatch.setattr(mission_validator, "git_state", lambda: {"commit": "abc123", "dirty": False})
+    fingerprint = {
+        "git": {"commit": "abc123", "dirty": False},
+        "dataset": {"origin": "warehouse", "checksum": "cs1", "timeframe": "H4"},
+    }
+    trial = {"fingerprint_json": json.dumps(fingerprint)}
+
+    def _boom(symbol, timeframe):
+        raise RuntimeError("D1 unreachable")
+
+    monkeypatch.setattr("storage.market_bars.get_manifest", _boom)
+    result = _compute_candidate_lock(trial, "EURUSD", Path("data"))  # must not raise
+    assert result["available"] is True
+    assert result["matches"] is False  # cs1 vs. no current checksum -> real drift, not silently "matches"
+
+
 def test_compute_date_overlap_detects_overlap():
     mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2022-01-01"})}
     vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",))
@@ -986,6 +1070,83 @@ def test_compute_date_overlap_full_history_both_sides_overlaps():
     vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",))
     result = _compute_date_overlap(mission, vc)
     assert result["overlaps"] is True
+
+
+# ── MC-5 (2026-08-15 red-team audit): SAME_SYMBOL default start date ───────
+# A SAME_SYMBOL validation that never gets an explicit `start` used to load
+# the WHOLE dataset (load_symbol_data reads None as "no lower bound"),
+# silently including the mission's own training window — not genuinely
+# out-of-sample. These pin the fix: default `start` to the day after the
+# mission's own training `end`, for SAME_SYMBOL only, only when the
+# operator didn't explicitly set one.
+
+def test_default_same_symbol_start_fills_in_day_after_training_end():
+    mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2022-06-30"})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",), validation_mode=SAME_SYMBOL)
+    result = _default_same_symbol_start(vc, mission)
+    assert result.start == "2022-07-01"
+    assert result.end == vc.end  # untouched
+
+
+def test_default_same_symbol_start_never_overrides_an_explicit_start():
+    mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2022-06-30"})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",), validation_mode=SAME_SYMBOL)
+    vc = ValidationConfig(**{**vc.__dict__, "start": "2019-01-01"})
+    result = _default_same_symbol_start(vc, mission)
+    assert result.start == "2019-01-01"  # operator's explicit choice wins, even if it overlaps
+
+
+def test_default_same_symbol_start_leaves_cross_symbol_mode_untouched():
+    mission = {"config_json": json.dumps({"start": "2020-01-01", "end": "2022-06-30"})}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("GBPUSD", "XAUUSD"), validation_mode=CROSS_SYMBOL)
+    result = _default_same_symbol_start(vc, mission)
+    assert result.start is None  # CROSS_SYMBOL's own out-of-sample safeguard is a different symbol, not a date
+
+
+def test_default_same_symbol_start_degrades_gracefully_when_mission_has_no_end():
+    mission = {"config_json": json.dumps({"start": "2020-01-01"})}  # no "end" key
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",), validation_mode=SAME_SYMBOL)
+    result = _default_same_symbol_start(vc, mission)
+    assert result.start is None  # nothing to default from — no crash, no fabricated date
+
+
+def test_default_same_symbol_start_degrades_gracefully_on_unparseable_config():
+    mission = {"config_json": "not json"}
+    vc = _small_vc(Path("."), "v-x", "m-x", validation_symbols=("EURUSD",), validation_mode=SAME_SYMBOL)
+    result = _default_same_symbol_start(vc, mission)
+    assert result.start is None
+
+
+def test_run_validation_same_symbol_defaults_start_and_reports_no_overlap(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    # Build the mission directly (not via _seed_mission_and_trial, whose
+    # own upsert_mission() call always uses config={} — and upsert_
+    # mission()'s ON CONFLICT clause only ever updates `status`, never
+    # `config_json`, so a second call can't retrofit a training end date
+    # onto an already-seeded mission) with a real training end date the
+    # default has something concrete to key off.
+    research_missions.upsert_mission(
+        mission_id="val-same-symbol-oos", name="test-mission", sampler="random",
+        objective_metric="profit_factor", symbols=["EURUSD"], n_trials_per_symbol=1,
+        min_trades=1, seed=42, search_space=mission_runner._search_space_dict(_space()),
+        config={"start": "2020-01-01", "end": "2020-01-01"}, status="finished",
+    )
+    raw_params = {_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0}
+    research_missions.record_trial(
+        mission_id="val-same-symbol-oos", trial_number=0, symbol="EURUSD", state="COMPLETE",
+        objective_value=1.2, params=raw_params, metrics={"profit_factor": 1.2}, trades=50,
+        error=None, started_at="t", finished_at="t",
+    )
+
+    vc = _small_vc(tmp_path, "v-same-symbol-oos", "val-same-symbol-oos",
+                    validation_symbols=(), validation_mode=SAME_SYMBOL)
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-same-symbol-oos")
+    assert validation is not None
+    date_overlap = json.loads(validation["date_overlap_json"])
+    assert date_overlap["validation_start"] == "2020-01-02"  # day after training end, not None
+    assert date_overlap["overlaps"] is False
 
 
 def test_run_validation_persists_candidate_lock_and_date_overlap(tmp_path):

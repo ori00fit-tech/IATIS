@@ -29,6 +29,16 @@
 #     ingress first (cloudflared: /etc/cloudflared/config.yml service:
 #     http://localhost:8000 → safe to switch). Edit the installed
 #     /etc/systemd/system/iatis-api.service afterwards.
+#   - enabling iatis-marketaux-collect.timer / iatis-orderflow-collector:
+#     both are now path-corrected and installed to /etc/systemd/system by
+#     this script (2026-08-15 red-team audit, OPS-6 — they were previously
+#     missing from UNITS entirely, so a non-root migration silently left
+#     them uninstalled), but NOT enabled — each starts a real, ongoing
+#     research data-accumulation clock (H021/H104,
+#     research/results/registry.json) and marketaux additionally needs
+#     MARKETAUX_API_KEY in .env. Enable deliberately when ready:
+#       systemctl enable --now iatis-marketaux-collect.timer
+#       systemctl enable --now iatis-orderflow-collector.service
 
 set -euo pipefail
 
@@ -38,7 +48,9 @@ SVC_USER=iatis
 UNITS=(iatis-api.service iatis-scheduler.service
        iatis-watchdog.service iatis-watchdog.timer
        iatis-backup.service iatis-backup.timer
-       iatis-d1-backup.service iatis-d1-backup.timer)
+       iatis-d1-backup.service iatis-d1-backup.timer
+       iatis-marketaux-collect.service iatis-marketaux-collect.timer
+       iatis-orderflow-collector.service)
 
 say()  { echo -e "\033[1;36m==> $*\033[0m"; }
 fail() { echo -e "\033[1;31m✗ $*\033[0m" >&2; exit 1; }

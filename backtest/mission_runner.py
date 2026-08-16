@@ -238,6 +238,12 @@ def _load_from_warehouse(symbol: str, timeframe: str, start: str | None, end: st
             "checksum": manifest.get("checksum"),
             "start_ts": manifest.get("start_ts"),
             "end_ts": manifest.get("end_ts"),
+            # 2026-08-15 red-team audit (MC-4) — the candidate-lock check
+            # re-derives a FRESH warehouse manifest at validation time and
+            # needs to know which timeframe to look up; without this the
+            # comparison silently fell back to a CSV re-derivation, which
+            # has no comparable content hash for a warehouse-origin trial.
+            "timeframe": timeframe,
         }
         return df, info
     except Exception as exc:  # noqa: BLE001 — D1 unreachable/unconfigured must never abort a mission

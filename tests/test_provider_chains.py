@@ -699,3 +699,103 @@ def test_fetch_with_failover_falls_through_when_only_bar_is_still_forming(monkey
         "BTC/USD", "H1", outputsize=10, providers=["ccxt", "twelve_data"],
     )
     assert provider == "twelve_data"
+
+
+# ── Red-team audit fixes (2026-08-15): C1 (unprotected resample) and C2
+# (no validate_ohlcv in the fetch layer) ────────────────────────────────
+
+def _df_with_forming_h1_prefix(n_h1: int, freq="h"):
+    """H1 bars ending exactly at real wall-clock 'now', floored to the
+    hour — i.e. the H1 series' own last bar is fully closed, but 'now' is
+    partway through the H4 period that bar belongs to, so a resample to
+    H4 built from this base has a still-forming last H4 bucket."""
+    return _df_ending_now(n=n_h1, freq=freq)
+
+
+def test_multi_tf_resample_drops_a_still_forming_h4_bucket(monkeypatch):
+    """C1 regression: fetch_multi_timeframe_with_failover()'s resample
+    path must apply the same still-forming-bar guard natively-fetched
+    frames already get (core/data_providers.py::_drop_still_forming_bar)
+    — otherwise a live H4/D1 view built by resampling a finer base can
+    include a partial, still-changing candle that confluence/
+    mtf_confirmation.py then scores against."""
+    import pandas as pd
+
+    # Anchor 'now' to a real H4-boundary-straddling instant so the base
+    # H1 series' own last bar is closed but the H4 bucket it falls inside
+    # is NOT yet fully covered — the exact scenario the guard must catch.
+    now = pd.Timestamp.now(tz="UTC")
+    h4_boundary = now.floor("4h")
+    if now - h4_boundary < pd.Timedelta(hours=1):
+        pytest.skip("too close to an H4 boundary for a deterministic mid-period base")
+
+    def fake_ccxt(symbol, interval, outputsize):
+        assert interval == "H1"  # only H1 is native in this chain
+        idx_end = now.floor("h")
+        idx = pd.date_range(end=idx_end, periods=outputsize, freq="h", tz="UTC")
+        px = pd.Series(100.0, index=idx)
+        return pd.DataFrame({"open": px, "high": px + 1, "low": px - 1,
+                             "close": px, "volume": 1.0}, index=idx)
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    views = dp.fetch_multi_timeframe_with_failover(
+        "BTC/USD", ["H1", "H4"], outputsize=200, providers=["ccxt"],
+    )
+    h4 = views["H4"]
+    # The resampled H4 series' last bar must be fully covered by the base
+    # H1 data it was built from — never a partial "today so far" bucket.
+    last_h4_period_end = h4.index[-1] + pd.Timedelta(hours=4)
+    last_h1_covers_to = views["H1"].index[-1] + pd.Timedelta(hours=1)
+    assert last_h1_covers_to >= last_h4_period_end, (
+        f"resampled H4 bar at {h4.index[-1]} is still forming — only "
+        f"covered up to {last_h1_covers_to}, needs {last_h4_period_end}"
+    )
+
+
+def test_fetch_with_failover_rejects_malformed_ohlc_and_falls_through(monkeypatch):
+    """C2 regression: a provider returning structurally invalid OHLC
+    (high < low) must be treated as a failed attempt — caught by
+    validate_ohlcv() inside fetch_with_failover() — and the chain must
+    fall through to the next provider, never silently returning the bad
+    frame to a caller."""
+    def fake_ccxt(symbol, interval, outputsize):
+        df = _df_ending_now(n=10, freq="h")
+        df = df.copy()
+        df.loc[df.index[-1], "high"] = df.loc[df.index[-1], "low"] - 5.0  # high < low
+        return df
+
+    def fake_twelve_data(symbol, interval, outputsize, use_cache):
+        return _df_ending_now(n=10, freq="h")
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    monkeypatch.setattr(dp, "_fetch_twelve_data", fake_twelve_data)
+    df, provider = dp.fetch_with_failover(
+        "BTC/USD", "H1", outputsize=10, providers=["ccxt", "twelve_data"],
+    )
+    assert provider == "twelve_data"
+    assert (df["high"] >= df["low"]).all()
+
+
+def test_fetch_with_failover_raises_when_every_provider_returns_malformed_ohlc(monkeypatch):
+    """No provider left standing after every one fails validate_ohlcv —
+    must raise DataFetchError, never return the malformed frame anyway."""
+    def fake_ccxt(symbol, interval, outputsize):
+        df = _df_ending_now(n=10, freq="h").copy()
+        df.loc[df.index[-1], "high"] = df.loc[df.index[-1], "low"] - 5.0
+        return df
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    with pytest.raises(dp.DataFetchError):
+        dp.fetch_with_failover("BTC/USD", "H1", outputsize=10, providers=["ccxt"])
+
+
+def test_fetch_with_failover_passes_through_valid_ohlc_unaffected(monkeypatch):
+    """Regression pin: well-formed data is completely unaffected by the
+    new validate_ohlcv() call — same bar count, same provider."""
+    def fake_ccxt(symbol, interval, outputsize):
+        return _df_ending_now(n=25, freq="h")
+
+    monkeypatch.setattr(dp, "_fetch_ccxt_provider", fake_ccxt)
+    df, provider = dp.fetch_with_failover("BTC/USD", "H1", outputsize=25, providers=["ccxt"])
+    assert provider == "ccxt"
+    assert len(df) == 25

@@ -129,12 +129,27 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # handed (2026-07-25 audit finding: a correlated position open for
         # hours/days provided zero protection against a new same-group
         # signal on a later tick).
+        #
+        # 2026-08-15 red-team audit (RE-F3): a storage failure here used to
+        # be swallowed at debug level and the run proceeded with an EMPTY
+        # seed list — silently disabling correlation protection for every
+        # already-open position for the whole tick (fail-open). Per
+        # CLAUDE.md's own rule ("UNKNOWN/INVALID/INCOMPLETE -> NO-TRADE
+        # unless explicit and justified exception"), an unreadable open-
+        # positions list means correlation safety cannot be verified for
+        # this tick, so every new EXECUTE this tick must be blocked rather
+        # than silently risking an undetected correlated pile-up.
         execute_signals: list[str] = []
+        correlation_seed_failed = False
         try:
             from storage.outcome_tracker import get_open_signals
             execute_signals.extend(str(r.get("symbol") or "") for r in get_open_signals())
         except Exception as exc:
-            logger.debug(f"Could not seed correlation filter with open positions: {exc}")
+            correlation_seed_failed = True
+            logger.warning(
+                f"Could not seed correlation filter with open positions — "
+                f"blocking new EXECUTEs this tick (fail-closed, RE-F3): {exc}"
+            )
         max_per_group = config.get("portfolio", {}).get("max_per_group", MAX_PER_GROUP)
         correlation_filter_enabled = config.get("features", {}).get("correlation_filter", True)
 
@@ -163,11 +178,18 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
             sym_config["data"]["twelve_data_symbol"] = sym
 
             # A1: Correlation Filter — skip if correlated symbol already EXECUTE
-            corr_check = (
-                check_correlation(internal, execute_signals, max_per_group=max_per_group)
-                if correlation_filter_enabled
-                else CorrelationCheckResult(allowed=True, symbol=internal, message="Correlation filter disabled by config")
-            )
+            if correlation_seed_failed and correlation_filter_enabled:
+                corr_check = CorrelationCheckResult(
+                    allowed=False, symbol=internal,
+                    message="Correlation filter degraded — cannot verify already-open "
+                            "positions this tick, blocking (fail-closed, RE-F3)",
+                )
+            else:
+                corr_check = (
+                    check_correlation(internal, execute_signals, max_per_group=max_per_group)
+                    if correlation_filter_enabled
+                    else CorrelationCheckResult(allowed=True, symbol=internal, message="Correlation filter disabled by config")
+                )
             if not corr_check.allowed:
                 logger.info(
                     f"[CORRELATION] {internal} blocked: {corr_check.message}"
@@ -180,21 +202,37 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 })
                 continue
 
-            # Symbol Health Index — skip paused symbols
+            # Symbol Health Index — skip paused symbols.
+            # 2026-08-15 red-team audit (RE-F1): a failure evaluating this
+            # gate used to be swallowed at debug level and the pipeline ran
+            # anyway — i.e. an error in the ONE check meant to pause a
+            # misbehaving symbol silently defaulted to ALLOWING the trade.
+            # Per CLAUDE.md's fail-closed rule, an unreadable health status
+            # must block the trade, not skip the check.
             try:
                 from storage.symbol_health import get_symbol_health
                 shi = get_symbol_health(internal)
-                if shi.status == "PAUSED":
-                    logger.info(f"[HEALTH] {internal} PAUSED (SHI={shi.shi_score:.0f}): {shi.reason}")
-                    reports.append({
-                        "final_verdict": "NO_TRADE",
-                        "symbol": internal,
-                        "summary": f"NO_TRADE: Symbol PAUSED (SHI={shi.shi_score:.0f}) — {shi.reason}",
-                        "health_paused": True,
-                    })
-                    continue
             except Exception as exc:
-                logger.debug(f"Symbol health check skipped for {internal}: {exc}")
+                logger.warning(
+                    f"[HEALTH] {internal} health check failed — blocking "
+                    f"(fail-closed, RE-F1): {exc}"
+                )
+                reports.append({
+                    "final_verdict": "NO_TRADE",
+                    "symbol": internal,
+                    "summary": f"NO_TRADE: Symbol health check failed ({type(exc).__name__}) — blocking (fail-closed)",
+                    "health_check_failed": True,
+                })
+                continue
+            if shi.status == "PAUSED":
+                logger.info(f"[HEALTH] {internal} PAUSED (SHI={shi.shi_score:.0f}): {shi.reason}")
+                reports.append({
+                    "final_verdict": "NO_TRADE",
+                    "symbol": internal,
+                    "summary": f"NO_TRADE: Symbol PAUSED (SHI={shi.shi_score:.0f}) — {shi.reason}",
+                    "health_paused": True,
+                })
+                continue
 
             try:
                 report = run_pipeline(sym_config)
@@ -512,6 +550,19 @@ def main() -> None:
             "available). Set TWELVE_DATA_API_KEY in .env, pass --source ctrader/twelve_data, "
             "or set system.mode to something other than 'live' in config.yaml."
         )
+
+    # 2026-08-15 red-team audit (DB-3): apply_migrations_safe() was
+    # previously only reached via run_loop() below — `--once` mode
+    # (used by external cron per this file's own module docstring)
+    # skipped it entirely, so a `--once`-only deployment could run
+    # indefinitely on a stale D1 schema. Calling it here too (in
+    # addition to run_loop()'s own call, harmless since it's idempotent
+    # — it checks the current schema version before doing any work)
+    # covers both paths from one call site.
+    from storage.migrations import apply_migrations_safe
+    applied = apply_migrations_safe()
+    if applied:
+        logger.info(f"Schema migrations applied at boot: {applied}")
 
     if args.once:
         reports = run_once(config, args.symbols)

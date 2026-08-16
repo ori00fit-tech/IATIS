@@ -324,6 +324,47 @@ class _Job:
         self.proc: Any = None
 
 
+# 2026-08-15 red-team audit (SEC-2): _jobs previously had no eviction/TTL/
+# max-size at all — every job record (including its full accumulated
+# stdout in log_lines) lived for the entire life of the iatis-api process,
+# unlike _active_sessions' own lazy pruning (execution/api_core.py). A
+# long-running deployment accumulating many research/benchmark jobs risked
+# unbounded memory growth toward the documented MemoryMax=1G OOM-kill
+# (iatis-api.service). Mirrors that same lazy-prune-on-access pattern.
+_JOB_RETENTION_SECONDS = 86400  # 24h — long enough to review a finished job's log via the dashboard
+_JOB_MAX_RETAINED = 200  # independent hard ceiling, bounds a burst of many short jobs within the window too
+
+
+def _prune_old_jobs() -> None:
+    """Evicts only TERMINAL jobs (finished/failed/timeout/cancelled) —
+    queued/running jobs are never evicted regardless of age. Caller must
+    already hold `_jobs_lock`."""
+    terminal_statuses = ("finished", "failed", "timeout", "cancelled")
+    now = time.time()
+    cutoff = now - _JOB_RETENTION_SECONDS
+    stale_ids = []
+    for jid, j in _jobs.items():
+        if j.status not in terminal_statuses or not j.finished_at:
+            continue
+        try:
+            finished_ts = datetime.fromisoformat(j.finished_at).timestamp()
+        except ValueError:
+            continue
+        if finished_ts < cutoff:
+            stale_ids.append(jid)
+    for jid in stale_ids:
+        _jobs.pop(jid, None)
+
+    overflow = len(_jobs) - _JOB_MAX_RETAINED
+    if overflow > 0:
+        terminal_jobs = sorted(
+            (j for j in _jobs.values() if j.status in terminal_statuses),
+            key=lambda j: j.finished_at or "",
+        )
+        for j in terminal_jobs[:overflow]:
+            _jobs.pop(j.id, None)
+
+
 def _job_summary(job: "_Job") -> dict[str, Any]:
     return {
         "job_id": job.id,
@@ -822,6 +863,7 @@ async def experiments_run(
         raise HTTPException(status_code=400, detail=f"'{body.job}' takes no params/multipliers.")
 
     with _jobs_lock:
+        _prune_old_jobs()
         already_running = any(
             j.name == body.job and j.status in ("queued", "running") for j in _jobs.values()
         )

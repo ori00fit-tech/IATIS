@@ -676,6 +676,16 @@ def run_backtest(
                     )
                 cls = variant_cls
             engine = cls()
+            # 2026-08-15 red-team audit (TE-3): main.py's live
+            # engine-construction loop (build_active_engines) sets
+            # engine._symbol, but this backtest loop never did —
+            # SentimentEngine's per-symbol COT lookup silently degraded
+            # to its "UNKNOWN"-symbol fallback in every backtest, unlike
+            # live (MacroEngine also reads self._symbol, but is never
+            # constructed by this loop at all — see ENGINE_KEYS' own
+            # comment above). Same gate/vote-parity principle as
+            # decision_tf/thresholds below.
+            engine._symbol = config.symbol
             # Same decision timeframe the production pipeline uses
             # (main.build_active_engines) — gate/vote parity.
             engine.decision_tf = timeframes[0] if timeframes else "H1"

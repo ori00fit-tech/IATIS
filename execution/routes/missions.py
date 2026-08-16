@@ -40,6 +40,7 @@ from execution.routes.experiments import (
     _job_summary,
     _jobs,
     _jobs_lock,
+    _prune_old_jobs,
     _run_job,
     _symbol_has_any_data,
     _validate_iso_date,
@@ -270,6 +271,7 @@ async def missions_create(
     # once (different symbol sets/search spaces) — bounded only by the
     # shared job-slot pool size (_job_executor), not a name collision.
     with _jobs_lock:
+        _prune_old_jobs()
         job = _Job(mission_id, "research_mission", argv=argv)
         _jobs[mission_id] = job
 
@@ -590,6 +592,7 @@ async def missions_validate(
         argv += ["--end", body.end]
 
     with _jobs_lock:
+        _prune_old_jobs()
         job = _Job(validation_id, "mission_validate", argv=argv)
         _jobs[validation_id] = job
 

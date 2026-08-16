@@ -320,16 +320,41 @@ def test_reliability_adjusted_objective_a_lucky_few_trade_pf_never_beats_a_well_
     assert lucky_few_trades < well_sampled
 
 
-def test_reliability_adjusted_objective_only_caps_profit_factor():
-    # sharpe_ratio has no cap in _OBJECTIVE_CAP_BY_METRIC — a large-but-
-    # finite value passes through uncapped, only trade-count-discounted.
-    value = _reliability_adjusted_objective(12.0, trades=30, metric="sharpe_ratio")
-    assert value == pytest.approx(12.0)
+def test_reliability_adjusted_objective_leaves_genuinely_bounded_metrics_uncapped():
+    # sharpe_ratio/sortino_ratio/expectancy_r/win_rate have no cap in
+    # _OBJECTIVE_CAP_BY_METRIC — a large-but-finite value passes through
+    # uncapped, only trade-count-discounted.
+    for metric in ("sharpe_ratio", "sortino_ratio", "expectancy_r", "win_rate"):
+        value = _reliability_adjusted_objective(12.0, trades=30, metric=metric)
+        assert value == pytest.approx(12.0), metric
 
 
 def test_reliability_adjusted_objective_never_exceeds_finite_objective_cap_on_negative_inf():
     value = _reliability_adjusted_objective(float("-inf"), trades=30, metric="profit_factor")
     assert value == pytest.approx(-5.0)
+
+
+# ── MC-1 (2026-08-15 red-team audit): recovery_factor/calmar_ratio/sqn
+# were previously left uncapped on the false claim they're "already
+# naturally bounded" — all three can blow up from a handful of lucky
+# trades with a tiny drawdown/near-identical R-multiples. ──
+
+@pytest.mark.parametrize("metric,cap", [
+    ("recovery_factor", 20.0), ("calmar_ratio", 20.0), ("sqn", 7.0),
+])
+def test_reliability_adjusted_objective_caps_the_newly_bounded_metrics(metric, cap):
+    huge_value = _reliability_adjusted_objective(9999.0, trades=30, metric=metric)
+    assert huge_value == pytest.approx(cap)  # full trade-count confidence, capped value passes through
+
+
+def test_reliability_adjusted_objective_a_lucky_few_trade_sqn_never_beats_a_well_sampled_moderate_sqn():
+    """The same regression class test_..._a_lucky_few_trade_pf_never_beats_...
+    already pins for profit_factor, now proven for sqn too: an
+    implausibly huge SQN from a handful of trades must not outrank a
+    realistic SQN from a well-sampled trial."""
+    lucky_few_trades = _reliability_adjusted_objective(500.0, trades=8, metric="sqn")
+    well_sampled = _reliability_adjusted_objective(3.5, trades=150, metric="sqn")
+    assert lucky_few_trades < well_sampled
 
 
 # ── trade_stream_fingerprint (Mission Center Research Rigor, item 2) ────────

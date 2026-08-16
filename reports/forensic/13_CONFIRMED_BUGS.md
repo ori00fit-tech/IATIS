@@ -2583,3 +2583,523 @@ operator from a real VPS mission (`b9c8e8a10545`) — this is the second
 bug this session diagnosed directly from an operator-supplied screenshot
 of unexpected live behavior (BUG-006's PK-collision class of issue was
 the first), not from a code-review pass alone.
+
+
+---
+
+## BUG-021
+
+**Severity:** P0 (fail-open no-trade governance directly contradicting
+CLAUDE.md's own rule; live data-integrity gap in the multi-provider fetch
+layer; missing duplicate-order guard on the cTrader execution path).
+
+**Category:** Full Adversarial Red-Team Audit (2026-08-15) — this session's
+own 8-subagent audit of data integrity, risk/no-trade governance, and
+execution reliability. This entry consolidates the P0 findings from that
+audit's report; each sub-finding below has its own File/Line/Fix/
+Regression-test, grouped here because all seven were remediated together
+in one pass.
+
+### C1 — Unprotected resample in the live multi-timeframe fetch layer
+
+**Claim:** `fetch_multi_timeframe_with_failover()`'s resample-from-a-finer-
+base construction path had no still-forming-bar guard, unlike every
+natively-fetched frame (which already gets one via `_drop_still_forming_
+bar`). A live fetch mid-way through the current H4/D1 period could
+silently include a partial, still-changing candle in the resampled view.
+
+**File/Line:** `core/data_providers.py:1461-1474` (the `resample(...)`
+call inside `fetch_multi_timeframe_with_failover`).
+
+**Fix:** pass `base_minutes` (derived via `core.timeframe_sync.
+base_timeframe_minutes(best_base_label)`) into the `resample()` call,
+matching the pattern `backtesting/backtest_engine.py`'s own resample path
+already used correctly.
+
+**Regression tests:** `tests/test_provider_chains.py::test_multi_tf_
+resample_drops_a_still_forming_h4_bucket` (+2 more for C2, see below).
+
+### C2 — Zero OHLC validation in the provider fetch layer
+
+**Claim:** `core/data_providers.py` had no `validate_ohlcv()` calls
+anywhere — malformed data (high&lt;low, nulls, unsorted timestamps) from
+any of 9 providers reached every consumer of `fetch_with_failover()`
+unfiltered; `main.py`'s own single downstream `validate_ohlcv(df_base)`
+call was the only backstop, applied AFTER failover-chain provider
+selection had already happened.
+
+**File/Line:** `core/data_providers.py::fetch_with_failover()`, inside the
+per-provider `try:` block.
+
+**Fix:** call `core.data_validator.validate_ohlcv(df)` immediately after
+`_drop_still_forming_bar`; a `DataValidationError` is caught by the
+existing `except Exception` block exactly like an empty-DataFrame
+failure, so a malformed provider is treated as failed and the chain falls
+through to the next provider.
+
+**Regression tests:** `tests/test_provider_chains.py::test_fetch_with_
+failover_rejects_malformed_ohlc_and_falls_through`, `..._raises_when_
+every_provider_returns_malformed_ohlc`, `..._passes_through_valid_ohlc_
+unaffected`.
+
+### RE-F1 — Symbol Health gate fails open on exception
+
+**File/Line:** `scheduler.py` (Symbol Health block in `run_once()`).
+
+**Fix:** an exception from `get_symbol_health()` now produces an explicit
+`NO_TRADE` report (`health_check_failed: True`) instead of silently
+falling through to `run_pipeline()`.
+
+**Regression test:** `tests/test_scheduler.py::test_run_once_blocks_
+when_symbol_health_check_raises`.
+
+### RE-F2 — News-blackout gate fails open on exception
+
+**File/Line:** `main.py::_news_gate()`.
+
+**Fix:** `news_blocked` now defaults to `True` (not the pre-existing
+`False`) when `assess_news_risk()` raises.
+
+**Regression tests:** `tests/test_news_risk.py::test_news_gate_blocks_
+when_assess_news_risk_raises`, `..._stays_unblocked_when_confluence_
+already_failed`, `..._passes_through_when_assess_news_risk_succeeds`.
+
+### RE-F3 — Correlation-filter seeding fails open on exception
+
+**File/Line:** `scheduler.py` (`execute_signals` seeding block in
+`run_once()`).
+
+**Fix:** a failure reading already-open positions from
+`storage.outcome_tracker.get_open_signals()` now blocks every new
+EXECUTE candidate for that tick (`correlation_blocked: True`, only when
+the correlation filter itself is enabled) instead of silently proceeding
+with an empty seed list.
+
+**Regression tests:** `tests/test_scheduler.py::test_run_once_
+correlation_seed_failure_blocks_every_new_execute`, `..._does_not_
+block_when_filter_disabled`.
+
+### RE-F5 — Meta Decision veto fails open on exception
+
+**File/Line:** `main.py::_final_verdict()`.
+
+**Fix:** an exception from `evaluate_meta_decision()` now downgrades
+`EXECUTE` to `NO_TRADE` (when `meta_decision_gate` is active) instead of
+silently leaving the verdict unchanged.
+
+**Regression tests:** `tests/test_axis8_and_downgrade.py::test_meta_
+decision_exception_blocks_when_gate_active`, `..._stays_execute_when_
+gate_explicitly_disabled`.
+
+### EXEC-DUP — Missing duplicate-position guard on the cTrader execution path
+
+**Claim:** OANDA and Dukascopy JForex execution branches in
+`TradeExecutor.execute_from_report()` both call `client.has_open_
+position(symbol)` before placing an order; the cTrader branch did not,
+despite `CTraderClient.has_open_position()` being fully implemented and
+broker-truth (rebuilt from `ProtoOAReconcileRes` on connect, kept current
+by execution events). Combined with `place_market_order()`'s 15s
+confirmation timeout being reported as unconditional failure with no
+broker-truth follow-up, a timed-out-but-actually-filled order could never
+be detected internally, and the next tick's `symbol_already_open` check
+(sourced from `storage.outcome_tracker`, which a timed-out order never
+populates) provided no protection either — leaving a real duplicate-order
+risk on the one broker path with no independent backstop.
+
+**File/Line:** `execution/trade_executor.py` (cTrader branch of
+`execute_from_report()`, before the account-info/sizing call).
+
+**Fix:** added `if client.has_open_position(symbol): return
+ExecutionResult(executed=False, ...)` to the cTrader branch, matching the
+OANDA/Dukascopy JForex branches exactly. Because a late execution event
+(arriving after a previous order's confirmation timeout) still updates
+`client._positions`, this check is a genuine backstop independent of the
+`outcome_tracker`-derived duplicate check upstream.
+
+**Regression tests:** `tests/test_oanda_execution.py::test_ctrader_
+refuses_duplicate_position`, `..._duplicate_check_runs_before_account_
+lookup` (+ fixed 2 pre-existing tests, `test_ctrader_places_on_demo_
+account`/`test_ctrader_live_allowed_when_flag_set`, whose bare `MagicMock()`
+clients previously relied on an unset `has_open_position` attribute being
+implicitly truthy-by-mock — now explicitly set `return_value=False`).
+
+**Status:** FIXED, tested, regression-pinned. Full project suite
+(3185 passed, 2 skipped) re-run with zero regressions outside the seven
+files touched. Not verified live against a real broker/data provider from
+this sandboxed session (no live credentials here) — same disclosed
+limitation as every other broker/provider-facing fix this session.
+
+**Not remediated in this pass:** see BUG-022 below, which supersedes this
+stale note — MC-1, MC-10, MC-4, and MC-5 are now FIXED; MC-2 and MC-6 are
+resolved by pre-existing design/code, not new work; MC-7 remains the one
+genuinely open item, deferred with reasoning.
+
+---
+
+## BUG-022
+
+**Claim:** the research-validity (MEDIUM) findings from the same
+red-team audit BUG-021 covers — MC-1, MC-2, MC-4, MC-5, MC-6, MC-7, MC-10
+— were listed as "remain open" in BUG-021's own closing note. This entry
+is the P1 follow-up pass resolving that list: 4 are now fixed, 2 were
+already resolved by design/code that postdated the audit finding, and 1
+remains genuinely open.
+
+### MC-1 — Winner's-curse objective capping covered only `profit_factor`
+
+**Claim:** `backtest/optimizer.py`'s `_OBJECTIVE_CAP_BY_METRIC` capped
+only `profit_factor` before feeding a trial's objective value to Optuna's
+sampler, on the stated (but false) assumption that `recovery_factor`,
+`calmar_ratio`, and `sqn` were "already naturally bounded." All three
+divide by a quantity (`max_drawdown_usd`/`max_drawdown`/`rr_std`) guarded
+only against being exactly zero, not against being arbitrarily close to
+it — a handful of trades with a tiny drawdown or near-identical
+R-multiples can produce a huge-but-finite value that dominates the
+sampler's acquisition function exactly like an uncapped PF would.
+
+**File/Line:** `backtest/optimizer.py` (`_OBJECTIVE_CAP_BY_METRIC`).
+
+**Fix:** extended the cap table to `recovery_factor: 20.0`,
+`calmar_ratio: 20.0`, `sqn: 7.0` (Van Tharp's own "Holy Grail" ceiling —
+an independent reference scale, not an arbitrary number).
+`sharpe_ratio`/`sortino_ratio`/`expectancy_r`/`win_rate` stay uncapped
+(genuinely bounded by their own formulas) but keep the existing
+trade-count reliability discount. Never touches `EvalResult.metrics`/the
+real report value — only what the sampler sees.
+
+**Regression tests:** `tests/test_optimizer.py::test_reliability_
+adjusted_objective_leaves_genuinely_bounded_metrics_uncapped` (renamed/
+reparametrized), `..._caps_the_newly_bounded_metrics`, `..._a_lucky_few_
+trade_sqn_never_beats_a_well_sampled_moderate_sqn`.
+
+### MC-10 — Dashboard "Passed" KPI counted trust-flagged hypotheses as passed
+
+**Claim:** `execution/routes/research.py`'s `hypothesis_summary.passed`
+was a raw `status == "PASSED"` count, ignoring the same `trusted` field
+computed a few lines earlier in the same response (H009 is `PASSED` but
+fails `research/edge_gate.py`'s codified promotion criteria) — the KPI
+tile could show a hypothesis as "passed" while the Trust Audit panel
+right below it flagged the same hypothesis untrusted.
+
+**File/Line:** `execution/routes/research.py` (`hypothesis_summary`
+construction).
+
+**Fix:** `passed` now requires `status == "PASSED" and trusted`; new
+`passed_untrusted` field counts the rest, surfaced separately (never
+silently folded in). Frontend: `ResearchBacktests.tsx` renders an amber
+banner naming the untrusted count whenever `passed_untrusted > 0`,
+pointing at the Trust Audit table below.
+
+**Regression tests:** `tests/test_dashboard_endpoints.py::test_research_
+includes_trust_audit` (extended with `passed`/`passed_untrusted`
+assertions against the real registry, confirming H009 never counts
+toward `passed`).
+
+### MC-4 — Candidate-lock check always false-positived on warehouse-origin trials
+
+**Claim:** `backtest/mission_validator.py::_compute_candidate_lock()`
+always re-derived a CSV fingerprint (`find_symbol_csv`/`dataset_
+fingerprint`) to compare against a trial's stored fingerprint,
+regardless of whether that trial's original data came from the D1
+`market_bars` warehouse (Trusted Data Center Phase 2). A warehouse-origin
+fingerprint has no `sha256` field at all (it carries `checksum` from the
+warehouse manifest instead) — comparing it against a freshly-derived CSV
+fingerprint produced a spurious "dataset file content changed" mismatch
+on every single warehouse-origin trial, regardless of whether the
+underlying data had actually changed.
+
+**File/Line:** `backtest/mission_validator.py::_compute_candidate_lock()`;
+`backtest/mission_runner.py::_load_from_warehouse()` (origin info dict).
+
+**Fix:** `_compute_candidate_lock()` now branches on the original
+fingerprint's `dataset.origin`: a `"warehouse"` origin re-checks against
+a fresh `storage.market_bars.get_manifest(symbol, timeframe)` checksum
+(never touching `find_symbol_csv`), everything else keeps the existing
+CSV-fingerprint path. `_load_from_warehouse()`'s origin info now also
+records `timeframe`, so the candidate-lock check knows which warehouse
+manifest to re-fetch. New `_dataset_content_id()` helper normalizes the
+two origins' differently-named content-hash fields (`sha256` vs.
+`checksum`) into one comparison.
+
+**Regression tests:** `tests/test_mission_validator.py::test_compute_
+candidate_lock_warehouse_origin_matches_when_checksum_unchanged`,
+`..._detects_checksum_drift`, `..._never_falls_through_to_csv`, `..._
+degrades_gracefully_on_d1_failure`; `tests/test_mission_runner.py::test_
+load_from_warehouse_marks_native_source_as_native` extended to assert
+`info["timeframe"]`.
+
+### MC-5 — SAME_SYMBOL validation silently defaulted to the trial's own training window
+
+**Claim:** a `SAME_SYMBOL` validation run with no explicit `start`
+override passed `None` straight through to `load_symbol_data`, which
+reads `None` as "no lower bound" — silently loading the ENTIRE dataset,
+including the mission's own training window, rather than genuinely
+out-of-sample data. `_compute_date_overlap()` (Diagnostic Infrastructure
+Phase 1) already flagged this after the fact as an informational
+diagnostic, but nothing changed the actual data window being evaluated.
+
+**File/Line:** `backtest/mission_validator.py::run_validation()`.
+
+**Fix:** new `_default_same_symbol_start()`, called right after the
+mission is loaded and before `_compute_date_overlap()`/the symbol loop:
+for `SAME_SYMBOL` mode only, when `vc.start` is `None`, defaults it to
+the day after the mission's own recorded training `end` date (from
+`mission["config_json"]`). An explicit operator-supplied `start` always
+wins — this only ever fires when it's unset. `CROSS_SYMBOL` mode is
+untouched (a different symbol is already that mode's out-of-sample
+safeguard, by design).
+
+**Regression tests:** `tests/test_mission_validator.py::test_default_
+same_symbol_start_fills_in_day_after_training_end`, `..._never_overrides_
+an_explicit_start`, `..._leaves_cross_symbol_mode_untouched`, `..._
+degrades_gracefully_when_mission_has_no_end`, `..._degrades_gracefully_
+on_unparseable_config`, `test_run_validation_same_symbol_defaults_start_
+and_reports_no_overlap` (end-to-end).
+
+### MC-2 — Bonferroni/significance correction never gates the Mission Center verdict
+
+**Status: RESOLVED BY DESIGN, not new work.** Since the original audit,
+Mission Center Research Rigor Phase 2 added
+`_compute_effective_sample_size_diagnostic()` — an autocorrelation-
+adjusted, Bonferroni-aware significance check — computed and persisted
+(`significance_json`) for every validation. It is explicitly, repeatedly
+documented as "Diagnostic only, never a `VALIDATION_CRITERIA` entry,"
+matching CLAUDE.md's own "the promotion bar is code" principle: folding
+an opinion-weighted multiple-testing penalty into `VALIDATION_CRITERIA`'s
+fixed threshold table would itself be exactly the kind of un-pre-
+registered, ad hoc rule-change that discipline exists to prevent. No
+code change made here — confirmed via direct read of `backtest/
+mission_validator.py` that this is a deliberate, already-reasoned
+decision, not an oversight.
+
+### MC-6 — Non-deterministic dataset-file selection
+
+**Status: RESOLVED, pre-existing.** `backtest/runner.py::find_symbol_csv()`
+wraps its glob results in `sorted()` before selecting the largest file
+by size (`matches = sorted(data_dir.glob(...)) + sorted(data_dir.glob(...))`,
+`chosen = max(matches, key=...)`) — Python's `max()` returns the first
+maximal element on a tie, so ties among same-size files resolve
+deterministically by filename, not by filesystem iteration order. This
+already closes the non-determinism the original finding named; no
+further change needed. Confirmed by direct code read, not assumed.
+
+### MC-7 — D1 warehouse in-place overwrite, no versioning
+
+**Status: OPEN, explicitly deferred.** `storage/market_bars.py::upsert_
+bars()` (`INSERT OR REPLACE`) and `upsert_manifest()`
+(`ON CONFLICT ... DO UPDATE`) both overwrite in place — no history table,
+no version column, no way to reconstruct what a symbol's warehouse data
+looked like at an earlier point in time. This is a real, unaddressed gap
+confirmed by direct code read. Not fixed in this pass: a proper fix needs
+its own versioned-dataset-store design (new table shape, retention
+policy, migration path for every existing `market_bars` reader) —
+materially larger in scope than this P1 batch's other items, and rushing
+it risks a half-designed schema. Flagged for a dedicated future session.
+
+**Status:** MC-1/MC-10/MC-4/MC-5 FIXED, tested, regression-pinned.
+MC-2/MC-6 resolved by pre-existing design/code, confirmed not new bugs.
+MC-7 remains open, deferred with reasoning above. Full project suite
+re-run with zero regressions outside the files touched (see commit for
+exact count). Not verified live against real D1/warehouse data from this
+sandboxed session (no live credentials here) — same disclosed limitation
+as every other D1-facing fix this session.
+
+**Not remediated in this pass:** MC-7 (see above), plus the full list of
+MEDIUM/LOW findings from the original audit report not already covered
+by BUG-021/BUG-022 — remain open, tracked in the audit report itself.
+
+---
+
+## BUG-023
+
+**Claim:** the P2 batch of the same red-team audit (BUG-021/BUG-022's
+own source report) — six items spanning security hardening, a UI
+correctness contradiction, a dependency-pinning gap, a deploy-script
+gap, a schema-migration gap, and a research/live parity gap. All six
+fixed, tested, and regression-pinned in this pass.
+
+### SEC-1 — Dashboard route bypassed session-TTL expiry
+
+**Claim:** `execution/routes/dashboard_legacy.py`'s `/dashboard` route
+checked session presence in `_active_sessions` directly rather than
+going through `execution/api_core.py`'s `_check_auth()` — the one place
+lazy TTL-purge of expired sessions actually happens. An expired session
+whose entry hadn't yet been purged by an unrelated request elsewhere
+could still render the dashboard.
+
+**File/Line:** `execution/routes/dashboard_legacy.py`.
+
+**Fix:** route now accepts both `X-API-Key` and the session cookie and
+calls the shared `_check_auth(x_api_key, iatis_session)` exactly like
+every other endpoint, redirecting to `/login` on `HTTPException` instead
+of hand-rolling its own session-dict lookup.
+
+**Regression tests:** `tests/test_api_server.py::test_dashboard`
+(extended), `..._requires_auth_redirects_to_login`,
+`..._accepts_valid_session_cookie`,
+`..._rejects_expired_session_cookie` (the key pin — proves an expired
+session is now purged-and-rejected, not silently kept alive).
+
+### SEC-2 — Unbounded `_jobs` dict growth
+
+**Claim:** `execution/routes/experiments.py`'s in-memory `_jobs: dict[str,
+_Job]` (including each job's full accumulated stdout in `log_lines`) had
+no eviction, TTL, or max-size — every job record from a long-running
+`iatis-api` process's whole lifetime stayed resident, unlike
+`_active_sessions`' own lazy-pruning precedent, risking unbounded memory
+growth toward `iatis-api.service`'s documented `MemoryMax=1G` OOM-kill.
+
+**File/Line:** `execution/routes/experiments.py` (`_jobs`, job-creation
+block); mirrored into all 6 downstream job-creation sites
+(`missions.py` ×2, `analytics_benchmark.py`, `macro_benchmark.py`,
+`engine_benchmark.py`, `news_benchmark.py`, `provider_benchmark.py`).
+
+**Fix:** new `_prune_old_jobs()` — evicts only TERMINAL jobs
+(finished/failed/timeout/cancelled) older than `_JOB_RETENTION_SECONDS`
+(24h), plus an independent hard `_JOB_MAX_RETAINED` (200) ceiling that
+also only ever evicts terminal jobs (running/queued jobs are never
+touched, even if the ceiling can't be fully satisfied from terminal jobs
+alone). Called under `_jobs_lock` at every one of the 8 job-creation call
+sites across 7 route files, mirroring `_active_sessions`' own
+lazy-prune-on-access pattern.
+
+**Regression tests:** `tests/test_api_contract.py::test_prune_old_jobs_
+evicts_stale_terminal_jobs`, `..._never_evicts_running_or_queued_jobs_
+regardless_of_age`, `..._respects_hard_max_retained_ceiling`, `..._max_
+retained_ceiling_never_evicts_active_jobs`, `..._ceiling_evicts_only_
+enough_terminal_jobs`, `..._called_via_real_job_submission_evicts_old_
+terminal_job` (end-to-end, through the real HTTP endpoint).
+
+### MC-3 — `SAME_SYMBOL_CONFIRMED` rendered with the same badge color as `STRONG_LEAD`
+
+**Claim:** Mission Center's `VerdictBadge` (and a second, independent
+`ValidationStatusBadge` in the same file) both mapped
+`SAME_SYMBOL_CONFIRMED` to a tone visually indistinguishable from a
+genuine cross-symbol `STRONG_LEAD` (or, in the second badge, to the same
+"failure" red as `NO_EDGE`) — directly contradicting
+`backtest/mission_validator.py`'s own comment: same-symbol confirmation
+"must never be presented with the same tokens" as cross-symbol evidence.
+
+**File/Line:** `dashboard/frontend/src/modules/mission-center/
+MissionCenter.tsx` (`VerdictBadge`, `ValidationStatusBadge`).
+
+**Fix:** both badges now map `SAME_SYMBOL_CONFIRMED` to the amber
+"marginal" tone (matching `WEAK_LEAD`'s own tone — "real but limited
+evidence") — visually distinct from `STRONG_LEAD`'s green in
+`VerdictBadge` and from `NO_EDGE`'s red in `ValidationStatusBadge`,
+consistent between the two badges for the first time.
+
+**Regression tests:** none added (pure presentational/tone-mapping
+change, no new backend contract) — verified via `tsc -b`/`oxlint` clean.
+
+### DEP-1 — `ctrader-open-api` version pin had no ceiling
+
+**Claim:** `requirements-ctrader.txt` pinned `ctrader-open-api>=0.9.2`
+with no upper bound, unlike every other dependency's floor+ceiling
+convention in this codebase — an unreviewed future major version (a
+real protocol/API break risk for a live broker client) could install
+silently on a fresh deploy or `pip install -U`.
+
+**File/Line:** `requirements-ctrader.txt`.
+
+**Fix:** confirmed via PyPI (0.9.2, 2024-06-26, is the latest real
+release — the only later release, 0.9.3, was yanked by the maintainer)
+and pinned `>=0.9.2,<1.0.0` with a dated rationale comment matching this
+file's own established convention.
+
+**Regression tests:** none — no test asserts on this file's content
+(confirmed by grep); the fix is a plain version-pin correction.
+
+### OPS-6 — Missing collector systemd units in the non-root migration script
+
+**Claim:** `scripts/setup_service_user.sh`'s `UNITS` array omitted
+`iatis-marketaux-collect.service`/`.timer` and
+`iatis-orderflow-collector.service` (both real, already-written unit
+files at the repo root) — a non-root migration (`/root/IATIS` →
+`/opt/iatis`) silently left both research collectors uninstalled at the
+new path, with no error or warning.
+
+**File/Line:** `scripts/setup_service_user.sh` (`UNITS`).
+
+**Fix:** added all 3 units to `UNITS` (installed/path-corrected like
+every other unit) but deliberately left un-auto-enabled — each starts a
+real, ongoing research data-accumulation clock (H021/H104) and
+marketaux additionally needs `MARKETAUX_API_KEY` — documented in the
+script's own "NOT done automatically" comment block with the exact
+`systemctl enable --now` commands an operator runs when ready.
+
+**Regression tests:** `bash -n` syntax check only — this script has no
+existing test coverage (confirmed by grep) and is not run in CI.
+
+### DB-3 — D1 schema migrations never applied outside the scheduler's long-running boot path
+
+**Claim:** `storage/migrations.py::apply_migrations_safe()` was called
+only from `scheduler.py::run_loop()` — never from `scheduler.py --once`
+(the mode this file's own docstring names for external cron) and never
+from the API server at all. A deployment running only `--once`/only the
+API server could run indefinitely on a stale D1 schema.
+
+**File/Line:** `scheduler.py` (`main()`), `execution/api_core.py`
+(`lifespan()`).
+
+**Fix:** added the same non-fatal `apply_migrations_safe()` call (1) in
+`scheduler.py::main()` before the `--once`/`run_loop` branch (so both
+paths are covered from one call site; `run_loop()`'s own existing call
+stays, harmless since migrations are idempotent) and (2) in
+`execution/api_core.py`'s `lifespan()` startup, wrapped in the same
+"boot path must survive anything" try/except convention as
+`apply_migrations_safe()` itself.
+
+**Regression tests:** `tests/test_scheduler.py`, `tests/
+test_api_server.py`, `tests/test_migrations.py` (94 tests, all still
+passing — no dedicated new test added since `fake_d1`'s autouse fixture
+already exercises the new call sites on every existing test that
+constructs the API app or calls `scheduler.main()`/equivalents; a
+migration failure is non-fatal by construction, confirmed by direct
+code read of `apply_migrations_safe()`).
+
+### TE-3 — `backtesting/backtest_engine.py`'s engine-construction loop never set `engine._symbol`
+
+**Claim:** `main.py`'s live engine-construction loop
+(`build_active_engines`) sets `engine._symbol = symbol` on every
+constructed engine; `backtesting/backtest_engine.py::run_backtest()`'s
+own construction loop set `decision_tf`/`thresholds` for gate/vote
+parity but never `_symbol` — `SentimentEngine`'s per-symbol COT cache
+lookup silently resolved to `"UNKNOWN"` in every backtest instead of the
+real symbol under test, unlike live.
+
+**File/Line:** `backtesting/backtest_engine.py::run_backtest()` (engine
+construction loop, ~line 678).
+
+**Note on scope, confirmed by direct code read before fixing:**
+`MacroEngine` also reads `self._symbol` (BUG-008's USD-base DXY-inversion),
+but `MacroEngine` is never constructed by this loop at all — deliberately
+excluded from `ENGINE_KEYS`/`_ENGINE_MAP` (no runnable class wired into
+the backtest path, per that constant's own comment) — so this fix reaches
+`SentimentEngine` only, not `MacroEngine`. Separately, `SentimentEngine`'s
+own bar-time gate (BUG-005) already skips COT/MarketAux lookups whenever
+`bar_time` is far from wall-clock now — true for almost every bar in a
+genuinely historical backtest regardless of `_symbol` — so this fix's
+practical effect today is narrow (a backtest run against very recent
+bars) but the wiring itself is a real, direct gate/vote-parity gap worth
+closing on its own terms, matching every other field this loop already
+mirrors from the live path.
+
+**Fix:** `engine._symbol = config.symbol` added to the construction
+loop, alongside the existing `decision_tf`/`thresholds` assignments.
+
+**Regression tests:** new `tests/test_backtest_engine_symbol_wiring.py`
+— `test_run_backtest_sets_symbol_on_every_constructed_engine`,
+`test_run_backtest_symbol_wiring_matches_config_symbol_for_a_different_
+symbol` (both spy on `SentimentEngine.analyze()` through a real
+`run_backtest()` call and assert `self._symbol` matches `config.symbol`;
+confirmed to fail without the fix by temporarily reverting it and
+re-running before restoring).
+
+**Status:** all 6 P2 items FIXED, tested, regression-pinned (SEC-2/TE-3)
+or verified by existing/static checks (MC-3/DEP-1/OPS-6/DB-3, per each
+item's own reasoning above for why a new test wasn't warranted). Full
+project suite re-run with zero regressions (see commit for exact count).
+Not verified live against a real VPS/systemd/D1 deployment from this
+sandboxed session — same disclosed limitation as every other
+deploy/D1-facing fix in this audit.

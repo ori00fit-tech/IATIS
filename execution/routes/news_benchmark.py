@@ -29,6 +29,7 @@ from execution.routes.experiments import (
     _job_summary,
     _jobs,
     _jobs_lock,
+    _prune_old_jobs,
     _run_job,
 )
 
@@ -91,6 +92,7 @@ async def news_benchmark_create(
         argv += ["--limit", str(body.limit)]
 
     with _jobs_lock:
+        _prune_old_jobs()
         job = _Job(run_id, "news_benchmark", argv=argv)
         _jobs[run_id] = job
 

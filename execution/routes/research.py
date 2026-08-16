@@ -966,7 +966,18 @@ async def research_center(
     return {
         "hypothesis_summary": {
             "total": len(hypotheses),
-            "passed": sum(1 for h in hypotheses if h["status"] == "PASSED"),
+            # 2026-08-15 red-team audit (MC-10, live-verified against this
+            # repo's own real registry.json): "passed" used to be a RAW
+            # status count, so the top-line KPI tile could show green
+            # "PASSED" hypotheses that the SAME response's own per-entry
+            # `trusted` flag (line ~915) correctly marks as failing the
+            # codified promotion bar (research/edge_gate.py). An operator
+            # scanning only the KPI strip would see confidence the
+            # underlying data doesn't support. "passed" now counts only
+            # PASSED-and-trusted; "passed_untrusted" surfaces the rest
+            # explicitly rather than silently dropping them from view.
+            "passed": sum(1 for h in hypotheses if h["status"] == "PASSED" and h["trusted"]),
+            "passed_untrusted": sum(1 for h in hypotheses if h["status"] == "PASSED" and not h["trusted"]),
             "failed": sum(1 for h in hypotheses if "FAILED" in h["status"]),
             "research": sum(1 for h in hypotheses if h["status"] == "RESEARCH"),
             "needs_data": sum(1 for h in hypotheses if h["status"] == "NEEDS_MORE_DATA"),

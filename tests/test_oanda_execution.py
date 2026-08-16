@@ -161,6 +161,7 @@ def test_ctrader_places_on_demo_account():
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
     fake_client.get_account_info.return_value = MagicMock(balance=200.0)
     fake_client.calculate_volume.return_value = 1000
     fake_client.place_market_order.return_value = MagicMock(
@@ -182,6 +183,7 @@ def test_ctrader_live_allowed_when_flag_set():
 
     fake_client = MagicMock()
     fake_client.environment = "live"
+    fake_client.has_open_position.return_value = False
     fake_client.get_account_info.return_value = MagicMock(balance=200.0)
     fake_client.calculate_volume.return_value = 1000
     fake_client.place_market_order.return_value = MagicMock(
@@ -192,6 +194,46 @@ def test_ctrader_live_allowed_when_flag_set():
 
     assert result.executed is True
     fake_client.place_market_order.assert_called_once()
+
+
+# ─── EXEC-DUP (2026-08-15 red-team audit): duplicate-position guard on the
+# cTrader branch — previously present on OANDA/Dukascopy JForex but missing
+# here, meaning a broker-truth already-open position never blocked a
+# second real order via this path. ─────────────────────────────────────
+
+def test_ctrader_refuses_duplicate_position():
+    """client.has_open_position(symbol)=True must block a second cTrader
+    order — this is the exact backstop for a previous order whose
+    confirmation timed out but was actually filled (the late execution
+    event still updates client._positions, so a later has_open_position()
+    check correctly catches it)."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = True
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "Already have open position" in result.skip_reason
+    fake_client.get_account_info.assert_not_called()
+    fake_client.place_market_order.assert_not_called()
+
+
+def test_ctrader_duplicate_check_runs_before_account_lookup():
+    """The duplicate check must short-circuit before any account/sizing
+    call — no wasted API calls once a duplicate is already known."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = True
+    with patch.object(executor, "_get_client", return_value=fake_client):
+        executor.execute_from_report(_make_report())
+
+    fake_client.has_open_position.assert_called_once_with("EURUSD")
+    fake_client.calculate_volume.assert_not_called()
 
 
 # ─── Dukascopy JForex (2026-08-08) ─────────────────────────────────────────

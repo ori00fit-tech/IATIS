@@ -272,6 +272,62 @@ def test_run_once_correlation_filter_considers_already_open_positions(synthetic_
 
 
 # ---------------------------------------------------------------------------
+# Fail-closed no-trade gates (2026-08-15 red-team audit: RE-F1, RE-F3)
+#
+# Both gates previously swallowed a storage-read exception at debug level
+# and proceeded as if nothing was wrong — Symbol Health defaulted to
+# "allow the trade" on an unreadable health status, and the correlation
+# filter defaulted to "no positions are open" on an unreadable open-
+# positions list. Per CLAUDE.md's own rule ("UNKNOWN/INVALID/INCOMPLETE
+# -> NO-TRADE unless explicit and justified exception"), both must now
+# block instead.
+# ---------------------------------------------------------------------------
+
+def test_run_once_blocks_when_symbol_health_check_raises(synthetic_config):
+    from scheduler import run_once
+
+    with patch("storage.symbol_health.get_symbol_health",
+               side_effect=RuntimeError("D1 unreachable")), \
+         patch("scheduler.run_pipeline") as mock_pipeline, \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_pipeline.assert_not_called()  # blocked before the pipeline even runs
+    assert reports[0].get("final_verdict") == "NO_TRADE"
+    assert reports[0].get("health_check_failed") is True
+
+
+def test_run_once_correlation_seed_failure_blocks_every_new_execute(synthetic_config):
+    from scheduler import run_once
+
+    with patch("storage.outcome_tracker.get_open_signals",
+               side_effect=RuntimeError("D1 unreachable")), \
+         patch("scheduler.run_pipeline") as mock_pipeline, \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_pipeline.assert_not_called()  # blocked before the pipeline even runs
+    assert reports[0].get("correlation_blocked") is True
+
+
+def test_run_once_correlation_seed_failure_does_not_block_when_filter_disabled(synthetic_config):
+    """The fail-closed block only applies when the correlation filter is
+    actually enabled — a disabled filter stays fully inert, matching
+    every other 'operator explicitly opted out' precedent in this file."""
+    from scheduler import run_once
+
+    synthetic_config["features"] = {**synthetic_config.get("features", {}), "correlation_filter": False}
+
+    with patch("storage.outcome_tracker.get_open_signals",
+               side_effect=RuntimeError("D1 unreachable")), \
+         patch("scheduler.run_pipeline") as mock_pipeline, \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_pipeline.assert_called_once()  # not blocked — filter is off
+
+
+# ---------------------------------------------------------------------------
 # Reconciliation auto-repair (2026-07-30)
 # ---------------------------------------------------------------------------
 

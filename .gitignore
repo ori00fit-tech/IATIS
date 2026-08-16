@@ -59,3 +59,38 @@ archive/
 # AI Copilot draft hypotheses (execution/routes/ai.py's _DRAFTS_DIR) —
 # unreviewed AI output, never meant to be committed as-is.
 research/hypotheses/drafts/
+
+# Generated backtest/mission/robustness run output (reports/*.json,
+# reports/*.html — backtest_summary_*, mission_*, *_chart_data.json,
+# robustness_*, per-symbol HTML reports). reports/forensic/*.md and
+# reports/engine_refinement/*.md are hand-authored deliverables and stay
+# tracked — this pattern only matches files directly under reports/, not
+# its subdirectories.
+reports/*.json
+reports/*.html
+
+# Collector output logs (iatis-orderflow-collector.service,
+# iatis-marketaux-collect.timer) — regenerated on the VPS, not source data.
+data/*.jsonl
+
+# Opt-in broker/data-bridge installs (docs/MT5_BRIDGE_SETUP.md,
+# docs/DUKASCOPY_JFOREX_BRIDGE_SETUP.md) — local, machine-specific
+# installs, never part of the repo.
+.wine/
+JForex/
+dukas-api/
+mt5_wine/
+
+# Stray shell/tool state that lands in the repo root when a VPS service
+# account's $HOME points here (e.g. the iatis service user) — not
+# project files.
+.bash_history
+.lesshst
+.cache/
+.config/
+.m2/
+.npm/
+.opencode/
+
+# One-off backup archives
+*.tgz

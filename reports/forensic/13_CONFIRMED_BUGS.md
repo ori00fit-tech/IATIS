@@ -3180,3 +3180,134 @@ place one real demo ETHUSD order (and ideally one other non-5-digit
 symbol, e.g. an index) through the fixed path and confirm no
 "invalid precision" rejection, then watch `storage.execution_attempts`
 accumulate real ACCEPTED/REJECTED rows over the following days.
+
+## BUG-025
+
+**Claim:** live production logs (operator screenshot, 2026-08-17,
+immediately after BUG-024's fix confirmed the precision-rejection path
+now works — a real `BUY ETHUSD` order accepted, position tracked, trade
+executed, reconciliation `MATCH`) showed a new warning:
+`WARNING storage.execution_quality: TCA: fill for 'ETHUSD' missing
+intended/fill price — not recorded`. Trade Cost Analysis (slippage
+measurement) was silently failing to record the real fill for every live
+order.
+
+**Root cause (confirmed against cTrader's own official `ProtoOAExecutionType`
+enum, via live WebSearch against `github.com/spotware/openapi-proto-messages`
+— not assumed from the symptom):** `place_market_order()`'s synchronous RPC
+response is the FIRST `ProtoOAExecutionEvent` cTrader sends for a market
+order — typically `ORDER_ACCEPTED` (`executionType=2`), not `ORDER_FILLED`
+(`executionType=3`). For a market order not yet filled at that exact
+instant, this first event frequently carries `position.price == 0`. The
+REAL fill price arrives moments later via a separate, asynchronously-
+pushed `ProtoOAExecutionEvent` (`ORDER_FILLED`/`ORDER_PARTIAL_FILL`),
+processed only by `_on_execution_event()` on the Twisted reactor thread —
+never fed back into the synchronous result `place_market_order()` already
+returned, or into the old, synchronous `log_fill()` TCA call `scheduler.py`
+made immediately after execution. TCA was measuring slippage against a
+price that was structurally never going to be populated on that code path.
+A pre-existing, latent fallback in `_parse_execution_response()`
+(`elif order.entry_price: exec_price = float(order.entry_price)`) would
+have silently substituted the signal's INTENDED entry price as if it were
+the real fill — fabricating zero slippage — but was never actually
+triggered live because no caller ever populated `CTraderOrder.entry_price`
+(confirmed by reading every construction site in
+`execution/trade_executor.py`); removed anyway as a landmine, per the
+explicit instruction that TCA must never treat `fill_price == intended_
+entry` as if it were broker truth.
+
+**File/Line:** `execution/ctrader_client.py` (`_on_execution_event()`,
+`_on_reconcile_res()`, `_parse_execution_response()`),
+`storage/execution_quality.py`, `scheduler.py` (its per-tick TCA call
+site).
+
+**Fix:** a durable, two-layer-idempotent, never-fabricating async
+fill-price pipeline. `execution/ctrader_client.py` gained an in-memory
+`_fill_updates` registry, populated only when a `ProtoOAExecutionEvent`
+(live, via `_on_execution_event()`) or a `ProtoOAReconcileRes`
+(post-reconnect recovery, via `_on_reconcile_res()`) carries a real
+`position.price > 0` — never on `price == 0`, so the first ORDER_ACCEPTED
+event is correctly a no-op and a later ORDER_FILLED/PARTIAL_FILL event is
+what actually populates it. `take_fill_update(position_id)` pops the entry
+(idempotency layer 1 — a second poll before a new update arrives returns
+`None`). `storage/execution_quality.py` gained a new `pending_fills` D1
+table (`PENDING`/`RESOLVED`/`UNAVAILABLE`) — `queue_pending_fill()` durably
+queues a signal awaiting its real price; `resolve_pending_fill()` only
+transitions a row from `PENDING` (idempotency layer 2 — a second call for
+an already-`RESOLVED` position_id is a no-op, the first successfully-
+resolved price is never overwritten); `record_or_queue_fill()` is the new
+single entry point — records immediately when the price is already known
+(OANDA/Dukascopy JForex), or queues when it isn't yet (the cTrader
+ORDER_ACCEPTED shape); `mark_pending_fill_unavailable()`/
+`sweep_stale_pending_fills(max_age_seconds=900.0)` transition a fill to
+`UNAVAILABLE` after 15 minutes with no broker confirmation — never
+fabricates a fill, TCA correctly stays "pending" or "unavailable" forever
+rather than ever substituting the intended price. `scheduler.py` gained a
+new per-tick resolution pass (gated identically to reconciliation:
+`ctrader_enabled` and not `dry_run`) that polls `take_fill_update()` for
+every currently-`PENDING` position_id and calls `resolve_pending_fill()`
+when a real price has arrived, then sweeps stale entries — non-fatal,
+wrapped so a storage/client hiccup never aborts the tick.
+`_parse_execution_response()`'s fabrication fallback (`order.entry_price`
+substitution) was removed entirely; `exec_price` now stays `0.0` (never
+fabricated) when no real broker price is known yet, with `success` still
+`True` (the order WAS accepted — only the fill-price knowledge is
+pending). cTrader's own `position.price` already reflects the broker's
+own weighted-average entry price under partial fills, so no separate
+manual VWAP accumulator was needed. Slippage is computed only inside
+`resolve_pending_fill()`, i.e. only once `actual_fill_price` is known —
+never derived from `intended_entry`.
+
+**Investigative findings, not code changes:** (1) the "Position tracked:
+ETHUSD" log line appearing 3× in the operator's screenshot is a plain
+dict overwrite (`self._positions[...] = OpenPosition(...)`), already
+idempotent by construction — legitimate lifecycle events (ACCEPTED, then
+FILLED, then a later reconcile confirmation), not duplicate processing;
+only the log line itself was clarified to also print `execution_type`/
+`price` for readability. (2) `execution/reconciliation.py`'s `reconcile()`
+matches broker positions to internal outcome rows by symbol only, not by
+stable broker position ID — confirmed as an existing, documented design
+choice (paper outcome rows carry no broker position ID today), not
+changed by this fix; flagged as a separate, larger future improvement if
+ever revisited.
+
+**Regression tests:** `tests/test_ctrader_message_handlers.py` (+6 —
+`_fill_updates` populated only on a real `price > 0` from both
+`_on_execution_event`/`_on_reconcile_res`, never on `price == 0`,
+`take_fill_update` pops so a second poll returns `None`, unknown
+position_id returns `None`; existing fabrication-fallback test rewritten
+to assert `entry_price == 0.0`, proving the removed landmine),
+`tests/test_ctrader_execution_logic.py` (existing pending-accept test
+updated to the same `entry_price == 0.0` assertion),
+`tests/test_execution_quality.py` (+18 — full `pending_fills` lifecycle:
+queue/resolve/idempotent-resolve/reject-non-positive-price/reject-unknown-
+position/never-raises-on-storage-failure, `mark_pending_fill_unavailable`
+transitions-from-pending/is-idempotent/never-writes-a-fabricated-fill,
+`sweep_stale_pending_fills` marks-old/leaves-recent, `record_or_queue_fill`
+records-immediately/queues/drops-dry-run/drops-nothing-to-queue,
+synchronous `log_fill()` path leaves `fill_latency_seconds` `NULL`),
+`tests/test_scheduler.py` (+5 — the per-tick pending-fill resolution pass:
+resolves when a real broker-truth update is available, leaves a position
+`PENDING` when no update has arrived yet — never fabricates one, skips
+entirely in `dry_run` and when `ctrader_enabled` is `False`, survives a
+client/storage exception non-fatally). New D1 migration (version 15,
+`fill_latency_seconds` column on `fills`, `NULL` for the synchronous path,
+populated as `(now - ts_queued).total_seconds()` for the async-resolved
+path).
+
+**Status:** FIXED, tested — 271 targeted tests green
+(`test_ctrader_client.py`/`test_ctrader_message_handlers.py`/
+`test_ctrader_execution_logic.py`/`test_ctrader_order_precision.py`/
+`test_execution_quality.py`/`test_oanda_execution.py`/`test_scheduler.py`),
+full project suite re-run with zero regressions (see commit for exact
+count). **Not verified live against a real cTrader demo/live account from
+this sandboxed session** (no network/credentials here, same disclosed
+limitation as BUG-024 and every other external-broker fix this session) —
+the operator's own follow-up is to place a real demo market order and
+confirm the log sequence now reads `ORDER ACCEPTED -> POSITION/DEAL
+CONFIRMED -> ACTUAL FILL PRICE RECEIVED -> EXECUTION RECORD UPDATED -> TCA
+CALCULATED`, with no `"missing intended/fill price"` warning and a real,
+non-zero slippage value recorded in `storage.execution_quality`'s `fills`
+table (or a `pending_fills` row visibly transitioning `PENDING ->
+RESOLVED` on the following scheduler tick if the fill event genuinely
+lands late).

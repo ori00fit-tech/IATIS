@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS fills (
     slippage_r        REAL,                      -- same, as fraction of SL distance
     spread_at_fill    REAL,                      -- reserved: broker event doesn't expose it yet
     decision_bar_time TEXT,                      -- ties the fill to its decision bar
-    git_commit        TEXT                       -- provenance tie-in (M2)
+    git_commit        TEXT,                      -- provenance tie-in (M2)
+    fill_latency_seconds REAL                    -- accept->confirmed-fill gap (async-fill path only; NULL when N/A)
 )
 """
 _INDEXES = [
@@ -79,11 +80,80 @@ _INDEXES = [
 # The backtest's cost assumption these measurements exist to verify.
 BACKTEST_SLIPPAGE_ASSUMPTION_PIPS = 0.5
 
+# ---------------------------------------------------------------------------
+# Pending fills — durable queue for a broker fill whose real price isn't
+# known yet at accept time (2026-08-17, TCA async-fill fix).
+#
+# Root cause this closes: cTrader's synchronous ProtoOANewOrderReq response
+# is a ProtoOAExecutionEvent with executionType=ORDER_ACCEPTED (2), which
+# frequently carries position.price == 0 — the real fill lands moments
+# later on an ORDER_FILLED (3) / ORDER_PARTIAL_FILL (11) event pushed
+# asynchronously on the reactor thread (execution/ctrader_client.py's
+# _on_execution_event), which the old synchronous log_fill() call never
+# saw. Every such fill was previously dropped with "TCA: fill ... missing
+# intended/fill price — not recorded" and NEVER completed — a silent,
+# permanent gap in the slippage ledger for exactly the fills that most
+# needed measuring (the ones the fast synchronous path couldn't price).
+#
+# Durable (D1), not in-memory: survives a process restart between accept
+# and fill — _on_reconcile_res's broker-truth position price on the next
+# (re)connect can resolve a pending row just as well as a live
+# _on_execution_event can (see execution/ctrader_client.py's
+# _record_fill_update).
+#
+# Never fabricates: a row here carries NO fill_price at all until
+# resolve_pending_fill() is called with a REAL broker-reported price.
+# sweep_stale_pending_fills() marks a fill UNAVAILABLE after a bounded
+# wait rather than leaving PENDING forever, but never invents a price to
+# get there.
+# ---------------------------------------------------------------------------
 
-def _init(con) -> None:
+PENDING = "PENDING"
+RESOLVED = "RESOLVED"
+UNAVAILABLE = "UNAVAILABLE"
+_PENDING_FILL_STATUSES = (PENDING, RESOLVED, UNAVAILABLE)
+
+_DDL_PENDING = """
+CREATE TABLE IF NOT EXISTS pending_fills (
+    position_id    TEXT PRIMARY KEY,
+    status         TEXT NOT NULL,
+    ts_queued      TEXT NOT NULL,
+    symbol         TEXT NOT NULL,
+    direction      TEXT NOT NULL,
+    broker         TEXT,
+    trade_id       TEXT,
+    intended_price REAL NOT NULL,
+    stop_loss      REAL,
+    volume         REAL,
+    bar_time       TEXT,
+    git_commit     TEXT
+)
+"""
+
+
+def _init_fills_table(con) -> None:
     con.execute(_DDL)
     for idx in _INDEXES:
         con.execute(idx)
+
+
+def _init_pending_table(con) -> None:
+    con.execute(_DDL_PENDING)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_pending_fills_status ON pending_fills(status)")
+
+
+def _init(con) -> None:
+    """Ensures BOTH `fills` and `pending_fills` exist, regardless of which
+    path (synchronous log_fill vs. the async pending-fill queue) a caller
+    happens to exercise first — the two tables are one subsystem and a
+    caller touching only one side must never hit a missing-table error on
+    the other."""
+    _init_fills_table(con)
+    _init_pending_table(con)
+
+
+def _init_pending(con) -> None:
+    _init(con)
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +186,69 @@ def compute_slippage(direction: str, intended: float, fill: float) -> float:
 # Write
 # ---------------------------------------------------------------------------
 
+def _current_session() -> str | None:
+    try:
+        from regimes.session_context import detect_session
+        return detect_session().primary_session
+    except Exception:
+        return None
+
+
+def _insert_fill_row(
+    con,
+    *,
+    symbol: str,
+    direction: str,
+    broker: str | None,
+    trade_id: str,
+    session: str | None,
+    intended: float,
+    fill: float,
+    stop: float | None,
+    volume: float | None,
+    pip: float,
+    slip_price: float,
+    slip_pips: float,
+    slip_r: float | None,
+    bar_time: str | None,
+    git_commit: str | None,
+    fill_latency_seconds: float | None,
+) -> None:
+    con.execute(
+        """INSERT INTO fills
+           (ts, symbol, direction, broker, trade_id, session,
+            intended_price, fill_price, stop_loss, volume, pip_size,
+            slippage_price, slippage_pips, slippage_r,
+            decision_bar_time, git_commit, fill_latency_seconds)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            symbol,
+            direction.upper(),
+            broker,
+            trade_id,
+            session,
+            intended,
+            fill,
+            stop,
+            volume,
+            pip,
+            round(slip_price, 8),
+            round(slip_pips, 3),
+            round(slip_r, 5) if slip_r is not None else None,
+            bar_time,
+            git_commit,
+            round(fill_latency_seconds, 3) if fill_latency_seconds is not None else None,
+        ),
+    )
+
+
 def log_fill(report: dict, exec_result: Any, broker: str | None = None) -> bool:
-    """Record one real broker fill. Never raises — a TCA write failure
-    must not disturb the trade that just executed.
+    """Record one real broker fill whose price is ALREADY known
+    synchronously (the common case: OANDA, Dukascopy JForex, or a cTrader
+    order-accept response that happened to carry a real price). Never
+    raises — a TCA write failure must not disturb the trade that just
+    executed.
 
     Args:
         report: the pipeline report the trade came from (intended price,
@@ -128,7 +258,9 @@ def log_fill(report: dict, exec_result: Any, broker: str | None = None) -> bool:
         broker: which broker filled it ("ctrader" | "oanda"), from the
                 caller's execution config.
 
-    Returns True if a row was written.
+    Returns True if a row was written. Callers with a real position_id
+    but no price yet should call queue_pending_fill() instead — or just
+    call record_or_queue_fill(), which picks the right one automatically.
     """
     try:
         if not getattr(exec_result, "executed", False):
@@ -155,46 +287,27 @@ def log_fill(report: dict, exec_result: Any, broker: str | None = None) -> bool:
 
         stop = report.get("stop_loss")
         slip_r = None
-        if stop:
-            sl_dist = abs(intended - float(stop))
+        sl_val = float(stop) if stop else None
+        if sl_val:
+            sl_dist = abs(intended - sl_val)
             if sl_dist > 0:
                 slip_r = slip_price / sl_dist
 
-        try:
-            from regimes.session_context import detect_session
-            session = detect_session().primary_session
-        except Exception:
-            session = None
-
+        session = _current_session()
         provenance = report.get("provenance") or {}
 
         with d1_client.d1_connection() as con:
             _init(con)
-            con.execute(
-                """INSERT INTO fills
-                   (ts, symbol, direction, broker, trade_id, session,
-                    intended_price, fill_price, stop_loss, volume, pip_size,
-                    slippage_price, slippage_pips, slippage_r,
-                    decision_bar_time, git_commit)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    datetime.now(timezone.utc).isoformat(),
-                    symbol,
-                    direction.upper(),
-                    broker,
-                    str(getattr(exec_result, "trade_id", "") or ""),
-                    session,
-                    intended,
-                    fill,
-                    float(stop) if stop else None,
-                    float(getattr(exec_result, "units", 0) or 0) or None,
-                    pip,
-                    round(slip_price, 8),
-                    round(slip_pips, 3),
-                    round(slip_r, 5) if slip_r is not None else None,
-                    str(report.get("bar_time", "") or "") or None,
-                    provenance.get("git_commit"),
-                ),
+            _insert_fill_row(
+                con,
+                symbol=symbol, direction=direction, broker=broker,
+                trade_id=str(getattr(exec_result, "trade_id", "") or ""),
+                session=session, intended=intended, fill=fill, stop=sl_val,
+                volume=float(getattr(exec_result, "units", 0) or 0) or None,
+                pip=pip, slip_price=slip_price, slip_pips=slip_pips, slip_r=slip_r,
+                bar_time=str(report.get("bar_time", "") or "") or None,
+                git_commit=provenance.get("git_commit"),
+                fill_latency_seconds=None,  # synchronous path — the concept doesn't apply
             )
         logger.info(
             f"TCA: {direction} {symbol} intended={intended} fill={fill} "
@@ -208,6 +321,215 @@ def log_fill(report: dict, exec_result: Any, broker: str | None = None) -> bool:
     except Exception as exc:  # noqa: BLE001 — must never disturb execution
         logger.warning(f"TCA logging error (non-fatal): {exc}")
         return False
+
+
+def queue_pending_fill(report: dict, exec_result: Any, broker: str | None = None) -> bool:
+    """Called when a broker order was accepted but its real fill price is
+    NOT yet known (cTrader's synchronous ORDER_ACCEPTED response — see
+    this module's pending-fills docstring above). Persists a durable
+    PENDING row keyed by position_id; resolve_pending_fill() completes it
+    once execution/ctrader_client.py reports a real broker price. Never
+    writes a fill_price here at all — nothing to fabricate. Never raises.
+    """
+    try:
+        if not getattr(exec_result, "executed", False):
+            return False
+        if getattr(exec_result, "dry_run", True):
+            return False
+
+        symbol = getattr(exec_result, "symbol", "") or report.get("symbol", "")
+        direction = getattr(exec_result, "direction", "")
+        intended = report.get("entry_price")
+        position_id = str(getattr(exec_result, "trade_id", "") or "")
+        if not symbol or not direction or not intended:
+            logger.warning(f"TCA: cannot queue pending fill for {symbol!r} — missing symbol/direction/intended price")
+            return False
+        if not position_id:
+            logger.warning(
+                f"TCA: fill for {symbol!r} has no fill price AND no position_id "
+                f"— cannot queue for async resolution, not recorded"
+            )
+            return False
+
+        stop = report.get("stop_loss")
+        provenance = report.get("provenance") or {}
+
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            con.execute(
+                """INSERT OR IGNORE INTO pending_fills
+                   (position_id, status, ts_queued, symbol, direction, broker,
+                    trade_id, intended_price, stop_loss, volume, bar_time, git_commit)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    position_id, PENDING, datetime.now(timezone.utc).isoformat(),
+                    symbol, direction.upper(), broker, position_id,
+                    float(intended), float(stop) if stop else None,
+                    float(getattr(exec_result, "units", 0) or 0) or None,
+                    str(report.get("bar_time", "") or "") or None,
+                    provenance.get("git_commit"),
+                ),
+            )
+        logger.info(
+            f"TCA: {direction} {symbol} pos_id={position_id} queued as PENDING "
+            f"— fill price not yet confirmed by broker"
+        )
+        return True
+    except D1Error as exc:
+        logger.warning(f"TCA pending-fill queue write failed (non-fatal): {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001 — must never disturb execution
+        logger.warning(f"TCA pending-fill queue error (non-fatal): {exc}")
+        return False
+
+
+def record_or_queue_fill(report: dict, exec_result: Any, broker: str | None = None) -> str:
+    """Single entry point a caller should use after every real (non-dry-
+    run) broker execution. Returns 'RECORDED' (log_fill wrote a completed
+    row immediately — the common case for a broker/response that DOES
+    carry a synchronous real price), 'QUEUED' (price not yet known, a
+    position_id is — queued for resolve_pending_fill() to complete
+    later), or 'DROPPED' (neither a price nor a position_id — nothing
+    durable to do, matches the pre-2026-08-17 warn-and-drop behavior)."""
+    if not getattr(exec_result, "executed", False) or getattr(exec_result, "dry_run", True):
+        return "DROPPED"
+    fill = getattr(exec_result, "entry_price", 0.0)
+    if fill:
+        return "RECORDED" if log_fill(report, exec_result, broker=broker) else "DROPPED"
+    return "QUEUED" if queue_pending_fill(report, exec_result, broker=broker) else "DROPPED"
+
+
+def resolve_pending_fill(position_id: str, fill_price: float) -> bool:
+    """Complete a pending fill once the broker's real fill price is known
+    (execution/ctrader_client.py's in-memory fill-update registry,
+    take_fill_update() — polled and resolved from the caller's own main
+    thread, never from the reactor thread). Idempotent: a position_id
+    that is already RESOLVED/UNAVAILABLE, or was never queued at all, is
+    a no-op (returns False) — a duplicate resolution attempt (e.g. two
+    execution events reporting the same fill) can never write two `fills`
+    rows for the same position. `fill_price` must be a real, broker-
+    reported value — this function never validates that on its own, so
+    the caller (never anything client-supplied) is the trust boundary."""
+    try:
+        if fill_price <= 0:
+            return False
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            _init(con)
+            row = con.execute(
+                "SELECT * FROM pending_fills WHERE position_id=?", (position_id,)
+            ).fetchone()
+            if row is None or row["status"] != PENDING:
+                return False
+
+            intended = float(row["intended_price"])
+            direction = row["direction"]
+            stop = row["stop_loss"]
+            pip = pip_size_for(row["symbol"])
+            slip_price = compute_slippage(direction, intended, fill_price)
+            slip_pips = slip_price / pip
+            slip_r = None
+            if stop:
+                sl_dist = abs(intended - float(stop))
+                if sl_dist > 0:
+                    slip_r = slip_price / sl_dist
+
+            queued_at = datetime.fromisoformat(row["ts_queued"])
+            latency = (datetime.now(timezone.utc) - queued_at).total_seconds()
+
+            _insert_fill_row(
+                con,
+                symbol=row["symbol"], direction=direction, broker=row["broker"],
+                trade_id=row["trade_id"] or position_id, session=_current_session(),
+                intended=intended, fill=fill_price, stop=float(stop) if stop else None,
+                volume=row["volume"], pip=pip, slip_price=slip_price,
+                slip_pips=slip_pips, slip_r=slip_r,
+                bar_time=row["bar_time"], git_commit=row["git_commit"],
+                fill_latency_seconds=latency,
+            )
+            con.execute(
+                "UPDATE pending_fills SET status=? WHERE position_id=? AND status=?",
+                (RESOLVED, position_id, PENDING),
+            )
+        logger.info(
+            f"TCA: {direction} {row['symbol']} pos_id={position_id} resolved — "
+            f"intended={intended} fill={fill_price} slippage={slip_pips:+.2f} pips "
+            f"(pending for {latency:.1f}s)"
+        )
+        return True
+    except D1Error as exc:
+        logger.warning(f"TCA pending-fill resolve failed (non-fatal): {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001 — must never disturb execution
+        logger.warning(f"TCA pending-fill resolve error (non-fatal): {exc}")
+        return False
+
+
+def mark_pending_fill_unavailable(position_id: str, reason: str = "") -> bool:
+    """Idempotent: only a currently-PENDING row transitions to
+    UNAVAILABLE; already-RESOLVED/UNAVAILABLE/unknown position_ids are a
+    no-op. Never writes a `fills` row — this position's slippage is
+    honestly unmeasured, not fabricated as zero."""
+    try:
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            cur = con.execute(
+                "UPDATE pending_fills SET status=? WHERE position_id=? AND status=?",
+                (UNAVAILABLE, position_id, PENDING),
+            )
+            changed = getattr(cur, "rowcount", 0) or 0
+        if changed:
+            logger.warning(f"TCA: pos_id={position_id} fill price never confirmed by broker — marked UNAVAILABLE ({reason or 'no reason given'})")
+        return bool(changed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"TCA pending-fill mark-unavailable failed (non-fatal): {exc}")
+        return False
+
+
+def sweep_stale_pending_fills(max_age_seconds: float = 900.0) -> list[str]:
+    """Marks every still-PENDING row older than max_age_seconds as
+    UNAVAILABLE. Called periodically (the scheduler's per-tick pending-
+    fill resolution pass) so a lost/never-arriving fill confirmation
+    doesn't leave TCA silently waiting forever — the row just stops being
+    a candidate for resolution, it is never converted into a fabricated
+    slippage-free fill. Returns the position_ids that were swept."""
+    try:
+        cutoff = (datetime.now(timezone.utc).timestamp() - max_age_seconds)
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            rows = con.execute(
+                "SELECT position_id, ts_queued FROM pending_fills WHERE status=?", (PENDING,)
+            ).fetchall()
+            stale = [
+                r["position_id"] for r in rows
+                if datetime.fromisoformat(r["ts_queued"]).timestamp() < cutoff
+            ]
+            for position_id in stale:
+                con.execute(
+                    "UPDATE pending_fills SET status=? WHERE position_id=? AND status=?",
+                    (UNAVAILABLE, position_id, PENDING),
+                )
+        if stale:
+            logger.warning(f"TCA: {len(stale)} pending fill(s) exceeded {max_age_seconds:.0f}s without broker confirmation — marked UNAVAILABLE: {stale}")
+        return stale
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"TCA stale pending-fill sweep failed (non-fatal): {exc}")
+        return []
+
+
+def pending_fill_position_ids() -> list[str]:
+    """position_ids currently PENDING — what a caller polls
+    execution/ctrader_client.py's take_fill_update() against each tick."""
+    try:
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            rows = con.execute(
+                "SELECT position_id FROM pending_fills WHERE status=?", (PENDING,)
+            ).fetchall()
+        return [r["position_id"] for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"TCA pending-fill listing failed (non-fatal): {exc}")
+        return []
 
 
 # ---------------------------------------------------------------------------

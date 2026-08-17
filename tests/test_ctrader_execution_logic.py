@@ -76,8 +76,15 @@ def test_parse_filled_order_success(client):
 
 
 def test_parse_pending_accept_still_success_with_ids(client):
-    # ORDER_ACCEPTED, not yet filled: no execution price → falls back to
-    # the signal reference price, still reported as a (pending) success.
+    # ORDER_ACCEPTED, not yet filled: no execution price anywhere in the
+    # response. Still reported as a (pending) success — cTrader DID accept
+    # the order — but entry_price must stay 0.0 (2026-08-17 fix: the old
+    # fallback to order.entry_price, the signal's own INTENDED price,
+    # silently fabricated a "fill" here — exactly the anti-pattern that
+    # made every real async fill's TCA slippage look like 0 by
+    # construction). The real fill price is picked up later via
+    # execution/ctrader_client.py's _on_execution_event/take_fill_update,
+    # never invented here.
     resp = _exec_event(
         errorCode="",
         deal=None,
@@ -88,7 +95,7 @@ def test_parse_pending_accept_still_success_with_ids(client):
     r = client._parse_execution_response(_order(), resp)
     assert r.success is True
     assert r.position_id == "999"
-    assert r.entry_price == pytest.approx(1.0850)  # fell back to entry_price
+    assert r.entry_price == 0.0
 
 
 def test_parse_error_code_is_failure(client):

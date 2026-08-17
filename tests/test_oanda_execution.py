@@ -236,6 +236,126 @@ def test_ctrader_duplicate_check_runs_before_account_lookup():
     fake_client.calculate_volume.assert_not_called()
 
 
+# ─── First-class execution outcomes (2026-08-17 live-execution fix):
+# every attempted cTrader order — accepted, broker-rejected, or timed-out —
+# is persisted to storage.execution_attempts, never just a log line. ───────
+
+def test_ctrader_rejected_order_persists_rejected_status():
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=False, error="INVALID_REQUEST — Relative stop loss has invalid precision",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client), \
+         patch("storage.execution_attempts.record_execution_attempt") as mock_record:
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "cTrader error" in result.skip_reason
+    mock_record.assert_called_once()
+    kwargs = mock_record.call_args.kwargs
+    assert kwargs["status"] == "REJECTED"
+    assert kwargs["symbol"] == "EURUSD"
+    assert kwargs["broker"] == "ctrader"
+    assert "invalid precision" in kwargs["broker_error_message"]
+
+
+def test_ctrader_timeout_checks_broker_truth_and_reports_timeout_unknown():
+    """A timed-out confirmation must never be indistinguishable from a
+    clean rejection — status is TIMEOUT_UNKNOWN, and has_open_position()
+    is consulted immediately (broker truth) rather than blindly assuming
+    failure. This is observation only: it does NOT retry the order."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    # First call (the pre-order duplicate guard) says no open position;
+    # second call (the post-timeout broker-truth check) says it IS now
+    # open — simulating a fill whose confirmation simply arrived late.
+    fake_client.has_open_position.side_effect = [False, True]
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=False, error="Order timed out after 15.0s",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client), \
+         patch("storage.execution_attempts.record_execution_attempt") as mock_record:
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is False
+    assert "timed out" in result.skip_reason
+    assert "position IS open" in result.skip_reason
+    assert fake_client.has_open_position.call_count == 2
+    mock_record.assert_called_once()
+    assert mock_record.call_args.kwargs["status"] == "TIMEOUT_UNKNOWN"
+
+
+def test_ctrader_timeout_without_broker_confirmation_says_so():
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.side_effect = [False, False]
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=False, error="Order timed out after 15.0s",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client), \
+         patch("storage.execution_attempts.record_execution_attempt"):
+        result = executor.execute_from_report(_make_report())
+
+    assert "no open position" in result.skip_reason
+
+
+def test_ctrader_accepted_order_persists_accepted_status():
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, position_id="pos999", entry_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client), \
+         patch("storage.execution_attempts.record_execution_attempt") as mock_record:
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    mock_record.assert_called_once()
+    kwargs = mock_record.call_args.kwargs
+    assert kwargs["status"] == "ACCEPTED"
+    assert kwargs["position_id"] == "pos999"
+
+
+def test_ctrader_execution_attempts_recording_failure_never_masks_the_real_result():
+    """A storage hiccup while persisting the attempt must never turn a
+    real (successful or failed) execution outcome into an exception."""
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+
+    fake_client = MagicMock()
+    fake_client.environment = "demo"
+    fake_client.has_open_position.return_value = False
+    fake_client.get_account_info.return_value = MagicMock(balance=200.0)
+    fake_client.calculate_volume.return_value = 1000
+    fake_client.place_market_order.return_value = MagicMock(
+        success=True, position_id="pos1", entry_price=1.0850, error="",
+    )
+    with patch.object(executor, "_get_client", return_value=fake_client), \
+         patch("storage.execution_attempts.record_execution_attempt", side_effect=RuntimeError("D1 down")):
+        result = executor.execute_from_report(_make_report())
+
+    assert result.executed is True
+    assert result.trade_id == "pos1"
+
+
 # ─── Dukascopy JForex (2026-08-08) ─────────────────────────────────────────
 
 def test_dukascopy_jforex_refuses_live_account_without_allow_flag():

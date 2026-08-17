@@ -33,6 +33,39 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _record_ctrader_attempt(
+    *, report: dict, symbol: str, direction: str, volume: float,
+    entry: float, sl: float, tp: float, status: str,
+    normalized_entry: float | None = None, position_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Best-effort persistence into storage.execution_attempts (2026-08-17
+    live-execution fix). `report.get("signal_id")` is currently always
+    None — no pipeline stage stamps a signal_id onto the report dict today
+    (storage.outcome_tracker.log_signal() only generates one internally,
+    at ITS OWN log time, never written back onto `report`) — kept here
+    so this call auto-wires for free if a future pipeline stage ever adds
+    one, rather than being a second thing to remember to update. Never
+    raises: storage.execution_attempts.record_execution_attempt() already
+    swallows its own D1 errors, and the import itself is wrapped here too
+    so a missing/misconfigured storage layer (e.g. in a test environment)
+    can never turn a real execution outcome into an unhandled exception."""
+    try:
+        from storage.execution_attempts import record_execution_attempt
+        record_execution_attempt(
+            symbol=symbol, broker="ctrader", direction=direction,
+            status=status,
+            signal_id=report.get("signal_id"),
+            requested_volume=float(volume),
+            requested_entry=float(entry), requested_sl=float(sl), requested_tp=float(tp),
+            normalized_entry=normalized_entry,
+            broker_error_message=error,
+            position_id=position_id,
+        )
+    except Exception as exc:
+        logger.debug(f"execution_attempts recording skipped for {symbol}: {exc}")
+
+
 @dataclass
 class ExecutionResult:
     executed: bool
@@ -291,6 +324,13 @@ class TradeExecutor:
                 result = client.place_market_order(ct_order)
 
                 if result.success:
+                    _record_ctrader_attempt(
+                        report=report, symbol=symbol, direction=direction,
+                        volume=volume, entry=entry, sl=sl, tp=tp,
+                        status="ACCEPTED",
+                        normalized_entry=result.entry_price,
+                        position_id=result.position_id,
+                    )
                     logger.info(
                         f"✅ cTrader ORDER: {direction} {symbol} "
                         f"vol={volume} pos_id={result.position_id}"
@@ -303,9 +343,44 @@ class TradeExecutor:
                         trade_id=result.position_id, dry_run=False,
                     )
                 else:
+                    # First-class execution outcome (2026-08-17 live-execution
+                    # fix): a declined order is not just a log line — it is
+                    # ALWAYS persisted to storage.execution_attempts (never
+                    # storage.outcome_tracker's `outcomes` table — that would
+                    # reopen the orphaned-position bug the reconciliation fix
+                    # closed; see execution_attempts.py's own module
+                    # docstring). A timed-out confirmation gets ONE immediate
+                    # broker-truth check — has_open_position() reads
+                    # client._positions, which ProtoOAExecutionEvent already
+                    # updates asynchronously even if THIS call's own response
+                    # timed out — so a late fill is recorded accurately
+                    # instead of being reported as a plain failure. This is
+                    # observation only: it never retries the order (the
+                    # existing has_open_position() pre-check above already
+                    # blocks a second real attempt on the NEXT call, whether
+                    # this one timed out or was cleanly rejected).
+                    is_timeout = "timed out" in (result.error or "").lower()
+                    if is_timeout:
+                        status = "TIMEOUT_UNKNOWN"
+                        try:
+                            broker_confirms_open = client.has_open_position(symbol)
+                        except Exception:
+                            broker_confirms_open = False
+                        skip_reason = (
+                            f"cTrader order confirmation timed out; broker "
+                            f"{'now reports a position IS open — do not retry' if broker_confirms_open else 'reports no open position (yet)'}"
+                        )
+                    else:
+                        status = "REJECTED"
+                        skip_reason = f"cTrader error: {result.error}"
+                    _record_ctrader_attempt(
+                        report=report, symbol=symbol, direction=direction,
+                        volume=volume, entry=entry, sl=sl, tp=tp,
+                        status=status, error=result.error,
+                    )
                     return ExecutionResult(
                         executed=False, symbol=symbol,
-                        skip_reason=f"cTrader error: {result.error}",
+                        skip_reason=skip_reason,
                         dry_run=False,
                     )
 

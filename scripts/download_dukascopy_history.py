@@ -408,9 +408,21 @@ def download_symbol_hours(
 
 
 def _hour_range(years: float) -> list[datetime]:
+    """`end` is already hour-aligned (minute/second/microsecond zeroed).
+    Computing `total_hours` FIRST and deriving `start` from a whole-hour
+    timedelta guarantees `start` (and therefore every hour in the
+    returned list) stays hour-aligned too, for any `years` value —
+    including a fractional one like --probe's years=0.02. The previous
+    `start = end - timedelta(days=years * 365.25)` broke this for any
+    non-whole-day span (0.02 * 365.25 = 7 days + 7h19m12s exactly), so
+    every subsequent hour in the list silently inherited a non-:00
+    time-of-day offset. Integer `years` (the real --years flag) was
+    never actually affected — 365.25 * N is always a whole multiple of
+    6 hours for integer N — but this fix removes the fragility
+    entirely rather than relying on that coincidence."""
     end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=years * 365.25)
-    total_hours = int((end - start).total_seconds() // 3600)
+    total_hours = int(years * 365.25 * 24)
+    start = end - timedelta(hours=total_hours)
     return [start + timedelta(hours=i) for i in range(total_hours)]
 
 

@@ -30,6 +30,7 @@ from download_dukascopy_history import (  # noqa: E402
     DukascopyFetchError,
     _PLAUSIBLE_RANGES,
     _POINT_VALUE_CANDIDATES,
+    _hour_range,
     coarsen_bars,
     detect_point_value,
     download_symbol_hours,
@@ -494,6 +495,56 @@ def test_m15_to_h1_coarsening_matches_direct_single_hour_tick_aggregation():
     assert row["low"] == pytest.approx(min(mids))
     assert row["close"] == pytest.approx(mids[-1])
     assert row["volume"] == pytest.approx(total_volume)
+
+
+# ---------------------------------------------------------------------------
+# _hour_range — every returned hour must be hour-aligned (regression:
+# the old start = end - timedelta(days=years * 365.25) computation broke
+# this for any fractional-years value, e.g. --probe's hardcoded years=0.02,
+# since 0.02 * 365.25 = 7 days + 7h19m12s exactly, not a whole number of
+# hours — every subsequent hour in the returned list silently inherited
+# that non-:00 time-of-day offset).
+# ---------------------------------------------------------------------------
+
+
+def _assert_all_hour_aligned(hours: list[datetime]) -> None:
+    for h in hours:
+        assert h.minute == 0 and h.second == 0 and h.microsecond == 0, h
+
+
+def test_hour_range_fractional_years_stays_hour_aligned():
+    # years=0.02 is exactly --probe's own hardcoded value — the case that
+    # reproduced the bug live.
+    hours = _hour_range(0.02)
+    assert len(hours) > 0
+    _assert_all_hour_aligned(hours)
+
+
+def test_hour_range_consecutive_hours_are_exactly_one_hour_apart():
+    hours = _hour_range(0.02)
+    for a, b in zip(hours, hours[1:]):
+        assert b - a == timedelta(hours=1)
+
+
+def test_hour_range_last_entry_matches_hour_aligned_now():
+    hours = _hour_range(0.02)
+    end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    # The range ends at (aligned "now" minus 1h) — the returned list never
+    # includes the still-in-progress current hour.
+    assert hours[-1] == end - timedelta(hours=1)
+
+
+def test_hour_range_integer_years_matches_old_hour_count():
+    # Integer years were never actually broken (365.25 * N is always a
+    # whole multiple of 6 hours for integer N) — pin that the fix doesn't
+    # change behavior for the real --years flag's normal usage.
+    hours = _hour_range(1.0)
+    assert len(hours) == int(1.0 * 365.25 * 24)
+    _assert_all_hour_aligned(hours)
+
+
+def test_hour_range_zero_years_returns_empty():
+    assert _hour_range(0.0) == []
 
 
 # ---------------------------------------------------------------------------

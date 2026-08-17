@@ -44,6 +44,28 @@ folded into the 429 handling. fetch_hour() retries these too, with a
 separate, shorter exponential backoff (MAX_NETWORK_RETRIES / _NETWORK_
 BACKOFF_*), independent of the 429 retry budget.
 
+A third, real live finding (2026-08-17, confirmed on the VPS: a real
+2-year M15 GBPUSD run, run AFTER both fixes above): 429s kept surfacing
+throughout the WHOLE run, not just at startup — a large fraction of
+hours were still SKIPPED after exhausting all 6 retry attempts (up to
+~120s of backoff each), scattered continuously rather than clustered at
+the beginning. This proves the earlier two fixes treat 429 as a
+per-request nuisance to retry around, but the real cause is a SUSTAINED
+per-IP rate limit that 4 concurrently-firing workers exceed on every
+steady-state cycle, not just in a synchronized initial burst — retrying
+harder after the fact cannot fix a rate that's exceeded continuously.
+The fix: a global, thread-safe request pacer (_throttle(), MIN_REQUEST_
+INTERVAL_SECONDS) that every actual HTTP request — the first attempt AND
+every retry — must pass through before firing, capping total throughput
+to a fixed requests/second rate shared across every worker thread,
+regardless of --workers. This is proactive rate-limiting rather than
+reactive backoff, and it's the layer that should make the 429 retry
+logic above rarely need to fire at all going forward (kept in place as
+defense-in-depth, not removed). The chosen default interval was picked
+from the observed failure pattern above, not independently verified
+against a published Dukascopy rate limit (none exists) — tune via
+--request-interval if it's still too aggressive/too slow.
+
 Price scaling: Dukascopy's raw int32 values are price * a per-instrument
 point value (100, 1000, 10000, or 100000 depending on the instrument's
 usual decimal precision) with NO published, authoritative table. Rather
@@ -100,6 +122,7 @@ Usage:
     python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD            # 10y H1, default
     python3 -m scripts.download_dukascopy_history --symbols EURUSD --timeframe M15   # 10y M15
     python3 -m scripts.download_dukascopy_history --symbols BTCUSD --years 1 --workers 16
+    python3 -m scripts.download_dukascopy_history --symbols GBPUSD --request-interval 1.0  # slower, if still hitting 429s
 """
 from __future__ import annotations
 
@@ -107,6 +130,7 @@ import argparse
 import lzma
 import struct
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -125,6 +149,34 @@ REQUEST_TIMEOUT = 15
 DEFAULT_WORKERS = 4  # lowered from 12 (2026-08-11) — see module docstring's "Rate limiting" note
 TICK_RECORD_STRUCT = struct.Struct(">iiiff")  # ms_offset, ask_raw, bid_raw, ask_vol, bid_vol
 TICK_RECORD_SIZE = TICK_RECORD_STRUCT.size
+
+# Global request-rate pacer (2026-08-17) — see module docstring's "Rate
+# limiting" note, third finding. A module-level, mutable default so a
+# single-process CLI run can override it once via --request-interval
+# (main() reassigns this global before any download starts) without
+# threading a new parameter through fetch_hour()'s signature, which is
+# also called directly by --probe and by every existing test.
+MIN_REQUEST_INTERVAL_SECONDS = 0.5  # ~2 req/s sustained, shared across all worker threads
+_rate_limit_lock = threading.Lock()
+_next_request_time = 0.0
+
+
+def _throttle() -> None:
+    """Blocks the calling thread until it's safe to send the next
+    Dukascopy request, then reserves the next slot for whoever calls
+    next. The lock is held only long enough to read/reserve the shared
+    next-allowed-time — never across the sleep itself — so multiple
+    worker threads queue up cleanly with correctly staggered wake times
+    instead of serializing on each other's I/O."""
+    global _next_request_time
+    with _rate_limit_lock:
+        now = time.monotonic()
+        wait = max(0.0, _next_request_time - now)
+        reserved_start = now + wait
+        _next_request_time = reserved_start + MIN_REQUEST_INTERVAL_SECONDS
+    if wait > 0:
+        time.sleep(wait)
+
 
 # 429 retry/backoff — see module docstring's "Rate limiting" note.
 MAX_429_RETRIES = 5
@@ -238,15 +290,18 @@ def fetch_hour(instrument: str, dt: datetime) -> list[tuple[int, float, float, f
     """One hour's raw ticks as (ms_offset, ask_raw, bid_raw, ask_vol,
     bid_vol) tuples. Returns None (not an error) on 404 — a closed
     market hour (weekend/holiday) is expected, not a fetch failure.
-    Retries a 429 (rate-limited) response and a transient network
-    exception (connect timeout, connection error) each with their own
-    backoff/retry budget — see module docstring's "Rate limiting" note —
-    before giving up as a real failure."""
+    Every actual HTTP attempt — the first one AND every retry — is paced
+    by _throttle() first (a global, cross-worker-thread rate limiter —
+    see module docstring's "Rate limiting" note, third finding), and on
+    top of that retries a 429 (rate-limited) response and a transient
+    network exception (connect timeout, connection error) each with
+    their own backoff/retry budget before giving up as a real failure."""
     url = _hour_url(instrument, dt)
     resp: "requests.Response | None" = None
     network_attempt = 0
     attempt_429 = 0
     while True:
+        _throttle()
         try:
             resp = requests.get(url, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
@@ -442,14 +497,23 @@ def coarsen_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 
 def main() -> None:
+    global MIN_REQUEST_INTERVAL_SECONDS
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--probe", help="single symbol, fetch a handful of recent hours, print result, no file written")
     parser.add_argument("--symbols", nargs="+", default=None)
     parser.add_argument("--timeframe", default="H1", choices=sorted(_TF_MINUTES))
     parser.add_argument("--years", type=float, default=10.0)
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    parser.add_argument(
+        "--request-interval", type=float, default=MIN_REQUEST_INTERVAL_SECONDS,
+        help="minimum seconds between the START of consecutive Dukascopy requests, "
+             "shared across every worker thread (raise this if 429s are still frequent "
+             "even after the retry/backoff logic; see module docstring's 'Rate limiting' note)",
+    )
     parser.add_argument("--force", action="store_true", help="re-download even if the output file exists")
     args = parser.parse_args()
+
+    MIN_REQUEST_INTERVAL_SECONDS = args.request_interval
 
     if args.probe:
         symbol = args.probe.upper()

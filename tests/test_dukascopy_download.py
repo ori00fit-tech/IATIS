@@ -31,6 +31,7 @@ from download_dukascopy_history import (  # noqa: E402
     _PLAUSIBLE_RANGES,
     _POINT_VALUE_CANDIDATES,
     _hour_range,
+    _throttle,
     coarsen_bars,
     detect_point_value,
     download_symbol_hours,
@@ -105,7 +106,8 @@ def test_fetch_hour_raises_after_exhausting_network_retries():
     import download_dukascopy_history as m
 
     with patch("download_dukascopy_history.requests.get", side_effect=requests.ConnectionError("boom")), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         with pytest.raises(DukascopyFetchError, match="request failed after"):
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     assert mock_sleep.call_count == m.MAX_NETWORK_RETRIES
@@ -122,7 +124,8 @@ def test_fetch_hour_retries_429_then_succeeds():
     body = _compress_records(records)
     responses = [_fake_response(429), _fake_response(429), _fake_response(200, body)]
     with patch("download_dukascopy_history.requests.get", side_effect=responses), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     assert ticks == records
     assert mock_sleep.call_count == 2  # one sleep per 429 before the eventual success
@@ -133,7 +136,8 @@ def test_fetch_hour_raises_after_exhausting_429_retries():
 
     responses = [_fake_response(429)] * (m.MAX_429_RETRIES + 1)
     with patch("download_dukascopy_history.requests.get", side_effect=responses), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         with pytest.raises(DukascopyFetchError, match="HTTP 429"):
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     assert mock_sleep.call_count == m.MAX_429_RETRIES  # sleeps between attempts, not after the final failed one
@@ -144,7 +148,8 @@ def test_fetch_hour_honors_numeric_retry_after_header():
     body = _compress_records(records)
     responses = [_fake_response(429, headers={"Retry-After": "7"}), _fake_response(200, body)]
     with patch("download_dukascopy_history.requests.get", side_effect=responses), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     mock_sleep.assert_called_once_with(7.0)
 
@@ -156,14 +161,16 @@ def test_fetch_hour_falls_back_to_exponential_backoff_on_malformed_retry_after()
     body = _compress_records(records)
     responses = [_fake_response(429, headers={"Retry-After": "not-a-number"}), _fake_response(200, body)]
     with patch("download_dukascopy_history.requests.get", side_effect=responses), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     mock_sleep.assert_called_once_with(m._429_BACKOFF_BASE_SECONDS)  # attempt=0 -> base * 2**0
 
 
 def test_fetch_hour_still_treats_404_as_market_closed_not_a_retry_target():
     with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)) as mock_get, \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         ticks = fetch_hour("EURUSD", datetime(2024, 1, 6, 10, tzinfo=timezone.utc))
     assert ticks is None
     assert mock_get.call_count == 1  # no retry for a 404 — it's an expected closed-market response
@@ -186,7 +193,8 @@ def test_fetch_hour_retries_a_network_exception_then_succeeds():
     with patch(
         "download_dukascopy_history.requests.get",
         side_effect=[requests.ConnectTimeout("timed out"), requests.ConnectTimeout("timed out"), _fake_response(200, body)],
-    ), patch("download_dukascopy_history.time.sleep") as mock_sleep:
+    ), patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     assert ticks == records
     assert mock_sleep.call_count == 2
@@ -208,10 +216,103 @@ def test_fetch_hour_network_retry_budget_is_independent_of_429_budget():
         + [_fake_response(200, body)]
     )
     with patch("download_dukascopy_history.requests.get", side_effect=responses), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
     assert ticks == records
     assert mock_sleep.call_count == m.MAX_NETWORK_RETRIES + m.MAX_429_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# Global rate-limit pacer (2026-08-17 — confirmed live on the VPS: a real
+# 2-year M15 GBPUSD run, AFTER the 429/network-retry/initial-burst-stagger
+# fixes above, still lost roughly a third of requests to 429s scattered
+# throughout the whole run, not just at startup — proving the earlier fixes
+# retry around a per-request nuisance while the real cause is a SUSTAINED
+# per-IP rate limit that 4 concurrent workers exceed continuously. _throttle()
+# is the proactive fix: every actual HTTP attempt is paced to a fixed
+# requests/second rate shared across every worker thread, regardless of
+# --workers.)
+# ---------------------------------------------------------------------------
+
+
+def test_throttle_first_call_does_not_sleep(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        _throttle()
+    mock_sleep.assert_not_called()
+
+
+def test_throttle_second_call_within_interval_sleeps_the_remainder(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        _throttle()  # reserves [1000.0, 1000.0 + MIN_REQUEST_INTERVAL_SECONDS)
+    mock_sleep.assert_not_called()
+
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.1), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        _throttle()  # only 0.1s has passed — must wait for the rest of the interval
+    mock_sleep.assert_called_once()
+    waited = mock_sleep.call_args[0][0]
+    assert waited == pytest.approx(m.MIN_REQUEST_INTERVAL_SECONDS - 0.1, abs=1e-9)
+
+
+def test_throttle_call_after_interval_elapsed_does_not_sleep(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0), \
+         patch("download_dukascopy_history.time.sleep"):
+        _throttle()
+
+    with patch(
+        "download_dukascopy_history.time.monotonic",
+        return_value=1000.0 + m.MIN_REQUEST_INTERVAL_SECONDS + 5.0,
+    ), patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        _throttle()
+    mock_sleep.assert_not_called()
+
+
+def test_throttle_reserves_strictly_increasing_slots_even_with_a_frozen_clock(monkeypatch):
+    """Simulates several worker threads calling _throttle() back-to-back
+    with zero real time elapsed between them (a frozen time.monotonic()) —
+    proves the pacer correctly serializes reservations (each call gets its
+    own, later slot) rather than every call computing the same near-zero
+    wait against a clock that hasn't moved. This is the property that
+    actually caps sustained throughput regardless of --workers."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    waits: list[float] = []
+    with patch("download_dukascopy_history.time.monotonic", return_value=2000.0), \
+         patch("download_dukascopy_history.time.sleep", side_effect=lambda w: waits.append(w)):
+        for _ in range(5):
+            _throttle()
+    # first call: no wait; each subsequent call must wait one more full
+    # interval than the last, since the clock never advances on its own.
+    assert waits == [
+        pytest.approx(m.MIN_REQUEST_INTERVAL_SECONDS * i, abs=1e-9) for i in range(1, 5)
+    ]
+
+
+def test_throttle_is_called_before_every_actual_http_attempt_in_fetch_hour():
+    """fetch_hour() must call _throttle() before the initial attempt AND
+    before every retry — never just once — since a retry is still a real
+    HTTP request that could itself trigger a fresh 429 if unthrottled."""
+    import download_dukascopy_history as m
+
+    responses = [_fake_response(429), _fake_response(429), _fake_response(404)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch.object(m, "_throttle") as mock_throttle:
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert mock_throttle.call_count == 3  # initial attempt + 2 retries
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +503,8 @@ def test_download_symbol_hours_staggers_only_the_initial_worker_pool_fill():
 
     hours = [datetime(2024, 1, 2, h, tzinfo=timezone.utc) for h in range(10)]
     with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)), \
-         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
         download_symbol_hours("EURUSD", "EURUSD", hours, workers=3)
     assert mock_sleep.call_count == 2  # workers - 1
     mock_sleep.assert_called_with(m._INITIAL_SUBMIT_STAGGER_SECONDS)

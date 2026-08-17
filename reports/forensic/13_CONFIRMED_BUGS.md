@@ -3103,3 +3103,80 @@ project suite re-run with zero regressions (see commit for exact count).
 Not verified live against a real VPS/systemd/D1 deployment from this
 sandboxed session — same disclosed limitation as every other
 deploy/D1-facing fix in this audit.
+
+## BUG-024
+
+**Claim:** live production logs (operator screenshot, 2026-08-17 06:50
+UTC) showed a real `BUY ETHUSD` order sent to cTrader immediately
+rejected — `Order error event: INVALID_REQUEST — Relative stop loss has
+invalid precision` — with the signal correctly declined (not silently
+recorded as opened) but the underlying precision defect unfixed.
+Separately observed: `Unhandled message type: ProtoOASubscribeSpotsRes`/
+`ProtoOAUnsubscribeSpotsRes` WARNING-level log spam on every single SL/TP
+order.
+
+**Root cause (confirmed against cTrader's own Open API docs and
+community forum before writing any fix — not assumed from the symptom
+alone):** `execution/ctrader_client.py`'s `SPOT_SCALE = 100_000` is a
+FIXED, symbol-independent wire-protocol constant (cTrader's own docs:
+"divide by 100000, then round to symbol digits" / relative SL-TP =
+`Round(priceDiff, symbol.Digits) * 100000`) — it was never the bug.
+`place_market_order()` computed `rel_sl`/`rel_tp` as
+`int(round(abs(entry_price - order.stop_loss) * SPOT_SCALE))` directly
+from raw Python floats, **skipping the required per-symbol rounding to
+`digits`** before re-scaling. `_SymbolDetails.digits`/`.pip_position`
+were already fetched from the broker via `ProtoOASymbolByIdReq` but
+**never consulted anywhere in the file** (confirmed by grep — dead
+fields). `storage/outcome_tracker.py`'s own pip-size comment (verified
+live against this exact broker, 2026-07-16) independently confirms
+ETHUSD/BTCUSD's real `digits=2` vs. EURUSD's `digits=5` — explaining why
+FX majors never triggered this and crypto did.
+
+**File/Line:** `execution/ctrader_client.py`, `place_market_order()`
+(now `_compute_relative_sl_tp()`).
+
+**Fix:** new `_round_price_to_digits()` (Decimal, via `Decimal(str(x))`
+— never `Decimal(x)`, which would re-import the source float's own
+binary rounding noise) and `_price_to_relative_units()`. Every distance
+is rounded to the symbol's own `digits` BEFORE being scaled to the wire
+integer, with a defense-in-depth `% tick_size == 0` check before
+sending. Fail-closed: `place_market_order()` now refuses (never guesses)
+when `details.digits` is outside `[0, 10]` (stale/corrupt metadata).
+Every attempted order — accepted, broker-rejected, or timed-out — is now
+persisted via a new `storage/execution_attempts.py` table (deliberately
+**separate** from `storage/outcome_tracker.py`'s `outcomes` table, to
+avoid reopening the orphaned-open-position bug the earlier `main.py` ->
+`scheduler.py` reconciliation fix closed — that fix deliberately stopped
+logging into `outcomes` unless `exec_result.executed` is True):
+`ACCEPTED`/`REJECTED`/`TIMEOUT_UNKNOWN`/`CANCELLED`, with
+the requested/normalized values and the real broker error text. A
+confirmation timeout now triggers one immediate `has_open_position()`
+broker-truth check (never a retry) so a late fill is recorded accurately
+instead of looking identical to a clean rejection.
+`_on_message()`'s dispatcher gained explicit `ProtoOASubscribeSpotsRes`/
+`ProtoOAUnsubscribeSpotsRes` branches (DEBUG, matching the existing
+`ProtoOAApplicationAuthRes`/`ProtoHeartbeatEvent` convention) instead of
+falling through to the generic "Unhandled message type" WARNING on every
+SL/TP-bearing order.
+
+**Regression tests:** `tests/test_ctrader_order_precision.py` (14 —
+`_round_price_to_digits`/`_price_to_relative_units` pure-math correctness
+including the exact `0.1+0.2` binary-float-noise case, the literal
+ETHUSD reproduction proving `rel_sl`/`rel_tp` are always exact multiples
+of the symbol's tick scale, EURUSD digits=5 regression pin, fail-closed
+on missing/implausible digits, and the ProtoOA dispatcher fix),
+`tests/test_execution_attempts.py` (10 — round-trip, invalid-status
+rejection, storage-failure-never-raises), `tests/test_oanda_execution.py`
+(+5 — REJECTED/TIMEOUT_UNKNOWN/ACCEPTED persistence, the broker-truth
+post-timeout check both with and without a confirmed late fill, and a
+storage-failure-never-masks-the-real-result test).
+
+**Status:** FIXED, tested. Full project suite re-run with zero
+regressions (see commit for exact count). **Not verified live against a
+real cTrader demo/live account from this sandboxed session** (no
+network/credentials here, same disclosed limitation as every other
+external-broker fix this session) — the operator's own follow-up is to
+place one real demo ETHUSD order (and ideally one other non-5-digit
+symbol, e.g. an index) through the fixed path and confirm no
+"invalid precision" rejection, then watch `storage.execution_attempts`
+accumulate real ACCEPTED/REJECTED rows over the following days.

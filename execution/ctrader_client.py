@@ -47,6 +47,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 from pathlib import Path
 from queue import Queue
@@ -101,6 +102,59 @@ def _trendbar_window(count: int, period: str, to_timestamp_ms: int | None,
     # cTrader caps the returned count anyway, so a wider window is safe.
     from_ms = to_ms - int(count * period_minutes * 60_000 * 1.6)
     return from_ms, to_ms
+
+
+# ─── Order price precision (2026-08-17, ETHUSD "invalid precision" defect) ──
+#
+# Root cause, confirmed against cTrader's own Open API docs (help.ctrader.com
+# /open-api/symbol-data/, /open-api/model-messages/) and community forum
+# (community.ctrader.com/forum/connect-api-support/37262/) before writing
+# this fix — NOT assumed from the symptom alone:
+#
+#   "ProtoOASpotEvent bid/ask... divide by 100000... [then] round the result
+#    to symbol digits." / relativeStopLoss/relativeTakeProfit are "specified
+#    in 1/100000 of unit of a price," computed as
+#    `Round(priceDiff, symbol.Digits) * 100000`.
+#
+# SPOT_SCALE=100_000 is a FIXED, symbol-independent wire-protocol constant —
+# it was never the bug. `digits` is a per-symbol ROUNDING precision that
+# must be applied to the real price value BEFORE re-scaling to the integer
+# sent over the wire, and this file skipped that rounding step entirely:
+# place_market_order() computed `abs(entry_price - order.stop_loss) *
+# SPOT_SCALE` directly from raw Python floats, so any float noise beyond
+# the symbol's own decimal precision (all but guaranteed by ordinary
+# float arithmetic) produced a relative value that does not correspond to
+# an exact multiple of that symbol's tick size — exactly what the broker's
+# "invalid precision" rejection means (confirmed by a second, independently
+# titled forum thread: "Order price has more digits than symbol allows").
+# This is why FX majors (commonly digits=5, where IATIS's own signal
+# precision rarely exceeds 5 decimals) appeared to work while ETHUSD (a
+# much coarser digits value) did not — it was never FX-vs-crypto-specific,
+# it surfaces for ANY symbol/price combination where float noise exceeds
+# that symbol's own digits.
+#
+# Fixed here with Decimal, not float, quantization — float rounding
+# (`round(x, n)`) can itself land a value one ULP off a clean decimal
+# multiple; Decimal.quantize() on a value first converted via
+# Decimal(str(x)) (never Decimal(x) directly, which re-imports the
+# original binary-float noise) is exact.
+
+def _round_price_to_digits(value: float, digits: int) -> Decimal:
+    """Round a real price/price-distance to a symbol's own decimal
+    precision, per cTrader's documented "divide by 100000, then round to
+    symbol digits" convention. `Decimal(str(value))` is deliberate — never
+    `Decimal(value)`, which would re-import the source float's own binary
+    rounding noise before quantizing it away."""
+    quantum = Decimal(1).scaleb(-digits)
+    return Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def _price_to_relative_units(value: Decimal, scale: int) -> int:
+    """A digits-rounded Decimal price/distance -> the integer cTrader's
+    wire format expects (real value * scale, e.g. 1/100000 of a price
+    unit) — always an exact multiple of `scale // 10**digits` by
+    construction, since `value` was already digits-quantized."""
+    return int((value * scale).to_integral_value(rounding=ROUND_HALF_UP))
 
 
 class DuplicateSessionError(Exception):
@@ -635,8 +689,19 @@ class CTraderClient:
                 self._on_error_res(message)
             elif msg_type == "ProtoOAOrderErrorEvent":
                 self._on_order_error_event(message)
-            elif msg_type in ("ProtoOAApplicationAuthRes", "ProtoOAAccountAuthRes"):
-                # Handled by the correlated auth callbacks; nothing to do here.
+            elif msg_type in (
+                "ProtoOAApplicationAuthRes", "ProtoOAAccountAuthRes",
+                "ProtoOASubscribeSpotsRes", "ProtoOAUnsubscribeSpotsRes",
+            ):
+                # Handled by their correlated request callbacks (see
+                # _get_spot_scaled's subscribe()/unsubscribe() closures for
+                # the latter two) — the deferred returned by client.send()
+                # already resolves when these arrive, nothing to act on in
+                # the dispatcher. Previously fell through to the generic
+                # "Unhandled message type" WARNING on every single spot
+                # subscribe/unsubscribe (i.e. every place_market_order()
+                # SL/TP lookup) — expected, uninteresting protocol
+                # lifecycle traffic, not an anomaly worth a WARNING.
                 logger.debug(f"↩ {msg_type}")
             elif msg_type == "ProtoHeartbeatEvent":
                 # Server keep-alive on a long-lived connection (every ~30s —
@@ -1582,6 +1647,85 @@ class CTraderClient:
 
     # ─── Orders ──────────────────────────────────────────────────────────────
 
+    def _compute_relative_sl_tp(
+        self, order: "CTraderOrder", ct_symbol: str, symbol_id: int,
+        details: "_SymbolDetails",
+    ) -> tuple[int, int, float, str]:
+        """Derive (relativeStopLoss, relativeTakeProfit) for a MARKET order
+        from a live spot price and the symbol's own digits-precision — see
+        the _round_price_to_digits/_price_to_relative_units block near the
+        top of this file for why this needs `details.digits`, not just
+        SPOT_SCALE, and tests/test_ctrader_order_precision.py for the
+        ETHUSD reproduction this fixes. Returns (rel_sl, rel_tp,
+        entry_price, error) — error is non-empty when the order must be
+        refused; rel_sl/rel_tp are 0 for a side that wasn't requested.
+        Split out of place_market_order() so this precision-critical
+        arithmetic is directly unit-testable without a live reactor/
+        broker connection."""
+        rel_sl = rel_tp = 0
+        entry_price = 0.0
+        if order.stop_loss <= 0 and order.take_profit <= 0:
+            return rel_sl, rel_tp, entry_price, ""
+
+        # cTrader rejects ABSOLUTE stopLoss/takeProfit on MARKET orders; it wants
+        # relativeStopLoss/relativeTakeProfit (distance from fill, in 1/100000 of
+        # price — SPOT_SCALE is a FIXED protocol constant for every symbol, see
+        # the _round_price_to_digits/_price_to_relative_units block above this
+        # class for why the per-symbol precision instead comes from `digits`).
+        # Derive that distance from a live spot price rather than a guessed entry.
+        spot = self._get_spot_scaled(symbol_id)
+        if not spot:
+            return 0, 0, 0.0, f"No live spot price for {ct_symbol}; cannot set SL/TP."
+        bid_scaled, ask_scaled = spot
+        entry_scaled = ask_scaled if order.direction == "BUY" else bid_scaled
+        # cTrader's own documented convention: divide the raw scaled spot
+        # by SPOT_SCALE, THEN round to the symbol's own digits — skipping
+        # this rounding is exactly what produced ETHUSD's "invalid
+        # precision" rejection (see the block comment above this class).
+        entry_price = float(_round_price_to_digits(entry_scaled / self.SPOT_SCALE, details.digits))
+
+        # Sanity: reject if the derived entry is wildly off the SL/TP band
+        # (guards against any price-scale mismatch instead of trading on it).
+        ref = order.take_profit or order.stop_loss
+        if ref and not (0.2 <= entry_price / ref <= 5.0):
+            return 0, 0, entry_price, (
+                f"Spot sanity check failed for {ct_symbol}: "
+                f"entry≈{entry_price} vs SL/TP {order.stop_loss}/"
+                f"{order.take_profit} (raw bid/ask={bid_scaled}/{ask_scaled})."
+            )
+
+        # Directional validation.
+        if order.direction == "BUY":
+            if order.stop_loss > 0 and order.stop_loss >= entry_price:
+                return 0, 0, entry_price, f"BUY: SL {order.stop_loss} must be below entry ≈{entry_price:.5f}."
+            if order.take_profit > 0 and order.take_profit <= entry_price:
+                return 0, 0, entry_price, f"BUY: TP {order.take_profit} must be above entry ≈{entry_price:.5f}."
+        else:
+            if order.stop_loss > 0 and order.stop_loss <= entry_price:
+                return 0, 0, entry_price, f"SELL: SL {order.stop_loss} must be above entry ≈{entry_price:.5f}."
+            if order.take_profit > 0 and order.take_profit >= entry_price:
+                return 0, 0, entry_price, f"SELL: TP {order.take_profit} must be below entry ≈{entry_price:.5f}."
+
+        # ROOT-CAUSE FIX (2026-08-17): round each distance to the symbol's
+        # own decimal precision BEFORE scaling to the wire integer — a
+        # plain `round(x * SPOT_SCALE)` on an un-quantized float (the
+        # previous code) does not, in general, land on an exact multiple
+        # of the symbol's real tick size, which is exactly what the
+        # broker's "invalid precision" rejection means.
+        tick = Decimal(1).scaleb(-details.digits)
+        if order.stop_loss > 0:
+            sl_dist = _round_price_to_digits(abs(entry_price - order.stop_loss), details.digits)
+            if sl_dist % tick != 0:  # defense-in-depth: quantize() above must already guarantee this
+                return 0, 0, entry_price, f"SL distance failed tick-alignment check for {ct_symbol} (digits={details.digits})."
+            rel_sl = _price_to_relative_units(sl_dist, self.SPOT_SCALE)
+        if order.take_profit > 0:
+            tp_dist = _round_price_to_digits(abs(order.take_profit - entry_price), details.digits)
+            if tp_dist % tick != 0:
+                return 0, 0, entry_price, f"TP distance failed tick-alignment check for {ct_symbol} (digits={details.digits})."
+            rel_tp = _price_to_relative_units(tp_dist, self.SPOT_SCALE)
+
+        return rel_sl, rel_tp, entry_price, ""
+
     def place_market_order(self, order: CTraderOrder) -> CTraderResult:
         """Place a market order with absolute SL/TP prices."""
         if self._read_only:
@@ -1625,6 +1769,17 @@ class CTraderClient:
                 success=False, symbol=order.symbol,
                 error=f"No live lotSize for {ct_symbol}; refusing to size by guess.",
             )
+        # FAIL CLOSED (2026-08-17): digits drives every price-precision
+        # decision below (see the _round_price_to_digits block preceding
+        # this method). A digits value outside any plausible real-world
+        # range means the fetched symbol spec is stale/corrupt/never
+        # actually populated — refuse rather than guess a scale for it.
+        if not (0 <= details.digits <= 10):
+            return CTraderResult(
+                success=False, symbol=order.symbol,
+                error=f"Implausible digits={details.digits} for {ct_symbol}; "
+                      f"refusing to guess a price precision.",
+            )
 
         api_volume, vol_error = self._to_api_volume(details, order.volume)
         if vol_error:
@@ -1632,54 +1787,11 @@ class CTraderClient:
                 success=False, symbol=order.symbol, error=vol_error,
             )
 
-        # cTrader rejects ABSOLUTE stopLoss/takeProfit on MARKET orders; it wants
-        # relativeStopLoss/relativeTakeProfit (distance from fill, in 1/100000 of
-        # price). Derive that distance from a live spot price rather than a
-        # guessed entry.
-        rel_sl = rel_tp = 0
-        if order.stop_loss > 0 or order.take_profit > 0:
-            spot = self._get_spot_scaled(symbol_id)
-            if not spot:
-                return CTraderResult(
-                    success=False, symbol=order.symbol,
-                    error=f"No live spot price for {ct_symbol}; cannot set SL/TP.",
-                )
-            bid_scaled, ask_scaled = spot
-            entry_scaled = ask_scaled if order.direction == "BUY" else bid_scaled
-            entry_price = entry_scaled / self.SPOT_SCALE
-
-            # Sanity: reject if the derived entry is wildly off the SL/TP band
-            # (guards against any price-scale mismatch instead of trading on it).
-            ref = order.take_profit or order.stop_loss
-            if ref and not (0.2 <= entry_price / ref <= 5.0):
-                return CTraderResult(
-                    success=False, symbol=order.symbol,
-                    error=(f"Spot sanity check failed for {ct_symbol}: "
-                           f"entry≈{entry_price} vs SL/TP {order.stop_loss}/"
-                           f"{order.take_profit} (raw bid/ask={bid_scaled}/"
-                           f"{ask_scaled})."),
-                )
-
-            # Directional validation.
-            if order.direction == "BUY":
-                if order.stop_loss > 0 and order.stop_loss >= entry_price:
-                    return CTraderResult(success=False, symbol=order.symbol,
-                        error=f"BUY: SL {order.stop_loss} must be below entry ≈{entry_price:.5f}.")
-                if order.take_profit > 0 and order.take_profit <= entry_price:
-                    return CTraderResult(success=False, symbol=order.symbol,
-                        error=f"BUY: TP {order.take_profit} must be above entry ≈{entry_price:.5f}.")
-            else:
-                if order.stop_loss > 0 and order.stop_loss <= entry_price:
-                    return CTraderResult(success=False, symbol=order.symbol,
-                        error=f"SELL: SL {order.stop_loss} must be above entry ≈{entry_price:.5f}.")
-                if order.take_profit > 0 and order.take_profit >= entry_price:
-                    return CTraderResult(success=False, symbol=order.symbol,
-                        error=f"SELL: TP {order.take_profit} must be below entry ≈{entry_price:.5f}.")
-
-            if order.stop_loss > 0:
-                rel_sl = int(round(abs(entry_price - order.stop_loss) * self.SPOT_SCALE))
-            if order.take_profit > 0:
-                rel_tp = int(round(abs(order.take_profit - entry_price) * self.SPOT_SCALE))
+        rel_sl, rel_tp, _entry_price, sl_tp_error = self._compute_relative_sl_tp(
+            order, ct_symbol, symbol_id, details
+        )
+        if sl_tp_error:
+            return CTraderResult(success=False, symbol=order.symbol, error=sl_tp_error)
 
         try:
             from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOANewOrderReq

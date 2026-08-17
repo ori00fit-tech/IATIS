@@ -245,6 +245,100 @@ def test_on_execution_event_two_unresolved_symbols_do_not_collide(client):
     assert client._positions["SYMBOL_222"].position_id == "2"
 
 
+# ── TCA async-fill fix (2026-08-17) — _fill_updates / take_fill_update ───
+# Root cause: place_market_order()'s synchronous RPC response is a
+# ProtoOAExecutionEvent with executionType=ORDER_ACCEPTED (2), which
+# frequently carries position.price == 0 for a market order — the real
+# fill lands moments later on an ORDER_FILLED (3) event pushed
+# asynchronously, processed only by _on_execution_event. Both this handler
+# and _on_reconcile_res must record a broker-truth price into
+# _fill_updates the instant one is real (never when it's still 0), so
+# storage.execution_quality's pending-fill resolution can complete a fill
+# it couldn't price synchronously.
+
+def test_on_execution_event_records_fill_update_when_price_is_real(client):
+    client._symbol_id_to_name[1] = "EURUSD"
+    position = SimpleNamespace(
+        positionId=42, positionStatus=1, price=1.10765,
+        stopLoss=1.09, takeProfit=1.12,
+        tradeData=SimpleNamespace(symbolId=1, tradeSide=1, volume=100_000),
+    )
+    client._on_execution_event(SimpleNamespace(executionType=3, position=position))
+
+    update = client.take_fill_update("42")
+    assert update is not None
+    assert update["price"] == pytest.approx(1.10765)
+    assert update["symbol"] == "EURUSD"
+    assert update["direction"] == "BUY"
+
+
+def test_on_execution_event_does_not_record_fill_update_when_price_is_zero(client):
+    """The common ORDER_ACCEPTED shape: position exists (so _positions IS
+    updated, matching today's behavior), but price is still 0 — must NOT
+    be queued as a "fill" update, since there is no real price yet."""
+    client._symbol_id_to_name[1] = "EURUSD"
+    position = SimpleNamespace(
+        positionId=999, positionStatus=1, price=0.0,
+        stopLoss=0.0, takeProfit=0.0,
+        tradeData=SimpleNamespace(symbolId=1, tradeSide=1, volume=100_000),
+    )
+    client._on_execution_event(SimpleNamespace(executionType=2, position=position))
+
+    assert "EURUSD" in client._positions  # position tracking is unaffected
+    assert client.take_fill_update("999") is None  # but no fill update was recorded
+
+
+def test_on_reconcile_res_records_fill_update_when_price_is_real(client):
+    """Covers the process-restart recovery path: a fill accepted before
+    this process started (or between accept and fill) can still resolve
+    via the broker-truth price ProtoOAReconcileRes reports on reconnect."""
+    client._symbol_id_to_name[1] = "EURUSD"
+    positions = [
+        SimpleNamespace(
+            positionId=555, price=1.08765, stopLoss=1.0800, takeProfit=1.0950,
+            tradeData=SimpleNamespace(symbolId=1, tradeSide=1, volume=100_000),
+        )
+    ]
+    client._on_reconcile_res(SimpleNamespace(position=positions))
+
+    update = client.take_fill_update("555")
+    assert update is not None
+    assert update["price"] == pytest.approx(1.08765)
+
+
+def test_on_reconcile_res_does_not_record_fill_update_when_price_is_zero(client):
+    client._symbol_id_to_name[1] = "EURUSD"
+    positions = [
+        SimpleNamespace(
+            positionId=777, price=0.0, stopLoss=0.0, takeProfit=0.0,
+            tradeData=SimpleNamespace(symbolId=1, tradeSide=1, volume=100_000),
+        )
+    ]
+    client._on_reconcile_res(SimpleNamespace(position=positions))
+    assert client.take_fill_update("777") is None
+
+
+def test_take_fill_update_pops_so_a_second_poll_returns_none(client):
+    """Idempotency layer #1 (the D1-side PENDING-status guard in
+    storage.execution_quality is layer #2): once popped, a second poll
+    before another real update arrives must return None, not the same
+    stale value again."""
+    client._symbol_id_to_name[1] = "EURUSD"
+    position = SimpleNamespace(
+        positionId=42, positionStatus=1, price=1.10765,
+        stopLoss=0.0, takeProfit=0.0,
+        tradeData=SimpleNamespace(symbolId=1, tradeSide=1, volume=100_000),
+    )
+    client._on_execution_event(SimpleNamespace(executionType=3, position=position))
+
+    assert client.take_fill_update("42") is not None
+    assert client.take_fill_update("42") is None
+
+
+def test_take_fill_update_unknown_position_returns_none(client):
+    assert client.take_fill_update("NEVER_SEEN") is None
+
+
 # ── SYMBOL_N re-resolution race fix ──────────────────────────────────────
 
 def test_reresolve_pending_symbol_ids_fixes_up_placeholder_after_symbols_load(client):
@@ -704,10 +798,17 @@ def test_parse_execution_response_prefers_deal_execution_price_over_position(cli
     assert result.entry_price == 1.09000
 
 
-def test_parse_execution_response_falls_back_to_order_entry_price_when_nothing_else_is_set(client):
+def test_parse_execution_response_never_fabricates_fill_price_from_order_entry_price(client):
+    """2026-08-17 fix, regression pin: when the broker hasn't reported a
+    real deal/position/order execution price yet (the common shape of a
+    cTrader executionType=ORDER_ACCEPTED response), entry_price MUST stay
+    0.0 — order.entry_price (the signal's own intended reference price)
+    must never be silently substituted as a "fill". Substituting it here
+    is exactly the anti-pattern that made TCA slippage look like 0 by
+    construction on the very live fills that most needed measuring."""
     response = _fake_response(
-        "ProtoOAExecutionEvent", executionType=1, errorCode="",
-        deal=None, position=None, order=None,
+        "ProtoOAExecutionEvent", executionType=CTraderClient.EXEC_TYPE_ORDER_ACCEPTED,
+        errorCode="", deal=None, position=None, order=None,
     )
     order = CTraderOrder(
         symbol="EURUSD", direction="BUY", volume=100_000,
@@ -715,4 +816,5 @@ def test_parse_execution_response_falls_back_to_order_entry_price_when_nothing_e
     )
     result = client._parse_execution_response(order, response)
 
-    assert result.entry_price == 1.0875
+    assert result.success is True  # the order itself was still accepted
+    assert result.entry_price == 0.0  # but the fill price is honestly unknown

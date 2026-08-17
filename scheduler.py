@@ -284,9 +284,19 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                     )
                                     # TCA: record intended-vs-fill for every real
                                     # broker fill (storage/execution_quality.py).
+                                    # record_or_queue_fill() records immediately
+                                    # when the fill price is already known
+                                    # (OANDA/Dukascopy JForex, or a cTrader
+                                    # response that happened to carry one), or
+                                    # durably QUEUES it when it isn't yet (the
+                                    # common cTrader ORDER_ACCEPTED shape,
+                                    # 2026-08-17 fix) — resolved by the pending-
+                                    # fill pass below on a LATER tick, once
+                                    # execution/ctrader_client.py's async event
+                                    # stream reports the real broker price.
                                     # Never raises; dry-run is excluded inside.
-                                    from storage.execution_quality import log_fill
-                                    log_fill(report, exec_result, broker=broker)
+                                    from storage.execution_quality import record_or_queue_fill
+                                    record_or_queue_fill(report, exec_result, broker=broker)
                             else:
                                 logger.info(
                                     f"Signal for {internal} not logged to outcome tracker: "
@@ -433,6 +443,39 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                             logger.warning(f"Reconciliation auto-repair failed (non-fatal): {exc}")
             except Exception as exc:
                 logger.warning(f"Reconciliation failed (non-fatal): {exc}")
+
+        # TCA async-fill resolution pass (2026-08-17 fix): completes any
+        # fill queued as PENDING by record_or_queue_fill() earlier this
+        # tick (or an earlier one) once execution/ctrader_client.py's
+        # async event stream — or the next ProtoOAReconcileRes — has
+        # reported the real broker price. Gated the same way
+        # reconciliation is (cTrader path actually live): a paper/dry-run
+        # deployment has no broker session to poll and nothing would ever
+        # resolve. take_fill_update() pops each update so a second poll
+        # before the next one arrives is a no-op — combined with
+        # resolve_pending_fill()'s own PENDING-status guard on the D1
+        # side, a fill can only ever be recorded once.
+        exec_cfg = config.get("execution", {})
+        if exec_cfg.get("ctrader_enabled", False) and not exec_cfg.get("dry_run", True):
+            try:
+                from storage.execution_quality import (
+                    pending_fill_position_ids,
+                    resolve_pending_fill,
+                    sweep_stale_pending_fills,
+                )
+                from core.data_providers import get_shared_ctrader_client
+                client = get_shared_ctrader_client()
+                resolved = 0
+                for position_id in pending_fill_position_ids():
+                    update = client.take_fill_update(position_id)
+                    if update and update.get("price"):
+                        if resolve_pending_fill(position_id, float(update["price"])):
+                            resolved += 1
+                if resolved:
+                    logger.info(f"TCA: resolved {resolved} pending fill(s) this tick")
+                sweep_stale_pending_fills()
+            except Exception as exc:
+                logger.warning(f"TCA pending-fill resolution failed (non-fatal): {exc}")
 
     finally:
         _lock.release()

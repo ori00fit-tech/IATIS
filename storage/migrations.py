@@ -238,6 +238,18 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE provider_benchmark_results ADD COLUMN evidence_series_json TEXT",
         ],
     ),
+    (
+        15,
+        "fills_latency_column",
+        # TCA async-fill fix (2026-08-17) — storage/execution_quality.py's
+        # resolve_pending_fill() records how long a fill sat PENDING before
+        # the broker confirmed its real price (async path only; the
+        # synchronous log_fill() path leaves this NULL, since the concept
+        # doesn't apply the same way there).
+        [
+            "ALTER TABLE fills ADD COLUMN fill_latency_seconds REAL",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -304,6 +316,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE provider_benchmark_results" in s for s in statements):
                 from storage import provider_benchmark
                 provider_benchmark._init(con)
+            if any("ALTER TABLE fills" in s for s in statements):
+                from storage import execution_quality
+                execution_quality._init(con)
             for sql in statements:
                 try:
                     con.execute(sql)

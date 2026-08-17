@@ -47,6 +47,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 from pathlib import Path
@@ -351,6 +352,19 @@ class CTraderClient:
     # cTrader spot bid/ask and relative SL/TP are in 1/100000 of price units.
     SPOT_SCALE = 100_000
 
+    # ProtoOAExecutionType values (verified against spotware/openapi-proto-
+    # messages' OpenApiModelMessages.proto — not guessed; a wrong guess here
+    # would misdiagnose which event genuinely carries a fill price). Only
+    # ORDER_ACCEPTED is consulted by name today (see the TCA async-fill fix,
+    # 2026-08-17): the synchronous RPC response to ProtoOANewOrderReq is
+    # this event, and it commonly carries position.price == 0 for a market
+    # order — the real fill lands on a later, asynchronously-pushed
+    # ORDER_FILLED/ORDER_PARTIAL_FILL event instead.
+    EXEC_TYPE_ORDER_ACCEPTED = 2
+    EXEC_TYPE_ORDER_FILLED = 3
+    EXEC_TYPE_ORDER_REJECTED = 7
+    EXEC_TYPE_ORDER_PARTIAL_FILL = 11
+
     # Response wait budgets (seconds)
     ORDER_TIMEOUT = 15.0
     AUTH_TIMEOUT = 15.0        # app/account auth round-trips
@@ -420,6 +434,21 @@ class CTraderClient:
         # Account / positions.
         self._account_info: AccountInfo | None = None
         self._positions: dict[str, OpenPosition] = {}
+
+        # Broker-truth fill-price registry, keyed by position_id (2026-08-17,
+        # TCA "missing intended/fill price" fix — see the module-level note
+        # near _EXEC_TYPE_ACCEPTED below). place_market_order()'s synchronous
+        # RPC response is a ProtoOAExecutionEvent with executionType=
+        # ORDER_ACCEPTED, which frequently carries NO real fill price yet
+        # (position.price == 0) — the actual fill arrives moments later on
+        # the async event stream (_on_execution_event), or, if this process
+        # restarted in between, via the next _on_reconcile_res on reconnect.
+        # Both handlers populate this dict with the real broker price the
+        # instant one becomes known; storage.execution_quality's pending-fill
+        # resolution (driven from the scheduler's main thread, never from
+        # here) polls it via take_fill_update(). Pure in-memory, no I/O —
+        # this file's reactor thread must never block on a D1 round-trip.
+        self._fill_updates: dict[str, dict[str, Any]] = {}
 
         # Async → sync bridge for account info.
         self._message_queue: Queue = Queue()
@@ -843,6 +872,46 @@ class CTraderClient:
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOASymbolByIdRes: {exc}")
 
+    def _record_fill_update(self, position: OpenPosition) -> None:
+        """Caches a broker-truth fill price for later pickup by
+        take_fill_update() — called from inside the `self._lock` block of
+        both _on_reconcile_res and _on_execution_event, the only two
+        places `_positions` is ever written with a broker-reported price.
+
+        A no-op when `entry_price` is still 0 (position accepted but not
+        yet filled) — this function never queues a "fill" that isn't
+        real, matching every other broker-truth-only guarantee in this
+        file. Overwrites any previous entry for the same position_id,
+        which is exactly what's wanted for a partial fill: cTrader
+        already computes and reports the position's own running average
+        entry price server-side (position.price), so each update here is
+        already the correct, broker-computed weighted-average fill price
+        as of that event — no separate manual VWAP accumulation needed.
+        """
+        if position.entry_price <= 0 or not position.position_id:
+            return
+        self._fill_updates[position.position_id] = {
+            "price": position.entry_price,
+            "volume": position.volume,
+            "symbol": position.symbol,
+            "direction": position.direction,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def take_fill_update(self, position_id: str) -> dict[str, Any] | None:
+        """Pops (removes) a captured broker-truth fill update for
+        `position_id`, or None if nothing has arrived since the last call.
+
+        Popping is itself one layer of idempotency: a second poll for the
+        same position_id before another update lands returns None, so a
+        caller (storage.execution_quality's pending-fill resolution,
+        driven from the scheduler's main thread — never from here) can't
+        act on the same broker event twice from this side. Combined with
+        pending_fills' own PENDING-status guard on the D1 side, a fill can
+        only ever be recorded once."""
+        with self._lock:
+            return self._fill_updates.pop(position_id, None)
+
     def _on_reconcile_res(self, message: Any) -> None:
         """Handle ProtoOAReconcileRes: rebuild `_positions` from broker truth.
 
@@ -892,6 +961,13 @@ class CTraderClient:
                         stop_loss=float(getattr(position, "stopLoss", 0.0)),
                         take_profit=float(getattr(position, "takeProfit", 0.0)),
                     )
+                    # Recovery path for the TCA async-fill fix (2026-08-17):
+                    # covers a process restart between an order's ACCEPT and
+                    # its FILL confirmation — reconcile is broker truth too,
+                    # so a pending fill can resolve from here even if the
+                    # live _on_execution_event that would normally do it was
+                    # never seen by this process.
+                    self._record_fill_update(self._positions[iatis_symbol])
             logger.info(f"🧾 Reconcile: {len(self._positions)} open position(s) loaded from broker")
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOAReconcileRes: {exc}")
@@ -941,7 +1017,21 @@ class CTraderClient:
                         stop_loss=float(getattr(position, "stopLoss", 0.0)),
                         take_profit=float(getattr(position, "takeProfit", 0.0)),
                     )
-                    logger.info(f"📈 Position tracked: {iatis_symbol}")
+                    logger.info(
+                        f"📈 Position tracked: {iatis_symbol} "
+                        f"(execution_type={exec_type}, price={self._positions[iatis_symbol].entry_price})"
+                    )
+                    # TCA async-fill fix (2026-08-17): the FIRST event for a
+                    # new order is typically executionType=ORDER_ACCEPTED
+                    # (2), which frequently carries position.price == 0 —
+                    # this call is then a no-op (see _record_fill_update's
+                    # own guard). The real price lands on a LATER event
+                    # (ORDER_FILLED=3 / ORDER_PARTIAL_FILL=11), which is
+                    # exactly why this dict update lives here rather than
+                    # only inside place_market_order()'s synchronous
+                    # response handling — that synchronous path only ever
+                    # sees the FIRST event, this handler sees all of them.
+                    self._record_fill_update(self._positions[iatis_symbol])
         except Exception as exc:
             logger.error(f"❌ Error processing ProtoOAExecutionEvent: {exc}")
 
@@ -1925,6 +2015,24 @@ class CTraderClient:
         # broker's ground truth for fill price (_on_execution_event,
         # _on_reconcile_res), so it belongs ahead of the order/deal fields
         # here too, not only after them.
+        #
+        # FIX (2026-08-17, TCA async-fill correctness): the `order.entry_price`
+        # fallback that used to sit here is REMOVED. It silently turned the
+        # signal's own INTENDED price into a fabricated "fill" the moment
+        # deal/position/order_obj all lacked a real one — exactly the anti-
+        # pattern that made slippage look like 0 by construction on every
+        # ORDER_ACCEPTED response with no fill data yet (confirmed: cTrader's
+        # own executionType=2 is ORDER_ACCEPTED, not ORDER_FILLED=3 — this
+        # synchronous RPC response is frequently the accept, not the fill).
+        # `exec_price` staying 0.0 here is now the correct, honest signal
+        # that the real fill price is not yet known — storage.
+        # execution_quality.record_or_queue_fill() queues it instead of
+        # recording a fabricated slippage-free "fill", and
+        # _on_execution_event/_on_reconcile_res populate the real broker
+        # price into self._fill_updates the instant a later event confirms
+        # it (see take_fill_update()). The order is still reported
+        # success=True here regardless — cTrader DID accept it — only the
+        # fill-price KNOWLEDGE is what's pending, not the order itself.
         exec_price = 0.0
         if deal is not None and getattr(deal, "executionPrice", 0):
             exec_price = float(deal.executionPrice)
@@ -1932,8 +2040,6 @@ class CTraderClient:
             exec_price = float(position.price)
         elif order_obj is not None and getattr(order_obj, "executionPrice", 0):
             exec_price = float(order_obj.executionPrice)
-        elif order.entry_price:
-            exec_price = float(order.entry_price)
 
         result = CTraderResult(
             success=True,
@@ -1947,9 +2053,10 @@ class CTraderClient:
             take_profit=order.take_profit,
             raw={"execution_type": getattr(response, "executionType", None)},
         )
+        price_label = exec_price if exec_price else "PENDING (fill price not yet confirmed by broker)"
         logger.info(
             f"✅ Order response: pos_id={position_id or 'pending'} "
-            f"price={exec_price} type={result.raw['execution_type']}"
+            f"price={price_label} type={result.raw['execution_type']}"
         )
         return result
 

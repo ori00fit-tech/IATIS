@@ -476,3 +476,129 @@ def test_run_once_survives_a_proactive_refresh_failure(synthetic_config):
         reports = run_once(synthetic_config, symbols=["EUR/USD"])
 
     assert len(reports) == 1
+
+
+# ---------------------------------------------------------------------------
+# TCA async-fill resolution pass (2026-08-17 fix) — the per-tick pass that
+# completes any fill queued as PENDING by record_or_queue_fill() once
+# execution/ctrader_client.py's async event stream reports the real broker
+# price. Gated identically to reconciliation: only when ctrader_enabled and
+# not dry_run.
+# ---------------------------------------------------------------------------
+
+def _live_ctrader_config(synthetic_config):
+    synthetic_config["execution"] = {
+        **synthetic_config.get("execution", {}),
+        "ctrader_enabled": True, "dry_run": False,
+    }
+    # reconcile() itself also reaches for get_shared_ctrader_client() under
+    # this same gate — keep it a harmless no-op match so the reconciliation
+    # pass doesn't fire an alert/auto-repair unrelated to this test.
+    return synthetic_config
+
+
+class _FakeCtraderClientWithFillUpdate:
+    def __init__(self, fill_updates: dict[str, dict] | None = None):
+        self._fill_updates = dict(fill_updates or {})
+        self.take_fill_update_calls: list[str] = []
+
+    def get_open_positions(self):
+        return []
+
+    def take_fill_update(self, position_id: str):
+        self.take_fill_update_calls.append(position_id)
+        return self._fill_updates.pop(position_id, None)
+
+
+def test_run_once_resolves_pending_fill_when_ctrader_live(synthetic_config, monkeypatch):
+    """A PENDING fill whose broker-truth price has since arrived (via
+    take_fill_update) must be resolved this tick — the whole point of the
+    async-fill fix: TCA doesn't permanently fail just because the order's
+    own synchronous response carried price=0.0."""
+    from scheduler import run_once
+
+    _live_ctrader_config(synthetic_config)
+    fake_client = _FakeCtraderClientWithFillUpdate({"POS123": {"price": 1.0855}})
+    monkeypatch.setattr("core.data_providers.get_shared_ctrader_client", lambda: fake_client)
+
+    with patch("storage.execution_quality.pending_fill_position_ids", return_value=["POS123"]), \
+         patch("storage.execution_quality.resolve_pending_fill", return_value=True) as mock_resolve, \
+         patch("storage.execution_quality.sweep_stale_pending_fills") as mock_sweep, \
+         patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert fake_client.take_fill_update_calls == ["POS123"]
+    mock_resolve.assert_called_once_with("POS123", 1.0855)
+    mock_sweep.assert_called_once()
+
+
+def test_run_once_does_not_resolve_when_no_fill_update_yet(synthetic_config, monkeypatch):
+    """A PENDING position with no broker-truth update available yet (the
+    fill hasn't been confirmed) must be left PENDING — never fabricated
+    from take_fill_update() returning None."""
+    from scheduler import run_once
+
+    _live_ctrader_config(synthetic_config)
+    fake_client = _FakeCtraderClientWithFillUpdate({})  # no update queued
+    monkeypatch.setattr("core.data_providers.get_shared_ctrader_client", lambda: fake_client)
+
+    with patch("storage.execution_quality.pending_fill_position_ids", return_value=["POS999"]), \
+         patch("storage.execution_quality.resolve_pending_fill") as mock_resolve, \
+         patch("storage.execution_quality.sweep_stale_pending_fills"), \
+         patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert fake_client.take_fill_update_calls == ["POS999"]
+    mock_resolve.assert_not_called()
+
+
+def test_run_once_skips_pending_fill_resolution_in_dry_run(synthetic_config):
+    """dry_run=True has no live broker session to poll — the resolution
+    pass must never even attempt to reach for a cTrader client."""
+    from scheduler import run_once
+
+    synthetic_config["execution"] = {
+        **synthetic_config.get("execution", {}), "ctrader_enabled": True, "dry_run": True,
+    }
+
+    with patch("storage.execution_quality.pending_fill_position_ids") as mock_pending, \
+         patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_pending.assert_not_called()
+
+
+def test_run_once_skips_pending_fill_resolution_when_ctrader_disabled(synthetic_config):
+    from scheduler import run_once
+
+    synthetic_config["execution"] = {
+        **synthetic_config.get("execution", {}), "ctrader_enabled": False, "dry_run": False,
+    }
+
+    with patch("storage.execution_quality.pending_fill_position_ids") as mock_pending, \
+         patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_pending.assert_not_called()
+
+
+def test_run_once_survives_pending_fill_resolution_failure(synthetic_config, monkeypatch):
+    """A storage/client hiccup in the TCA resolution pass must never abort
+    the scheduler tick — same non-fatal contract as reconciliation."""
+    from scheduler import run_once
+
+    _live_ctrader_config(synthetic_config)
+    monkeypatch.setattr(
+        "core.data_providers.get_shared_ctrader_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("cTrader session down")),
+    )
+
+    with patch("scheduler.run_pipeline", return_value={"symbol": "EUR/USD", "final_verdict": "NO_TRADE"}), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert len(reports) == 1

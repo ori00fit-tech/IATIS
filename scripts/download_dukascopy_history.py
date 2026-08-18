@@ -148,10 +148,47 @@ Usage:
     python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD            # 10y H1, default
     python3 -m scripts.download_dukascopy_history --symbols EURUSD --timeframe M15   # 10y M15
     python3 -m scripts.download_dukascopy_history --symbols BTCUSD --years 1 --workers 16
-    python3 -m scripts.download_dukascopy_history --symbols GBPUSD --request-interval 1.0  # slower, if still hitting 429s
+    python3 -m scripts.download_dukascopy_history --symbols GBPUSD --request-interval 5.0  # even more conservative than the 3.0s default, if still hitting 429s/503s
+    python3 -m scripts.download_dukascopy_history --probe GBPUSD --workers 1 --request-interval 5  # safe, sequential live check before any bulk run
     # Interrupted or partially-failed run? Just re-run the same command —
     # already-completed hours are skipped automatically (see "Resume/
-    # checkpointing" above), no flag needed.
+    # checkpointing" above), no flag needed. Ctrl+C during a run is safe:
+    # it's caught cooperatively (see "Ctrl+C / cancellation" below), never
+    # corrupts the checkpoint, and the same re-run resumes cleanly.
+
+Ctrl+C / cancellation (2026-08-18): a real live run mixed 429s/503s/
+connect-timeouts AND ended with the operator's own Ctrl+C producing a
+long hang/traceback — traced to `with ThreadPoolExecutor(...) as pool:`
+implicitly calling `pool.shutdown(wait=True)` on exit, which blocks
+until every in-flight/queued future finishes, including ones stuck deep
+in a multi-minute retry backoff. Python cannot forcibly kill a running
+thread, so this can never be made instant — but download_symbol_hours()
+now checks a shared, cooperative `_shutdown_requested` flag (set by
+main()'s own KeyboardInterrupt handler) BEFORE every sleep and every new
+HTTP attempt — never during an already-started one, since Python cannot
+preempt a sleeping/blocked thread — and shuts the pool down with
+`wait=False, cancel_futures=True` instead of blocking. This bounds the
+worst case to whatever single wait/request is already in progress on
+each worker (a request timeout, a retry backoff, or — rarely — an
+active global cooldown, which can run up to
+_CONSECUTIVE_FAILURE_COOLDOWN_SECONDS/180s in the escalated case), never
+the whole remaining queue of hours. Whatever hours had already completed
+(and, for a checkpointed CLI run, been durably written) stay exactly as
+safe as any other interruption — see "Resume/checkpointing" below.
+
+No verified published Dukascopy rate limit exists (the 3.0s default
+below, and every retry/backoff/cooldown constant, is empirical, derived
+from live failures observed on this project's own VPS runs — see the
+"Rate limiting" section below for the full history). The intended
+behavior is adaptive, not a fixed guarantee: healthy conditions run at
+the full configured rate; a 429 backs off and enters a shared cooldown
+that slows every worker, escalating on repeated hits; a 503 (backend
+unavailable, not a rate limit) starts with a SHORTER initial cooldown
+than a 429 but escalates the same way on repeats. Do not read any
+interval/backoff constant in this file as "guarantees no 429/503" —
+Dukascopy publishes no rate limit to guarantee against. Always run
+--probe with a single worker before a bulk/--years download against a
+feed that hasn't been exercised recently.
 """
 from __future__ import annotations
 
@@ -180,38 +217,133 @@ DEFAULT_WORKERS = 4  # lowered from 12 (2026-08-11) — see module docstring's "
 TICK_RECORD_STRUCT = struct.Struct(">iiiff")  # ms_offset, ask_raw, bid_raw, ask_vol, bid_vol
 TICK_RECORD_SIZE = TICK_RECORD_STRUCT.size
 
-# Global request-rate pacer (2026-08-17) — see module docstring's "Rate
-# limiting" note, third finding. A module-level, mutable default so a
-# single-process CLI run can override it once via --request-interval
-# (main() reassigns this global before any download starts) without
-# threading a new parameter through fetch_hour()'s signature, which is
-# also called directly by --probe and by every existing test.
-MIN_REQUEST_INTERVAL_SECONDS = 0.5  # ~2 req/s sustained, shared across all worker threads
+# Global request-rate pacer (2026-08-17, defaults raised 2026-08-18 — see
+# module docstring's "Rate limiting" note, fourth finding). A module-level,
+# mutable default so a single-process CLI run can override it once via
+# --request-interval (main() reassigns this global before any download
+# starts) without threading a new parameter through fetch_hour()'s
+# signature, which is also called directly by --probe and by every
+# existing test. 3.0s (not the earlier 0.5s) is a conservative EMPIRICAL
+# safety default, not an official Dukascopy published rate limit (none
+# exists) — live evidence 2026-08-18 showed 0.5s (~2 req/s) still drew
+# sustained 429s. Tune with --request-interval if still too aggressive
+# (or, once the feed is confirmed healthy via --probe, too slow).
+MIN_REQUEST_INTERVAL_SECONDS = 3.0
 _rate_limit_lock = threading.Lock()
 _next_request_time = 0.0
+
+# Global circuit breaker / cooldown (2026-08-18) — see module docstring's
+# "Rate limiting" note, fourth finding: a curl straight to the bare
+# datafeed.dukascopy.com root returned HTTP 503 "No server is available
+# to handle this request" — Dukascopy's OWN backend is intermittently
+# unavailable, a genuinely different failure mode from per-request rate
+# limiting, and one where 4 workers independently retrying makes things
+# worse, not better. _cooldown_until is a shared monotonic deadline: any
+# thread hitting a transient failure (429/5xx) EXTENDS it (never shrinks
+# an existing longer cooldown set by another thread), and _throttle() —
+# the single gate every actual HTTP attempt already passes through, first
+# attempt or retry — blocks every worker until it clears. This turns
+# "4 workers each retry independently" into "one shared, extend-only
+# cooldown all workers wait out together," per the operator's own
+# explicit design request.
+_cooldown_lock = threading.Lock()
+_cooldown_until = 0.0
+_shutdown_requested = threading.Event()  # cooperative Ctrl+C — see download_symbol_hours()
+
+
+def _enter_cooldown(seconds: float) -> None:
+    """Extends the shared cooldown deadline — never shrinks a longer one
+    another thread already set (e.g. thread A's 120s 429 backoff must not
+    get overwritten by thread B's shorter 503 backoff arriving a moment
+    later)."""
+    global _cooldown_until
+    if seconds <= 0:
+        return
+    with _cooldown_lock:
+        _cooldown_until = max(_cooldown_until, time.monotonic() + seconds)
 
 
 def _throttle() -> None:
     """Blocks the calling thread until it's safe to send the next
-    Dukascopy request, then reserves the next slot for whoever calls
-    next. The lock is held only long enough to read/reserve the shared
-    next-allowed-time — never across the sleep itself — so multiple
-    worker threads queue up cleanly with correctly staggered wake times
-    instead of serializing on each other's I/O."""
+    Dukascopy request — first waiting out any active global cooldown
+    (see _enter_cooldown above), then reserving the next per-request
+    pacing slot — and reserves that slot for whoever calls next. Locks
+    are held only long enough to read/reserve shared state — never
+    across the sleep itself — so multiple worker threads queue up
+    cleanly with correctly staggered wake times instead of serializing
+    on each other's I/O. Raises _ShutdownRequested (cooperative
+    cancellation, see download_symbol_hours()) instead of ever sleeping
+    once a Ctrl+C has been requested."""
     global _next_request_time
+    if _shutdown_requested.is_set():
+        raise _ShutdownRequested()
+    # Single-shot cooldown wait (compute once, sleep once — no re-check
+    # loop): a loop that re-reads _cooldown_until after waking would be
+    # more precise against a cooldown another thread keeps extending
+    # while this one sleeps, but re-deriving the remaining wait from
+    # time.monotonic() on every iteration cannot be safely mocked the way
+    # this whole file's test suite mocks time.sleep() (a frozen/mocked
+    # clock with a no-op sleep spins forever instead of advancing). A
+    # thread that wakes slightly early from a stale cooldown value just
+    # makes one attempt sooner than ideal — self-correcting, since a
+    # continued outage re-triggers _enter_cooldown() again — and matches
+    # this module's own "empirical, not a guarantee" framing (see the
+    # docstring's "Rate limiting" note) rather than a hard requirement.
+    with _cooldown_lock:
+        cooldown_wait = max(0.0, _cooldown_until - time.monotonic())
+    if cooldown_wait > 0:
+        if _shutdown_requested.is_set():
+            raise _ShutdownRequested()
+        time.sleep(cooldown_wait)
     with _rate_limit_lock:
         now = time.monotonic()
         wait = max(0.0, _next_request_time - now)
         reserved_start = now + wait
         _next_request_time = reserved_start + MIN_REQUEST_INTERVAL_SECONDS
     if wait > 0:
+        if _shutdown_requested.is_set():
+            raise _ShutdownRequested()
         time.sleep(wait)
 
 
-# 429 retry/backoff — see module docstring's "Rate limiting" note.
+def _jittered(seconds: float, spread: float = 0.2) -> float:
+    """±spread jitter (default ±20%, per the operator's own spec) so
+    concurrent workers backing off from the same failure don't wake and
+    retry in lockstep."""
+    import random
+    return seconds * random.uniform(1.0 - spread, 1.0 + spread)
+
+
+class _ShutdownRequested(Exception):
+    """Internal-only cooperative-cancellation signal — raised by
+    _throttle() once Ctrl+C has been requested, instead of starting (or
+    continuing to back off before) another HTTP attempt. Never crosses
+    download_symbol_hours()'s own boundary as this exception type; it's
+    translated there into a clean, checkpoint-preserving stop."""
+
+
+# 429 (rate-limited) retry/backoff — see module docstring's "Rate
+# limiting" note. Distinct budget/schedule from 5xx below: rate limiting
+# and backend unavailability are different failure modes with different
+# expected recovery times.
 MAX_429_RETRIES = 5
-_429_BACKOFF_BASE_SECONDS = 4.0
-_429_BACKOFF_MAX_SECONDS = 60.0
+_429_BACKOFF_BASE_SECONDS = 10.0  # 10, 20, 40, 60(capped), 120(capped) — empirical, see module docstring
+_429_BACKOFF_MAX_SECONDS = 120.0
+_429_COOLDOWN_SECONDS = 30.0  # extends the GLOBAL cooldown so every worker (not just the one that got the 429) pauses
+
+# HTTP 5xx (500/502/503/504 — transient server/backend errors, distinct
+# from 429) retry/backoff. 2026-08-18, confirmed live: a direct curl to
+# datafeed.dukascopy.com's bare root returned 503 "No server is available
+# to handle this request", then later requests to the same host succeeded
+# — genuinely transient backend unavailability, not a client-side problem
+# a longer request interval alone fixes, and not the same failure class as
+# 429 (rate limiting is Dukascopy telling you to slow down; 5xx is
+# Dukascopy's own infrastructure being unhealthy).
+_TRANSIENT_5XX_STATUSES = frozenset({500, 502, 503, 504})
+MAX_5XX_RETRIES = 5
+_5XX_BACKOFF_BASE_SECONDS = 5.0  # 5, 10, 20, 40, 60(capped) — empirical
+_5XX_BACKOFF_MAX_SECONDS = 60.0
+_5XX_COOLDOWN_SECONDS = 10.0  # shorter initial global cooldown than 429 — see _consecutive_transient_failures below for escalation
 
 # Network-level retry/backoff (2026-08-11, confirmed live on the VPS
 # immediately after the 429 fix landed: with 429s gone, some fraction of
@@ -221,11 +353,39 @@ _429_BACKOFF_MAX_SECONDS = 60.0
 # connect timeout to a public feed under concurrent load is exactly the
 # kind of transient failure this project's other providers already
 # retry (e.g. download_twelve_data_history.py's _td_get()) — distinct
-# from the 429 case, so a separate, shorter/faster backoff and its own
-# retry budget, not reuse of MAX_429_RETRIES.
-MAX_NETWORK_RETRIES = 3
-_NETWORK_BACKOFF_BASE_SECONDS = 2.0
-_NETWORK_BACKOFF_MAX_SECONDS = 15.0
+# from the 429/5xx cases, so its own backoff/retry budget.
+MAX_NETWORK_RETRIES = 4
+_NETWORK_BACKOFF_BASE_SECONDS = 3.0  # 3, 6, 12, 24(capped) — per the operator's own spec
+_NETWORK_BACKOFF_MAX_SECONDS = 24.0
+
+# Consecutive-failure escalation (2026-08-18) — a run of transient
+# failures ACROSS ALL WORKERS (not per-thread) is stronger evidence of a
+# real outage than any single failure, and earns a longer global cooldown
+# on top of whatever that failure's own cooldown already set. Reset to
+# zero only by a genuine 200 response — NOT by a 404, which is a normal
+# closed-market result, not evidence the backend is healthy (operator's
+# own explicit requirement).
+_CONSECUTIVE_FAILURE_THRESHOLD = 5
+_CONSECUTIVE_FAILURE_COOLDOWN_SECONDS = 180.0
+_consecutive_lock = threading.Lock()
+_consecutive_transient_failures = 0
+
+
+def _record_transient_failure() -> None:
+    global _consecutive_transient_failures
+    with _consecutive_lock:
+        _consecutive_transient_failures += 1
+        escalate = _consecutive_transient_failures >= _CONSECUTIVE_FAILURE_THRESHOLD
+    if escalate:
+        print(f"    COOLDOWN: {_consecutive_transient_failures} consecutive transient failures "
+              f"across all workers — extending global cooldown {_CONSECUTIVE_FAILURE_COOLDOWN_SECONDS:.0f}s")
+        _enter_cooldown(_CONSECUTIVE_FAILURE_COOLDOWN_SECONDS)
+
+
+def _record_success() -> None:
+    global _consecutive_transient_failures
+    with _consecutive_lock:
+        _consecutive_transient_failures = 0
 
 # Initial-burst stagger (2026-08-11, confirmed live on the VPS: two
 # consecutive probe runs, both after the retry fixes above, still saw
@@ -304,57 +464,119 @@ def _hour_url(instrument: str, dt: datetime) -> str:
     )
 
 
-def _retry_after_seconds(resp: "requests.Response", attempt: int) -> float:
-    """Honors a numeric Retry-After header when the server sends one;
-    otherwise exponential backoff capped at _429_BACKOFF_MAX_SECONDS."""
+# Statuses that indicate a permanent client-side/request problem, never a
+# transient condition — retrying is pointless and would just hammer a
+# rejection. 404 is handled separately (a legitimate closed-market hour,
+# not an error at all).
+_NO_RETRY_STATUSES = frozenset({400, 401, 403, 410})
+
+
+def _retry_after_seconds(resp: "requests.Response", attempt: int, *, base: float, cap: float) -> float:
+    """Honors a numeric Retry-After header VERBATIM (the server's own
+    authoritative value — never jittered) when the server sends one;
+    otherwise exponential backoff off `base`, capped at `cap`, with the
+    operator's own requested +/-20% jitter (_jittered) so concurrent
+    workers backing off from the same failure don't wake and retry in
+    lockstep. Shared by both the 429 and 5xx retry loops in fetch_hour()
+    below — same header convention, different budgets/schedules."""
     header = resp.headers.get("Retry-After")
     if header:
         try:
             return max(0.0, float(header))
         except ValueError:
             pass
-    return min(_429_BACKOFF_MAX_SECONDS, _429_BACKOFF_BASE_SECONDS * (2 ** attempt))
+    return _jittered(min(cap, base * (2 ** attempt)))
+
+
+def _sleep_unless_shutdown(seconds: float) -> None:
+    """A literal time.sleep() call (not Event.wait) so every existing/new
+    test can assert on it exactly like every other backoff assertion in
+    this file — but skipped entirely, raising _ShutdownRequested instead,
+    if a shutdown was already requested before this sleep would start.
+    Does NOT shorten a sleep already in progress (Python cannot preempt a
+    running thread) — see the module docstring's "Ctrl+C / cancellation"
+    note for the accepted, bounded worst case this implies."""
+    if _shutdown_requested.is_set():
+        raise _ShutdownRequested()
+    time.sleep(seconds)
 
 
 def fetch_hour(instrument: str, dt: datetime) -> list[tuple[int, float, float, float, float]] | None:
     """One hour's raw ticks as (ms_offset, ask_raw, bid_raw, ask_vol,
     bid_vol) tuples. Returns None (not an error) on 404 — a closed
-    market hour (weekend/holiday) is expected, not a fetch failure.
+    market hour (weekend/holiday) is expected, not a fetch failure, and
+    never retried.
+
     Every actual HTTP attempt — the first one AND every retry — is paced
     by _throttle() first (a global, cross-worker-thread rate limiter —
-    see module docstring's "Rate limiting" note, third finding), and on
-    top of that retries a 429 (rate-limited) response and a transient
-    network exception (connect timeout, connection error) each with
-    their own backoff/retry budget before giving up as a real failure."""
+    see module docstring's "Rate limiting" note, third finding). Three
+    distinct transient failure classes are each retried with their OWN
+    budget/backoff schedule (429 rate-limiting, 5xx backend
+    unavailability, network-level exceptions) since they have different
+    expected recovery times; a genuine transient hit on any of them
+    also EXTENDS the shared global cooldown (_enter_cooldown) so every
+    other worker thread pauses too, not just this one. 400/401/403/410
+    are permanent rejections and are never retried. Consecutive
+    transient failures across ALL workers (not just this call) are
+    tracked via _record_transient_failure()/_record_success() — reset
+    ONLY by a genuine 200, never by a 404 (a normal closed-market result
+    is not evidence the backend is healthy)."""
     url = _hour_url(instrument, dt)
     resp: "requests.Response | None" = None
     network_attempt = 0
     attempt_429 = 0
+    attempt_5xx = 0
     while True:
         _throttle()
         try:
             resp = requests.get(url, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
+            _record_transient_failure()
+            label = "TIMEOUT" if isinstance(exc, (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout)) else "NETWORK_ERROR"
             if network_attempt >= MAX_NETWORK_RETRIES:
                 raise DukascopyFetchError(
                     f"{url}: request failed after {MAX_NETWORK_RETRIES + 1} attempts: {exc}"
                 ) from exc
-            time.sleep(min(_NETWORK_BACKOFF_MAX_SECONDS, _NETWORK_BACKOFF_BASE_SECONDS * (2 ** network_attempt)))
+            wait = _jittered(min(_NETWORK_BACKOFF_MAX_SECONDS, _NETWORK_BACKOFF_BASE_SECONDS * (2 ** network_attempt)))
+            print(f"    {label}: {url} ({exc}) — retrying in {wait:.1f}s ({network_attempt + 1}/{MAX_NETWORK_RETRIES})")
+            _sleep_unless_shutdown(wait)
             network_attempt += 1
             continue
 
-        if resp.status_code != 429:
-            break
-        if attempt_429 == MAX_429_RETRIES:
-            raise DukascopyFetchError(f"{url}: HTTP 429 (rate limited) after {MAX_429_RETRIES + 1} attempts")
-        time.sleep(_retry_after_seconds(resp, attempt_429))
-        attempt_429 += 1
+        if resp.status_code == 429:
+            _record_transient_failure()
+            _enter_cooldown(_429_COOLDOWN_SECONDS)
+            if attempt_429 == MAX_429_RETRIES:
+                raise DukascopyFetchError(f"{url}: HTTP 429 (rate limited) after {MAX_429_RETRIES + 1} attempts")
+            wait = _retry_after_seconds(resp, attempt_429, base=_429_BACKOFF_BASE_SECONDS, cap=_429_BACKOFF_MAX_SECONDS)
+            print(f"    RATE_LIMIT: {url} — retrying in {wait:.1f}s ({attempt_429 + 1}/{MAX_429_RETRIES})")
+            _sleep_unless_shutdown(wait)
+            attempt_429 += 1
+            continue
+
+        if resp.status_code in _TRANSIENT_5XX_STATUSES:
+            _record_transient_failure()
+            _enter_cooldown(_5XX_COOLDOWN_SECONDS)
+            label = "SERVICE_UNAVAILABLE" if resp.status_code == 503 else "SERVER_ERROR"
+            if attempt_5xx == MAX_5XX_RETRIES:
+                raise DukascopyFetchError(f"{url}: HTTP {resp.status_code} (server error) after {MAX_5XX_RETRIES + 1} attempts")
+            wait = _retry_after_seconds(resp, attempt_5xx, base=_5XX_BACKOFF_BASE_SECONDS, cap=_5XX_BACKOFF_MAX_SECONDS)
+            print(f"    {label}: {url} (HTTP {resp.status_code}) — retrying in {wait:.1f}s ({attempt_5xx + 1}/{MAX_5XX_RETRIES})")
+            _sleep_unless_shutdown(wait)
+            attempt_5xx += 1
+            continue
+
+        break
 
     assert resp is not None
     if resp.status_code == 404:
-        return None
+        return None  # closed-market hour — never a success or a failure for the consecutive-failure escalation
+    if resp.status_code in _NO_RETRY_STATUSES:
+        raise DukascopyFetchError(f"{url}: HTTP {resp.status_code} (not retried — permanent rejection)")
     if resp.status_code != 200:
         raise DukascopyFetchError(f"{url}: HTTP {resp.status_code}")
+
+    _record_success()  # a genuine 200 — the ONLY thing that resets the consecutive-transient-failure counter
 
     if not resp.content:
         return None
@@ -371,6 +593,37 @@ def fetch_hour(instrument: str, dt: datetime) -> list[tuple[int, float, float, f
         )
 
     return [TICK_RECORD_STRUCT.unpack_from(raw, i) for i in range(0, len(raw), TICK_RECORD_SIZE)]
+
+
+def _classify_failure(exc: "DukascopyFetchError") -> str:
+    """Maps a raised DukascopyFetchError to one of the end-of-symbol
+    summary buckets, by the exact message shapes fetch_hour() itself
+    produces above — kept in one place so the summary in
+    download_symbol_hours() can't silently drift from what fetch_hour()
+    actually raises."""
+    msg = str(exc)
+    if "HTTP 429" in msg:
+        return "failed_429"
+    if "server error" in msg:
+        return "failed_5xx"
+    if "request failed after" in msg:
+        return "failed_network"
+    return "failed_other"
+
+
+class _DownloadInterrupted(Exception):
+    """Raised by download_symbol_hours() when Ctrl+C (KeyboardInterrupt)
+    interrupts an in-progress download, after the pool has been shut down
+    non-blockingly and whatever hours had already durably completed are
+    safely checkpointed (see the module docstring's "Ctrl+C /
+    cancellation" note). main() catches this to stop cleanly — no output
+    CSV write, no checkpoint clear — for exactly the interrupted symbol,
+    without silently continuing as if the run had finished."""
+
+    def __init__(self, done: int, total: int):
+        super().__init__(f"interrupted after {done}/{total} hour(s) this run")
+        self.done = done
+        self.total = total
 
 
 def detect_point_value(raw_prices: list[int], symbol: str) -> int:
@@ -506,7 +759,17 @@ def download_symbol_hours(
     completed hour as it finishes rather than only at the very end, so
     a Ctrl+C/crash/timeout loses at most the in-flight hours, not the
     whole run's progress. Defaults False so every existing direct
-    caller (tests, --probe) is completely unaffected."""
+    caller (tests, --probe) is completely unaffected. Checkpoint writes
+    are ordered bars-THEN-hours (never the reverse) — an interruption
+    between the two writes must never mark an hour "complete" while its
+    bars are still missing on disk, which would otherwise cause a later
+    resume to silently skip that hour forever (permanent, silent data
+    loss). Ctrl+C (KeyboardInterrupt) is caught cooperatively — see the
+    module docstring's "Ctrl+C / cancellation" note — and raises
+    _DownloadInterrupted after shutting the pool down non-blockingly;
+    whatever completed before that point stays exactly as durably
+    checkpointed as any other interruption."""
+    _shutdown_requested.clear()  # defensive: a prior interrupted call in the same process must never silently block a fresh one
     already_done: set[datetime] = set()
     bars: list[dict] = []
     if checkpoint:
@@ -518,48 +781,81 @@ def download_symbol_hours(
               f"{len(remaining_hours)} remaining")
 
     point_value: int | None = None
-    failures = 0
+    counts = {
+        "completed": 0, "closed_market": 0,
+        "failed_429": 0, "failed_5xx": 0, "failed_network": 0, "failed_other": 0,
+    }
     hours_path, bars_path = _checkpoint_paths(symbol) if checkpoint else (None, None)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    done = 0
+    interrupted: "_DownloadInterrupted | None" = None
+    try:
         future_to_hour: dict = {}
         for i, h in enumerate(remaining_hours):
             if 0 < i < workers:
                 time.sleep(_INITIAL_SUBMIT_STAGGER_SECONDS)
             future_to_hour[pool.submit(fetch_hour, instrument, h)] = h
-        done = 0
-        for future in as_completed(future_to_hour):
-            hour = future_to_hour[future]
-            done += 1
-            try:
-                ticks = future.result()
-            except DukascopyFetchError as exc:
-                failures += 1
-                print(f"    [{done}/{len(remaining_hours)}] {hour.date()} {hour.hour:02d}h: SKIPPED ({exc})")
-                continue
+        try:
+            for future in as_completed(future_to_hour):
+                hour = future_to_hour[future]
+                done += 1
+                try:
+                    ticks = future.result()
+                except DukascopyFetchError as exc:
+                    counts[_classify_failure(exc)] += 1
+                    print(f"    [{done}/{len(remaining_hours)}] {hour.date()} {hour.hour:02d}h: SKIPPED ({exc})")
+                    continue
+                except _ShutdownRequested:
+                    # this hour's fetch was aborted mid-retry by a shutdown
+                    # already in progress — never checkpointed, retried on
+                    # the next resume, not counted as a failure.
+                    continue
 
-            hour_bars: list[dict] = []
-            if ticks:
-                if point_value is None:
-                    point_value = detect_point_value([t[1] for t in ticks], symbol)
-                    print(f"    detected point value: {point_value} (from {hour.date()} {hour.hour:02d}h)")
-                hour_bars = ticks_to_m15_bars(hour, ticks, point_value)
-                bars.extend(hour_bars)
-            # else: market closed this hour — not a failure, still checkpointed as done below
+                hour_bars: list[dict] = []
+                if ticks:
+                    if point_value is None:
+                        point_value = detect_point_value([t[1] for t in ticks], symbol)
+                        print(f"    detected point value: {point_value} (from {hour.date()} {hour.hour:02d}h)")
+                    hour_bars = ticks_to_m15_bars(hour, ticks, point_value)
+                    bars.extend(hour_bars)
+                    counts["completed"] += 1
+                else:
+                    counts["closed_market"] += 1  # market closed this hour — not a failure, still checkpointed as done below
 
-            if checkpoint:
-                with hours_path.open("a") as f:
-                    f.write(hour.isoformat() + "\n")
-                if hour_bars:
-                    pd.DataFrame(hour_bars).to_csv(
-                        bars_path, mode="a", header=not bars_path.exists(), index=False,
-                    )
+                if checkpoint:
+                    # bars written BEFORE the hour is marked complete — see
+                    # this function's own docstring above for why the order
+                    # matters.
+                    if hour_bars:
+                        pd.DataFrame(hour_bars).to_csv(
+                            bars_path, mode="a", header=not bars_path.exists(), index=False,
+                        )
+                    with hours_path.open("a") as f:
+                        f.write(hour.isoformat() + "\n")
 
-            if done % 200 == 0:
-                print(f"    ...{done}/{len(remaining_hours)} hours checked, {len(bars)} bars so far")
+                if done % 200 == 0:
+                    print(f"    ...{done}/{len(remaining_hours)} hours checked, {len(bars)} bars so far")
+        except KeyboardInterrupt:
+            _shutdown_requested.set()
+            interrupted = _DownloadInterrupted(done, len(remaining_hours))
+    finally:
+        pool.shutdown(wait=interrupted is None, cancel_futures=interrupted is not None)
 
+    failures = counts["failed_429"] + counts["failed_5xx"] + counts["failed_network"] + counts["failed_other"]
+    print(
+        f"    Summary: {counts['completed']} completed, {counts['closed_market']} closed-market, "
+        f"{counts['failed_429']} failed(429), {counts['failed_5xx']} failed(5xx), "
+        f"{counts['failed_network']} failed(network), {counts['failed_other']} failed(other), "
+        f"{len(bars)} bars total"
+    )
     if failures:
         print(f"    {failures}/{len(remaining_hours)} hour(s) failed (not 404s) and were skipped.")
+
+    if interrupted is not None:
+        print(f"\n    Interrupted (Ctrl+C) — {interrupted.done}/{interrupted.total} hour(s) processed this run"
+              f"{' (already-completed hours are safely checkpointed; re-run the same command to resume)' if checkpoint else ''}.")
+        raise interrupted
 
     if not bars:
         return pd.DataFrame()
@@ -628,12 +924,21 @@ def main() -> None:
             raise SystemExit(f"{symbol}: no Dukascopy instrument mapping in SYMBOL_MAP.")
         instrument = SYMBOL_MAP[symbol]
         probe_hours = _hour_range(years=0.02)[-24:]  # ~last day's worth of hours
-        print(f"Probing {symbol} -> Dukascopy instrument {instrument!r}, {len(probe_hours)} hour(s)...")
-        df = download_symbol_hours(instrument, symbol, probe_hours, workers=min(args.workers, 8))
+        print(f"Probing {symbol} -> Dukascopy instrument {instrument!r}, {len(probe_hours)} hour(s) "
+              f"({args.workers} worker(s), {MIN_REQUEST_INTERVAL_SECONDS}s min request interval). "
+              f"No file will be written. Per-hour RATE_LIMIT/SERVICE_UNAVAILABLE/SERVER_ERROR/"
+              f"TIMEOUT/NETWORK_ERROR/COOLDOWN lines above the summary below classify anything "
+              f"observed live.")
+        try:
+            df = download_symbol_hours(instrument, symbol, probe_hours, workers=min(args.workers, 8))
+        except _DownloadInterrupted as exc:
+            print(f"\n{symbol}: probe interrupted (Ctrl+C) — {exc}.")
+            return
         if df.empty:
-            print(f"{symbol}: no bars returned in the probe window (all closed hours, or a real fetch problem above).")
+            print(f"{symbol}: no bars returned in the probe window (all closed hours, or a real fetch problem above — "
+                  f"check the per-hour classification lines and the Summary line above).")
         else:
-            print(f"{symbol}: {len(df)} bar(s), {df.index[0]} -> {df.index[-1]}")
+            print(f"{symbol}: healthy — {len(df)} bar(s), {df.index[0]} -> {df.index[-1]}")
             print(df.tail(3))
         return
 
@@ -665,6 +970,10 @@ def main() -> None:
         instrument = SYMBOL_MAP[sym]
         try:
             base_df = download_symbol_hours(instrument, sym, hours, workers=args.workers, checkpoint=True)
+        except _DownloadInterrupted as exc:
+            print(f"\n  {sym}: interrupted ({exc}) — progress is safely checkpointed, "
+                  f"re-run the same command to resume. Stopping (Ctrl+C) — no further symbols will start.")
+            break
         except DukascopyFetchError as exc:
             print(f"  {sym}: FAILED — {exc}")
             continue

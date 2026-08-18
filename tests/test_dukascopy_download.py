@@ -28,6 +28,7 @@ from download_dukascopy_history import (  # noqa: E402
     SYMBOL_MAP,
     TICK_RECORD_STRUCT,
     DukascopyFetchError,
+    _DownloadInterrupted,
     _PLAUSIBLE_RANGES,
     _POINT_VALUE_CANDIDATES,
     _hour_range,
@@ -39,6 +40,32 @@ from download_dukascopy_history import (  # noqa: E402
     ticks_to_m15_bars,
 )
 from core.data_validator import validate_ohlcv
+
+
+@pytest.fixture(autouse=True)
+def _reset_dukascopy_module_globals():
+    """download_dukascopy_history.py added module-level mutable state this
+    session (_cooldown_until, _next_request_time, _consecutive_transient_
+    failures, _shutdown_requested) that fetch_hour()/_throttle() now write
+    to as a side effect of ordinary retry/cooldown handling. Tests share
+    one process, so without a reset a real _enter_cooldown()/
+    _record_transient_failure() call inside one test's fetch_hour()
+    invocation (even one that never explicitly touches these globals)
+    could silently leak into a later, unrelated test — e.g. a nonzero
+    _cooldown_until from an earlier 429-retry test making a later
+    _throttle()-timing test wait/sleep unexpectedly. Reset before AND
+    after every test in this file, defensively."""
+    import download_dukascopy_history as m
+
+    def _reset():
+        m._cooldown_until = 0.0
+        m._next_request_time = 0.0
+        m._consecutive_transient_failures = 0
+        m._shutdown_requested.clear()
+
+    _reset()
+    yield
+    _reset()
 
 
 def _compress_records(records: list[tuple]) -> bytes:
@@ -82,10 +109,18 @@ def test_fetch_hour_returns_none_on_empty_200_body():
     assert ticks is None
 
 
-def test_fetch_hour_raises_on_non_200_non_404():
-    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(500)):
-        with pytest.raises(DukascopyFetchError, match="HTTP 500"):
+def test_fetch_hour_raises_immediately_on_a_permanent_rejection_status():
+    # 400/401/403/410 are permanent rejections, never retried — distinct
+    # from 429 (rate limit) and 5xx (transient backend unavailability),
+    # both of which now DO retry (see the dedicated retry-loop tests
+    # below). This test deliberately does NOT patch time.sleep/_throttle:
+    # if a permanent-rejection status were ever accidentally routed into
+    # a retry loop, this test would hang/sleep for real instead of
+    # silently passing.
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(403)) as mock_get:
+        with pytest.raises(DukascopyFetchError, match="HTTP 403"):
             fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert mock_get.call_count == 1
 
 
 def test_fetch_hour_raises_on_malformed_lzma():
@@ -164,7 +199,11 @@ def test_fetch_hour_falls_back_to_exponential_backoff_on_malformed_retry_after()
          patch("download_dukascopy_history.time.sleep") as mock_sleep, \
          patch("download_dukascopy_history._throttle"):
         fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
-    mock_sleep.assert_called_once_with(m._429_BACKOFF_BASE_SECONDS)  # attempt=0 -> base * 2**0
+    mock_sleep.assert_called_once()
+    waited = mock_sleep.call_args[0][0]
+    # attempt=0 -> base * 2**0 = base, +/-20% jitter (operator's own
+    # requested spread) — no longer an exact value once jitter landed.
+    assert m._429_BACKOFF_BASE_SECONDS * 0.8 <= waited <= m._429_BACKOFF_BASE_SECONDS * 1.2
 
 
 def test_fetch_hour_still_treats_404_as_market_closed_not_a_retry_target():
@@ -175,6 +214,216 @@ def test_fetch_hour_still_treats_404_as_market_closed_not_a_retry_target():
     assert ticks is None
     assert mock_get.call_count == 1  # no retry for a 404 — it's an expected closed-market response
     mock_sleep.assert_not_called()
+
+
+def test_fetch_hour_never_retries_401_or_410():
+    for status in (401, 410):
+        with patch("download_dukascopy_history.requests.get", return_value=_fake_response(status)) as mock_get, \
+             patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+             patch("download_dukascopy_history._throttle"):
+            with pytest.raises(DukascopyFetchError, match=f"HTTP {status}"):
+                fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+        assert mock_get.call_count == 1
+        mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# HTTP 5xx (transient backend unavailability, distinct from 429 rate
+# limiting) retry/backoff (2026-08-18 — confirmed live on the VPS: a direct
+# curl to datafeed.dukascopy.com's bare root returned 503 "No server is
+# available to handle this request", then later requests succeeded — a
+# genuinely transient backend condition needing its own retry budget/
+# schedule, not folded into the 429 handling above).
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hour_retries_503_then_succeeds():
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(503), _fake_response(503), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == 2
+
+
+def test_fetch_hour_raises_after_exhausting_503_retries():
+    import download_dukascopy_history as m
+
+    responses = [_fake_response(503)] * (m.MAX_5XX_RETRIES + 1)
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
+        with pytest.raises(DukascopyFetchError, match="HTTP 503"):
+            fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert mock_sleep.call_count == m.MAX_5XX_RETRIES
+
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_fetch_hour_retries_other_5xx_statuses_then_succeeds(status):
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(status), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == 1
+
+
+def test_5xx_and_429_retry_budgets_are_independent():
+    """A request that alternates between 503 and 429 must exhaust BOTH
+    retry budgets independently before giving up — proves the two loops
+    don't share (or prematurely consume) each other's attempt counters,
+    mirroring the existing network-vs-429 independence test."""
+    import download_dukascopy_history as m
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = (
+        [_fake_response(503)] * m.MAX_5XX_RETRIES
+        + [_fake_response(429)] * m.MAX_429_RETRIES
+        + [_fake_response(200, body)]
+    )
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep, \
+         patch("download_dukascopy_history._throttle"):
+        ticks = fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert ticks == records
+    assert mock_sleep.call_count == m.MAX_5XX_RETRIES + m.MAX_429_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# Global cooldown / consecutive-failure escalation (2026-08-18) — a 429/5xx
+# hit must extend the SHARED _cooldown_until deadline (every worker pauses,
+# not just the one that got the transient response), and enough consecutive
+# transient failures across the whole process escalates to a longer,
+# extended cooldown — reset ONLY by a genuine 200, never by a 404.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hour_429_extends_the_global_cooldown():
+    import download_dukascopy_history as m
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(429), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("download_dukascopy_history._throttle"), \
+         patch.object(m, "_enter_cooldown") as mock_enter_cooldown:
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    mock_enter_cooldown.assert_called_once_with(m._429_COOLDOWN_SECONDS)
+
+
+def test_fetch_hour_503_extends_the_global_cooldown_with_its_own_shorter_duration():
+    import download_dukascopy_history as m
+
+    records = [(0, 108510, 108490, 1.5, 2.0)]
+    body = _compress_records(records)
+    responses = [_fake_response(503), _fake_response(200, body)]
+    with patch("download_dukascopy_history.requests.get", side_effect=responses), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("download_dukascopy_history._throttle"), \
+         patch.object(m, "_enter_cooldown") as mock_enter_cooldown:
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    mock_enter_cooldown.assert_called_once_with(m._5XX_COOLDOWN_SECONDS)
+    assert m._5XX_COOLDOWN_SECONDS < m._429_COOLDOWN_SECONDS  # shorter initial cooldown, per the operator's own spec
+
+
+def test_enter_cooldown_never_shrinks_an_existing_longer_cooldown(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_cooldown_until", 0.0)
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0):
+        m._enter_cooldown(100.0)  # deadline -> 1100.0
+        assert m._cooldown_until == 1100.0
+        m._enter_cooldown(10.0)  # a shorter cooldown from another worker/failure must NOT shrink it
+        assert m._cooldown_until == 1100.0
+        m._enter_cooldown(200.0)  # a longer one DOES extend it
+        assert m._cooldown_until == 1200.0
+
+
+def test_throttle_blocks_on_an_active_global_cooldown_shared_across_calls(monkeypatch):
+    """One worker's 429 (_enter_cooldown) must block EVERY worker's next
+    _throttle() call, not just the one that hit the 429 — the load-bearing
+    property that makes this a GLOBAL, not per-thread, circuit breaker.
+    _throttle()'s cooldown-wait is a single compute-once/sleep-once
+    time.sleep() call (matching every other backoff wait in this file, so
+    it can be mocked the same uniform way) rather than a re-checking loop
+    — see _throttle()'s own docstring for why a loop isn't used here."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    monkeypatch.setattr(m, "_cooldown_until", 0.0)
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0):
+        m._enter_cooldown(30.0)  # one worker's 429 sets a 30s shared cooldown
+    assert m._cooldown_until == pytest.approx(1030.0)
+
+    with patch("download_dukascopy_history.time.monotonic", return_value=1000.0), \
+         patch("download_dukascopy_history.time.sleep") as mock_sleep:
+        m._throttle()
+
+    # first call is the cooldown wait (30s remaining); a second call may
+    # follow for the pacing reservation, but the cooldown wait must be
+    # present regardless.
+    waited_for_cooldown = any(
+        call.args and call.args[0] == pytest.approx(30.0, abs=1e-9) for call in mock_sleep.call_args_list
+    )
+    assert waited_for_cooldown
+
+
+def test_consecutive_transient_failures_escalate_the_cooldown(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_consecutive_transient_failures", m._CONSECUTIVE_FAILURE_THRESHOLD - 1)
+    with patch.object(m, "_enter_cooldown") as mock_enter_cooldown:
+        m._record_transient_failure()
+    mock_enter_cooldown.assert_called_once_with(m._CONSECUTIVE_FAILURE_COOLDOWN_SECONDS)
+
+
+def test_consecutive_transient_failures_do_not_escalate_below_threshold(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_consecutive_transient_failures", 0)
+    with patch.object(m, "_enter_cooldown") as mock_enter_cooldown:
+        m._record_transient_failure()
+    mock_enter_cooldown.assert_not_called()
+
+
+def test_success_resets_the_consecutive_failure_counter(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_consecutive_transient_failures", 4)
+    m._record_success()
+    assert m._consecutive_transient_failures == 0
+
+
+def test_fetch_hour_404_neither_resets_nor_increments_the_consecutive_failure_counter(monkeypatch):
+    """The operator's own explicit requirement: a 404 is a normal
+    closed-market result, not evidence the backend is healthy — it must
+    not reset the counter the way a genuine 200 does."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_consecutive_transient_failures", 3)
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)), \
+         patch("download_dukascopy_history._throttle"):
+        fetch_hour("EURUSD", datetime(2024, 1, 6, 10, tzinfo=timezone.utc))
+    assert m._consecutive_transient_failures == 3
+
+
+def test_fetch_hour_200_resets_the_consecutive_failure_counter(monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_consecutive_transient_failures", 3)
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history._throttle"):
+        fetch_hour("EURUSD", datetime(2024, 1, 2, 10, tzinfo=timezone.utc))
+    assert m._consecutive_transient_failures == 0
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +835,151 @@ def test_download_symbol_hours_resumes_and_skips_already_checkpointed_hours(tmp_
     assert len(fetched_second_run) == 2
     assert all("09h_ticks" not in url for url in fetched_second_run)
     assert len(df2) == 3  # 1 resumed from checkpoint + 2 newly fetched
+
+
+def test_download_symbol_hours_resume_produces_no_duplicate_bar_rows(tmp_path, monkeypatch):
+    """Explicit dedicated proof (beyond the row-count check above) that a
+    resumed run's on-disk checkpoint never accumulates a duplicate bar row
+    for an hour that was already checkpointed — every checkpointed
+    datetime must be unique in bars.csv after two consecutive resumed
+    runs over the SAME hour list."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [
+        datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 10, tzinfo=timezone.utc),
+    ]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    def fake_get_first(url, timeout=None):
+        if "09h_ticks" in url:
+            return _fake_response(200, body)
+        return _fake_response(503)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get_first), \
+         patch("download_dukascopy_history.time.sleep"):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"):
+        df2 = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    _, bars_path = m._checkpoint_paths("EURUSD")
+    on_disk = pd.read_csv(bars_path, parse_dates=["datetime"])
+    assert on_disk["datetime"].duplicated().sum() == 0
+    assert len(on_disk) == 2
+    assert df2.index.duplicated().sum() == 0
+    assert len(df2) == 2
+
+
+def test_download_symbol_hours_a_permanently_failed_hour_is_never_checkpointed(tmp_path, monkeypatch):
+    """A hour that exhausts its retry budget (a real, non-404 failure)
+    must NEVER be written to completed_hours.txt — it needs to be
+    retried automatically on the next run, not silently skipped forever."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [
+        datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 10, tzinfo=timezone.utc),
+    ]
+    good_body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    def fake_get(url, timeout=None):
+        if "09h_ticks" in url:
+            return _fake_response(403)  # a permanent rejection, never retried, never checkpointed
+        return _fake_response(200, good_body)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"):
+        df = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    assert len(df) == 1
+    completed, _ = m._load_checkpoint("EURUSD")
+    assert datetime(2024, 1, 2, 10, tzinfo=timezone.utc) in completed
+    assert datetime(2024, 1, 2, 9, tzinfo=timezone.utc) not in completed  # the failed hour must be retried next time
+
+
+def test_checkpoint_writes_bars_before_marking_the_hour_complete(tmp_path, monkeypatch):
+    """The 'completed hour -> its bars durably represented' invariant: an
+    interruption between the two checkpoint writes must never mark an
+    hour complete while its bars are still missing on disk — proven here
+    by recording the real write order, not just the end result."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, 9, tzinfo=timezone.utc)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+    hours_path, bars_path = m._checkpoint_paths("EURUSD")
+
+    write_order: list[str] = []
+    real_to_csv = pd.DataFrame.to_csv
+
+    def tracking_to_csv(self, path_or_buf=None, *args, **kwargs):
+        if path_or_buf == bars_path:
+            write_order.append("bars")
+        return real_to_csv(self, path_or_buf, *args, **kwargs)
+
+    real_open = Path.open
+
+    def tracking_open(self, *args, **kwargs):
+        if self == hours_path:
+            write_order.append("hours")
+        return real_open(self, *args, **kwargs)
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch.object(pd.DataFrame, "to_csv", tracking_to_csv), \
+         patch.object(Path, "open", tracking_open):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    assert write_order == ["bars", "hours"]
+
+
+def test_download_symbol_hours_ctrl_c_raises_download_interrupted_and_leaves_a_consistent_checkpoint(tmp_path, monkeypatch):
+    """Simulates a KeyboardInterrupt (Ctrl+C) partway through a run: must
+    raise _DownloadInterrupted (never propagate a raw KeyboardInterrupt or
+    hang), and whatever DID get checkpointed must stay internally
+    consistent (every checkpointed hour has its bar(s) on disk) and
+    cleanly resumable afterward."""
+    import concurrent.futures as cf
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, h, tzinfo=timezone.utc) for h in range(5)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    real_as_completed = cf.as_completed
+
+    def interrupting_as_completed(fs, *a, **kw):
+        for i, fut in enumerate(real_as_completed(fs, *a, **kw)):
+            if i == 2:
+                raise KeyboardInterrupt()
+            yield fut
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("download_dukascopy_history.as_completed", interrupting_as_completed):
+        with pytest.raises(m._DownloadInterrupted):
+            download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    completed, bars = m._load_checkpoint("EURUSD")
+    assert 0 < len(completed) < 5  # a real partial run — not everything, not nothing
+    assert len(bars) == len(completed)  # every checkpointed hour's bar row is present (1 bar/hour in this fixture)
+    # _shutdown_requested is deliberately left SET after an interrupt (not
+    # cleared here) so any still-running worker thread gets the best chance
+    # to notice it and bail before its next sleep/HTTP attempt — it's only
+    # cleared defensively at the START of the next download_symbol_hours()
+    # call (see below), which is the real proof this isn't "stuck".
+
+    # Resuming afterward must complete cleanly and reach the full dataset —
+    # proving the leftover SET flag from above does not block a fresh call.
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"):
+        df2 = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+    assert len(df2) == 5
+    assert not m._shutdown_requested.is_set()  # a normal completion never leaves it set
 
 
 def test_download_symbol_hours_resume_with_nothing_new_to_fetch_returns_checkpointed_data(tmp_path, monkeypatch):

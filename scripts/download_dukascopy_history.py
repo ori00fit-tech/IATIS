@@ -117,12 +117,41 @@ of the feed, not verified live from this sandbox); 10 years of hourly
 fetches is ~87,600 HTTP requests per symbol, expensive but bounded by
 --workers concurrency, same as any --years value.
 
+Resume/checkpointing (2026-08-18, confirmed live on the VPS: a real
+GBPUSD run mixed 429s and connect-timeouts to datafeed.dukascopy.com,
+and a direct `curl` to the bare domain root returned HTTP 503 "No
+server is available to handle this request" — Dukascopy's OWN backend
+is intermittently unavailable, not something client-side pacing can
+fix, and not an IP-level block either (the curl connected and got a
+clean HTTP response, just an error one). Against a server this
+unreliable, download_symbol_hours() previously threw away ALL progress
+on a Ctrl+C/crash/timeout (bars only ever accumulated in memory, one
+`out_df.to_csv()` at the very end) and every retry re-fetched every
+hour from scratch even when most of them had already succeeded last
+time — the worst possible strategy against a flaky server. Now, when
+invoked from main() (checkpoint=True), every hour that completes
+(ticks or a confirmed-closed-market hour) is durably appended to
+data/.dukascopy_checkpoints/{SYMBOL}_completed_hours.txt and
+{SYMBOL}_bars.csv as it happens — a subsequent run only re-fetches
+hours NOT already in that file, so repeated attempts make monotonic
+forward progress instead of restarting at zero. Only a genuinely
+FAILED hour (429/timeout that exhausted its retries) is left off the
+checkpoint, so it's retried automatically next time. Checkpoints are
+cleared once a symbol's full download completes successfully — a
+later --force re-download starts genuinely fresh, not from stale
+partial state. Direct callers of download_symbol_hours() (tests,
+--probe) default to checkpoint=False — this is an opt-in behavior of
+the full CLI download flow, not the fetch function's own default.
+
 Usage:
     python3 -m scripts.download_dukascopy_history --probe EURUSD                     # single hour, no file written
     python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD            # 10y H1, default
     python3 -m scripts.download_dukascopy_history --symbols EURUSD --timeframe M15   # 10y M15
     python3 -m scripts.download_dukascopy_history --symbols BTCUSD --years 1 --workers 16
     python3 -m scripts.download_dukascopy_history --symbols GBPUSD --request-interval 1.0  # slower, if still hitting 429s
+    # Interrupted or partially-failed run? Just re-run the same command —
+    # already-completed hours are skipped automatically (see "Resume/
+    # checkpointing" above), no flag needed.
 """
 from __future__ import annotations
 
@@ -143,6 +172,7 @@ import pandas as pd
 import requests
 
 DATA_DIR = PROJECT_ROOT / "data"
+_CHECKPOINT_DIR = DATA_DIR / ".dukascopy_checkpoints"
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 REQUEST_TIMEOUT = 15
@@ -409,22 +439,91 @@ def ticks_to_m15_bars(hour_start: datetime, hour_ticks: list[tuple], point_value
     return bars
 
 
+def _checkpoint_paths(symbol: str) -> tuple[Path, Path]:
+    """(hours_path, bars_path) for a symbol's resume checkpoint — see the
+    module docstring's "Resume/checkpointing" note. hours_path is a
+    plain one-ISO-timestamp-per-line append log of every hour that has
+    ALREADY completed (ticks fetched, or confirmed market-closed);
+    bars_path holds the M15-bucketed OHLCV rows for the (non-empty)
+    hours among those, in the base timeframe so it's reusable
+    regardless of --timeframe."""
+    return (
+        _CHECKPOINT_DIR / f"{symbol}_completed_hours.txt",
+        _CHECKPOINT_DIR / f"{symbol}_bars.csv",
+    )
+
+
+def _load_checkpoint(symbol: str) -> tuple[set[datetime], list[dict]]:
+    """Returns (already-completed hours, their M15 bars) — both empty
+    if no checkpoint exists yet for this symbol. Malformed/partial
+    checkpoint files (e.g. a line half-written when a previous run was
+    killed) are skipped line-by-line rather than aborting the whole
+    load — a checkpoint is an optimization, never something a resume
+    run should crash over."""
+    hours_path, bars_path = _checkpoint_paths(symbol)
+    completed: set[datetime] = set()
+    if hours_path.exists():
+        for line in hours_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                completed.add(datetime.fromisoformat(line))
+            except ValueError:
+                continue
+    bars: list[dict] = []
+    if bars_path.exists():
+        try:
+            checkpoint_df = pd.read_csv(bars_path, parse_dates=["datetime"])
+            bars = checkpoint_df.to_dict("records")
+        except (pd.errors.EmptyDataError, ValueError):
+            pass
+    return completed, bars
+
+
+def _clear_checkpoint(symbol: str) -> None:
+    """Called once a symbol's full download completes successfully — a
+    later --force re-download should start genuinely fresh, not resume
+    stale partial state from a different --years/--timeframe request."""
+    for path in _checkpoint_paths(symbol):
+        path.unlink(missing_ok=True)
+
+
 def download_symbol_hours(
-    instrument: str, symbol: str, hours: list[datetime], workers: int = DEFAULT_WORKERS
+    instrument: str, symbol: str, hours: list[datetime], workers: int = DEFAULT_WORKERS,
+    checkpoint: bool = False,
 ) -> pd.DataFrame:
     """Bounded-concurrency fetch of every hour in `hours` (one HTTP
     request per hour — Dukascopy has no batch-of-N-bars API, unlike
     MT5/cTrader, hence the ThreadPoolExecutor here instead of the
     sequential-with-sleep pattern those scripts use). Staggers only the
     initial fill of the worker pool — see the module-level
-    _INITIAL_SUBMIT_STAGGER_SECONDS comment for why."""
+    _INITIAL_SUBMIT_STAGGER_SECONDS comment for why.
+
+    checkpoint=True (main()'s CLI path only — see module docstring's
+    "Resume/checkpointing" note) skips hours already recorded as
+    complete from a previous run, and durably appends each newly-
+    completed hour as it finishes rather than only at the very end, so
+    a Ctrl+C/crash/timeout loses at most the in-flight hours, not the
+    whole run's progress. Defaults False so every existing direct
+    caller (tests, --probe) is completely unaffected."""
+    already_done: set[datetime] = set()
     bars: list[dict] = []
+    if checkpoint:
+        _CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        already_done, bars = _load_checkpoint(symbol)
+    remaining_hours = [h for h in hours if h not in already_done] if checkpoint else hours
+    if checkpoint and already_done:
+        print(f"    resuming: {len(already_done)}/{len(hours)} hour(s) already checkpointed, "
+              f"{len(remaining_hours)} remaining")
+
     point_value: int | None = None
     failures = 0
+    hours_path, bars_path = _checkpoint_paths(symbol) if checkpoint else (None, None)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         future_to_hour: dict = {}
-        for i, h in enumerate(hours):
+        for i, h in enumerate(remaining_hours):
             if 0 < i < workers:
                 time.sleep(_INITIAL_SUBMIT_STAGGER_SECONDS)
             future_to_hour[pool.submit(fetch_hour, instrument, h)] = h
@@ -436,23 +535,31 @@ def download_symbol_hours(
                 ticks = future.result()
             except DukascopyFetchError as exc:
                 failures += 1
-                print(f"    [{done}/{len(hours)}] {hour.date()} {hour.hour:02d}h: SKIPPED ({exc})")
+                print(f"    [{done}/{len(remaining_hours)}] {hour.date()} {hour.hour:02d}h: SKIPPED ({exc})")
                 continue
 
-            if not ticks:
-                continue  # market closed this hour — not a failure
+            hour_bars: list[dict] = []
+            if ticks:
+                if point_value is None:
+                    point_value = detect_point_value([t[1] for t in ticks], symbol)
+                    print(f"    detected point value: {point_value} (from {hour.date()} {hour.hour:02d}h)")
+                hour_bars = ticks_to_m15_bars(hour, ticks, point_value)
+                bars.extend(hour_bars)
+            # else: market closed this hour — not a failure, still checkpointed as done below
 
-            if point_value is None:
-                point_value = detect_point_value([t[1] for t in ticks], symbol)
-                print(f"    detected point value: {point_value} (from {hour.date()} {hour.hour:02d}h)")
-
-            bars.extend(ticks_to_m15_bars(hour, ticks, point_value))
+            if checkpoint:
+                with hours_path.open("a") as f:
+                    f.write(hour.isoformat() + "\n")
+                if hour_bars:
+                    pd.DataFrame(hour_bars).to_csv(
+                        bars_path, mode="a", header=not bars_path.exists(), index=False,
+                    )
 
             if done % 200 == 0:
-                print(f"    ...{done}/{len(hours)} hours checked, {len(bars)} bars so far")
+                print(f"    ...{done}/{len(remaining_hours)} hours checked, {len(bars)} bars so far")
 
     if failures:
-        print(f"    {failures}/{len(hours)} hour(s) failed (not 404s) and were skipped.")
+        print(f"    {failures}/{len(remaining_hours)} hour(s) failed (not 404s) and were skipped.")
 
     if not bars:
         return pd.DataFrame()
@@ -557,7 +664,7 @@ def main() -> None:
 
         instrument = SYMBOL_MAP[sym]
         try:
-            base_df = download_symbol_hours(instrument, sym, hours, workers=args.workers)
+            base_df = download_symbol_hours(instrument, sym, hours, workers=args.workers, checkpoint=True)
         except DukascopyFetchError as exc:
             print(f"  {sym}: FAILED — {exc}")
             continue
@@ -576,6 +683,7 @@ def main() -> None:
         out_df.to_csv(out_path)
         csvs.append(str(out_path))
         print(f"  saved: {out_path}  ({time.monotonic() - t0:.0f}s elapsed)")
+        _clear_checkpoint(sym)  # this symbol is now fully, freshly downloaded — no stale partial state to resume next time
 
     if not csvs:
         print("\nNo files downloaded — nothing to manifest.")

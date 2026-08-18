@@ -492,6 +492,178 @@ def test_download_symbol_hours_skips_a_bad_hour_without_aborting():
     assert len(df) == 1  # the bad hour was skipped, not fatal to the whole download
 
 
+# ---------------------------------------------------------------------------
+# Resume/checkpointing (2026-08-18) — see the module docstring's "Resume/
+# checkpointing" note: a real Dukascopy server-side outage (429s/503s/
+# connect-timeouts, confirmed live) means download_symbol_hours() must make
+# monotonic forward progress across repeated attempts instead of throwing
+# away everything on every interruption/failure.
+# ---------------------------------------------------------------------------
+
+
+def test_download_symbol_hours_default_does_not_checkpoint(tmp_path, monkeypatch):
+    """checkpoint defaults False — every existing direct caller (this
+    whole file's other tests, --probe) must see zero filesystem side
+    effects, exactly as before this feature existed."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, 9, tzinfo=timezone.utc)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1)
+    assert not (tmp_path / "checkpoints").exists()
+
+
+def test_download_symbol_hours_checkpoints_completed_hours(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [
+        datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 10, tzinfo=timezone.utc),
+        datetime(2024, 1, 6, 3, tzinfo=timezone.utc),  # weekend -> 404, closed-market
+    ]
+
+    def fake_get(url, timeout=None):
+        if "2024/00/06" in url:
+            return _fake_response(404)
+        hour_num = int(url.rsplit("/", 1)[-1][:2])
+        base = 108500 + hour_num
+        return _fake_response(200, _compress_records([(0, base + 10, base - 10, 1.0, 1.0)]))
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"):
+        df = download_symbol_hours("EURUSD", "EURUSD", hours, workers=2, checkpoint=True)
+
+    assert len(df) == 2
+    hours_path, bars_path = m._checkpoint_paths("EURUSD")
+    completed_lines = hours_path.read_text().splitlines()
+    assert len(completed_lines) == 3  # all 3 hours, including the confirmed-closed one
+    assert bars_path.exists()
+    assert len(pd.read_csv(bars_path)) == 2  # only the 2 hours that actually had ticks
+
+
+def test_download_symbol_hours_resumes_and_skips_already_checkpointed_hours(tmp_path, monkeypatch):
+    """The regression test for the exact live bug: a second call with the
+    SAME hours list must only fetch the hours NOT already checkpointed —
+    proven here by making requests.get raise for any hour the resumed
+    call would (incorrectly) re-fetch."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [
+        datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 10, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 11, tzinfo=timezone.utc),
+    ]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    # First run: hour 09 succeeds, hours 10/11 fail (simulating a partial,
+    # interrupted, or server-flaky first attempt).
+    def fake_get_first(url, timeout=None):
+        if "09h_ticks" in url:
+            return _fake_response(200, body)
+        return _fake_response(500)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get_first), \
+         patch("download_dukascopy_history.time.sleep"):
+        df1 = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+    assert len(df1) == 1
+
+    fetched_second_run: list[str] = []
+
+    def fake_get_second(url, timeout=None):
+        fetched_second_run.append(url)
+        return _fake_response(200, body)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get_second), \
+         patch("download_dukascopy_history.time.sleep"):
+        df2 = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    # Only hours 10 and 11 (the ones that failed last time) should have been
+    # re-fetched — hour 09 must NOT appear in the second run's real requests.
+    assert len(fetched_second_run) == 2
+    assert all("09h_ticks" not in url for url in fetched_second_run)
+    assert len(df2) == 3  # 1 resumed from checkpoint + 2 newly fetched
+
+
+def test_download_symbol_hours_resume_with_nothing_new_to_fetch_returns_checkpointed_data(tmp_path, monkeypatch):
+    """Every hour already checkpointed -> zero new HTTP requests, but the
+    full, previously-checkpointed dataset is still returned."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, 9, tzinfo=timezone.utc)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=AssertionError("must not fetch")) as mock_get, \
+         patch("download_dukascopy_history.time.sleep"):
+        df = download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    mock_get.assert_not_called()
+    assert len(df) == 1
+
+
+def test_clear_checkpoint_removes_both_files(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, 9, tzinfo=timezone.utc)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    hours_path, bars_path = m._checkpoint_paths("EURUSD")
+    assert hours_path.exists() and bars_path.exists()
+
+    m._clear_checkpoint("EURUSD")
+    assert not hours_path.exists()
+    assert not bars_path.exists()
+
+
+def test_clear_checkpoint_is_a_no_op_when_nothing_was_ever_checkpointed(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    m._clear_checkpoint("NEVER_CHECKPOINTED")  # must not raise
+
+
+def test_load_checkpoint_ignores_malformed_lines(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    (tmp_path / "checkpoints").mkdir()
+    hours_path, _ = m._checkpoint_paths("EURUSD")
+    hours_path.write_text("2024-01-02T09:00:00+00:00\nnot-a-real-timestamp\n\n")
+    completed, bars = m._load_checkpoint("EURUSD")
+    assert completed == {datetime(2024, 1, 2, 9, tzinfo=timezone.utc)}
+    assert bars == []
+
+
+def test_main_clears_checkpoint_after_a_fully_successful_symbol_download(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / ".dukascopy_checkpoints")
+    monkeypatch.setattr(sys, "argv", ["prog", "--symbols", "EURUSD", "--years", "0.001", "--workers", "1"])
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("research.manifest.write_manifest"):
+        m.main()
+
+    hours_path, bars_path = m._checkpoint_paths("EURUSD")
+    assert not hours_path.exists()
+    assert not bars_path.exists()
+    assert (tmp_path / "EURUSD_H1_dukascopy.csv").exists()
+
+
 def test_download_symbol_hours_staggers_only_the_initial_worker_pool_fill():
     """2026-08-11 — confirmed live on the VPS, twice: with all-429s and
     connect-timeouts fixed, the ONLY hours that still exhausted their

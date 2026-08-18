@@ -351,10 +351,13 @@ def test_throttle_blocks_on_an_active_global_cooldown_shared_across_calls(monkey
     """One worker's 429 (_enter_cooldown) must block EVERY worker's next
     _throttle() call, not just the one that hit the 429 — the load-bearing
     property that makes this a GLOBAL, not per-thread, circuit breaker.
-    _throttle()'s cooldown-wait is a single compute-once/sleep-once
-    time.sleep() call (matching every other backoff wait in this file, so
-    it can be mocked the same uniform way) rather than a re-checking loop
-    — see _throttle()'s own docstring for why a loop isn't used here."""
+    v2 (2026-08-18): the cooldown-wait is a BOUNDED re-check loop (up to
+    _COOLDOWN_MAX_RECHECKS iterations), not a single compute-once/
+    sleep-once call — a worker that wakes from a wait must re-verify the
+    cooldown is genuinely clear (another worker's failure may have
+    extended it mid-wait) rather than proceed on a stale value. Under a
+    frozen clock (as here), cooldown_wait can never naturally reach 0, so
+    this also proves the loop terminates at the bound instead of hanging."""
     import download_dukascopy_history as m
 
     monkeypatch.setattr(m, "_next_request_time", 0.0)
@@ -367,13 +370,59 @@ def test_throttle_blocks_on_an_active_global_cooldown_shared_across_calls(monkey
          patch("download_dukascopy_history.time.sleep") as mock_sleep:
         m._throttle()
 
-    # first call is the cooldown wait (30s remaining); a second call may
-    # follow for the pacing reservation, but the cooldown wait must be
-    # present regardless.
-    waited_for_cooldown = any(
-        call.args and call.args[0] == pytest.approx(30.0, abs=1e-9) for call in mock_sleep.call_args_list
-    )
-    assert waited_for_cooldown
+    # every cooldown-wait sleep call must be for the still-active 30s
+    # remainder (the frozen clock never lets it shrink) — and the loop
+    # must have re-checked, not slept once and moved on.
+    cooldown_sleeps = [c for c in mock_sleep.call_args_list if c.args and c.args[0] == pytest.approx(30.0, abs=1e-9)]
+    assert len(cooldown_sleeps) == m._COOLDOWN_MAX_RECHECKS
+
+
+def test_throttle_recheck_loop_absorbs_a_mid_wait_cooldown_extension(monkeypatch):
+    """The exact race the bounded re-check loop exists to close: a worker
+    wakes from waiting out the cooldown to find ANOTHER worker's failure
+    has since extended it further — it must re-check and wait again rather
+    than firing a request against a cooldown that's actually still live."""
+    import download_dukascopy_history as m
+
+    fake_now = [0.0]
+    monkeypatch.setattr(m.time, "monotonic", lambda: fake_now[0])
+    monkeypatch.setattr(m, "_cooldown_until", 10.0)
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+
+    sleep_calls: list[float] = []
+    extended = {"done": False}
+
+    def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+        fake_now[0] += seconds
+        if not extended["done"]:
+            extended["done"] = True
+            m._cooldown_until = fake_now[0] + 5.0  # simulates another worker's failure extending it mid-wait
+
+    monkeypatch.setattr(m.time, "sleep", fake_sleep)
+    m._throttle()
+
+    assert len(sleep_calls) >= 2  # a single-shot wait would only ever produce one
+    assert fake_now[0] >= 15.0  # never proceeded until the (extended) cooldown had genuinely cleared
+
+
+def test_throttle_cooldown_recheck_loop_is_bounded_never_hangs(monkeypatch):
+    """Regression pin for the two real hangs this session's earlier attempts
+    at this loop produced: even a cooldown that appears to keep extending
+    forever (or a frozen/mocked clock that never lets cooldown_wait reach
+    0) must terminate after _COOLDOWN_MAX_RECHECKS iterations, never spin
+    indefinitely."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m.time, "monotonic", lambda: 0.0)  # frozen — cooldown_wait can never naturally reach 0
+    monkeypatch.setattr(m, "_cooldown_until", 100.0)
+    monkeypatch.setattr(m, "_next_request_time", 0.0)
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(m.time, "sleep", lambda s: sleep_calls.append(s))
+
+    m._throttle()  # must return promptly, not hang
+
+    assert len(sleep_calls) == m._COOLDOWN_MAX_RECHECKS
 
 
 def test_consecutive_transient_failures_escalate_the_cooldown(monkeypatch):
@@ -1039,6 +1088,222 @@ def test_load_checkpoint_ignores_malformed_lines(tmp_path, monkeypatch):
     assert bars == []
 
 
+# ---------------------------------------------------------------------------
+# Unresolved-hour tracking & dataset completeness (v2, 2026-08-18) — a
+# persistent transient failure must read as UNRESOLVED/RETRYABLE, never as
+# missing data or a closed market, and a dataset with any unresolved hours
+# must never be silently treated as complete.
+# ---------------------------------------------------------------------------
+
+
+def test_write_unresolved_checkpoint_rewrites_not_appends(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    h1 = datetime(2024, 1, 2, 9, tzinfo=timezone.utc)
+    h2 = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+
+    m._write_unresolved_checkpoint("EURUSD", [h1, h2], {h1: {"reason": "boom", "retryable": True}})
+    assert len(m._load_unresolved_hours("EURUSD")) == 2
+
+    # A second, smaller call must fully REPLACE the file, never append on
+    # top of the first call's rows — an hour that's resolved by now must
+    # disappear, not linger alongside a stale duplicate entry.
+    m._write_unresolved_checkpoint("EURUSD", [h2], {})
+    second = m._load_unresolved_hours("EURUSD")
+    assert len(second) == 1
+    assert second[0]["hour"] == h2.isoformat()
+
+
+def test_load_unresolved_hours_returns_empty_list_when_no_file_exists(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    assert m._load_unresolved_hours("NEVER_RUN") == []
+
+
+def test_load_unresolved_hours_ignores_malformed_lines(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    (tmp_path / "checkpoints").mkdir()
+    path = m._unresolved_checkpoint_path("EURUSD")
+    path.write_text(
+        '{"hour": "2024-01-02T09:00:00+00:00", "reason": "boom", "retryable": true}\n'
+        "not json\n"
+        "\n"
+    )
+    records = m._load_unresolved_hours("EURUSD")
+    assert len(records) == 1
+    assert records[0]["hour"] == "2024-01-02T09:00:00+00:00"
+
+
+def test_download_symbol_hours_persistent_timeout_is_unresolved_not_completed(tmp_path, monkeypatch):
+    """The critical v2 semantic (explicit operator instruction): a
+    persistently-failing TIMEOUT must read as UNRESOLVED/RETRYABLE — it
+    must NEVER be silently reinterpreted as missing data or a closed
+    market (a confirmed 404)."""
+    import requests
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    bad_hour = datetime(2024, 1, 2, 9, tzinfo=timezone.utc)
+    good_hour = datetime(2024, 1, 2, 10, tzinfo=timezone.utc)
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    def fake_get(url, timeout=None):
+        if "09h_ticks" in url:
+            raise requests.Timeout("boom")
+        return _fake_response(200, body)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"):
+        download_symbol_hours("EURUSD", "EURUSD", [bad_hour, good_hour], workers=1, checkpoint=True)
+
+    unresolved = m._load_unresolved_hours("EURUSD")
+    assert len(unresolved) == 1
+    record = unresolved[0]
+    assert record["hour"] == bad_hour.isoformat()
+    assert record["retryable"] is True
+    assert "missing" not in record["reason"].lower()
+    assert "closed" not in record["reason"].lower()
+
+    completed, _ = m._load_checkpoint("EURUSD")
+    assert bad_hour not in completed
+    assert good_hour in completed
+
+
+def test_download_symbol_hours_confirmed_closed_market_is_not_unresolved(tmp_path, monkeypatch):
+    """The positive control distinguishing the case above: a genuine 404
+    (confirmed closed market) is resolved, never left in the unresolved
+    snapshot — proving the two outcomes are not conflated in either
+    direction."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hour = datetime(2024, 1, 6, 3, tzinfo=timezone.utc)  # weekend
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(404)):
+        download_symbol_hours("EURUSD", "EURUSD", [hour], workers=1, checkpoint=True)
+    assert m._load_unresolved_hours("EURUSD") == []
+
+
+def test_download_symbol_hours_permanent_rejection_is_unresolved_and_not_retryable(tmp_path, monkeypatch):
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hour = datetime(2024, 1, 2, 9, tzinfo=timezone.utc)
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(403)):
+        download_symbol_hours("EURUSD", "EURUSD", [hour], workers=1, checkpoint=True)
+    unresolved = m._load_unresolved_hours("EURUSD")
+    assert len(unresolved) == 1
+    assert unresolved[0]["retryable"] is False
+
+
+def test_ctrl_c_interrupt_writes_unresolved_hours_including_never_attempted(tmp_path, monkeypatch):
+    """Ctrl+C -> no false checkpoint, extended: every requested hour is
+    accounted for after an interrupt — either checkpointed complete, or
+    present in the unresolved snapshot with the honest 'not attempted this
+    run' reason for hours the interrupt cut off before they were ever
+    reached."""
+    import concurrent.futures as cf
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [datetime(2024, 1, 2, h, tzinfo=timezone.utc) for h in range(5)]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    real_as_completed = cf.as_completed
+
+    def interrupting_as_completed(fs, *a, **kw):
+        for i, fut in enumerate(real_as_completed(fs, *a, **kw)):
+            if i == 2:
+                raise KeyboardInterrupt()
+            yield fut
+
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("download_dukascopy_history.as_completed", interrupting_as_completed):
+        with pytest.raises(m._DownloadInterrupted):
+            download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    completed, _ = m._load_checkpoint("EURUSD")
+    unresolved = m._load_unresolved_hours("EURUSD")
+    unresolved_hours = {datetime.fromisoformat(r["hour"]) for r in unresolved}
+
+    assert unresolved_hours == set(hours) - completed  # every hour accounted for, none silently dropped
+    assert unresolved  # a real interrupt with only 1 worker leaves something unresolved
+    # nothing in this run ever failed (every response was 200) — so every
+    # unresolved hour got there purely by being cut off, never a real error.
+    assert all("not attempted this run" in r["reason"] for r in unresolved)
+
+
+def test_resume_after_persistent_failure_retries_and_clears_unresolved_hours(tmp_path, monkeypatch):
+    """Resume -> retries unresolved hours, extended: once a previously-
+    unresolved hour succeeds on a later run, it must disappear from the
+    unresolved snapshot (rewritten, not appended)."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / "checkpoints")
+    hours = [
+        datetime(2024, 1, 2, 9, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 10, tzinfo=timezone.utc),
+    ]
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    def fake_get_first(url, timeout=None):
+        if "09h_ticks" in url:
+            return _fake_response(500)
+        return _fake_response(200, body)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get_first), \
+         patch("download_dukascopy_history.time.sleep"):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    unresolved_after_first = m._load_unresolved_hours("EURUSD")
+    assert len(unresolved_after_first) == 1
+    assert unresolved_after_first[0]["retryable"] is True
+
+    # Resume: the previously-failing hour succeeds this time.
+    with patch("download_dukascopy_history.requests.get", return_value=_fake_response(200, body)), \
+         patch("download_dukascopy_history.time.sleep"):
+        download_symbol_hours("EURUSD", "EURUSD", hours, workers=1, checkpoint=True)
+
+    assert m._load_unresolved_hours("EURUSD") == []
+
+
+def test_main_keeps_checkpoint_and_reports_partial_when_hours_unresolved(tmp_path, monkeypatch):
+    """dataset-with-unresolved-hours -> PARTIAL: main() must NOT clear the
+    checkpoint when a symbol finishes with any unresolved hours — the
+    exact real bug this v2 work fixes (a partially-successful run
+    previously destroyed its own resumability)."""
+    import download_dukascopy_history as m
+
+    monkeypatch.setattr(m, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(m, "_CHECKPOINT_DIR", tmp_path / ".dukascopy_checkpoints")
+    monkeypatch.setattr(sys, "argv", ["prog", "--symbols", "EURUSD", "--years", "0.001", "--workers", "1"])
+    body = _compress_records([(0, 108510, 108490, 1.0, 1.0)])
+
+    failed_once = {"done": False}
+
+    def fake_get(url, timeout=None):
+        if not failed_once["done"]:
+            failed_once["done"] = True
+            return _fake_response(403)  # a permanent rejection — never resolves, never retried
+        return _fake_response(200, body)
+
+    with patch("download_dukascopy_history.requests.get", side_effect=fake_get), \
+         patch("download_dukascopy_history.time.sleep"), \
+         patch("research.manifest.write_manifest"):
+        m.main()
+
+    hours_path, bars_path = m._checkpoint_paths("EURUSD")
+    assert hours_path.exists() and bars_path.exists()  # checkpoint KEPT — a partial run must stay resumable
+    unresolved = m._load_unresolved_hours("EURUSD")
+    assert len(unresolved) == 1
+    assert unresolved[0]["retryable"] is False
+    assert (tmp_path / "EURUSD_H1_dukascopy.csv").exists()  # a partial-but-real CSV is still written and useful
+
+
 def test_main_clears_checkpoint_after_a_fully_successful_symbol_download(tmp_path, monkeypatch):
     import download_dukascopy_history as m
 
@@ -1055,6 +1320,7 @@ def test_main_clears_checkpoint_after_a_fully_successful_symbol_download(tmp_pat
     hours_path, bars_path = m._checkpoint_paths("EURUSD")
     assert not hours_path.exists()
     assert not bars_path.exists()
+    assert not m._unresolved_checkpoint_path("EURUSD").exists()  # zero unresolved hours -> COMPLETE -> checkpoint (incl. unresolved snapshot) fully cleared
     assert (tmp_path / "EURUSD_H1_dukascopy.csv").exists()
 
 

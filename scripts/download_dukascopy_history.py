@@ -143,6 +143,30 @@ partial state. Direct callers of download_symbol_hours() (tests,
 --probe) default to checkpoint=False — this is an opt-in behavior of
 the full CLI download flow, not the fetch function's own default.
 
+Unresolved-hour tracking & dataset completeness (2026-08-18, v2 —
+operator-reviewed critique of the design above): a persistent
+429/5xx/network/TIMEOUT failure that exhausts its retries is a hard
+UNRESOLVED/RETRYABLE outcome, and it must NEVER be silently reinterpreted
+as "missing data" or "the market was closed" — those are semantically
+different facts (a confirmed 404 IS a closed market; a TIMEOUT is not).
+To make that distinction durable and auditable, every checkpointed run
+also (re)writes data/.dukascopy_checkpoints/{SYMBOL}_unresolved_hours.jsonl
+— one JSON line per hour from the originally-requested set that is
+neither completed nor confirmed-closed-market as of that run, each
+tagged with its real failure reason and a retryable flag (False only for
+a permanent rejection like an HTTP 400/401/403/410; True for every
+transient category, including a persistent TIMEOUT). main()'s CLI flow
+reads this file after each symbol finishes: zero unresolved hours means
+the dataset is COMPLETE and the checkpoint is cleared exactly as before;
+any unresolved hours means the dataset is PARTIAL — the checkpoint is
+deliberately KEPT (never cleared) so the next run resumes and retries
+exactly those hours, and this is recorded per-symbol in the run's
+manifest under results.dataset_status. A partial CSV is still written
+and still useful (it's honestly labeled, not silently treated as
+complete) — this closes a real bug where a partially-successful run
+previously cleared its own checkpoint unconditionally, destroying
+resumability and producing a dataset that looked complete but wasn't.
+
 Usage:
     python3 -m scripts.download_dukascopy_history --probe EURUSD                     # single hour, no file written
     python3 -m scripts.download_dukascopy_history --symbols EURUSD XAUUSD            # 10y H1, default
@@ -193,6 +217,7 @@ feed that hasn't been exercised recently.
 from __future__ import annotations
 
 import argparse
+import json
 import lzma
 import struct
 import sys
@@ -263,10 +288,29 @@ def _enter_cooldown(seconds: float) -> None:
         _cooldown_until = max(_cooldown_until, time.monotonic() + seconds)
 
 
+# Bounded cooldown re-check budget (2026-08-18, v2 — operator-reviewed
+# critique of the earlier single-shot design): a worker that reads
+# _cooldown_until, starts sleeping, and wakes up AFTER another worker's
+# failure has since extended that deadline would previously proceed
+# straight to a request against a cooldown that's actually still active
+# ("wakes from a stale cooldown"). Re-checking after each wait closes
+# that gap. The recheck count is capped (not an unbounded while-loop) so
+# this can never spin forever under this file's time.sleep()-mocking
+# test convention (a frozen/mocked clock would otherwise never let
+# cooldown_wait reach 0) — a fixed, small number of rechecks is enough to
+# absorb any REALISTIC sequence of extensions in practice; if the
+# cooldown is still active after _COOLDOWN_MAX_RECHECKS, this proceeds
+# anyway rather than looping indefinitely, matching this module's own
+# "empirical, not a hard guarantee" framing (see the docstring's "Rate
+# limiting" note).
+_COOLDOWN_MAX_RECHECKS = 5
+
+
 def _throttle() -> None:
     """Blocks the calling thread until it's safe to send the next
     Dukascopy request — first waiting out any active global cooldown
-    (see _enter_cooldown above), then reserving the next per-request
+    (see _enter_cooldown above, and _COOLDOWN_MAX_RECHECKS's own comment
+    for the bounded re-check loop), then reserving the next per-request
     pacing slot — and reserves that slot for whoever calls next. Locks
     are held only long enough to read/reserve shared state — never
     across the sleep itself — so multiple worker threads queue up
@@ -277,21 +321,11 @@ def _throttle() -> None:
     global _next_request_time
     if _shutdown_requested.is_set():
         raise _ShutdownRequested()
-    # Single-shot cooldown wait (compute once, sleep once — no re-check
-    # loop): a loop that re-reads _cooldown_until after waking would be
-    # more precise against a cooldown another thread keeps extending
-    # while this one sleeps, but re-deriving the remaining wait from
-    # time.monotonic() on every iteration cannot be safely mocked the way
-    # this whole file's test suite mocks time.sleep() (a frozen/mocked
-    # clock with a no-op sleep spins forever instead of advancing). A
-    # thread that wakes slightly early from a stale cooldown value just
-    # makes one attempt sooner than ideal — self-correcting, since a
-    # continued outage re-triggers _enter_cooldown() again — and matches
-    # this module's own "empirical, not a guarantee" framing (see the
-    # docstring's "Rate limiting" note) rather than a hard requirement.
-    with _cooldown_lock:
-        cooldown_wait = max(0.0, _cooldown_until - time.monotonic())
-    if cooldown_wait > 0:
+    for _ in range(_COOLDOWN_MAX_RECHECKS):
+        with _cooldown_lock:
+            cooldown_wait = max(0.0, _cooldown_until - time.monotonic())
+        if cooldown_wait <= 0:
+            break
         if _shutdown_requested.is_set():
             raise _ShutdownRequested()
         time.sleep(cooldown_wait)
@@ -734,11 +768,76 @@ def _load_checkpoint(symbol: str) -> tuple[set[datetime], list[dict]]:
     return completed, bars
 
 
+def _unresolved_checkpoint_path(symbol: str) -> Path:
+    """A THIRD, additive checkpoint artifact (2026-08-18, v2) — kept
+    deliberately separate from _checkpoint_paths()'s existing 2-tuple
+    (hours_path/bars_path), whose format/contract stays byte-for-byte
+    unchanged, per the operator's own explicit "no checkpoint format
+    change without a migration" constraint. This file is a fresh
+    JSON-lines snapshot, REWRITTEN (not appended) at the end of every
+    checkpointed download_symbol_hours() call: one line per hour from
+    the originally-requested list that is neither completed nor
+    confirmed closed-market as of right now — i.e. every hour a human
+    or a downstream Data-Centre process should NOT treat as resolved.
+    An hour vanishes from this file the moment a later resume actually
+    completes it. Never written when checkpoint=False (--probe/tests)."""
+    return _CHECKPOINT_DIR / f"{symbol}_unresolved_hours.jsonl"
+
+
+def _write_unresolved_checkpoint(
+    symbol: str, unresolved_hours: list[datetime], failure_detail: dict[datetime, dict],
+) -> None:
+    """Rewrites (never appends) the unresolved-hours snapshot — see
+    _unresolved_checkpoint_path()'s own docstring. Each line explicitly
+    classifies WHY an hour is unresolved and whether it's worth
+    retrying, per the operator's own instruction: a persistently-failing
+    hour must read as UNRESOLVED/RETRYABLE (or, for a permanent
+    rejection like an HTTP 400/401/403/410, retryable=False), never be
+    silently reinterpreted as "missing data" or "closed market"."""
+    _CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    path = _unresolved_checkpoint_path(symbol)
+    with path.open("w") as f:
+        for hour in sorted(unresolved_hours):
+            detail = failure_detail.get(hour)
+            if detail is None:
+                record = {"hour": hour.isoformat(), "reason": "not attempted this run "
+                          "(interrupted before reaching it)", "retryable": True}
+            else:
+                record = {"hour": hour.isoformat(), "reason": detail["reason"], "retryable": detail["retryable"]}
+            f.write(json.dumps(record) + "\n")
+
+
+def _load_unresolved_hours(symbol: str) -> list[dict]:
+    """Tolerant reader for _unresolved_checkpoint_path() — malformed/
+    partial lines are skipped rather than aborting, matching
+    _load_checkpoint()'s own established convention. An empty list means
+    either "never had any unresolved hours" or "no checkpoint exists at
+    all" — both correctly read as COMPLETE by main()'s dataset-status
+    logic."""
+    path = _unresolved_checkpoint_path(symbol)
+    if not path.exists():
+        return []
+    records: list[dict] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and "hour" in record:
+            records.append(record)
+    return records
+
+
 def _clear_checkpoint(symbol: str) -> None:
-    """Called once a symbol's full download completes successfully — a
-    later --force re-download should start genuinely fresh, not resume
-    stale partial state from a different --years/--timeframe request."""
-    for path in _checkpoint_paths(symbol):
+    """Called once a symbol's full download completes successfully (zero
+    unresolved hours) — a later --force re-download should start
+    genuinely fresh, not resume stale partial state from a different
+    --years/--timeframe request. Also clears the unresolved-hours
+    snapshot, which is redundant (empty) at that point anyway."""
+    for path in (*_checkpoint_paths(symbol), _unresolved_checkpoint_path(symbol)):
         path.unlink(missing_ok=True)
 
 
@@ -772,6 +871,15 @@ def download_symbol_hours(
     _shutdown_requested.clear()  # defensive: a prior interrupted call in the same process must never silently block a fresh one
     already_done: set[datetime] = set()
     bars: list[dict] = []
+    # v2 (2026-08-18): every hour that genuinely resolves this run (a real
+    # 200 fetch or a confirmed 404 closed-market — never a permanent
+    # rejection/failed_other, which stays unresolved on purpose) is tracked
+    # here so the end-of-run unresolved-hours snapshot can tell "resolved"
+    # apart from "still needs a retry" — see _write_unresolved_checkpoint()'s
+    # own docstring for why a persistent TIMEOUT must never be silently
+    # reclassified as missing data or a closed market.
+    resolved_this_run: set[datetime] = set()
+    failure_detail: dict[datetime, dict] = {}
     if checkpoint:
         _CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
         already_done, bars = _load_checkpoint(symbol)
@@ -803,15 +911,26 @@ def download_symbol_hours(
                 try:
                     ticks = future.result()
                 except DukascopyFetchError as exc:
-                    counts[_classify_failure(exc)] += 1
+                    category = _classify_failure(exc)
+                    counts[category] += 1
+                    # retryable=True for every transient category (429/5xx/
+                    # network/timeout) — explicitly NEVER for a permanent
+                    # rejection (failed_other, e.g. 400/401/403/410), which
+                    # matches _write_unresolved_checkpoint()'s own contract:
+                    # a persistent TIMEOUT must read as UNRESOLVED/RETRYABLE,
+                    # never as missing data or a closed market.
+                    failure_detail[hour] = {"reason": str(exc), "retryable": category != "failed_other"}
                     print(f"    [{done}/{len(remaining_hours)}] {hour.date()} {hour.hour:02d}h: SKIPPED ({exc})")
                     continue
                 except _ShutdownRequested:
                     # this hour's fetch was aborted mid-retry by a shutdown
                     # already in progress — never checkpointed, retried on
-                    # the next resume, not counted as a failure.
+                    # the next resume, not counted as a failure, and left
+                    # unresolved (no failure_detail entry) — the fallback
+                    # "not attempted this run" reason applies.
                     continue
 
+                resolved_this_run.add(hour)
                 hour_bars: list[dict] = []
                 if ticks:
                     if point_value is None:
@@ -851,6 +970,17 @@ def download_symbol_hours(
     )
     if failures:
         print(f"    {failures}/{len(remaining_hours)} hour(s) failed (not 404s) and were skipped.")
+
+    if checkpoint:
+        # Written on EVERY checkpointed call — both the interrupted and the
+        # normal-completion path below — so a dataset's unresolved-hours
+        # snapshot is always current as of this run, not just on a clean
+        # finish. remaining_hours already excludes hours already_done from
+        # a prior run, so this file only ever reflects hours actually in
+        # play this run: previously-unresolved hours that got resolved now
+        # correctly drop out (rewritten, not appended).
+        unresolved_hours = [h for h in remaining_hours if h not in resolved_this_run]
+        _write_unresolved_checkpoint(symbol, unresolved_hours, failure_detail)
 
     if interrupted is not None:
         print(f"\n    Interrupted (Ctrl+C) — {interrupted.done}/{interrupted.total} hour(s) processed this run"
@@ -949,6 +1079,7 @@ def main() -> None:
 
     DATA_DIR.mkdir(exist_ok=True)
     csvs: list[str] = []
+    dataset_status: dict[str, str] = {}
     t0 = time.monotonic()
     hours = _hour_range(args.years)
 
@@ -992,7 +1123,24 @@ def main() -> None:
         out_df.to_csv(out_path)
         csvs.append(str(out_path))
         print(f"  saved: {out_path}  ({time.monotonic() - t0:.0f}s elapsed)")
-        _clear_checkpoint(sym)  # this symbol is now fully, freshly downloaded — no stale partial state to resume next time
+
+        # v2 (2026-08-18): a CSV existing is NOT the same as the dataset
+        # being complete — download_symbol_hours() may have swallowed
+        # per-hour failures internally without ever raising, so check the
+        # real unresolved-hours snapshot before deciding the checkpoint is
+        # safe to discard. Previously this unconditionally cleared the
+        # checkpoint here, silently destroying resumability for a
+        # partially-successful run and writing a CSV that looked complete
+        # but wasn't.
+        unresolved = _load_unresolved_hours(sym)
+        if unresolved:
+            dataset_status[sym] = "PARTIAL"
+            print(f"  {sym}: PARTIAL — {len(unresolved)} hour(s) unresolved (retryable transient failures; "
+                  f"never reclassified as missing data or a closed market). Checkpoint kept — re-run the same "
+                  f"command to retry just those hours.")
+        else:
+            dataset_status[sym] = "COMPLETE"
+            _clear_checkpoint(sym)  # zero unresolved hours — fully, freshly downloaded, no stale partial state to resume next time
 
     if not csvs:
         print("\nNo files downloaded — nothing to manifest.")
@@ -1009,7 +1157,7 @@ def main() -> None:
             "workers": args.workers,
         },
         datasets=[dataset_fingerprint(Path(c)) for c in csvs],
-        results={"files_written": csvs},
+        results={"files_written": csvs, "dataset_status": dataset_status},
     )
     outp = write_manifest(manifest, f"dukascopy_history_{time.strftime('%Y%m%d')}")
     print(f"\nManifest: {outp}")

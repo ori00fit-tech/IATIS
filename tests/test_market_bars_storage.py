@@ -117,6 +117,39 @@ def test_upsert_bars_default_batch_size_respects_d1s_real_param_ceiling():
     assert market_bars._INSERT_BATCH_ROWS_DEFAULT * 9 <= 100
 
 
+def test_upsert_bars_uses_d1_batch_to_collapse_http_round_trips(monkeypatch):
+    """Regression pin for the 2026-08-18 'push: timeout' fix (Trusted
+    Data Center Warehouse push badge) — before this fix, upsert_bars()
+    made one HTTP round-trip PER batch_rows-sized INSERT statement,
+    which for a real multi-thousand-row symbol blew past push_to_
+    warehouse's own 900s job timeout. Now it groups statements_per_batch
+    of those INSERTs into d1_client.d1_batch() calls (Cloudflare D1's
+    own env.DB.batch(), one Worker invocation per group). Wraps the
+    already-faked transport (tests/conftest.py's fake_d1) to count real
+    POST calls without re-faking the D1 semantics."""
+    import storage.d1_client as d1_client_module
+
+    original_post = d1_client_module._post
+    call_count = {"n": 0}
+
+    def counting_post(*args, **kwargs):
+        call_count["n"] += 1
+        return original_post(*args, **kwargs)
+
+    monkeypatch.setattr(d1_client_module, "_post", counting_post)
+
+    df = _ohlcv(1000)  # default batch_rows=10 -> 100 INSERT statements
+    written = market_bars.upsert_bars("EURUSD", "M15", df, source="dukascopy")
+    assert written == 1000
+    assert market_bars.bar_count("EURUSD", "M15") == 1000
+    # 100 statements / statements_per_batch=50 -> 2 batch POSTs, plus 2
+    # more for _init()'s CREATE TABLE IF NOT EXISTS x2 -> 4 total. The
+    # load-bearing assertion is "far fewer than 100 (one per statement)",
+    # not the exact count, so this doesn't pin an unrelated implementation
+    # detail of _init().
+    assert call_count["n"] < 10
+
+
 def test_upsert_bars_at_default_batch_size_works_against_the_real_d1_param_ceiling():
     # Exercises the PRODUCTION default (no explicit batch_rows override)
     # against fake_d1's enforced 100-param ceiling — the exact path that

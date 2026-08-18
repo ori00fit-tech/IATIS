@@ -88,6 +88,19 @@ MIN_COVERAGE_PCT_FOR_READY = 95.0
 # maximum of 11 rows/statement; 10 leaves a safety margin.
 _INSERT_BATCH_ROWS_DEFAULT = 10
 
+# 2026-08-18 — confirmed live on the VPS: pushing a multi-year M15/H1
+# symbol through one d1_client.execute() HTTP round-trip PER 10-row
+# statement (thousands of round-trips at real D1-proxy latency) blew
+# past push_to_warehouse's own 900s job timeout — the "push: timeout"
+# badge in the Trusted Data Center UI. d1_client.d1_batch() (Cloudflare
+# D1's own env.DB.batch()) executes many statements in ONE Worker
+# invocation, so grouping statements_per_batch of the 10-row INSERTs
+# above into one /d1/batch call collapses the round-trip count by
+# ~50x while each individual statement still respects the 100-param
+# ceiling. 50 is comfortably inside d1_client's 15s per-call timeout —
+# not tuned against a measured ceiling, just conservative headroom.
+_STATEMENTS_PER_D1_BATCH = 50
+
 
 def _init(con) -> None:
     con.execute(_DDL_BARS)
@@ -113,14 +126,21 @@ def _to_epoch_second(ts) -> int:
 
 
 def upsert_bars(symbol: str, timeframe: str, df: pd.DataFrame, source: str,
-                batch_rows: int = _INSERT_BATCH_ROWS_DEFAULT) -> int:
+                batch_rows: int = _INSERT_BATCH_ROWS_DEFAULT,
+                statements_per_batch: int = _STATEMENTS_PER_D1_BATCH) -> int:
     """Idempotent bulk write: INSERT OR REPLACE so re-pushing the same
     (symbol, timeframe, timestamp) — e.g. a re-run of the download
     orchestrator, or backfilling more recent bars — updates in place
     rather than erroring on the primary key or silently duplicating.
-    Batches multiple rows per statement (one D1 HTTP round-trip per
-    batch, not per row — pushing years of M15 history one row at a time
-    would be thousands of requests). Returns the number of rows written."""
+
+    Rows are grouped into `batch_rows`-sized INSERT statements (each
+    respecting D1's 100-bound-param ceiling — see
+    _INSERT_BATCH_ROWS_DEFAULT above), and those statements are
+    themselves grouped `statements_per_batch` at a time into d1_client.
+    d1_batch() calls, so a multi-thousand-row push costs a small number
+    of HTTP round-trips (one per group of statements) instead of one
+    round-trip per 10-row statement — see _STATEMENTS_PER_D1_BATCH
+    above for why this exists. Returns the number of rows written."""
     if df.empty:
         return 0
     timestamps = _to_epoch_seconds(df.index)
@@ -128,23 +148,26 @@ def upsert_bars(symbol: str, timeframe: str, df: pd.DataFrame, source: str,
         timestamps, df["open"].tolist(), df["high"].tolist(), df["low"].tolist(),
         df["close"].tolist(), df["volume"].tolist(),
     ))
-    written = 0
+
+    statements: list[tuple[str, tuple]] = []
+    for i in range(0, len(rows), batch_rows):
+        chunk = rows[i:i + batch_rows]
+        placeholders = ",".join(["(?,?,?,?,?,?,?,?,?)"] * len(chunk))
+        params: list[Any] = []
+        for ts, o, h, low, c, vol in chunk:
+            params.extend([symbol, timeframe, ts, o, h, low, c, vol, source])
+        statements.append((
+            f"""INSERT OR REPLACE INTO market_bars
+                (symbol, timeframe, timestamp, open, high, low, close, volume, source)
+                VALUES {placeholders}""",
+            tuple(params),
+        ))
+
     with d1_client.d1_connection() as con:
         _init(con)
-        for i in range(0, len(rows), batch_rows):
-            chunk = rows[i:i + batch_rows]
-            placeholders = ",".join(["(?,?,?,?,?,?,?,?,?)"] * len(chunk))
-            params: list[Any] = []
-            for ts, o, h, low, c, vol in chunk:
-                params.extend([symbol, timeframe, ts, o, h, low, c, vol, source])
-            con.execute(
-                f"""INSERT OR REPLACE INTO market_bars
-                    (symbol, timeframe, timestamp, open, high, low, close, volume, source)
-                    VALUES {placeholders}""",
-                tuple(params),
-            )
-            written += len(chunk)
-    return written
+    for i in range(0, len(statements), statements_per_batch):
+        d1_client.d1_batch(statements[i:i + statements_per_batch])
+    return len(rows)
 
 
 def load_bars(symbol: str, timeframe: str, start=None, end=None) -> pd.DataFrame:

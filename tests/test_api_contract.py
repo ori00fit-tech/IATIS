@@ -1364,13 +1364,200 @@ def test_experiments_run_download_history_provider_defaults_to_dukascopy(client,
 
 
 def test_experiments_run_download_history_rejects_unknown_provider(client):
+    # "ctrader" is a real, recognized provider now (gated by the scheduler
+    # guard below, not "unknown") — mt5/dukascopy_jforex remain genuinely
+    # unrecognized here, with no guard built for them at all.
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "mt5"},
+        headers=HDR,
+    )
+    assert r.status_code == 400, r.text
+    assert "Unknown provider" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# cTrader Data Center provider — live-trading safety guard (2026-08-18):
+# every cTrader download request MUST be rejected before any subprocess is
+# launched unless iatis-scheduler is CONFIRMED inactive via
+# _systemd_service_status() (real `systemctl is-active`, mocked here rather
+# than actually touching services). ACTIVE and every non-"inactive" status
+# (UNKNOWN/unavailable/timeout/error) must both block — fail closed, never
+# fail open on an undetermined scheduler state.
+# ---------------------------------------------------------------------------
+
+
+def test_experiments_run_ctrader_is_a_selectable_download_provider():
+    import execution.routes.experiments as m
+
+    assert "ctrader" in m._DOWNLOAD_PROVIDERS
+    assert m._DOWNLOAD_PROVIDERS["ctrader"]["timeframes"] == ("M15", "H1")
+    assert m._DOWNLOAD_PROVIDERS["ctrader"]["supports_years"] is True
+    assert "ctrader" in m._DOWNLOAD_PROVIDER_COMMANDS
+    assert m._DOWNLOAD_PROVIDER_COMMANDS["ctrader"][-1] == "scripts.download_ctrader_fx_history"
+
+
+def test_experiments_run_ctrader_blocked_when_scheduler_active(client, monkeypatch):
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_systemd_service_status", lambda: {"scheduler": {"status": "active"}})
+
+    def _must_not_launch(*args, **kwargs):
+        raise AssertionError("subprocess.Popen must never be called when the scheduler is active")
+
+    monkeypatch.setattr("subprocess.Popen", _must_not_launch)
+
     r = client.post(
         "/experiments/run",
         json={"job": "download_history", "symbols": ["EURUSD"], "provider": "ctrader"},
         headers=HDR,
     )
-    assert r.status_code == 400, r.text
-    assert "Unknown provider" in r.json()["detail"]
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "iatis-scheduler is active" in detail
+    assert "Stop iatis-scheduler" in detail
+    assert "live trading" in detail
+
+
+@pytest.mark.parametrize("status", ["unknown", "unavailable", "timeout", "error"])
+def test_experiments_run_ctrader_fails_closed_on_undetermined_scheduler_status(client, monkeypatch, status):
+    """The explicit fail-closed requirement: UNKNOWN (and every other
+    non-'active'/non-'inactive' systemd outcome) must BLOCK, not be
+    silently treated as 'safe to proceed'."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_systemd_service_status", lambda: {"scheduler": {"status": status}})
+
+    def _must_not_launch(*args, **kwargs):
+        raise AssertionError(f"subprocess.Popen must never be called when scheduler status is {status!r}")
+
+    monkeypatch.setattr("subprocess.Popen", _must_not_launch)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "ctrader"},
+        headers=HDR,
+    )
+    assert r.status_code == 409, r.text
+    assert "could not be confirmed" in r.json()["detail"]
+    assert status in r.json()["detail"]
+
+
+def test_experiments_run_ctrader_blocked_when_scheduler_status_missing_entirely(client, monkeypatch):
+    """A _systemd_service_status() response with no 'scheduler' key at all
+    (e.g. this host has no systemd, or the whitelist ever changes) must
+    still block — the missing-key fallback defaults to 'unknown', not
+    'inactive'."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_systemd_service_status", lambda: {})
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not launch")),
+    )
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "ctrader"},
+        headers=HDR,
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_experiments_run_ctrader_allowed_when_scheduler_inactive_builds_expected_argv(client, monkeypatch):
+    """The only ALLOW case: a confirmed 'inactive' scheduler lets the
+    request reach the existing cTrader command construction unchanged —
+    proves the guard doesn't just block, it also correctly gets out of the
+    way when it's genuinely safe."""
+    import execution.routes.experiments as m
+
+    monkeypatch.setattr(m, "_systemd_service_status", lambda: {"scheduler": {"status": "inactive"}})
+    monkeypatch.setattr(m, "_DOWNLOAD_PROVIDER_COMMANDS", {"ctrader": ["echo", "ct"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            _FakeProc.captured_argv = argv
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["eurusd"], "provider": "ctrader", "timeframe": "M15", "years": 1.5},
+        headers=HDR,
+    )
+    assert r.status_code == 200, r.text
+    _wait_for_job(client, r.json()["job_id"])
+    assert _FakeProc.captured_argv == [
+        "echo", "ct", "--symbols", "EURUSD", "--timeframe", "M15", "--years", "1.5",
+    ]
+
+
+def test_experiments_run_non_ctrader_providers_never_call_scheduler_guard(client, monkeypatch):
+    """Existing providers (dukascopy default, twelve_data) must keep
+    working completely unaffected by this guard — proven here by making
+    _systemd_service_status raise if it's ever even called for them."""
+    import execution.routes.experiments as m
+
+    def _must_not_be_called():
+        raise AssertionError("_systemd_service_status must not be called for a non-ctrader provider")
+
+    monkeypatch.setattr(m, "_systemd_service_status", _must_not_be_called)
+    monkeypatch.setattr(m, "_JOB_COMMANDS", {**m._JOB_COMMANDS, "download_history": ["echo", "dukas"]})
+    monkeypatch.setattr(m, "_DOWNLOAD_PROVIDER_COMMANDS", {"twelve_data": ["echo", "td"]})
+
+    class _FakeProc:
+        def __init__(self, argv, **kwargs):
+            self.stdout = iter([])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProc)
+
+    r1 = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"]},  # default provider: dukascopy
+        headers=HDR,
+    )
+    assert r1.status_code == 200, r1.text
+    _wait_for_job(client, r1.json()["job_id"])
+
+    r2 = client.post(
+        "/experiments/run",
+        json={"job": "download_history", "symbols": ["EURUSD"], "provider": "twelve_data"},
+        headers=HDR,
+    )
+    assert r2.status_code == 200, r2.text
+    _wait_for_job(client, r2.json()["job_id"])
+
+
+def test_guard_ctrader_download_source_never_references_document_hidden_or_paused_badge():
+    """The Data Center 'Paused' badge (dashboard/frontend/src/App.tsx:137)
+    is purely document.hidden/browser-tab-visibility and has NO
+    relationship to whether iatis-scheduler is actually running — pinned
+    here as a source-scan proving the backend guard's only real dependency
+    is _systemd_service_status(), never anything client-supplied that
+    could be confused with (or spoof) that badge."""
+    import inspect
+
+    import execution.routes.experiments as m
+
+    src = inspect.getsource(m._guard_ctrader_download)
+    assert "_systemd_service_status" in src
+    for forbidden in ("document.hidden", "Paused", "visible", "request.", "body."):
+        assert forbidden not in src, f"guard source unexpectedly references {forbidden!r}"
 
 
 def test_experiments_run_download_history_rejects_years_for_twelve_data(client):

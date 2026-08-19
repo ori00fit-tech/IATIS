@@ -170,6 +170,30 @@ def test_suite_threads_start_end_into_payload(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Data Integrity Core, Slice 2 (Fingerprint Binding) — dataset_descriptor
+# embedded in every successfully-swept symbol's report entry.
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_suite_embeds_real_dataset_descriptor_per_symbol(tmp_path):
+    from backtest.runner import build_dataset_descriptor, find_symbol_csv, load_symbol_data
+
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_dukascopy.csv")
+    out_dir = tmp_path / "reports"
+    rc = RobustnessConfig(params=("sl_atr_multiplier",), min_trades=1)
+    run_robustness_suite(["EURUSD"], tmp_path, rc, output_dir=out_dir)
+
+    payload = json.loads(next(out_dir.glob("robustness_*.json")).read_text())
+    descriptor = payload["symbols"]["EURUSD"]["dataset_descriptor"]
+    assert descriptor is not None
+    assert descriptor["symbol"] == "EURUSD"
+    assert descriptor["provider"] == "dukascopy"
+
+    csv_path = find_symbol_csv("EURUSD", tmp_path, timeframe="H1")
+    fresh = build_dataset_descriptor(load_symbol_data("EURUSD", tmp_path, timeframe="H1"), "EURUSD", "H1", csv_path)
+    assert descriptor["dataset_fingerprint"] == fresh["dataset_fingerprint"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Data-download M15 support (2026-08-11) — physical_load_timeframe wiring
 # ─────────────────────────────────────────────────────────────────────────
 

@@ -42,7 +42,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backtest.metrics import calculate_metrics, json_safe
-from backtest.runner import load_symbol_data, physical_load_timeframe, trade_to_record
+from backtest.runner import (
+    build_dataset_descriptor,
+    find_symbol_csv,
+    load_symbol_data,
+    physical_load_timeframe,
+    trade_to_record,
+)
 from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
@@ -222,11 +228,24 @@ def run_robustness_suite(
     excluded; it never aborts the suite. start/end (Backtesting Lab Pro
     Phase A, 2026-07-27): optional ISO-date dataset slice, same semantics
     as backtest.runner.load_symbol_data.
+
+    Data Integrity Core (2026-08-19): unlike walk_forward.run_walk_forward_
+    suite, this function does NOT gate on dataset_completeness_pct() — a
+    parameter-sensitivity screen is explicitly not out-of-sample evidence
+    (see this function's own "note" field below), so adding a fail-closed
+    gate here is a separate, not-yet-decided design question. Every
+    successful symbol still gets a real dataset_descriptor embedded in the
+    written report (Fingerprint Binding, slice 2) so a reader can at least
+    see the completeness/fingerprint it was actually run on.
     """
     out: dict[str, RobustnessResult] = {}
+    dataset_descriptors: dict[str, dict] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir, start, end, timeframe=physical_load_timeframe(rc.timeframes))
+            timeframe = physical_load_timeframe(rc.timeframes)
+            df = load_symbol_data(symbol, data_dir, start, end, timeframe=timeframe)
+            csv_path = find_symbol_csv(symbol, data_dir, timeframe=timeframe)
+            dataset_descriptors[symbol] = build_dataset_descriptor(df, symbol, timeframe, csv_path)
             out[symbol] = run_robustness(symbol, df, rc)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: robustness sweep failed — {exc}")
@@ -254,7 +273,10 @@ def run_robustness_suite(
             "start": start,
             "end": end,
             "engine_overrides": rc.engine_overrides,
-            "symbols": {s: r.to_dict() for s, r in out.items()},
+            "symbols": {
+                s: {**r.to_dict(), "dataset_descriptor": dataset_descriptors.get(s)}
+                for s, r in out.items()
+            },
         }
         path.write_text(json.dumps(json_safe(payload), indent=2))
         logger.info(f"Robustness report: {path} — {stable}/{len(out)} all-STABLE")

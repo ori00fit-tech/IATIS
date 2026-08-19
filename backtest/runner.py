@@ -125,6 +125,7 @@ class SymbolRunResult:
     data_start: str
     data_end: str
     bars: int
+    dataset_descriptor: dict | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -244,6 +245,44 @@ def dataset_completeness_pct(
         config = load_config()
     asset_class = asset_class_for_symbol(symbol, config)
     return completeness_score(df, timeframe, asset_class)
+
+
+def build_dataset_descriptor(
+    df: pd.DataFrame, symbol: str, timeframe: str, csv_path: Path, config: dict | None = None,
+) -> dict[str, Any]:
+    """Data Integrity Core, Slice 2 (Fingerprint Binding). The one
+    dataset-identity block every evidence-report writer (write_summary,
+    walk_forward's suite writer, robustness's suite writer) embeds, so a
+    research result can always answer "what data was this actually built
+    on" instead of only carrying a bare filename.
+
+    Combines two ALREADY-EXISTING primitives, neither reimplemented:
+    dataset_completeness_pct() (Slice 1, this module) for real gap-aware
+    coverage, and research.manifest.dataset_fingerprint() — the house
+    reproducibility fingerprint mission_runner.py/mission_validator.py
+    already use for per-trial/validation fingerprints — for the SHA256
+    identity. `provider` is parsed straight from csv_path's own
+    `{SYMBOL}_{TIMEFRAME}_{provider}.csv` naming convention (find_symbol_
+    csv's own documented pattern) — no new metadata source invented.
+    """
+    from research.manifest import dataset_fingerprint
+
+    completeness_pct, _detail = dataset_completeness_pct(df, symbol, timeframe, config=config)
+    fingerprint = dataset_fingerprint(csv_path, df)
+    stem = csv_path.stem  # "{SYMBOL}_{TIMEFRAME}_{provider}"
+    prefix = f"{symbol}_{timeframe}_"
+    provider = stem[len(prefix):] if stem.startswith(prefix) else stem
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "provider": provider,
+        "from": str(df.index[0]) if len(df) else None,
+        "to": str(df.index[-1]) if len(df) else None,
+        "row_count": int(len(df)),
+        "completeness_pct": round(completeness_pct, 2),
+        "dataset_fingerprint": fingerprint["sha256"],
+    }
 
 
 def physical_load_timeframe(timeframes: tuple[str, ...] | None) -> str:
@@ -480,6 +519,18 @@ def run_symbol(
     if runner_config.write_html:
         html = generate_html_report(metrics, records, mc=mc, symbol=symbol, df=df)
 
+    # Fingerprint Binding (Data Integrity Core, slice 2) — cheap glob,
+    # not a re-read of the file (dataset_fingerprint does the one real
+    # SHA256 read); mirrors the "call find_symbol_csv a second time"
+    # pattern already established in mission_runner.py/mission_validator.py.
+    dataset_descriptor: dict | None = None
+    try:
+        physical_tf = physical_load_timeframe(runner_config.timeframes)
+        csv_path = find_symbol_csv(symbol, runner_config.data_dir, timeframe=physical_tf)
+        dataset_descriptor = build_dataset_descriptor(df, symbol, physical_tf, csv_path)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        logger.warning(f"{symbol}: could not build dataset descriptor (non-fatal): {exc}")
+
     return SymbolRunResult(
         symbol=symbol,
         engine_result=result,
@@ -490,6 +541,7 @@ def run_symbol(
         data_start=str(df.index[0]),
         data_end=str(df.index[-1]),
         bars=len(df),
+        dataset_descriptor=dataset_descriptor,
     )
 
 
@@ -539,6 +591,7 @@ def write_summary(results: dict[str, SymbolRunResult], output_dir: Path) -> Path
                 "data_start": r.data_start,
                 "data_end": r.data_end,
                 "bars": r.bars,
+                "dataset_descriptor": r.dataset_descriptor,
                 "pipeline_runs": r.engine_result.total_runs,
                 "pipeline_errors": r.engine_result.error_count,
                 # Backtesting Lab Pro Phase D (2026-07-27) — already

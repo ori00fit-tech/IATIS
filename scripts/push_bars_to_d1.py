@@ -125,13 +125,28 @@ def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str
     falls back to the resample-from-H1 path exactly as before when no
     native H4/D1 file exists. Every one of the 4 timeframes gets a result
     entry, even a total miss (NO_SOURCE_FILE) — never silently dropped
-    from the return value."""
+    from the return value.
+
+    Fingerprint Binding (Data Integrity Core, slice 2): every pushed
+    (symbol, timeframe) gets a real SHA256 checksum via the EXISTING
+    research/manifest.py::dataset_fingerprint() (reused, not
+    reimplemented) passed into market_bars.upsert_manifest(). Before
+    this, upsert_manifest() was always called with checksum=None here,
+    the only place a live push ever writes a manifest — so
+    dataset_manifest.checksum was always NULL in production, and
+    mission_validator.py's warehouse-origin candidate-lock drift
+    detection was comparing None to None. A derived H4/D1 (no native
+    CSV of its own) is fingerprinted from the real H1 file it was
+    resampled FROM, since a derived timeframe has no CSV on disk to
+    hash."""
+    from research.manifest import dataset_fingerprint
     from storage import market_bars
 
     asset_class = _asset_class_for_symbol(symbol, config)
     results: dict[str, dict[str, Any]] = {}
     h1_df: pd.DataFrame | None = None
     h1_source: str | None = None
+    h1_path: Path | None = None
 
     for tf in _NATIVE_TIMEFRAMES:
         found = find_source_csv(symbol, tf, data_dir)
@@ -141,11 +156,12 @@ def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str
         path, source = found
         df = load_csv(path)
         written = market_bars.upsert_bars(symbol, tf, df, source=source)
+        checksum = dataset_fingerprint(path, df)["sha256"]
         manifest = market_bars.compute_manifest(symbol, tf, source=source, asset_class=asset_class)
-        market_bars.upsert_manifest(manifest)
-        results[tf] = {"status": manifest["status"], "rows": written, "source": source}
+        market_bars.upsert_manifest(manifest, checksum=checksum)
+        results[tf] = {"status": manifest["status"], "rows": written, "source": source, "checksum": checksum}
         if tf == "H1":
-            h1_df, h1_source = df, source
+            h1_df, h1_source, h1_path = df, source, path
 
     for tf in _DERIVED_TIMEFRAMES:
         native_found = find_source_csv(symbol, tf, data_dir)
@@ -153,9 +169,10 @@ def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str
             path, source = native_found
             df = load_csv(path)
             written = market_bars.upsert_bars(symbol, tf, df, source=source)
+            checksum = dataset_fingerprint(path, df)["sha256"]
             manifest = market_bars.compute_manifest(symbol, tf, source=source, asset_class=asset_class)
-            market_bars.upsert_manifest(manifest)
-            results[tf] = {"status": manifest["status"], "rows": written, "source": source}
+            market_bars.upsert_manifest(manifest, checksum=checksum)
+            results[tf] = {"status": manifest["status"], "rows": written, "source": source, "checksum": checksum}
             continue
         if h1_df is None or h1_df.empty:
             results[tf] = {"status": "NO_SOURCE_FILE", "rows": 0, "source": None}
@@ -166,9 +183,10 @@ def push_symbol(symbol: str, data_dir: Path, config: dict) -> dict[str, dict[str
             continue
         derived_source = f"{h1_source}_resampled"
         written = market_bars.upsert_bars(symbol, tf, derived_df, source=derived_source)
+        checksum = dataset_fingerprint(h1_path, h1_df)["sha256"] if h1_path is not None else None
         manifest = market_bars.compute_manifest(symbol, tf, source=derived_source, asset_class=asset_class)
-        market_bars.upsert_manifest(manifest)
-        results[tf] = {"status": manifest["status"], "rows": written, "source": derived_source}
+        market_bars.upsert_manifest(manifest, checksum=checksum)
+        results[tf] = {"status": manifest["status"], "rows": written, "source": derived_source, "checksum": checksum}
 
     return results
 

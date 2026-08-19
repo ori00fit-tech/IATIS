@@ -96,14 +96,18 @@ export const getWarehouseManifest = () => apiGet<WarehouseManifestResponse>('/wa
 
 // Data Center "Deepen a symbol" action — two whitelisted jobs
 // (download_history, push_to_warehouse) run via the shared experiment-
-// runner job engine. `download_history` supports two providers, both
-// free/credential-free and safe to trigger ad-hoc from the API-server
-// process; cTrader/MT5/dukascopy_jforex are never offered here — see
-// execution/routes/experiments.py's _JOB_COMMANDS/_DOWNLOAD_PROVIDERS
-// comments (single-session-per-account limit, would race the live
-// scheduler's own connection).
+// runner job engine. `download_history` supports three providers.
+// Dukascopy/Twelve Data are free/credential-free and always safe to
+// trigger ad-hoc. cTrader is also offered here, but the backend
+// (execution/routes/experiments.py's _guard_ctrader_download()) rejects
+// the request with 409 unless iatis-scheduler is confirmed inactive —
+// a live cTrader session enforces a single-session-per-account limit
+// and would otherwise race the scheduler's own connection. That 409
+// surfaces through the same inline error path as any other failure, no
+// special-casing needed here. MT5/dukascopy_jforex remain unavailable
+// from this UI entirely.
 export interface DownloadProviderSpec {
-  id: 'dukascopy' | 'twelve_data'
+  id: 'dukascopy' | 'twelve_data' | 'ctrader'
   label: string
   timeframes: readonly string[]
   supportsYears: boolean
@@ -112,6 +116,7 @@ export interface DownloadProviderSpec {
 export const DOWNLOAD_PROVIDERS: readonly DownloadProviderSpec[] = [
   { id: 'dukascopy', label: 'Dukascopy', timeframes: ['M15', 'H1', 'H4', 'D1'], supportsYears: true },
   { id: 'twelve_data', label: 'Twelve Data', timeframes: ['M15', 'H1'], supportsYears: false },
+  { id: 'ctrader', label: 'cTrader', timeframes: ['M15', 'H1'], supportsYears: true },
 ]
 
 export const runDownloadHistoryJob = (

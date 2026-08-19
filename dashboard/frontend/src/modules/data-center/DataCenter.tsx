@@ -281,9 +281,10 @@ function DeepenAction({ onPushed }: { onPushed: () => void }) {
       </div>
       <p className="text-[0.7em] text-muted">
         Dukascopy (all 4 timeframes, choose your own lookback) or Twelve Data (M15/H1 only, always fetches its
-        full available history) — both free, credential-free feeds. cTrader enforces a single-session-per-account
-        limit and would race the live scheduler's own connection, so cTrader-sourced deepening stays a VPS
-        CLI-only operation (stop the scheduler first) and is never offered here. Download writes a local CSV;
+        full available history) — both free, credential-free feeds. cTrader (M15/H1, real tick-volume) is also
+        offered, but is rejected with a 409 unless iatis-scheduler is confirmed inactive — cTrader enforces a
+        single-session-per-account limit and a second live connection could interfere with the scheduler's own
+        session. Stop iatis-scheduler first, download, then restart it. Download writes a local CSV;
         Push writes it into the D1 warehouse (native H4/D1 files are preferred over resampling H1) — run
         Download, then Push.
       </p>

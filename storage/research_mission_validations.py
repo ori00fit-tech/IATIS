@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS research_mission_validations (
     error                    TEXT,
     candidate_lock_json      TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): git+dataset fingerprint drift vs. the trial's own recorded fingerprint. Informational only, never blocks.
     date_overlap_json        TEXT,   -- Diagnostic Infrastructure Phase 1 (2026-08-02): does this validation's date range overlap the original mission's training window. Informational only.
+    mission_family_significance_json TEXT,  -- Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19): Bonferroni-corrected significance of THIS candidate against how many configurations its mission actually searched. Distinct from significance_json (autocorrelation-within-one-candidate) below -- this is selection-among-many-candidates. UNLIKE every other diagnostic column on this table, this ONE gates the top-tier verdict (STRONG_LEAD/SAME_SYMBOL_CONFIRMED) -- see backtest/mission_validator.py.
     validation_mode          TEXT NOT NULL DEFAULT 'CROSS_SYMBOL'  -- Forensic Audit Phase 1, item D (2026-08-02): SAME_SYMBOL|CROSS_SYMBOL. Default here matches every pre-existing row's real shape (>=2 symbols, trial_symbol excluded) — the API's own default is the OPPOSITE (SAME_SYMBOL), a deliberate, documented mismatch.
 )
 """
@@ -171,6 +172,27 @@ def set_validation_integrity_checks(
         con.execute(
             "UPDATE research_mission_validations SET candidate_lock_json=?, date_overlap_json=? WHERE id=?",
             (json.dumps(candidate_lock), json.dumps(date_overlap), validation_id),
+        )
+
+
+def set_mission_family_significance(validation_id: str, mission_family_significance: dict) -> None:
+    """Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19). Computed
+    once per validation run by backtest/mission_validator.py, same
+    validation-level (not per-symbol) scope as set_validation_integrity_
+    checks() above -- the mission's search-family size is a property of
+    the CANDIDATE being validated, not of any one validation symbol.
+
+    Kept in its own setter, not folded into set_validation_integrity_
+    checks(), because this one is load-bearing for the overall_verdict
+    (gates STRONG_LEAD/SAME_SYMBOL_CONFIRMED) while candidate_lock/
+    date_overlap are purely informational -- keeping the write paths
+    separate makes that asymmetry visible in the code, not just in a
+    comment."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        con.execute(
+            "UPDATE research_mission_validations SET mission_family_significance_json=? WHERE id=?",
+            (json.dumps(mission_family_significance), validation_id),
         )
 
 

@@ -78,20 +78,39 @@ def _space() -> MissionSearchSpace:
     )
 
 
-def _seed_mission_and_trial(mission_id: str, trial_symbol: str = "EURUSD", state: str = "COMPLETE") -> None:
+def _seed_mission_only(mission_id: str, trial_symbol: str = "EURUSD") -> None:
     space = _space()
-    raw_params = {_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0}
     research_missions.upsert_mission(
         mission_id=mission_id, name="test-mission", sampler="random", objective_metric="profit_factor",
         symbols=[trial_symbol], n_trials_per_symbol=1, min_trades=1, seed=42,
         search_space=mission_runner._search_space_dict(space), config={}, status="finished",
     )
+
+
+def _record_trial(
+    mission_id: str, trial_number: int, symbol: str = "EURUSD", state: str = "COMPLETE",
+    avg_rr: float = 0.5, std_rr: float = 1.0, trades: int = 50,
+) -> None:
+    """avg_rr/std_rr default to values whose trial_p_value() is ~0.0004 —
+    comfortably < bonferroni_alpha(n) for any family size up to ~100
+    trials (Slice 3, 2026-08-19), so a lone COMPLETE trial's family
+    (n_trials_in_family == 1, bonferroni_alpha == 0.05) always reaches
+    SURVIVES_CORRECTION unless a test explicitly overrides these to prove
+    the opposite."""
+    raw_params = {_TF_IDX_KEY: 0, _ENGINES_IDX_KEY: 0, _INDICATORS_IDX_KEY: 0, "sl_atr_multiplier": 2.0}
     research_missions.record_trial(
-        mission_id=mission_id, trial_number=0, symbol=trial_symbol, state=state,
+        mission_id=mission_id, trial_number=trial_number, symbol=symbol, state=state,
         objective_value=1.2 if state == "COMPLETE" else None,
-        params=raw_params, metrics={"profit_factor": 1.2}, trades=50 if state == "COMPLETE" else 0,
+        params=raw_params,
+        metrics={"profit_factor": 1.2, "avg_rr": avg_rr, "std_rr": std_rr} if state == "COMPLETE" else None,
+        trades=trades if state == "COMPLETE" else 0,
         error=None, started_at="t", finished_at="t",
     )
+
+
+def _seed_mission_and_trial(mission_id: str, trial_symbol: str = "EURUSD", state: str = "COMPLETE") -> None:
+    _seed_mission_only(mission_id, trial_symbol)
+    _record_trial(mission_id, 0, trial_symbol, state=state)
 
 
 def _small_vc(tmp_path: Path, validation_id: str, mission_id: str,
@@ -1400,3 +1419,154 @@ def test_cross_symbol_mode_still_uses_cross_symbol_vocabulary(monkeypatch):
     assert validation["overall_verdict"] in (NO_EDGE, WEAK_LEAD, STRONG_LEAD)
     assert validation["overall_verdict"] not in (SAME_SYMBOL_CONFIRMED, SAME_SYMBOL_NOT_CONFIRMED)
     assert validation["validation_mode"] == CROSS_SYMBOL
+
+
+# ── Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19) ─────────
+# _compute_mission_family_significance() binds the pre-existing
+# backtest.multiple_testing Bonferroni machinery into the promotion
+# decision. Mandatory pre-commit scenarios, verbatim from the operator's
+# approval: (1) a candidate drawn from a large (2000-trial) search family
+# whose adjusted classification does NOT survive correction must never
+# reach STRONG_LEAD/SAME_SYMBOL_CONFIRMED even when every raw criterion
+# passes; (2) the mirror case — a small family that DOES survive
+# correction — must still be able to reach the top tier; (3) PRUNED/FAIL
+# trials must never count toward the family size, only COMPLETE.
+
+from backtest.mission_validator import _compute_mission_family_significance  # noqa: E402
+
+
+def test_compute_mission_family_significance_counts_only_complete_trials():
+    mission_id = "mission-family-count"
+    _seed_mission_only(mission_id)
+    _record_trial(mission_id, 0, state="COMPLETE")
+    _record_trial(mission_id, 1, state="PRUNED")
+    _record_trial(mission_id, 2, state="FAIL")
+    _record_trial(mission_id, 3, state="COMPLETE")
+    _record_trial(mission_id, 4, state="PRUNED")
+
+    trial = research_missions.get_trial(mission_id, 0, "EURUSD")
+    result = _compute_mission_family_significance(mission_id, "EURUSD", trial)
+
+    # 5 trials recorded, only 2 are COMPLETE — PRUNED/FAIL must never
+    # inflate the family size the Bonferroni correction is computed against.
+    assert result["n_trials_in_family"] == 2
+
+
+def test_compute_mission_family_significance_large_family_does_not_survive_correction():
+    """The operator's mandatory scenario #1: 2000 COMPLETE trials in the
+    family, the candidate's own raw p-value is nominally significant
+    (p < 0.05) but does not survive Bonferroni correction against 2000
+    trials (p >= 0.05/2000)."""
+    mission_id = "mission-family-2000"
+    _seed_mission_only(mission_id)
+    # avg_rr=0.3, std_rr=1.0, n=100 -> z=3.0, p ~= 0.0027: nominally
+    # significant (< 0.05) but >> bonferroni_alpha(2000) == 0.000025.
+    for i in range(2000):
+        _record_trial(mission_id, i, state="COMPLETE", avg_rr=0.3, std_rr=1.0, trades=100)
+
+    trial = research_missions.get_trial(mission_id, 0, "EURUSD")
+    result = _compute_mission_family_significance(mission_id, "EURUSD", trial)
+
+    assert result["n_trials_in_family"] == 2000
+    assert result["raw_p_value"] is not None
+    assert result["raw_p_value"] < 0.05  # nominally "significant" by itself
+    assert result["bonferroni_alpha"] == pytest.approx(0.05 / 2000)
+    assert result["raw_p_value"] >= result["bonferroni_alpha"]  # ...but not after correction
+    assert result["classification"] != "SURVIVES_CORRECTION"
+
+
+def test_compute_mission_family_significance_small_family_survives_correction():
+    """Mirror of the above: a small family (n_trials_in_family == 1,
+    bonferroni_alpha == 0.05) where the candidate's own p-value clears
+    the corrected bar -- SURVIVES_CORRECTION, so the top-tier verdict
+    stays reachable."""
+    mission_id = "mission-family-small"
+    _seed_mission_only(mission_id)
+    _record_trial(mission_id, 0, state="COMPLETE", avg_rr=0.5, std_rr=1.0, trades=50)
+
+    trial = research_missions.get_trial(mission_id, 0, "EURUSD")
+    result = _compute_mission_family_significance(mission_id, "EURUSD", trial)
+
+    assert result["n_trials_in_family"] == 1
+    assert result["bonferroni_alpha"] == pytest.approx(0.05)
+    assert result["classification"] == "SURVIVES_CORRECTION"
+
+
+def test_run_validation_caps_verdict_below_top_tier_when_family_does_not_survive_correction(monkeypatch):
+    """Operator's mandatory scenario #1, exercised end-to-end through
+    run_validation(): candidate's raw VALIDATION_CRITERIA all PASS on
+    every validation symbol (forced via a mocked _evaluate_symbol, same
+    technique as test_verdict_boundaries), but the candidate's own
+    2000-trial family fails Bonferroni correction. overall_verdict MUST
+    NOT be STRONG_LEAD (CROSS_SYMBOL) or SAME_SYMBOL_CONFIRMED
+    (SAME_SYMBOL) -- regardless of the raw criteria all passing."""
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-family-2000-cross"
+    _seed_mission_only(mission_id)
+    for i in range(2000):
+        _record_trial(mission_id, i, state="COMPLETE", avg_rr=0.3, std_rr=1.0, trades=100)
+
+    symbols = ["EURUSD", "GBPUSD", "XAUUSD"]
+    vc = ValidationConfig(
+        validation_id="v-family-2000-cross", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=tuple(symbols), data_dir=Path("."), start=None, end=None,
+        validation_mode=CROSS_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=symbols))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-family-2000-cross")
+    assert validation["overall_verdict"] == WEAK_LEAD  # capped, never STRONG_LEAD
+    family_sig = json.loads(validation["mission_family_significance_json"])
+    assert family_sig["n_trials_in_family"] == 2000
+    assert family_sig["classification"] != "SURVIVES_CORRECTION"
+
+
+def test_run_validation_same_symbol_caps_below_confirmed_when_family_does_not_survive_correction(monkeypatch):
+    """The SAME_SYMBOL-mode mirror of the CROSS_SYMBOL test above."""
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-family-2000-same"
+    _seed_mission_only(mission_id)
+    for i in range(2000):
+        _record_trial(mission_id, i, state="COMPLETE", avg_rr=0.3, std_rr=1.0, trades=100)
+
+    vc = ValidationConfig(
+        validation_id="v-family-2000-same", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=("EURUSD",), data_dir=Path("."), start=None, end=None,
+        validation_mode=SAME_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=["EURUSD"]))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-family-2000-same")
+    assert validation["overall_verdict"] == SAME_SYMBOL_NOT_CONFIRMED  # capped, never SAME_SYMBOL_CONFIRMED
+
+
+def test_run_validation_reaches_strong_lead_when_family_survives_correction(monkeypatch):
+    """Operator's mandatory scenario #2 (the mirror case): a small family
+    that DOES survive correction must still let the top-tier verdict be
+    reached when every raw criterion passes -- the gate must not be a
+    blanket downgrade."""
+    from backtest import mission_validator as mv
+
+    mission_id = "mission-family-survives-cross"
+    _seed_mission_and_trial(mission_id)  # default avg_rr/std_rr -> SURVIVES_CORRECTION at n_trials=1
+
+    symbols = ["EURUSD", "GBPUSD", "XAUUSD"]
+    vc = ValidationConfig(
+        validation_id="v-family-survives-cross", mission_id=mission_id, trial_number=0, trial_symbol="EURUSD",
+        validation_symbols=tuple(symbols), data_dir=Path("."), start=None, end=None,
+        validation_mode=CROSS_SYMBOL, output_dir=Path("/tmp"),
+    )
+    monkeypatch.setattr(mv, "_evaluate_symbol",
+                         lambda s, p, v: _fake_eval_all(s, p, v, passing_symbols=symbols))
+    run_validation(vc)
+
+    validation = research_mission_validations.get_validation("v-family-survives-cross")
+    assert validation["overall_verdict"] == STRONG_LEAD
+    family_sig = json.loads(validation["mission_family_significance_json"])
+    assert family_sig["classification"] == "SURVIVES_CORRECTION"

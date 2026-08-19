@@ -250,6 +250,24 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE fills ADD COLUMN fill_latency_seconds REAL",
         ],
     ),
+    (
+        16,
+        "validation_mission_family_significance_column",
+        # Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19) — a
+        # validated candidate's own Bonferroni-corrected significance
+        # against how many configurations its ORIGINAL mission actually
+        # searched (reuses backtest.multiple_testing.bonferroni_alpha/
+        # trial_p_value/classify_significance verbatim, no new statistical
+        # methodology). Distinct from the existing significance_json
+        # column on research_mission_validation_results (autocorrelation-
+        # within-one-candidate) — this corrects for selection-among-many-
+        # candidates. Unlike every other diagnostic column, this ONE gates
+        # the top-tier overall_verdict (STRONG_LEAD/SAME_SYMBOL_CONFIRMED)
+        # — see backtest/mission_validator.py.
+        [
+            "ALTER TABLE research_mission_validations ADD COLUMN mission_family_significance_json TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

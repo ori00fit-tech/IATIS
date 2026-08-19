@@ -115,6 +115,7 @@ def build_hypothesis_contract(
     symbol: str,
     timeframe: str,
     dataset_paths: list[Path],
+    dataset_frames: dict[str, Any] | None = None,
     train_period: dict[str, str | None],
     oos_period: dict[str, str | None],
     engine_config: dict[str, Any],
@@ -136,8 +137,19 @@ def build_hypothesis_contract(
     run, no statistical computation happens here; every measured value
     (dataset_completeness_pct, verdicts, classification) is supplied by
     the caller, computed by the EXISTING function that already owns that
-    computation (never re-derived here)."""
+    computation (never re-derived here).
+
+    dataset_frames (Slice 5 fix, 2026-08-19): optional {str(path):
+    DataFrame}. Slice 5's own audit found build_hypothesis_contract()
+    never received a DataFrame, so its dataset_fingerprints never carried
+    bar count/date range -- reproducing, inside the just-shipped contract
+    itself, the exact gap Slice 4's audit found in the H0XX bespoke
+    scripts. Backward compatible: omitted (or a path with no matching
+    entry) falls through to dataset_fingerprint(p, None), byte-identical
+    to Slice 4's original behavior -- every existing caller/test is
+    unaffected."""
     definition_path = hypothesis_definition_path or resolve_hypothesis_definition_path(hypothesis_id)
+    frames = dataset_frames or {}
     from datetime import datetime, timezone
 
     return {
@@ -145,7 +157,7 @@ def build_hypothesis_contract(
         "hypothesis_definition": dataset_fingerprint(definition_path),
         "symbol": symbol,
         "timeframe": timeframe,
-        "dataset_fingerprints": [dataset_fingerprint(p) for p in dataset_paths],
+        "dataset_fingerprints": [dataset_fingerprint(p, frames.get(str(p))) for p in dataset_paths],
         "dataset_completeness_pct": dataset_completeness_pct,
         "provider": provider,
         "train_period": dict(train_period),

@@ -119,6 +119,28 @@ def test_changing_hypothesis_definition_changes_execution_identity(tmp_path):
     assert hc.compute_execution_identity(c_before) != hc.compute_execution_identity(c_after)
 
 
+def test_dataset_frames_closes_the_bar_count_gap(tmp_path):
+    """Slice 5 fix: when the caller has a loaded DataFrame available,
+    dataset_fingerprints must carry bar count/date range -- not just the
+    bare file hash Slice 4 shipped by default."""
+    import pandas as pd
+
+    hyp_path, _ = _hyp_md(tmp_path)
+    ds_path = _price_csv(tmp_path)
+    kwargs = _base_kwargs(tmp_path, hyp_path, ds_path)
+
+    without_frames = hc.build_hypothesis_contract(**kwargs)
+    assert "bars" not in without_frames["dataset_fingerprints"][0]
+
+    df = pd.DataFrame({"close": [1.5]}, index=pd.to_datetime(["2024-01-01"]))
+    kwargs["dataset_frames"] = {str(ds_path): df}
+    with_frames = hc.build_hypothesis_contract(**kwargs)
+    assert with_frames["dataset_fingerprints"][0]["bars"] == 1
+    assert "2024-01-01" in with_frames["dataset_fingerprints"][0]["first"]
+    # sha256 is unaffected -- it's still purely a hash of the CSV's file bytes.
+    assert with_frames["dataset_fingerprints"][0]["sha256"] == without_frames["dataset_fingerprints"][0]["sha256"]
+
+
 def test_identity_ignores_dataset_fingerprint_list_order(tmp_path):
     hyp_path, _ = _hyp_md(tmp_path)
     ds_a = _price_csv(tmp_path, "EURUSD")

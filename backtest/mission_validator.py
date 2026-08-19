@@ -70,10 +70,11 @@ from backtest.monte_carlo import run_monte_carlo
 from backtest.multiple_testing import effective_sample_size, trial_p_value
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
 from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS, RobustnessConfig, run_robustness
-from backtest.runner import find_symbol_csv, load_symbol_data, physical_load_timeframe
+from backtest.runner import dataset_completeness_pct, find_symbol_csv, load_symbol_data, physical_load_timeframe
 from backtest.walk_forward import SymbolVerdict, WalkForwardConfig, run_walk_forward
 from research.manifest import dataset_fingerprint, git_state
 from storage import research_mission_validations, research_missions
+from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -127,6 +128,13 @@ VALIDATION_CRITERIA: dict[str, float | bool] = {
     "min_probability_profit_pct": 60.0,
     "require_walk_forward_consistent": True,
     "require_all_swept_params_stable": True,
+    # Data Integrity Core (2026-08-19) — reuses storage.market_bars'
+    # own D1-warehouse READY bar directly (not a second magic number),
+    # so a symbol's dataset is judged by the identical completeness
+    # formula regardless of whether it came from the CSV path or the
+    # warehouse. A PARTIAL dataset must never produce a CONFIRMED/
+    # STRONG_LEAD verdict.
+    "min_dataset_completeness_pct": MIN_COVERAGE_PCT_FOR_READY,
 }
 
 # A STRONG_LEAD requires passing on at least this many validation
@@ -569,7 +577,9 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     fail, nothing suppressed."""
     started_at = datetime.now(timezone.utc).isoformat()
     point_timeframes = tuple(point["timeframes"]) if point["timeframes"] else None
-    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end, timeframe=physical_load_timeframe(point_timeframes))
+    physical_tf = physical_load_timeframe(point_timeframes)
+    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end, timeframe=physical_tf)
+    completeness_pct, completeness_detail = dataset_completeness_pct(df, symbol, physical_tf)
 
     eval_result = evaluate_point(
         symbol, df, point, min_trades=1, objective_metric="profit_factor", return_trades=True,
@@ -646,6 +656,9 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "robustness_all_stable": _criterion(
             [s.verdict for s in rb_result.sweeps], "STABLE",
             all(s.verdict == "STABLE" for s in rb_result.sweeps)),
+        "dataset_completeness": _criterion(
+            completeness_pct, VALIDATION_CRITERIA["min_dataset_completeness_pct"],
+            completeness_pct >= VALIDATION_CRITERIA["min_dataset_completeness_pct"]),
     }
     passed = all(c["passed"] for c in breakdown.values())
 

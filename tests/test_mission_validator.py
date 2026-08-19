@@ -60,6 +60,15 @@ def _write_dataset(tmp_path: Path, symbol: str = "EURUSD", n: int = 2400) -> Non
     _ohlcv(n, seed=hash(symbol) % 1000).to_csv(tmp_path / f"{symbol}_H1_2y.csv")
 
 
+def _write_partial_dataset(tmp_path: Path, symbol: str = "EURUSD", n: int = 2400) -> None:
+    """Data Integrity Core (2026-08-19) — a structurally-valid CSV with a
+    real, large gap carved out of the middle (validate_ohlcv() alone
+    cannot see this; only dataset_completeness_pct() can)."""
+    df = _ohlcv(n, seed=hash(symbol) % 1000)
+    keep = df.index[(df.index < df.index[400]) | (df.index >= df.index[1200])]
+    df.loc[keep].to_csv(tmp_path / f"{symbol}_H1_2y.csv")
+
+
 def _space() -> MissionSearchSpace:
     return MissionSearchSpace(
         timeframes_choices=(("H1",),),
@@ -165,7 +174,7 @@ def test_run_validation_records_every_symbol_and_writes_report(tmp_path):
         assert set(breakdown) == {
             "profit_factor", "trades", "max_drawdown_pct", "expectancy", "sharpe_ratio",
             "walk_forward", "monte_carlo_risk_of_ruin", "monte_carlo_probability_profit",
-            "robustness_all_stable",
+            "robustness_all_stable", "dataset_completeness",
         }
         for c in breakdown.values():
             assert set(c) == {"actual", "threshold", "passed"}
@@ -407,6 +416,57 @@ def test_run_validation_records_regime_robustness_diagnostic_per_symbol(tmp_path
             "regimes_traded", "regimes_material", "regimes_profitable",
             "regime_robustness_score", "dominant_regime", "dominant_regime_share", "note",
         }
+
+
+def test_validation_criteria_dataset_completeness_bar_matches_warehouse_ready_bar():
+    """Data Integrity Core (2026-08-19) — pins that the CSV-path bar and
+    the D1-warehouse READY bar can never silently drift apart."""
+    from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
+
+    assert mission_validator.VALIDATION_CRITERIA["min_dataset_completeness_pct"] == MIN_COVERAGE_PCT_FOR_READY
+
+
+def test_run_validation_records_dataset_completeness_criterion_per_symbol(tmp_path):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-completeness")
+
+    vc = _small_vc(tmp_path, "v-completeness", "val-completeness")
+    run_validation(vc)
+
+    results = research_mission_validations.validation_results("v-completeness")
+    assert {r["symbol"] for r in results} == {"EURUSD", "GBPUSD"}
+    for r in results:
+        breakdown = json.loads(r["criteria_breakdown_json"])
+        dc = breakdown["dataset_completeness"]
+        assert set(dc) == {"actual", "threshold", "passed"}
+        assert dc["threshold"] == 95.0
+        assert dc["passed"] is True  # both datasets are complete, continuous CSVs
+        assert dc["actual"] == 100.0
+
+
+def test_run_validation_fails_dataset_completeness_for_a_partial_symbol(tmp_path):
+    """The authoritative proof this fix exists to deliver: a genuinely
+    PARTIAL dataset must fail its own criterion (and therefore the whole
+    symbol's `passed`) — it can never silently produce a CONFIRMED/
+    STRONG_LEAD verdict alongside a complete symbol's real result."""
+    _write_dataset(tmp_path, "EURUSD")
+    _write_partial_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial("val-partial")
+
+    vc = _small_vc(tmp_path, "v-partial", "val-partial")
+    run_validation(vc)
+
+    results = {r["symbol"]: r for r in research_mission_validations.validation_results("v-partial")}
+    assert set(results) == {"EURUSD", "GBPUSD"}
+
+    good = json.loads(results["EURUSD"]["criteria_breakdown_json"])
+    assert good["dataset_completeness"]["passed"] is True
+
+    bad = json.loads(results["GBPUSD"]["criteria_breakdown_json"])
+    assert bad["dataset_completeness"]["passed"] is False
+    assert bad["dataset_completeness"]["actual"] < 95.0
+    assert results["GBPUSD"]["passed"] == 0  # sqlite boolean — the whole symbol result fails, not just the one criterion
 
 
 def test_compute_effective_sample_size_diagnostic_too_few_trades():

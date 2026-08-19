@@ -219,6 +219,33 @@ def load_symbol_data(
     return df
 
 
+def dataset_completeness_pct(
+    df: pd.DataFrame, symbol: str, timeframe: str, config: dict | None = None,
+) -> tuple[float, dict]:
+    """Data Integrity Core (2026-08-19) — the CSV-loading-path equivalent
+    of storage/market_bars.py's D1-only completeness gate
+    (MIN_COVERAGE_PCT_FOR_READY). Reuses the exact same session-aware gap
+    classifier (backtest.price_benchmark.completeness_score, which already
+    excludes real weekend/market closures from the gap count) rather than
+    a second implementation — a real 40%-gap CSV and a real 40%-gap D1
+    dataset are now judged by the identical formula.
+
+    `df` must already be the loaded, structurally-valid frame (call this
+    AFTER validate_ohlcv, not instead of it — this checks completeness,
+    not structural correctness). `config` defaults to a fresh
+    load_config() call when omitted, matching every other config-reading
+    helper's default in this codebase.
+    """
+    from backtest.price_benchmark import asset_class_for_symbol, completeness_score
+
+    if config is None:
+        from utils.helpers import load_config
+
+        config = load_config()
+    asset_class = asset_class_for_symbol(symbol, config)
+    return completeness_score(df, timeframe, asset_class)
+
+
 def physical_load_timeframe(timeframes: tuple[str, ...] | None) -> str:
     """The REAL on-disk granularity to load for a run, given its
     (possibly overridden) ``RunnerConfig.timeframes``/``RobustnessConfig.

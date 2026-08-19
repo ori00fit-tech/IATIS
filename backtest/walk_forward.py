@@ -45,7 +45,7 @@ from typing import Protocol
 import pandas as pd
 
 from backtest.metrics import calculate_metrics, json_safe
-from backtest.runner import load_symbol_data, physical_load_timeframe, trade_to_record
+from backtest.runner import dataset_completeness_pct, load_symbol_data, physical_load_timeframe, trade_to_record
 from backtesting.backtest_engine import ENGINE_KEYS, BacktestConfig, build_engine_config_override, run_backtest
 from utils.logger import get_logger
 
@@ -295,11 +295,31 @@ def run_walk_forward_suite(
     excluded; it never aborts the suite. start/end (Backtesting Lab Pro
     Phase A, 2026-07-27): optional ISO-date dataset slice, same semantics
     as backtest.runner.load_symbol_data.
+
+    Data Integrity Core (2026-08-19): a structurally-valid CSV can still
+    be a genuinely PARTIAL dataset (real gaps well beyond weekend/session
+    closures) — validate_ohlcv() alone cannot catch that, only
+    dataset_completeness_pct() (the same session-aware gap classifier
+    already gating the D1 warehouse's READY/INCOMPLETE status,
+    storage.market_bars.MIN_COVERAGE_PCT_FOR_READY) can. Below that bar,
+    the symbol is excluded from this walk-forward run the exact same way
+    a missing/malformed file already is — a PARTIAL dataset must never
+    silently become "evidence."
     """
+    from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
+
     out: dict[str, WalkForwardResult] = {}
     for symbol in symbols:
         try:
-            df = load_symbol_data(symbol, data_dir, start, end, timeframe=physical_load_timeframe(wf_config.timeframes))
+            timeframe = physical_load_timeframe(wf_config.timeframes)
+            df = load_symbol_data(symbol, data_dir, start, end, timeframe=timeframe)
+            coverage_pct, _detail = dataset_completeness_pct(df, symbol, timeframe)
+            if coverage_pct < MIN_COVERAGE_PCT_FOR_READY:
+                raise ValueError(
+                    f"dataset is PARTIAL — {coverage_pct:.1f}% real coverage, "
+                    f"below the {MIN_COVERAGE_PCT_FOR_READY:.0f}% bar required "
+                    f"to enter walk-forward evidence"
+                )
             out[symbol] = run_walk_forward(symbol, df, wf_config)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             logger.error(f"{symbol}: walk-forward failed — {exc}")

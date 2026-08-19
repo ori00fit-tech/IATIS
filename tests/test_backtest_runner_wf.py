@@ -505,6 +505,68 @@ def test_walk_forward_suite_m15_base_loads_the_m15_file(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Data Integrity Core (2026-08-19) — dataset_completeness_pct + the walk-
+# forward PARTIAL-dataset exclusion gate.
+# ─────────────────────────────────────────────────────────────────────────
+
+_FX_CONFIG = {"data": {"twelve_data_symbols": [{"internal": "EURUSD", "asset_class": "fx_major"}]}}
+
+
+def test_dataset_completeness_pct_continuous_series_scores_100():
+    from backtest.runner import dataset_completeness_pct
+
+    df = _ohlcv(600, trend=0.05)  # raw continuous hourly index, no gaps at all
+    score, detail = dataset_completeness_pct(df, "EURUSD", "H1", config=_FX_CONFIG)
+    assert score == 100.0
+    assert detail["real_gap"] == 0
+
+
+def test_dataset_completeness_pct_real_weekday_gap_scores_below_ready_bar():
+    from backtest.runner import dataset_completeness_pct
+    from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
+
+    df = _ohlcv(600, trend=0.05)
+    # Drop a large chunk from the middle — spans several real weekdays, so
+    # most of it is a genuine gap (a handful of the dropped hours may
+    # legitimately land on a weekend and get excluded as expected_closure,
+    # but not nearly enough to keep this above the 95% READY bar).
+    keep = df.index[(df.index < df.index[100]) | (df.index >= df.index[300])]
+    partial = df.loc[keep]
+    score, detail = dataset_completeness_pct(partial, "EURUSD", "H1", config=_FX_CONFIG)
+    assert score < MIN_COVERAGE_PCT_FOR_READY
+    assert detail["real_gap"] > 0
+
+
+def test_walk_forward_suite_excludes_symbol_with_partial_dataset(tmp_path):
+    """The Data Integrity Core fix's authoritative proof: a structurally-
+    valid but genuinely PARTIAL CSV must never enter walk-forward evidence
+    — it has to be excluded the exact same way a missing/malformed file
+    already is, not silently accepted because validate_ohlcv() alone
+    can't see real gaps."""
+    import backtest.walk_forward as wf_mod
+
+    full = _ohlcv(2400, trend=0.10)
+    keep = full.index[(full.index < full.index[400]) | (full.index >= full.index[1200])]
+    full.loc[keep].to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default)
+    assert "EURUSD" not in out
+
+
+def test_walk_forward_suite_keeps_symbol_with_complete_dataset(tmp_path):
+    """Regression check: the new gate must not reject a genuinely complete
+    dataset — every pre-existing walk-forward test already relies on this
+    implicitly, this pins it explicitly."""
+    import backtest.walk_forward as wf_mod
+
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default)
+    assert "EURUSD" in out
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Backtesting Lab Pro Phase A — CLI wiring for per-run risk/cost overrides
 # ─────────────────────────────────────────────────────────────────────────
 

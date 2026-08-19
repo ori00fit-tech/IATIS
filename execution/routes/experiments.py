@@ -23,6 +23,7 @@ from fastapi import APIRouter, Cookie, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from execution.api_core import _REPO_ROOT, _check_auth, _get_config, _reset_config_cache
+from execution.api_shared_helpers import _systemd_service_status
 
 router = APIRouter()
 
@@ -145,12 +146,20 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # VPS-CLI steps an operator previously had to run by hand to "deepen" a
     # symbol (scripts/download_dukascopy_history.py then
     # scripts/push_bars_to_d1.py) exposed as ordinary whitelisted jobs, same
-    # one-job-slot-per-run model as every job above. Dukascopy only (never
-    # cTrader): cTrader enforces a single-session-per-account limit, so a
-    # second, ad-hoc dashboard-triggered connection would race the live
-    # scheduler's own session (see reports/forensic/22_DATA_ARCHITECTURE_
-    # CURRENT_STATE.md) — cTrader-sourced deepening stays a VPS CLI-only
-    # operation (stop the scheduler first), deliberately not exposed here.
+    # one-job-slot-per-run model as every job above. Dukascopy/Twelve Data
+    # are unconditionally safe (no live-session conflict). cTrader (added
+    # 2026-08-18) is ALSO offered here now, but ONLY behind a mandatory,
+    # server-side, fail-closed guard — see _guard_ctrader_download() below
+    # and its call site in experiments_run(). cTrader enforces a single-
+    # session-per-account limit at the broker level; scripts/download_
+    # ctrader_fx_history.py's own docstring and execution/ctrader_client.py:
+    # 75 give inconsistent accounts of what happens if a second connection
+    # is attempted while the live scheduler holds the account (one says the
+    # new connection just hangs/times out, the other says the broker "kicks
+    # either one out") — this codebase has no way to verify which is true
+    # from a sandbox, so it never tries to find out empirically. The guard
+    # blocks the download entirely (no CTraderClient is ever constructed)
+    # unless iatis-scheduler is CONFIRMED inactive via systemctl.
     "download_history": [sys.executable, "-m", "scripts.download_dukascopy_history"],
     "push_to_warehouse": [sys.executable, "-m", "scripts.push_bars_to_d1"],
 }
@@ -174,7 +183,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
     "analytics_benchmark": "Provider Benchmark & Data Quality Lab Phase 4 (backtest/analytics_benchmark.py): scores MarketAux's sentiment API on reproducibility — fetches the same query twice and checks whether the sentiment value for the same underlying article stays identical — plus coverage, freshness, and latency. Deliberately single-provider (TAAPI's real rate limit rules it out) and reproducibility-only (no predictive/subsequent-outcome-tracking dimension — that's a trading hypothesis, not a provider benchmark). Launched via POST /research/analytics-benchmark, not this endpoint directly — measurement/advisory only, never touches config.yaml.",
     "engine_benchmark": "Engine Benchmark (backtest/engine_benchmark.py): runs every confluence engine standalone (confluence quorum overridden to 1) against real local OHLCV history and reports raw per-(engine, symbol) backtest KPIs (trades, win rate, profit factor, Sharpe, drawdown, expectancy). Launched via POST /research/engine-benchmark, not this endpoint directly — measurement/advisory only, deliberately not a ranking tool (no composite score, no auto-selected 'best engine'), never writes config.yaml/config/engines.yaml/registry.json.",
-    "download_history": "Data Center — deepen a symbol's history via a free, credential-free provider (Dukascopy, all 4 native timeframes; or Twelve Data, M15/H1 only — see the `provider` field, default dukascopy), writing data/{SYMBOL}_{TIMEFRAME}_{provider}.csv. cTrader/MT5/dukascopy_jforex are deliberately not offered here (single-session-per-account limit — would race the live scheduler's own connection). Does not push to the D1 warehouse by itself — run push_to_warehouse afterward.",
+    "download_history": "Data Center — deepen a symbol's history via a provider (Dukascopy, all 4 native timeframes; Twelve Data, M15/H1 only; or cTrader, M15/H1, real tick-volume — see the `provider` field, default dukascopy), writing data/{SYMBOL}_{TIMEFRAME}_{provider}.csv. cTrader is gated: it is REJECTED unless iatis-scheduler is confirmed inactive (single-session-per-account limit — a second live connection could interfere with the scheduler's own session). MT5/dukascopy_jforex remain unavailable here entirely. Does not push to the D1 warehouse by itself — run push_to_warehouse afterward.",
     "push_to_warehouse": "Data Center — push already-downloaded local CSVs into the D1 market_bars/dataset_manifest warehouse (scripts/push_bars_to_d1.py), preferring a genuinely native H4/D1 file over deriving one by resampling H1.",
 }
 # Categorizes each whitelisted job for the frontend (Experiment Runner
@@ -287,25 +296,86 @@ _PARAMETERIZED_JOBS = frozenset({"backtest", "walk_forward", "robustness"})
 # timeframes(MTF)/engines/indicators — those are backtest-run concepts.
 _WAREHOUSE_JOBS = frozenset({"download_history", "push_to_warehouse"})
 
-# Data Center UI — Warehouse provider picker. Only providers safe to
-# trigger ad-hoc from the API-server process (no live-session conflict)
-# are offered: cTrader/MT5/dukascopy_jforex are broker bridges with a
-# single-session-per-account limit (see the _JOB_COMMANDS comment above)
-# and stay VPS CLI-only, never exposed here. `timeframes`/`supports_years`
-# mirror each script's own real, verified capability — Twelve Data's
-# free-plan history has no configurable lookback window (it always pages
-# back to the plan's own floor) and only ever fetches M15/H1 (see
-# scripts/download_twelve_data_history.py's own docstring).
+# Data Center UI — Warehouse provider picker. Dukascopy/Twelve Data are
+# unconditionally safe to trigger ad-hoc from the API-server process (no
+# live-session conflict). cTrader (added 2026-08-18) is also listed here,
+# but is NOT unconditionally safe — MT5/dukascopy_jforex remain excluded
+# entirely (no analogous guard has been built for them). Every cTrader
+# submission is forced through _guard_ctrader_download() in
+# experiments_run() before a subprocess is ever launched — see that
+# function's own docstring for why a fail-closed systemd check is used
+# instead of trusting the operator or probing the broker directly.
+# `timeframes`/`supports_years` mirror each script's own real, verified
+# capability — Twelve Data's free-plan history has no configurable
+# lookback window (it always pages back to the plan's own floor) and only
+# ever fetches M15/H1 (see scripts/download_twelve_data_history.py's own
+# docstring); cTrader's own --timeframe choices are exactly M15/H1 (see
+# scripts/download_ctrader_fx_history.py's argparse) and it does accept
+# --years (default 2.0).
 _DOWNLOAD_PROVIDERS: dict[str, dict[str, Any]] = {
     "dukascopy": {"timeframes": ("M15", "H1", "H4", "D1"), "supports_years": True},
     "twelve_data": {"timeframes": ("M15", "H1"), "supports_years": False},
+    "ctrader": {"timeframes": ("M15", "H1"), "supports_years": True},
 }
 # "dukascopy" deliberately absent here — it's the pre-existing default and
 # stays sourced from _JOB_COMMANDS["download_history"] (see experiments_run),
 # so a test monkeypatching that dict keeps working unchanged.
 _DOWNLOAD_PROVIDER_COMMANDS: dict[str, list[str]] = {
     "twelve_data": [sys.executable, "-m", "scripts.download_twelve_data_history"],
+    "ctrader": [sys.executable, "-m", "scripts.download_ctrader_fx_history"],
 }
+
+
+def _guard_ctrader_download() -> None:
+    """Live-trading safety boundary (2026-08-18) — the ONLY thing standing
+    between a Data Center "download cTrader history" click and a second
+    cTrader session racing the live scheduler's own connection.
+
+    Deliberately does NOT attempt to connect to cTrader, or to probe/
+    guess broker behavior, to determine whether it's safe to proceed —
+    the two existing accounts of what a second concurrent session does
+    (scripts/download_ctrader_fx_history.py:122-131: the new connection
+    hangs/times out, implying the scheduler's session survives;
+    execution/ctrader_client.py:75: the broker's single-session
+    enforcement "kicks either one out") are inconsistent, and testing
+    which is actually true would itself risk disrupting live trading —
+    exactly the outcome this guard exists to prevent. So it never tries:
+    it consults `execution/api_shared_helpers.py::_systemd_service_
+    status()` (real `systemctl is-active iatis-scheduler`, the same
+    fixed-argv/no-shell primitive /health/full already uses) and treats
+    anything other than a CONFIRMED "inactive" as unsafe — fail CLOSED,
+    not fail open:
+        scheduler status == "inactive"  -> allowed (the only ALLOW case)
+        scheduler status == "active"    -> blocked (the obvious case)
+        anything else ("unknown",
+          "unavailable", "timeout",
+          "error", a missing key)       -> ALSO blocked
+
+    An undetermined scheduler state must never be silently treated as
+    "safe to proceed" — that would turn a live-trading safety boundary
+    into a coin flip. Never stops/starts iatis-scheduler itself; that
+    stays a deliberate, conscious operator action (systemctl start/stop),
+    never automated from this endpoint. Module-level import (not local to
+    this function) deliberately, so tests can monkeypatch this module's
+    own `_systemd_service_status` name directly, matching every other
+    monkeypatch in this file's own test suite."""
+    status = _systemd_service_status().get("scheduler", {}).get("status", "unknown")
+    if status == "inactive":
+        return
+    if status == "active":
+        detail = (
+            "cTrader download blocked: iatis-scheduler is active. Stop iatis-scheduler "
+            "before downloading cTrader history. This prevents a second cTrader session "
+            "from interfering with live trading."
+        )
+    else:
+        detail = (
+            f"cTrader download blocked: iatis-scheduler status could not be confirmed "
+            f"(systemd reported '{status}'). Refusing to risk a second cTrader session "
+            f"against live trading — stop iatis-scheduler and confirm it is inactive "
+            f"before retrying."
+        )
+    raise HTTPException(status_code=409, detail=detail)
 
 # AI Research Lab / Mission Center Phase 2 (2026-07-28): bumped 2->3.
 # Phase 3 (2026-07-30): bumped 3->4 — an operator now often wants to run
@@ -770,6 +840,14 @@ async def experiments_run(
                 status_code=400,
                 detail=f"Unknown provider '{download_provider}' — choose from {sorted(_DOWNLOAD_PROVIDERS)}.",
             )
+        if download_provider == "ctrader":
+            # Live-trading safety boundary — must run BEFORE anything else
+            # for this provider (before argv is even built, let alone the
+            # subprocess launched): see _guard_ctrader_download()'s own
+            # docstring. Raises HTTPException(409) and returns nothing if
+            # iatis-scheduler isn't confirmed inactive; no cTrader client
+            # is ever constructed on that path.
+            _guard_ctrader_download()
         if download_provider != "dukascopy":
             argv = list(_DOWNLOAD_PROVIDER_COMMANDS[download_provider])
     elif body.provider is not None:

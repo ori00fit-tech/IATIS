@@ -1279,6 +1279,28 @@ async def research_edge_library(
     }
 
 
+@router.get("/research/h021-readiness")
+async def research_h021_readiness(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """H021 (MarketAux sentiment A/B) data-readiness — computed fresh, on
+    every call, from the real data/marketaux_sentiment_log.jsonl on disk
+    (research/h021_readiness.py). Never persisted, never hardcoded: this
+    panel updates automatically as the collector (scripts/
+    collect_marketaux_sentiment.py) accumulates more real data. Read-only
+    — never runs H021, never writes registry.json, never creates any file.
+
+    MUST stay registered before /research/{hypothesis_id} — same
+    single-segment literal-vs-path-param registration-order requirement
+    as /research/edge-library and /research/compare above.
+    """
+    _check_auth(x_api_key, iatis_session)
+    import research.h021_readiness as _h021
+
+    return _h021.compute_h021_readiness(_h021.LOG_PATH).to_dict()
+
+
 @router.get("/research/compare")
 async def research_compare(
     ids: str = Query(..., description="Comma-separated hypothesis IDs, e.g. H013,H015,H017"),

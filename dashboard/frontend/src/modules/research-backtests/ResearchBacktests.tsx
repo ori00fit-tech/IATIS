@@ -20,6 +20,7 @@ import {
   compareHypotheses,
   suggestHypothesis,
   saveHypothesisDraft,
+  getH021Readiness,
   type Hypothesis,
   type BacktestResult,
   type RegimeRow,
@@ -31,6 +32,7 @@ import {
   type SymbolEntry,
   type EngineEntry,
   type IndicatorEntry,
+  type H021ReadinessResponse,
 } from './api'
 import { getJobDetail, runJob, type JobDetail } from '../experiment-runner/api'
 
@@ -697,9 +699,57 @@ function IndicatorCatalogPanel() {
   )
 }
 
+function H021ReadinessPanel({ data, loading }: { data: H021ReadinessResponse | null; loading: boolean }) {
+  return (
+    <Panel
+      title="H021 Data Readiness — MarketAux Sentiment A/B"
+      right="computed fresh from data/marketaux_sentiment_log.jsonl on every load — never hardcoded"
+    >
+      {!data ? (
+        <Empty>{loading ? 'Loading...' : 'Unavailable'}</Empty>
+      ) : (
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-[0.85em]">
+            <Badge tone={data.overall_ready ? 'exec' : 'no-trade'}>
+              {data.overall_ready ? 'H021 DATA READY' : 'H021 DATA NOT READY'}
+            </Badge>
+            <span className="text-muted">{data.note}</span>
+          </div>
+          {data.log_exists && (
+            <DataTable
+              columns={[
+                { header: 'Symbol', render: (c) => c.symbol },
+                { header: 'Total', render: (c) => c.total_records, align: 'right' },
+                { header: 'TEST (raw)', render: (c) => c.test_records, align: 'right' },
+                { header: 'TEST article>0', render: (c) => c.test_article_gt_zero, align: 'right' },
+                {
+                  header: `TEST informative (need ≥${data.min_informative_test_records})`,
+                  render: (c) => c.test_sentiment_informative, align: 'right',
+                },
+                {
+                  header: 'Status',
+                  render: (c) => <Badge tone={c.ready ? 'exec' : 'no-trade'}>{c.ready ? 'READY' : 'NOT READY'}</Badge>,
+                },
+              ] satisfies Column<H021ReadinessResponse['carriers'][number]>[]}
+              rows={data.carriers}
+              rowKey={(c) => c.symbol}
+            />
+          )}
+          <span className="text-[0.72em] text-muted">
+            "TEST informative" (mean_sentiment ≠ 0) is the number H021's decision rule is written
+            against — never the raw TEST record count, which is always ≥ it and would overstate readiness.
+            Train/test split: chronological {(data.train_fraction * 100).toFixed(0)}%/{((1 - data.train_fraction) * 100).toFixed(0)}%.
+          </span>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 export function ResearchBacktests() {
   const { markUnauthenticated } = useAuth()
   const research = usePolling(getResearch, POLL_MS, markUnauthenticated)
+  const h021Readiness = usePolling(getH021Readiness, POLL_MS, markUnauthenticated)
   const backtests = usePolling(getBacktestResults, POLL_MS, markUnauthenticated)
   const meta = usePolling(getMetaAnalysis, POLL_MS, markUnauthenticated)
   const manifests = usePolling(getManifests, POLL_MS, markUnauthenticated)
@@ -919,6 +969,8 @@ export function ResearchBacktests() {
           </div>
         </Panel>
       )}
+
+      <H021ReadinessPanel data={h021Readiness.data} loading={h021Readiness.loading} />
 
       <Panel
         title="Hypothesis Registry"

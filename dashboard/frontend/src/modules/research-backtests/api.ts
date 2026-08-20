@@ -177,6 +177,37 @@ export interface HypothesisCompareResponse {
 export const compareHypotheses = (ids: string[]) =>
   apiGet<HypothesisCompareResponse>('/research/compare', { ids: ids.join(',') })
 
+// H021 Data Readiness (Hypothesis Campaign Manager, read-only Phase 1):
+// computed fresh on every call from the real data/marketaux_sentiment_log.jsonl
+// on disk (research/h021_readiness.py) — never hardcoded, never persisted.
+export interface H021CarrierReadiness {
+  symbol: string
+  total_records: number
+  train_records: number
+  test_records: number
+  train_article_gt_zero: number
+  test_article_gt_zero: number
+  train_sentiment_informative: number
+  test_sentiment_informative: number
+  earliest_collected_at: string | null
+  latest_collected_at: string | null
+  ready: boolean
+  note: string
+}
+
+export interface H021ReadinessResponse {
+  log_exists: boolean
+  log_path: string
+  total_records_all_symbols: number
+  carriers: H021CarrierReadiness[]
+  overall_ready: boolean
+  min_informative_test_records: number
+  train_fraction: number
+  note: string
+}
+
+export const getH021Readiness = () => apiGet<H021ReadinessResponse>('/research/h021-readiness')
+
 // ── Research Workspace, Phases 2-6 (2026-07-24/25) ──────────────────────────
 
 // Symbol Manager: the FULL symbol universe (including disabled/WATCHLIST/

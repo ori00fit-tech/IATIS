@@ -2660,8 +2660,53 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     assert client.get("/research/dashboard-summary", headers=HDR).status_code == 200
     assert client.get("/research/validation-config", headers=HDR).status_code == 200
     assert client.get("/research/edge-library", headers=HDR).status_code == 200
+    assert client.get("/research/h021-readiness", headers=HDR).status_code == 200
     assert client.get("/research/compare?ids=H015", headers=HDR).status_code == 200
     assert client.get("/research/integrity", headers=HDR).status_code == 200
+
+
+# ── H021 Data Readiness (Hypothesis Campaign Manager Phase 1) ──────────────
+
+def test_research_h021_readiness_requires_auth(client):
+    assert client.get("/research/h021-readiness").status_code == 401
+
+
+def test_research_h021_readiness_no_log_file(client, monkeypatch, tmp_path):
+    import research.h021_readiness as m
+    monkeypatch.setattr(m, "LOG_PATH", tmp_path / "does_not_exist.jsonl")
+    r = client.get("/research/h021-readiness", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["log_exists"] is False
+    assert body["overall_ready"] is False
+    assert len(body["carriers"]) == 3
+    assert all(not c["ready"] for c in body["carriers"])
+
+
+def test_research_h021_readiness_reflects_real_data(client, monkeypatch, tmp_path):
+    import json as _json
+    from datetime import datetime, timedelta
+
+    import research.h021_readiness as m
+
+    log_path = tmp_path / "log.jsonl"
+    lines = []
+    base = datetime(2026, 1, 1)
+    for symbol in ("XAUUSD", "BTCUSD", "ETHUSD"):
+        for day in range(90):
+            ts = (base + timedelta(days=day)).isoformat()
+            lines.append(_json.dumps({
+                "collected_at": ts, "symbol": symbol,
+                "article_count": 2, "mean_sentiment": 0.25,
+            }))
+    log_path.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(m, "LOG_PATH", log_path)
+    r = client.get("/research/h021-readiness", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["log_exists"] is True
+    assert body["overall_ready"] is True
+    assert body["total_records_all_symbols"] == 270
 
 
 # ── Edge Library (AI Research Lab Phase 4, 2026-07-30) ─────────────────────

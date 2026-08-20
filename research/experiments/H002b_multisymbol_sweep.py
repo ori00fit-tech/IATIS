@@ -111,6 +111,9 @@ def run_experiment(
         symbols_data: {symbol: (df_m15, df_h1)}
         sources: list of data source descriptions
     """
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H002b")
+
     for s in sources:
         if not s.startswith("real:"):
             raise SyntheticDataNotAllowedError("H002b requires real data only.")

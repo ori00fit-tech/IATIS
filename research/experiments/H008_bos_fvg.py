@@ -210,6 +210,9 @@ def run_experiment(
         source: data source description (must start with 'real:')
         df_h1: optional H1 data for regime filter (not used in base version)
     """
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H008")
+
     if not source.startswith("real:"):
         raise SyntheticDataNotAllowedError("H008 requires real data only.")
 

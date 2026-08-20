@@ -113,11 +113,22 @@ def main() -> None:
     for k, v in result.filter_stats.items():
         print(f"  {k}: {v}")
 
-    # Update registry if PASSED
+    # Slice 6 (Close Controlled-Run Bypasses, 2026-08-19): this branch used
+    # to call _update_registry(result), which wrote status="PASSED" straight
+    # into research/results/registry.json with no human review -- a direct
+    # violation of the "never auto-write registry.json" invariant every
+    # controlled-run slice this session enforces (CLAUDE.md rule 1: a
+    # decision rule/registration is pre-registered and reviewed BEFORE any
+    # result exists, never auto-applied AFTER one). require_controlled_
+    # execution() inside run_experiment() already makes this branch
+    # unreachable via a direct `python scripts/run_h002.py` invocation (it
+    # raises before result ever comes back) -- this is defense-in-depth so
+    # the capability doesn't exist at all, even if that guard is ever
+    # bypassed some other way.
     if result.status == "PASSED":
-        print("\n✅ H002 PASSED — updating registry.json...")
-        _update_registry(result)
-        print("Registry updated. Restart scheduler to activate smc_advanced.")
+        print("\n✅ H002 PASSED — registry.json NOT auto-updated (Slice 6).")
+        print("Manual step required: review the result, then hand-edit "
+              "research/results/registry.json's H002 entry yourself.")
     elif result.status == "FAILED":
         print("\n❌ H002 FAILED — registry unchanged.")
         print("Next step: design H003 with different approach (e.g. session filter).")
@@ -125,21 +136,6 @@ def main() -> None:
         print(f"\n⚠️  H002 {result.status} — need more data.")
 
     print(f"\nFull result saved to: research/results/H002_result.json")
-
-
-def _update_registry(result) -> None:
-    import json
-    from pathlib import Path
-    registry_path = Path("research/results/registry.json")
-    with open(registry_path) as f:
-        registry = json.load(f)
-    registry["hypotheses"]["H002"]["status"] = "PASSED"
-    registry["hypotheses"]["H002"]["tested_on"] = result.data_source
-    registry["hypotheses"]["H002"]["win_rate"] = result.qualified_win_rate
-    registry["hypotheses"]["H002"]["p_value"] = result.p_value
-    registry["hypotheses"]["H002"]["last_updated"] = str(__import__("datetime").date.today())
-    with open(registry_path, "w") as f:
-        json.dump(registry, f, indent=2)
 
 
 if __name__ == "__main__":

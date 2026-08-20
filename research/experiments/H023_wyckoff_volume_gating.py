@@ -204,6 +204,9 @@ def wyckoff_gate_verdict(
 # ------------------------------------------------------------------ main
 
 def main() -> None:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H023")
+
     parser = argparse.ArgumentParser(description="H023 Wyckoff volume-gating A/B (pre-registered)")
     parser.add_argument("--symbols", nargs="+")
     parser.add_argument("--all", action="store_true")

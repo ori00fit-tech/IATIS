@@ -153,6 +153,9 @@ def run_experiment(
     forward_bars: int = FORWARD_BARS,
 ) -> H002Result:
     """Run H002. Raises SyntheticDataNotAllowedError unless source='real:...'"""
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H002")
+
     if not source.startswith("real:"):
         raise SyntheticDataNotAllowedError(
             "H002 may only be tested against real historical data. "

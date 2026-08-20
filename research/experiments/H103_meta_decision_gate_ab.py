@@ -281,6 +281,13 @@ def main() -> None:
         print(f"Manifest (backfilled from existing result, no re-run): {out}")
         return
 
+    # Slice 6: guarded AFTER the --manifest-only early return above (that
+    # branch reads an EXISTING result.json and produces no new verdict --
+    # historical, stays reachable directly) but before anything below,
+    # which does produce a new controlled result.
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H103")
+
     symbols = ACTIVE_SYMBOLS if (args.all or not args.symbols) else args.symbols
 
     from core.data_loader import load_from_csv

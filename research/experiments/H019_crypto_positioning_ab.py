@@ -195,6 +195,9 @@ def positioning_verdict(
 
 
 def main() -> int:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H019")
+
     parser = argparse.ArgumentParser(description="H019 crypto positioning A/B (pre-registered)")
     parser.add_argument("--step", type=int, default=STEP)
     args = parser.parse_args()

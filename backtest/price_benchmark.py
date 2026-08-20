@@ -114,6 +114,13 @@ def _asset_class_for_symbol(symbol: str, config: dict) -> str:
     return "fx_major"
 
 
+def asset_class_for_symbol(symbol: str, config: dict) -> str:
+    """Public wrapper around _asset_class_for_symbol() for callers outside
+    this module's own benchmark flow (backtest/runner.py's dataset-
+    completeness gate)."""
+    return _asset_class_for_symbol(symbol, config)
+
+
 def _is_forex_week_closure(ts: pd.Timestamp) -> bool:
     """No existing module covers this: regimes/session_context.py only
     classifies intraday Asia/London/NY windows, core/market_quality.py's

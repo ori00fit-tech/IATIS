@@ -53,6 +53,36 @@ PASSED; a human must still manually pre-register a real hypothesis (with
 its own ID and falsification criteria) and re-test it through
 backtest/walk_forward.py's existing, human-gated chronological-OOS
 pipeline before CLAUDE.md rule 1 considers anything here "evidence".
+
+Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19): the 10
+VALIDATION_CRITERIA above answer "did this candidate's re-evaluated
+metrics clear a real bar" — they say nothing about how many candidate
+configurations the mission's own search tried before this one was
+selected. _compute_mission_family_significance() closes that gap by
+Bonferroni-correcting the candidate's own search-time significance
+against the real size of the family it was drawn from
+(research_missions.existing_trials(), COMPLETE only) — reusing backtest/
+multiple_testing.py's bonferroni_alpha()/trial_p_value()/
+classify_significance() verbatim, no new statistical methodology. This is
+the ONE diagnostic in this module that gates the verdict: only
+classification=="SURVIVES_CORRECTION" may reach STRONG_LEAD/
+SAME_SYMBOL_CONFIRMED, regardless of how the 10 raw criteria scored — a
+candidate that raced through thousands of trials before validation cannot
+reach the top evidence tier while its own selection is statistically
+indistinguishable from noise. Deliberately distinct from and never merged
+with the autocorrelation-adjusted `significance` diagnostic above (a
+different statistical question — within-candidate, not across-candidates
+— see storage/research_mission_validations.py's own column comments).
+
+Known, deliberately deferred gap (not addressed by this slice): repeated
+re-validation of the SAME candidate (e.g. rotating validation_symbols
+across several runs until one attempt reaches STRONG_LEAD) is itself a
+multiple-testing / p-hacking vector at the human-operator level.
+research_mission_validations has no uniqueness constraint on
+(mission_id, trial_number, trial_symbol) and nothing here tracks or
+corrects for how many times a candidate has been re-validated. Logged
+here as a research-integrity issue for a future slice, not silently
+fixed or silently dropped.
 """
 from __future__ import annotations
 
@@ -67,13 +97,19 @@ from typing import Any
 from backtest.feature_mining import compute_feature_mining
 from backtest.metrics import TradeRecord, json_safe
 from backtest.monte_carlo import run_monte_carlo
-from backtest.multiple_testing import effective_sample_size, trial_p_value
+from backtest.multiple_testing import (
+    bonferroni_alpha,
+    classify_significance,
+    effective_sample_size,
+    trial_p_value,
+)
 from backtest.optimizer import evaluate_point, resolve_point, search_space_from_dict
 from backtest.robustness import DEFAULT_MULTIPLIERS, SWEEP_PARAMS, RobustnessConfig, run_robustness
-from backtest.runner import find_symbol_csv, load_symbol_data, physical_load_timeframe
+from backtest.runner import dataset_completeness_pct, find_symbol_csv, load_symbol_data, physical_load_timeframe
 from backtest.walk_forward import SymbolVerdict, WalkForwardConfig, run_walk_forward
 from research.manifest import dataset_fingerprint, git_state
 from storage import research_mission_validations, research_missions
+from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -127,6 +163,13 @@ VALIDATION_CRITERIA: dict[str, float | bool] = {
     "min_probability_profit_pct": 60.0,
     "require_walk_forward_consistent": True,
     "require_all_swept_params_stable": True,
+    # Data Integrity Core (2026-08-19) — reuses storage.market_bars'
+    # own D1-warehouse READY bar directly (not a second magic number),
+    # so a symbol's dataset is judged by the identical completeness
+    # formula regardless of whether it came from the CSV path or the
+    # warehouse. A PARTIAL dataset must never produce a CONFIRMED/
+    # STRONG_LEAD verdict.
+    "min_dataset_completeness_pct": MIN_COVERAGE_PCT_FOR_READY,
 }
 
 # A STRONG_LEAD requires passing on at least this many validation
@@ -318,6 +361,72 @@ def _compute_effective_sample_size_diagnostic(trades: list[TradeRecord]) -> dict
             "entry. ess_adjusted_p_value is always >= nominal_p_value "
             "(more conservative), reflecting that consecutive backtest "
             "trades are not independent samples."
+        ),
+    }
+
+
+def _compute_mission_family_significance(mission_id: str, symbol: str, trial: dict) -> dict:
+    """Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19) — binds
+    the ALREADY-EXISTING backtest.multiple_testing Bonferroni machinery
+    into the promotion decision. This is a DIFFERENT statistical question
+    from _compute_effective_sample_size_diagnostic() above:
+      - that one corrects for autocorrelation WITHIN one candidate's own
+        trade sequence (n = this candidate's own trade count);
+      - this one corrects for how many candidate CONFIGURATIONS were
+        searched (n = COMPLETE trials for this mission_id+symbol) before
+        this one was selected for validation — the classic "best of N
+        draws" selection-bias problem mission_significance_summary()
+        already warns about in the mission's own report
+        (backtest/mission_runner.py::_write_report) but never bound to a
+        decision. The two are never merged into one object (see
+        research_mission_validations.py's own column-level comment).
+
+    The candidate's own p-value is computed the IDENTICAL way mission_
+    runner.py's own significance_input already does for every trial in a
+    mission report (avg_rr/std_rr/trades read from the trial's own
+    stored, search-time metrics_json — never re-derived from the fresh
+    OOS trade records evaluated during validation, which is a separate
+    question already answered by the ESS diagnostic above). Deterministic:
+    the same trial row always produces the same p-value and the same
+    classification, run after run.
+
+    Reuses trial_p_value()/bonferroni_alpha()/classify_significance()
+    verbatim from backtest/multiple_testing.py — no new statistical
+    methodology introduced here.
+
+    UNLIKE every diagnostic above, this ONE gates the top-tier verdict
+    (see run_validation()) — only classification=="SURVIVES_CORRECTION"
+    may reach STRONG_LEAD/SAME_SYMBOL_CONFIRMED.
+    """
+    family_trials = research_missions.existing_trials(mission_id, symbol)
+    n_trials = sum(1 for t in family_trials if t.get("state") == "COMPLETE")
+
+    trial_metrics = json.loads(trial["metrics_json"]) if trial.get("metrics_json") else {}
+    mean_r = trial_metrics.get("avg_rr", 0.0)
+    std_r = trial_metrics.get("std_rr", 0.0)
+    n_trades = trial.get("trades") or 0
+
+    p_value = trial_p_value(mean_r, std_r, n_trades)
+    classification = classify_significance(p_value, n_trials) if n_trials > 0 else "INSUFFICIENT_DATA"
+    corrected_alpha = bonferroni_alpha(n_trials) if n_trials > 0 else None
+
+    return {
+        "n_trials_in_family": n_trials,
+        "candidate_mean_r": mean_r,
+        "candidate_std_r": std_r,
+        "candidate_n_trades": n_trades,
+        "raw_p_value": p_value,
+        "bonferroni_alpha": corrected_alpha,
+        "classification": classification,
+        "note": (
+            f"Was this candidate's own apparent edge (as measured when the "
+            f"mission's search selected it) real, given {n_trials} configuration(s) "
+            f"were searched for {symbol} in this mission? Reuses backtest/"
+            f"multiple_testing.py's bonferroni_alpha()/trial_p_value()/"
+            f"classify_significance() verbatim — no new statistical methodology. "
+            f"Gates the top-tier verdict: only 'SURVIVES_CORRECTION' may reach "
+            f"STRONG_LEAD/SAME_SYMBOL_CONFIRMED, regardless of how the 10 raw "
+            f"VALIDATION_CRITERIA scored."
         ),
     }
 
@@ -569,7 +678,9 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     fail, nothing suppressed."""
     started_at = datetime.now(timezone.utc).isoformat()
     point_timeframes = tuple(point["timeframes"]) if point["timeframes"] else None
-    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end, timeframe=physical_load_timeframe(point_timeframes))
+    physical_tf = physical_load_timeframe(point_timeframes)
+    df = load_symbol_data(symbol, vc.data_dir, vc.start, vc.end, timeframe=physical_tf)
+    completeness_pct, completeness_detail = dataset_completeness_pct(df, symbol, physical_tf)
 
     eval_result = evaluate_point(
         symbol, df, point, min_trades=1, objective_metric="profit_factor", return_trades=True,
@@ -646,6 +757,9 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         "robustness_all_stable": _criterion(
             [s.verdict for s in rb_result.sweeps], "STABLE",
             all(s.verdict == "STABLE" for s in rb_result.sweeps)),
+        "dataset_completeness": _criterion(
+            completeness_pct, VALIDATION_CRITERIA["min_dataset_completeness_pct"],
+            completeness_pct >= VALIDATION_CRITERIA["min_dataset_completeness_pct"]),
     }
     passed = all(c["passed"] for c in breakdown.values())
 
@@ -732,6 +846,12 @@ def run_validation(vc: ValidationConfig) -> None:
     research_mission_validations.set_validation_integrity_checks(
         vc.validation_id, candidate_lock=candidate_lock, date_overlap=date_overlap,
     )
+    mission_family_significance = _compute_mission_family_significance(
+        vc.mission_id, vc.trial_symbol, trial,
+    )
+    research_mission_validations.set_mission_family_significance(
+        vc.validation_id, mission_family_significance,
+    )
 
     space = search_space_from_dict(json.loads(mission["search_space_json"]))
     point = resolve_point(space, json.loads(trial["params_json"]))
@@ -767,15 +887,26 @@ def run_validation(vc: ValidationConfig) -> None:
             )
 
     total = len(vc.validation_symbols)
+    # Evidence Integrity / Multiple Testing (Slice 3, 2026-08-19) —
+    # SURVIVES_CORRECTION is the ONLY classification that may reach the
+    # top-tier verdict; NOMINAL_ONLY/NOT_SIGNIFICANT/INSUFFICIENT_DATA
+    # cap the outcome one tier below what the raw criteria alone would
+    # have produced. This is the binding requirement: "adjusted
+    # significance = failed" can never coexist with "evidence = passed".
+    family_survives = mission_family_significance["classification"] == "SURVIVES_CORRECTION"
     if vc.validation_mode == SAME_SYMBOL:
         # Deliberately NOT the NO_EDGE/WEAK_LEAD/STRONG_LEAD scale — that
         # vocabulary is inherently about CROSS-SYMBOL generalization.
         # Confirming on the trial's own training symbol is a narrower,
         # weaker claim and must never be presented with the same tokens.
-        overall = SAME_SYMBOL_CONFIRMED if (passing == total and total > 0) else SAME_SYMBOL_NOT_CONFIRMED
+        overall = (
+            SAME_SYMBOL_CONFIRMED
+            if (passing == total and total > 0 and family_survives)
+            else SAME_SYMBOL_NOT_CONFIRMED
+        )
     elif passing <= 1:
         overall = NO_EDGE
-    elif passing == total and total >= MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD:
+    elif passing == total and total >= MIN_VALIDATION_SYMBOLS_FOR_STRONG_LEAD and family_survives:
         overall = STRONG_LEAD
     else:
         overall = WEAK_LEAD
@@ -784,12 +915,12 @@ def run_validation(vc: ValidationConfig) -> None:
         vc.validation_id, "finished", finished=True,
         overall_verdict=overall, passing_symbols=passing, total_symbols=total,
     )
-    _write_report(vc, overall, passing, total, candidate_lock, date_overlap)
+    _write_report(vc, overall, passing, total, candidate_lock, date_overlap, mission_family_significance)
 
 
 def _write_report(
     vc: ValidationConfig, overall: str, passing: int, total: int,
-    candidate_lock: dict, date_overlap: dict,
+    candidate_lock: dict, date_overlap: dict, mission_family_significance: dict,
 ) -> None:
     vc.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -813,6 +944,7 @@ def _write_report(
         "criteria": VALIDATION_CRITERIA,
         "candidate_lock": candidate_lock,
         "date_overlap": date_overlap,
+        "mission_family_significance": mission_family_significance,
         "validation_mode": vc.validation_mode,
         "results": results,
         "note": (

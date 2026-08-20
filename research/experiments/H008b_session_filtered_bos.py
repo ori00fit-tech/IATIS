@@ -137,6 +137,9 @@ def run_experiment(
     symbol: str = "UNKNOWN",
 ) -> H008bResult:
     """Run H008b experiment with session + ATR filters."""
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H008b")
+
     if not source.startswith("real:"):
         raise SyntheticDataNotAllowedError("H008b requires real data only.")
 

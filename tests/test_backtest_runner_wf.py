@@ -13,10 +13,12 @@ import pytest
 
 from backtest.runner import (
     RunnerConfig,
+    build_dataset_descriptor,
     find_symbol_csv,
     load_symbol_data,
     run_all,
     trade_to_record,
+    write_summary,
 )
 from backtest.walk_forward import (
     SymbolVerdict,
@@ -502,6 +504,89 @@ def test_walk_forward_suite_m15_base_loads_the_m15_file(tmp_path):
     _ohlcv(2400, trend=0.10, freq="15min").to_csv(tmp_path / "EURUSD_M15_2y.csv")
     out2 = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_m15)
     assert "EURUSD" in out2  # the real M15 file now exists -> succeeds
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Data Integrity Core (2026-08-19) — dataset_completeness_pct + the walk-
+# forward PARTIAL-dataset exclusion gate.
+# ─────────────────────────────────────────────────────────────────────────
+
+_FX_CONFIG = {"data": {"twelve_data_symbols": [{"internal": "EURUSD", "asset_class": "fx_major"}]}}
+
+
+def test_dataset_completeness_pct_continuous_series_scores_100():
+    from backtest.runner import dataset_completeness_pct
+
+    df = _ohlcv(600, trend=0.05)  # raw continuous hourly index, no gaps at all
+    score, detail = dataset_completeness_pct(df, "EURUSD", "H1", config=_FX_CONFIG)
+    assert score == 100.0
+    assert detail["real_gap"] == 0
+
+
+def test_dataset_completeness_pct_real_weekday_gap_scores_below_ready_bar():
+    from backtest.runner import dataset_completeness_pct
+    from storage.market_bars import MIN_COVERAGE_PCT_FOR_READY
+
+    df = _ohlcv(600, trend=0.05)
+    # Drop a large chunk from the middle — spans several real weekdays, so
+    # most of it is a genuine gap (a handful of the dropped hours may
+    # legitimately land on a weekend and get excluded as expected_closure,
+    # but not nearly enough to keep this above the 95% READY bar).
+    keep = df.index[(df.index < df.index[100]) | (df.index >= df.index[300])]
+    partial = df.loc[keep]
+    score, detail = dataset_completeness_pct(partial, "EURUSD", "H1", config=_FX_CONFIG)
+    assert score < MIN_COVERAGE_PCT_FOR_READY
+    assert detail["real_gap"] > 0
+
+
+def test_walk_forward_suite_excludes_symbol_with_partial_dataset(tmp_path):
+    """The Data Integrity Core fix's authoritative proof: a structurally-
+    valid but genuinely PARTIAL CSV must never enter walk-forward evidence
+    — it has to be excluded the exact same way a missing/malformed file
+    already is, not silently accepted because validate_ohlcv() alone
+    can't see real gaps."""
+    import backtest.walk_forward as wf_mod
+
+    full = _ohlcv(2400, trend=0.10)
+    keep = full.index[(full.index < full.index[400]) | (full.index >= full.index[1200])]
+    full.loc[keep].to_csv(tmp_path / "EURUSD_H1_2y.csv")
+
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default)
+    assert "EURUSD" not in out
+
+
+def test_walk_forward_suite_keeps_symbol_with_complete_dataset(tmp_path):
+    """Regression check: the new gate must not reject a genuinely complete
+    dataset — every pre-existing walk-forward test already relies on this
+    implicitly, this pins it explicitly."""
+    import backtest.walk_forward as wf_mod
+
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_2y.csv")
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default)
+    assert "EURUSD" in out
+
+
+def test_walk_forward_suite_embeds_real_dataset_descriptor(tmp_path):
+    import json as _json
+    import backtest.walk_forward as wf_mod
+
+    _ohlcv(2400, trend=0.10).to_csv(tmp_path / "EURUSD_H1_dukascopy.csv")
+    out_dir = tmp_path / "reports"
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default, output_dir=out_dir)
+    assert "EURUSD" in out
+
+    payload = _json.loads(next(out_dir.glob("walk_forward_*.json")).read_text())
+    descriptor = payload["symbols"]["EURUSD"]["dataset_descriptor"]
+    assert descriptor is not None
+    assert descriptor["symbol"] == "EURUSD"
+    assert descriptor["provider"] == "dukascopy"
+
+    csv_path = find_symbol_csv("EURUSD", tmp_path, timeframe="H1")
+    fresh = build_dataset_descriptor(load_symbol_data("EURUSD", tmp_path, timeframe="H1"), "EURUSD", "H1", csv_path)
+    assert descriptor["dataset_fingerprint"] == fresh["dataset_fingerprint"]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1153,3 +1238,185 @@ def test_from_profile_uses_real_spread_as_commission():
     assert BacktestConfig.from_profile("EURUSD").commission_pips == 0.5
     # Explicit override wins (ablation / sensitivity runs).
     assert BacktestConfig.from_profile("XAUUSD", commission_pips=0.5).commission_pips == 0.5
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Data Integrity Core, Slice 2 (Fingerprint Binding) —
+# build_dataset_descriptor() and its embedding into every evidence writer.
+# Reuses the EXISTING research.manifest.dataset_fingerprint() (SHA256 of
+# raw file bytes) rather than reimplementing hashing — its own
+# same/changed-content properties are what these tests pin at the
+# build_dataset_descriptor() level, not duplicated at the dataset_
+# fingerprint() level (already covered by tests/test_research_manifest.py).
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_build_dataset_descriptor_same_dataset_same_fingerprint(tmp_path):
+    df = _ohlcv(300)
+    path = tmp_path / "EURUSD_H1_dukascopy.csv"
+    df.to_csv(path)
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+
+    d1 = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+    d2 = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+    assert d1["dataset_fingerprint"] == d2["dataset_fingerprint"]
+    assert d1["dataset_fingerprint"] != ""
+
+
+def test_build_dataset_descriptor_one_row_changed_different_fingerprint(tmp_path):
+    df = _ohlcv(300)
+    path = tmp_path / "EURUSD_H1_dukascopy.csv"
+    df.to_csv(path)
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    before = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    changed = df.copy()
+    changed.iloc[150, changed.columns.get_loc("volume")] = 9999.0  # one row, one field
+    changed.to_csv(path)
+    loaded2 = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    after = build_dataset_descriptor(loaded2, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    assert after["dataset_fingerprint"] != before["dataset_fingerprint"]
+
+
+def test_build_dataset_descriptor_timestamp_changed_different_fingerprint(tmp_path):
+    df = _ohlcv(300)
+    path = tmp_path / "EURUSD_H1_dukascopy.csv"
+    df.to_csv(path)
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    before = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    shifted = df.copy()
+    shifted.index = shifted.index + pd.Timedelta(minutes=1)
+    shifted.to_csv(path)
+    loaded2 = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    after = build_dataset_descriptor(loaded2, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    assert after["dataset_fingerprint"] != before["dataset_fingerprint"]
+
+
+def test_build_dataset_descriptor_ohlc_changed_different_fingerprint(tmp_path):
+    df = _ohlcv(300)
+    path = tmp_path / "EURUSD_H1_dukascopy.csv"
+    df.to_csv(path)
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    before = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    changed = df.copy()
+    changed["high"] = changed["high"] + 0.01  # every bar's OHLC shape moves
+    changed.to_csv(path)
+    loaded2 = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    after = build_dataset_descriptor(loaded2, "EURUSD", "H1", path, config=_FX_CONFIG)
+
+    assert after["dataset_fingerprint"] != before["dataset_fingerprint"]
+
+
+def test_build_dataset_descriptor_shape(tmp_path):
+    """Required identity fields — a research result must always be able to
+    identify what it was built on."""
+    df = _ohlcv(300)
+    path = tmp_path / "EURUSD_H1_dukascopy.csv"
+    df.to_csv(path)
+    loaded = load_symbol_data("EURUSD", tmp_path, timeframe="H1")
+    d = build_dataset_descriptor(loaded, "EURUSD", "H1", path, config=_FX_CONFIG)
+    assert d["symbol"] == "EURUSD"
+    assert d["timeframe"] == "H1"
+    assert d["provider"] == "dukascopy"
+    assert d["row_count"] == len(loaded)
+    assert d["from"] == str(loaded.index[0])
+    assert d["to"] == str(loaded.index[-1])
+    assert 0.0 <= d["completeness_pct"] <= 100.0
+    assert isinstance(d["dataset_fingerprint"], str) and len(d["dataset_fingerprint"]) == 64
+
+
+def test_write_summary_embeds_correct_dataset_descriptor(tmp_path):
+    """Evidence points to the EXACT fingerprint it was built on — the
+    write_summary() payload's dataset_descriptor must match a fresh,
+    independently-computed descriptor of the same on-disk file, not a
+    stale or fabricated value."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _ohlcv(2400, trend=0.10).to_csv(data_dir / "EURUSD_H1_dukascopy.csv")
+
+    results = run_all(RunnerConfig(symbols=("EURUSD",), data_dir=data_dir, run_mc=False, write_html=False))
+    assert "EURUSD" in results
+    embedded = results["EURUSD"].dataset_descriptor
+    assert embedded is not None
+
+    csv_path = find_symbol_csv("EURUSD", data_dir, timeframe="H1")
+    fresh = build_dataset_descriptor(load_symbol_data("EURUSD", data_dir, timeframe="H1"), "EURUSD", "H1", csv_path)
+    assert embedded["dataset_fingerprint"] == fresh["dataset_fingerprint"]
+
+    import json as _json
+    output_dir = tmp_path / "reports"
+    path = write_summary(results, output_dir)
+    payload = _json.loads(path.read_text())
+    assert payload["symbols"]["EURUSD"]["dataset_descriptor"]["dataset_fingerprint"] == embedded["dataset_fingerprint"]
+
+
+def test_new_dataset_cannot_inherit_old_evidence(tmp_path):
+    """A dataset swapped out on disk between two runs must produce a
+    genuinely different fingerprint in the second run's evidence — a
+    stale/replaced file can never silently keep pointing at the old data's
+    identity."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _ohlcv(2400, trend=0.10, seed=1).to_csv(data_dir / "EURUSD_H1_dukascopy.csv")
+    first = run_all(RunnerConfig(symbols=("EURUSD",), data_dir=data_dir, run_mc=False, write_html=False))
+    first_fp = first["EURUSD"].dataset_descriptor["dataset_fingerprint"]
+
+    # A different underlying dataset (different seed) replaces the file —
+    # same symbol/timeframe/provider name, genuinely different content.
+    (data_dir / "EURUSD_H1_dukascopy.csv").unlink()
+    _ohlcv(2400, trend=0.10, seed=99).to_csv(data_dir / "EURUSD_H1_dukascopy.csv")
+    second = run_all(RunnerConfig(symbols=("EURUSD",), data_dir=data_dir, run_mc=False, write_html=False))
+    second_fp = second["EURUSD"].dataset_descriptor["dataset_fingerprint"]
+
+    assert second_fp != first_fp
+
+
+def test_walk_forward_partial_dataset_produces_no_evidence_at_all(tmp_path):
+    """A PARTIAL dataset must not produce ANY evidence, dataset_descriptor
+    included — extends test_walk_forward_suite_excludes_symbol_with_
+    partial_dataset's own exclusion proof to the fingerprint-binding layer
+    specifically: there is no half-written descriptor for an excluded
+    symbol, since it never enters `out` at all."""
+    import backtest.walk_forward as wf_mod
+
+    full = _ohlcv(2400, trend=0.10)
+    keep = full.index[(full.index < full.index[400]) | (full.index >= full.index[1200])]
+    full.loc[keep].to_csv(tmp_path / "EURUSD_H1_dukascopy.csv")
+
+    wf_default = WalkForwardConfig(n_windows=3, min_pf=1.5, min_trades_per_window=1)
+    output_dir = tmp_path / "reports"
+    out = wf_mod.run_walk_forward_suite(["EURUSD"], tmp_path, wf_default, output_dir=output_dir)
+    assert "EURUSD" not in out
+    assert not list(output_dir.glob("walk_forward_*.json")), (
+        "no symbol survived, so no report file (and no dataset_descriptor "
+        "inside one) should have been written at all"
+    )
+
+
+def test_write_summary_tolerates_missing_dataset_descriptor(tmp_path):
+    """Backward compatibility: a SymbolRunResult built the old way (before
+    this field existed, or when the descriptor build failed non-fatally)
+    has dataset_descriptor=None by default — write_summary() must still
+    produce a valid report, not crash on the missing field."""
+    from backtest.metrics import calculate_metrics
+    from backtest.runner import SymbolRunResult
+    from backtesting.backtest_engine import BacktestResult, BacktestConfig
+
+    cfg = BacktestConfig.from_profile("EURUSD")
+    engine_result = BacktestResult(
+        config=cfg, symbol="EURUSD", start_date="2024-01-01", end_date="2024-01-02", total_bars=24,
+    )
+    metrics = calculate_metrics([], initial_capital=cfg.initial_balance)
+    old_style_result = SymbolRunResult(
+        symbol="EURUSD", engine_result=engine_result, metrics=metrics, trade_records=[],
+        monte_carlo=None, html_report=None, data_start="2024-01-01", data_end="2024-01-02", bars=24,
+    )
+    assert old_style_result.dataset_descriptor is None
+
+    import json as _json
+    path = write_summary({"EURUSD": old_style_result}, tmp_path)
+    payload = _json.loads(path.read_text())
+    assert payload["symbols"]["EURUSD"]["dataset_descriptor"] is None

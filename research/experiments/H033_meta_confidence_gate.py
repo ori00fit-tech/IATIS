@@ -412,6 +412,9 @@ def fit_and_judge(ledger: list[dict], splits: dict[str, int]) -> dict:
 # ------------------------------------------------------------------ main
 
 def main() -> None:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H033")
+
     parser = argparse.ArgumentParser(description="H033 meta-confidence gate (pre-registered)")
     parser.add_argument("--symbols", nargs="+")
     parser.add_argument("--all", action="store_true")

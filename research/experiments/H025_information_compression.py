@@ -327,6 +327,9 @@ def bootstrap_p(frames: dict[str, pd.DataFrame]) -> float:
 # ------------------------------------------------------------------ main
 
 def main() -> int:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H025")
+
     import json
 
     from research.manifest import build_manifest, dataset_fingerprint, write_manifest

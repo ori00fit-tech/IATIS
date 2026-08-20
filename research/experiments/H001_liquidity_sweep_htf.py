@@ -100,6 +100,9 @@ def run_experiment(
     """Run the H001 experiment. Raises SyntheticDataNotAllowedError unless
     `source` is explicitly marked as real data.
     """
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H001")
+
     if not source.startswith("real:"):
         raise SyntheticDataNotAllowedError(
             "H001 may only be tested against real historical data. "

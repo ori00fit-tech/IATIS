@@ -191,6 +191,9 @@ class H008cResult:
 
 
 def run_experiment(df_m15: pd.DataFrame, source: str, symbol: str = "UNKNOWN") -> H008cResult:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H008c")
+
     if not source.startswith("real:"):
         raise SyntheticDataNotAllowedError("H008c requires real data only.")
 

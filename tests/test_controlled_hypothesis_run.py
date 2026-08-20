@@ -298,7 +298,11 @@ def test_execute_fn_is_called_exactly_once_and_only_after_validation():
         name for name, obj in inspect.getmembers(chr_mod, inspect.isfunction)
         if obj.__module__ == chr_mod.__name__ and not name.startswith("_")
     ]
-    assert public_functions == ["run_controlled_hypothesis"]  # the ONLY public entry point
+    # Slice 6 adds one more public function, require_controlled_execution() --
+    # it never calls execute_fn itself (it only raises or returns None), so
+    # it doesn't create a second path to execute_fn; it's the bypass GUARD
+    # every H0*.py script now calls, not an alternate entry point.
+    assert sorted(public_functions) == ["require_controlled_execution", "run_controlled_hypothesis"]
 
 
 def test_no_write_call_near_registry_config_or_engines_mention():

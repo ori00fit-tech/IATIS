@@ -51,21 +51,29 @@ Nothing in this module re-implements engine logic, statistical
 methodology, or optimizer sampling. Nothing here writes registry.json,
 config.yaml, or config/engines.yaml.
 
-DISCLOSED, NOT-CLOSED-IN-THIS-SLICE BYPASS (Requirement: "report any
-remaining bypass paths"): the 9 existing research/experiments/H0*.py
-scripts' own `main()` functions are NOT retrofitted to call
-run_controlled_hypothesis() in this slice -- deliberately, per the
-operator's own instruction sequence (wire the contract now; run
-H001-H020 only after one more short review). Until a script's main() is
-changed to call run_controlled_hypothesis() instead of executing
-directly, invoking that script's existing CLI entry point (e.g. `python
--m research.experiments.H101_smc_structural_bias_ab`) still bypasses
-this gate entirely -- it is the ONE known remaining bypass path, and it
-is a pre-existing script this slice does not touch, not a new one this
-slice introduces.
+Slice 6 (Close Controlled-Run Bypasses, 2026-08-19) closed the bypass
+disclosed above. Every research/experiments/H0*.py entry point capable of
+producing a NEW controlled result (15 of them -- 9 `main()`-shaped CLI
+scripts plus 6 legacy `run_experiment()`-shaped callables with no CLI at
+all, see the Slice 6 commit message for the full per-script audit table)
+now calls require_controlled_execution(hypothesis_id) as its first
+executable statement (after argument parsing, before any dataset
+load/backtest/verdict computation). This is a FAIL-CLOSED guard, not a
+routing change: none of those 13 scripts is retrofitted into a real
+execute_fn adapter in this slice (that would mean actually running a
+hypothesis, which is explicitly out of scope until after H001-H020's own
+final review) -- calling one directly now raises DirectExecutionRefused
+before it touches data, produces no result/manifest artifact, and its
+message points back at this module. A script only stops refusing once
+something calls it from *inside* run_controlled_hypothesis()'s own
+execute_fn callback (see require_controlled_execution()'s docstring for
+the exact mechanism) -- that is the one, deliberately narrow, door this
+slice leaves open, and it is the SAME orchestrator every other controlled
+run must already go through, not a second path.
 """
 from __future__ import annotations
 
+import contextvars
 from pathlib import Path
 from typing import Any, Callable
 
@@ -96,6 +104,63 @@ class ControlledRunAborted(Exception):
     def __init__(self, message: str, *, stage: str) -> None:
         super().__init__(message)
         self.stage = stage
+
+
+class DirectExecutionRefused(Exception):
+    """Raised by require_controlled_execution() (Slice 6) when a
+    hypothesis script's own controlled-result-producing entry point is
+    invoked directly -- e.g. `python -m research.experiments.
+    H101_smc_structural_bias_ab` or calling `run_experiment(...)` from a
+    driver script/REPL -- rather than through run_controlled_hypothesis().
+    Never caught and silently downgraded anywhere in this codebase: a
+    refusal here must always surface, since silently swallowing it would
+    let a bypassed run appear to have "worked"."""
+
+
+# Slice 6: a plain module-level flag would leak across threads/async
+# tasks running different hypotheses concurrently (e.g. two Mission
+# Center jobs); a contextvar scopes "am I currently inside THIS
+# hypothesis_id's orchestrated execute_fn call" correctly per call stack.
+_active_hypothesis_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "controlled_hypothesis_run_active_hypothesis_id", default=None,
+)
+
+
+def require_controlled_execution(hypothesis_id: str) -> None:
+    """The Slice 6 bypass-closing guard. Call this as the FIRST executable
+    statement of any research/experiments/H0*.py function that can
+    produce a NEW controlled result (a `main()` CLI entry point, or a
+    legacy `run_experiment()` callable with no CLI at all) -- before any
+    dataset load, backtest, or verdict computation. Deliberately a single
+    function call, never a copy-pasted pre-flight block, so no script
+    duplicates this module's own validation logic (Slice 6 requirement:
+    "Do NOT duplicate the pre-flight implementation into every script").
+
+    Raises DirectExecutionRefused unless the CURRENT call stack is inside
+    run_controlled_hypothesis()'s own execute_fn(contract) call for this
+    EXACT hypothesis_id (checked by identity, not just "some hypothesis is
+    running" -- H101's guard does not pass just because H102 is mid-run
+    on another thread). This is fail-closed by construction: the
+    contextvar defaults to None, so an entry point reached by any path
+    other than run_controlled_hypothesis() itself -- direct CLI
+    invocation, a bare Python import, a stray subprocess call -- always
+    refuses, with zero special-casing needed per script.
+
+    Read-only/historical operations (e.g. H103's own `--manifest-only`,
+    which backfills a manifest from an ALREADY-existing result.json
+    without recomputing a verdict) must call this AFTER their own early
+    return, not before -- they read history, they don't produce a new
+    controlled result, so they stay reachable directly (Slice 6
+    requirement: "Legacy historical results remain readable")."""
+    active = _active_hypothesis_id.get()
+    if active != hypothesis_id:
+        raise DirectExecutionRefused(
+            f"{hypothesis_id}: direct execution refused. This entry point produces "
+            f"a NEW controlled result and must be invoked through "
+            f"research.controlled_hypothesis_run.run_controlled_hypothesis() as its "
+            f"execute_fn, not directly via a CLI invocation, driver script, or bare "
+            f"import. See research/controlled_hypothesis_run.py."
+        )
 
 
 def run_controlled_hypothesis(
@@ -194,7 +259,18 @@ def run_controlled_hypothesis(
 
     execution_identity = compute_execution_identity(contract)
 
-    result = execute_fn(contract)
+    # Slice 6: the ONE place _active_hypothesis_id is ever set -- every
+    # require_controlled_execution() call anywhere in the codebase can
+    # only pass while execute_fn(contract) is on the stack, right here,
+    # for THIS hypothesis_id. reset() (not a bare set to None) restores
+    # whatever the caller's own context held before this call, so nested/
+    # sequential run_controlled_hypothesis() invocations on different
+    # hypotheses never leak into each other.
+    token = _active_hypothesis_id.set(hypothesis_id)
+    try:
+        result = execute_fn(contract)
+    finally:
+        _active_hypothesis_id.reset(token)
 
     if write_manifest_as is not None:
         from research.manifest import build_manifest, write_manifest

@@ -156,6 +156,9 @@ def run_symbol(symbol: str) -> dict:
 
 
 def main() -> int:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H022")
+
     from research.manifest import build_manifest, dataset_fingerprint, write_manifest
     from utils.helpers import load_config
 

@@ -220,6 +220,9 @@ def delay_verdict(
 # ------------------------------------------------------------------ main
 
 def main() -> None:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H037")
+
     parser = argparse.ArgumentParser(description="H037 decision-delay replay (pre-registered)")
     parser.add_argument("--symbols", nargs="+")
     parser.add_argument("--all", action="store_true")

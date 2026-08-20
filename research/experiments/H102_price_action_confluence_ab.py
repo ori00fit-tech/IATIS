@@ -153,6 +153,9 @@ def price_action_verdict(
 
 
 def main() -> int:
+    from research.controlled_hypothesis_run import require_controlled_execution
+    require_controlled_execution("H102")
+
     parser = argparse.ArgumentParser(description="H102 price_action confluence A/B (pre-registered)")
     parser.add_argument("--step", type=int, default=STEP)
     args = parser.parse_args()

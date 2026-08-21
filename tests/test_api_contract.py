@@ -2644,7 +2644,8 @@ def test_research_hypothesis_detail_unknown_id_404s(client):
 
 def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client):
     # /research/{hypothesis_id} is registered after /research/manifests,
-    # /research/symbols, /research/engines, /research/indicators,
+    # /research/symbols, /research/engines, /research/algorithm-inventory,
+    # /research/indicators,
     # /research/scenario-config, /research/datasets, /research/run-reports,
     # /research/dashboard-summary, /research/validation-config,
     # /research/edge-library, /research/compare, and /research/integrity —
@@ -2653,6 +2654,7 @@ def test_research_hypothesis_detail_route_does_not_shadow_literal_routes(client)
     assert client.get("/research/manifests", headers=HDR).status_code == 200
     assert client.get("/research/symbols", headers=HDR).status_code == 200
     assert client.get("/research/engines", headers=HDR).status_code == 200
+    assert client.get("/research/algorithm-inventory", headers=HDR).status_code == 200
     assert client.get("/research/indicators", headers=HDR).status_code == 200
     assert client.get("/research/scenario-config", headers=HDR).status_code == 200
     assert client.get("/research/datasets", headers=HDR).status_code == 200
@@ -2935,6 +2937,37 @@ def test_research_engines_reports_frozen_prod4_set(client):
         assert by_name[name]["enabled"] is False, by_name[name]
         assert by_name[name]["prod4"] is False
     assert body["smc_full_spec"] is False  # H017 FAILED
+
+
+def test_research_algorithm_inventory_requires_auth(client):
+    assert client.get("/research/algorithm-inventory").status_code == 401
+
+
+def test_research_algorithm_inventory_contract(client):
+    r = client.get("/research/algorithm-inventory", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["counts"]["total"] == 12
+    assert body["counts"]["base_algorithms"] == 10
+    assert body["counts"]["research_variants"] == 2
+    by_key = {e["key"]: e for e in body["algorithms"]}
+    # CLAUDE.md's frozen prod4 set — same real facts test_research_engines_
+    # reports_frozen_prod4_set already pins for the lighter /research/engines
+    # endpoint, re-asserted here since this is a separate, compliance-facing
+    # endpoint with its own independent computation.
+    for name in ("smc", "price_action", "nnfx", "wyckoff"):
+        assert by_key[name]["enabled"] is True, by_key[name]
+        assert by_key[name]["prod4"] is True
+        assert by_key[name]["hypothesis_id"] is not None
+    for name in ("divergence", "ict", "macro", "market_structure", "quant", "sentiment"):
+        assert by_key[name]["enabled"] is False, by_key[name]
+        assert by_key[name]["prod4"] is False
+    # research-only v2 variants: never live-eligible, never enabled
+    for name in ("price_action_v2", "wyckoff_v2"):
+        assert by_key[name]["is_live_eligible"] is False
+        assert by_key[name]["enabled"] is False
+        assert by_key[name]["variant_of"] is not None
+    assert body["consensus_rules"]["min_engines_agreeing"] == 2
 
 
 def test_research_indicators_requires_auth(client):

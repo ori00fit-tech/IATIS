@@ -670,3 +670,42 @@ def test_run_once_fails_closed_when_kill_switch_state_unreadable(synthetic_confi
 
     MockExecutor.assert_not_called()
     assert reports[0]["kill_switch_blocked"] is True
+
+
+# ---------------------------------------------------------------------------
+# Post-Trade Control / Incident Register wiring (execution/post_trade_monitor.py)
+# ---------------------------------------------------------------------------
+
+def test_run_once_invokes_post_trade_monitor_scans(synthetic_config):
+    from scheduler import run_once
+
+    with patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("execution.post_trade_monitor.run_all_scans") as mock_scans:
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_scans.assert_called_once()
+    _, kwargs = mock_scans.call_args
+    assert "reconciliation_report" in kwargs
+    assert "reconciliation_repair" in kwargs
+
+
+def test_run_once_post_trade_monitor_failure_does_not_abort_run(synthetic_config):
+    from scheduler import run_once
+
+    with patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("execution.post_trade_monitor.run_all_scans", side_effect=RuntimeError("boom")):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    assert len(reports) == 1
+
+
+def test_run_once_respects_post_trade_monitoring_feature_flag(synthetic_config):
+    from scheduler import run_once
+
+    synthetic_config.setdefault("features", {})["post_trade_monitoring"] = False
+
+    with patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("execution.post_trade_monitor.run_all_scans") as mock_scans:
+        run_once(synthetic_config, symbols=["EUR/USD"])
+
+    mock_scans.assert_not_called()

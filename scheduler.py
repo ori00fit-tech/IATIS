@@ -446,6 +446,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # runs every tick, acts only when the cTrader path is live
         # (reconcile() self-gates on ctrader_enabled + dry_run). Alert
         # with the standard per-key cooldown on any mismatch.
+        rec = None
+        repair = None
         if config.get("features", {}).get("broker_reconciliation", True):
             try:
                 from execution.reconciliation import format_alert, reconcile, repair_mismatches, store_result
@@ -472,6 +474,23 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                             logger.warning(f"Reconciliation auto-repair failed (non-fatal): {exc}")
             except Exception as exc:
                 logger.warning(f"Reconciliation failed (non-fatal): {exc}")
+
+        # Unified Post-Trade Control / Incident Register (execution/
+        # post_trade_monitor.py): turns this tick's ALREADY-COMPUTED
+        # reconciliation/execution_attempts/execution_quality/kill_switch/
+        # forward_review evidence into durable incidents. Runs every tick
+        # regardless of feature flags above (rec/repair are None when
+        # reconciliation didn't run this tick — scan_reconciliation()
+        # handles that by falling back to the last stored result). Its own
+        # internal per-scan try/except already isolates one subsystem's
+        # failure from the others; this outer try/except additionally
+        # ensures a monitoring-layer failure can never affect trading.
+        if config.get("features", {}).get("post_trade_monitoring", True):
+            try:
+                from execution.post_trade_monitor import run_all_scans
+                run_all_scans(reconciliation_report=rec, reconciliation_repair=repair)
+            except Exception as exc:
+                logger.warning(f"Post-trade incident monitoring failed (non-fatal): {exc}")
 
         # TCA async-fill resolution pass (2026-08-17 fix): completes any
         # fill queued as PENDING by record_or_queue_fill() earlier this

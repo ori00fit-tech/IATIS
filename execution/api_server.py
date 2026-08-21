@@ -112,6 +112,7 @@ from execution.routes import (
     missions,
     news_benchmark,
     outcomes,
+    post_trade,
     provider_benchmark,
     provider_scorecard,
     research,
@@ -170,6 +171,7 @@ app.include_router(research.router)
 app.include_router(experiments.router)
 app.include_router(data_providers.router)
 app.include_router(outcomes.router)
+app.include_router(post_trade.router)
 app.include_router(journal.router)
 app.include_router(logs.router)
 app.include_router(files.router)

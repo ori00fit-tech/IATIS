@@ -54,6 +54,42 @@ def _bucket_stats(rows: list[dict], symbols: set[str]) -> dict:
     }
 
 
+def evaluate_rules(rules: dict, buckets: dict) -> list[dict]:
+    """Pure: applies every `_decision_rules` entry against the already-
+    computed FX/carriers buckets, returning one structured verdict dict
+    per rule — same comparison logic main()'s own loop always used,
+    factored out so a caller other than this CLI (execution/
+    post_trade_monitor.py's FORWARD_REVIEW_TRIGGERED scan) can consume
+    real verdicts without re-deriving the threshold comparison. Never
+    reads/writes the registry itself — `rules` is passed in, already
+    loaded from `_decision_rules`, written BEFORE any evidence existed."""
+    results: list[dict] = []
+    for rule_id, rule in rules.items():
+        if rule_id.startswith("_") or not isinstance(rule, dict):
+            continue
+        b = buckets.get(rule["bucket"])
+        n = 0 if b is None else b["n"]
+        if b is None or n < rule["min_n"]:
+            results.append({
+                "rule_id": rule_id, "statement": rule["statement"], "bucket": rule["bucket"],
+                "n": n, "min_n": rule["min_n"], "metric": rule["metric"], "value": None,
+                "op": rule["op"], "threshold": rule["threshold"], "triggered": False,
+                "action": rule["action"], "insufficient_n": True,
+            })
+            continue
+        metric = b.get(rule["metric"])
+        triggered = (metric is not None
+                     and ((rule["op"] == "<" and metric < rule["threshold"])
+                          or (rule["op"] == ">=" and metric >= rule["threshold"])))
+        results.append({
+            "rule_id": rule_id, "statement": rule["statement"], "bucket": rule["bucket"],
+            "n": n, "min_n": rule["min_n"], "metric": rule["metric"], "value": metric,
+            "op": rule["op"], "threshold": rule["threshold"], "triggered": triggered,
+            "action": rule["action"], "insufficient_n": False,
+        })
+    return results
+
+
 def main() -> int:
     rules = json.loads(REGISTRY.read_text()).get("_decision_rules", {})
     if not rules:
@@ -73,21 +109,14 @@ def main() -> int:
           f"WR={buckets['carriers']['wr']}%\n")
 
     any_reached = False
-    for rule_id, rule in rules.items():
-        if rule_id.startswith("_") or not isinstance(rule, dict):
+    for verdict in evaluate_rules(rules, buckets):
+        print(f"── {verdict['rule_id']}: {verdict['statement']}")
+        if verdict["insufficient_n"]:
+            print(f"   INSUFFICIENT N ({verdict['n']}/{verdict['min_n']}) — keep accumulating.\n")
             continue
-        b = buckets.get(rule["bucket"])
-        print(f"── {rule_id}: {rule['statement']}")
-        if b is None or b["n"] < rule["min_n"]:
-            print(f"   INSUFFICIENT N ({0 if b is None else b['n']}/{rule['min_n']}) — keep accumulating.\n")
-            continue
-        metric = b.get(rule["metric"])
-        triggered = (metric is not None
-                     and ((rule["op"] == "<" and metric < rule["threshold"])
-                          or (rule["op"] == ">=" and metric >= rule["threshold"])))
-        print(f"   n={b['n']} {rule['metric']}={metric} vs {rule['op']} {rule['threshold']}"
-              f" → {'⚠ VERDICT REACHED: ' + rule['action'] if triggered else 'rule not triggered — no action'}\n")
-        any_reached = any_reached or triggered
+        print(f"   n={verdict['n']} {verdict['metric']}={verdict['value']} vs {verdict['op']} {verdict['threshold']}"
+              f" → {'⚠ VERDICT REACHED: ' + verdict['action'] if verdict['triggered'] else 'rule not triggered — no action'}\n")
+        any_reached = any_reached or verdict["triggered"]
 
     try:
         from storage.shadow_book import gate_ledger

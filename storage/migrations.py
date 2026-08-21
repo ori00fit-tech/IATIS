@@ -268,6 +268,19 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_mission_validations ADD COLUMN mission_family_significance_json TEXT",
         ],
     ),
+    (
+        17,
+        "reconciliation_checks_skip_reason_kind_column",
+        # Unified Post-Trade Control / Incident Register (2026-08-XX) —
+        # execution/reconciliation.py's reconcile() now tags a "skipped"
+        # result with WHY it skipped ("not_live" = healthy paper mode,
+        # "control_failure" = the control itself is genuinely unavailable),
+        # so execution/post_trade_monitor.py's scan can tell the two apart
+        # without string-matching `reason`. Advisory/diagnostic only.
+        [
+            "ALTER TABLE reconciliation_checks ADD COLUMN skip_reason_kind TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -337,6 +350,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE fills" in s for s in statements):
                 from storage import execution_quality
                 execution_quality._init(con)
+            if any("ALTER TABLE reconciliation_checks" in s for s in statements):
+                from execution import reconciliation
+                con.execute(reconciliation._DDL)
             for sql in statements:
                 try:
                     con.execute(sql)

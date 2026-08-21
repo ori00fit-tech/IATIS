@@ -156,9 +156,18 @@ def run_order_test(
         stop_loss=float(sl),
         take_profit=float(tp),
         comment="IATIS_SMOKE",
+        decision_id="smoke_test",
     )
     print(f"\n📤 Placing DEMO order: BUY {symbol} centi_lots={volume} SL={sl} TP={tp}")
-    result = client.place_market_order(order)
+    # Manual, human-triggered smoke test — deliberately bypasses risk/
+    # pretrade_limits.py's normal live approved_context() path (this
+    # script is run by hand, outside execution/trade_executor.py, to
+    # verify broker connectivity/order mechanics), per that module's own
+    # documented manual_override_context() escape hatch.
+    from risk.pretrade_limits import manual_override_context
+
+    with manual_override_context("smoke_test", "manual smoke test of broker connectivity"):
+        result = client.place_market_order(order)
 
     if result.success:
         print("✅ ORDER OK")

@@ -32,6 +32,7 @@ from execution.ctrader_client import (
     _price_to_relative_units,
     _round_price_to_digits,
 )
+from risk.pretrade_limits import manual_override_context
 
 
 # ─── _round_price_to_digits / _price_to_relative_units (pure math) ────────
@@ -166,9 +167,11 @@ def test_buy_sl_above_entry_is_rejected_directionally():
 def test_place_market_order_refuses_when_symbol_details_never_fetched():
     client = _client_with_symbol(digits=2)
     client._symbol_details.pop(501)  # never arrived / fetch failed
-    with patch.object(client, "_ensure_symbol_details", return_value=None):
+    with patch.object(client, "_ensure_symbol_details", return_value=None), \
+         manual_override_context("test_prec_1", "unit test: missing symbol details"):
         result = client.place_market_order(
-            CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0, take_profit=3300.0)
+            CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0,
+                         take_profit=3300.0, decision_id="test_prec_1")
         )
     assert result.success is False
     assert "lotSize" in result.error
@@ -179,9 +182,11 @@ def test_place_market_order_refuses_on_implausible_digits():
     digits value outside any real symbol's range means stale/corrupt
     metadata — refuse rather than guess a precision."""
     client = _client_with_symbol(digits=99)
-    with patch.object(client, "_ensure_symbol_details", return_value=client._symbol_details[501]):
+    with patch.object(client, "_ensure_symbol_details", return_value=client._symbol_details[501]), \
+         manual_override_context("test_prec_2", "unit test: implausible digits"):
         result = client.place_market_order(
-            CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0, take_profit=3300.0)
+            CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0,
+                         take_profit=3300.0, decision_id="test_prec_2")
         )
     assert result.success is False
     assert "Implausible digits" in result.error
@@ -190,9 +195,11 @@ def test_place_market_order_refuses_on_implausible_digits():
 def test_place_market_order_refuses_when_symbol_not_in_loaded_list():
     client = CTraderClient(client_id="test", client_secret="test", account_id=12345, access_token="test")
     client._state = ConnectionState.READY
-    result = client.place_market_order(
-        CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0, take_profit=3300.0)
-    )
+    with manual_override_context("test_prec_3", "unit test: symbol not in loaded list"):
+        result = client.place_market_order(
+            CTraderOrder(symbol="ETHUSD", direction="BUY", volume=200, stop_loss=3200.0,
+                         take_profit=3300.0, decision_id="test_prec_3")
+        )
     assert result.success is False
     assert "not in loaded symbol list" in result.error
 

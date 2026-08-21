@@ -847,11 +847,14 @@ def test_connect_refuses_when_lock_is_held_by_another_process(monkeypatch):
 # ─── read_only clients (research/data tools alongside the live scheduler) ──
 
 def test_place_market_order_refuses_unconditionally_on_a_read_only_client():
+    from risk.pretrade_limits import manual_override_context
+
     c = CTraderClient(client_id="test", client_secret="test",
                       account_id=12345, access_token="test", read_only=True)
     order = CTraderOrder(symbol="EURUSD", direction="BUY", volume=100_000,
-                         stop_loss=1.08, take_profit=1.10)
-    result = c.place_market_order(order)
+                         stop_loss=1.08, take_profit=1.10, decision_id="test_read_only")
+    with manual_override_context("test_read_only", "unit test: read_only client refusal"):
+        result = c.place_market_order(order)
     assert result.success is False
     assert "read_only" in result.error.lower()
 

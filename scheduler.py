@@ -276,6 +276,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                   (dukascopy_jforex_enabled and broker == "dukascopy_jforex")
                     if dry_run or broker_live:
                         try:
+                            from risk.pretrade_limits import load_pretrade_limits
+
                             executor = TradeExecutor(
                                 dry_run=dry_run,
                                 broker=broker,
@@ -283,6 +285,13 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                 min_score=exec_cfg.get("min_score_to_execute", 60.0),
                                 allow_live_trading=exec_cfg.get("allow_live_trading", False),
                                 dukascopy_jforex_fixed_quantity=exec_cfg.get("dukascopy_jforex_fixed_quantity", 0.0),
+                                # Loaded fresh from THIS tick's already-loaded
+                                # config — avoids a second load_config() read
+                                # per order (config/risk.yaml's own "loaded
+                                # fresh on every order" contract is still met:
+                                # config itself is reloaded every run_once()
+                                # tick, scheduler.py:591).
+                                pretrade_limits=load_pretrade_limits(config),
                             )
                             exec_result = executor.execute_from_report(report)
                             if exec_result.executed:

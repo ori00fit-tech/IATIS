@@ -84,6 +84,9 @@ class TradeOrder:
     stop_loss: float
     take_profit: float
     client_id: str = ""  # optional tag
+    # risk/pretrade_limits.py's decision_id for THIS exact order — required
+    # by place_market_order()'s require_pretrade_approval() bypass guard.
+    decision_id: str = ""
 
 
 @dataclass
@@ -235,6 +238,10 @@ class OandaClient:
         Returns:
             TradeResult with success/failure details
         """
+        from risk.pretrade_limits import require_pretrade_approval
+
+        require_pretrade_approval(order.decision_id)
+
         oanda_sym = IATIS_TO_OANDA.get(order.symbol)
         if not oanda_sym:
             return TradeResult(

@@ -74,6 +74,29 @@ _EXPECTED_RISK = {
     "risk_per_trade_max": 0.01,
     "risk_per_trade_min": 0.0025,
     "sl_atr_multiplier": 2.5,
+    # Pre-trade hard limits (P0, risk/pretrade_limits.py) — added to
+    # config/risk.yaml after this test's original pre-split snapshot was
+    # taken; this dict just needs to keep matching config/risk.yaml's real
+    # content, not stay frozen at the pre-split shape forever.
+    "pretrade_limits": {
+        "enabled": True,
+        "max_notional_usd": 50000.0,
+        "max_quantity": 1000,
+        "max_position_per_symbol_usd": 20000.0,
+        "max_portfolio_notional_usd": 50000.0,
+        "max_symbol_concentration_pct": 0.5,
+        "price_collar_pct": 0.02,
+        "max_slippage_pct": 0.02,
+        "require_stop_loss": True,
+        "min_stop_distance_pct": 0.0005,
+        "max_stop_distance_pct": 0.10,
+        "min_risk_reward": 2.0,
+        "max_stale_data_seconds": 21600,
+        "max_orders_per_window": 10,
+        "order_window_seconds": 3600,
+        "duplicate_window_seconds": 30,
+        "standard_contract_units": 100000.0,
+    },
 }
 
 

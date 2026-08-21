@@ -267,6 +267,11 @@ class CTraderOrder:
     take_profit: float
     comment: str = "IATIS"
     entry_price: float = 0.0  # optional signal reference price
+    # risk/pretrade_limits.py's decision_id for THIS exact order — required
+    # by place_market_order()'s require_pretrade_approval() bypass guard
+    # (a blank/mismatched decision_id raises PretradeNotApproved before any
+    # network call). See that module's docstring for the full design.
+    decision_id: str = ""
 
 
 @dataclass
@@ -1817,7 +1822,23 @@ class CTraderClient:
         return rel_sl, rel_tp, entry_price, ""
 
     def place_market_order(self, order: CTraderOrder) -> CTraderResult:
-        """Place a market order with absolute SL/TP prices."""
+        """Place a market order with absolute SL/TP prices.
+
+        First line is a hard, impossible-to-accidentally-bypass gate: this
+        method refuses to run at all unless the calling code has already
+        gotten a PASS from risk/pretrade_limits.py::evaluate_pretrade() for
+        this EXACT decision_id, via risk.pretrade_limits.approved_context()
+        (execution/trade_executor.py's normal live path) or explicitly via
+        manual_override_context() (deliberate manual/test/smoke-test use —
+        see risk/pretrade_limits.py's own module docstring for the full
+        bypass-prevention design). A direct, un-approved call to this
+        method — from new code, a bug, or a bypassed code path — raises
+        PretradeNotApproved immediately, before any network call is made.
+        """
+        from risk.pretrade_limits import require_pretrade_approval
+
+        require_pretrade_approval(order.decision_id)
+
         if self._read_only:
             # Hard, unconditional refusal — this is what makes it safe for
             # a read_only client to skip the single-session process lock
@@ -2075,6 +2096,45 @@ class CTraderClient:
         request. Used by execution/reconciliation.py's per-tick diff."""
         with self._lock:
             return list(self._positions.values())
+
+    def get_symbol_details(self, symbol: str) -> "SymbolSpec | None":
+        """Public accessor for risk/pretrade_limits.py's INDEPENDENT
+        pre-trade re-verification of broker precision (Phase 3, "BROKER
+        PRECISION"). Wraps _ensure_symbol_details() and converts cTrader's
+        broker-native volume units into centi-lots — the same unit
+        CTraderOrder.volume / calculate_volume() / risk.pretrade_limits.
+        PendingOrder.quantity all already use — via the exact inverse of
+        _to_api_volume()'s own `raw = lots * details.lot_size` conversion,
+        so the pre-trade layer never has to know cTrader's internal volume
+        convention.
+
+        Fail-closed: returns None on any lookup failure, an unmapped
+        symbol, or an implausible digits value (mirrors place_market_
+        order()'s own `0 <= digits <= 10` sanity check) — never a guessed
+        spec. The caller (execution/trade_executor.py) treats a None
+        return as SYMBOL METADATA FAILURE, per that module's own
+        fail-closed convention.
+        """
+        ct_symbol = IATIS_TO_CTRADER.get(symbol)
+        if not ct_symbol:
+            return None
+        symbol_id = self._symbol_name_to_id.get(ct_symbol)
+        if symbol_id is None:
+            return None
+        details = self._ensure_symbol_details(symbol_id)
+        if not details or details.lot_size <= 0:
+            return None
+        if not (0 <= details.digits <= 10):
+            return None
+        from risk.pretrade_limits import SymbolSpec
+
+        lot_size = float(details.lot_size)
+        return SymbolSpec(
+            price_digits=details.digits,
+            quantity_step=(details.step_volume / lot_size * 100.0) if details.step_volume > 0 else None,
+            min_quantity=(details.min_volume / lot_size * 100.0) if details.min_volume > 0 else None,
+            max_quantity=(details.max_volume / lot_size * 100.0) if details.max_volume > 0 else None,
+        )
 
     def test_connection(self) -> bool:
         """Verify credentials/connectivity without placing any order."""

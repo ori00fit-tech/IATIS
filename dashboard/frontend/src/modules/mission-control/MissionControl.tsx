@@ -9,6 +9,7 @@ import { AiStatusFrame } from '../../components/AiStatusFrame'
 import { DataTable, type Column } from '../../components/DataTable'
 import { ExecutiveOverview } from './ExecutiveOverview'
 import { EvidenceProgress } from './EvidenceProgress'
+import { KillSwitchPanel } from './KillSwitchPanel'
 import { getDataHealth } from '../data-center/api'
 import {
   getHealth,
@@ -232,6 +233,7 @@ export function MissionControl() {
 
   return (
     <div className="flex flex-col gap-4">
+      <KillSwitchPanel />
       <ExecutiveOverview
         healthFull={hf ?? null}
         marketHealth={marketHealth.data}

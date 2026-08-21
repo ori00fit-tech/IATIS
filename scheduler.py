@@ -238,6 +238,26 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 report = run_pipeline(sym_config)
                 reports.append(report)
                 if report.get("final_verdict") == "EXECUTE":
+                    # Kill switch (storage/kill_switch.py): a manually-
+                    # activated operational halt on NEW order submission
+                    # (RTS 6 Art.12 / PRA SS5/18 "kill functionality").
+                    # Checked fresh every EXECUTE, fail-closed on any read
+                    # error — an unreadable state must block, never allow.
+                    try:
+                        from storage.kill_switch import get_state as _kill_switch_state
+                        ks_state = _kill_switch_state()
+                    except Exception as exc:
+                        logger.error(f"[KILL-SWITCH] state check failed — blocking (fail-closed): {exc}")
+                        ks_state = {"active": True, "reason": f"kill switch check failed: {exc}"}
+                    if ks_state.get("active"):
+                        logger.warning(
+                            f"[KILL-SWITCH] EXECUTE for {internal} suppressed — "
+                            f"kill switch ACTIVE ({ks_state.get('reason')}). "
+                            f"Manual reactivation required."
+                        )
+                        report["kill_switch_blocked"] = True
+                        report["summary"] = f"NO_TRADE (blocked): kill switch active — {ks_state.get('reason')}"
+                        continue
                     execute_signals.append(internal)
                     # B1: Execute the trade. Broker execution runs when the
                     # matching broker is enabled; otherwise dry_run simulates.

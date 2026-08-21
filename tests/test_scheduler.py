@@ -602,3 +602,71 @@ def test_run_once_survives_pending_fill_resolution_failure(synthetic_config, mon
         reports = run_once(synthetic_config, symbols=["EUR/USD"])
 
     assert len(reports) == 1
+
+
+# ---------------------------------------------------------------------------
+# Kill switch (storage/kill_switch.py) — scheduler-level integration
+# ---------------------------------------------------------------------------
+
+def test_run_once_blocks_execution_when_kill_switch_active(synthetic_config, tmp_path):
+    """The kill switch must suppress order placement entirely — no
+    TradeExecutor is even constructed — and the report must be annotated
+    so an operator reviewing it can see exactly why nothing happened."""
+    from scheduler import run_once
+    from storage.kill_switch import activate
+
+    ks_path = tmp_path / "kill_switch.json"
+    activate("manual halt for testing", path=ks_path)
+
+    synthetic_config["execution"] = {"dry_run": True, "ctrader_enabled": False, "oanda_enabled": False}
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor, \
+         patch("storage.kill_switch.STATE_PATH", ks_path):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    MockExecutor.assert_not_called()
+    assert reports[0]["kill_switch_blocked"] is True
+    assert "kill switch" in reports[0]["summary"].lower()
+
+
+def test_run_once_executes_normally_when_kill_switch_inactive(synthetic_config, tmp_path):
+    """Regression: the default (never-activated) state must not change
+    today's behavior at all."""
+    from scheduler import run_once
+    from execution.trade_executor import ExecutionResult
+
+    ks_path = tmp_path / "kill_switch.json"  # never created -> inactive
+    synthetic_config["execution"] = {"dry_run": True, "ctrader_enabled": False, "oanda_enabled": False}
+    fake_result = ExecutionResult(executed=True, symbol="EURUSD", direction="SELL", dry_run=True, trade_id="DRY_RUN")
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor, \
+         patch("storage.kill_switch.STATE_PATH", ks_path):
+        MockExecutor.return_value.execute_from_report.return_value = fake_result
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    MockExecutor.assert_called_once()
+    assert "kill_switch_blocked" not in reports[0]
+
+
+def test_run_once_fails_closed_when_kill_switch_state_unreadable(synthetic_config, tmp_path):
+    """A corrupted/unreadable kill-switch state must block execution,
+    never silently allow it — same fail-closed discipline as the
+    correlation-filter (RE-F3) and symbol-health (RE-F1) gates."""
+    from scheduler import run_once
+
+    ks_path = tmp_path / "kill_switch.json"
+    ks_path.write_text("{not valid json")
+    synthetic_config["execution"] = {"dry_run": True, "ctrader_enabled": False, "oanda_enabled": False}
+
+    with patch("scheduler.run_pipeline", return_value=_fake_execute_report()), \
+         patch("scheduler.send_raw"), patch("scheduler.send_signal"), \
+         patch("scheduler.TradeExecutor") as MockExecutor, \
+         patch("storage.kill_switch.STATE_PATH", ks_path):
+        reports = run_once(synthetic_config, symbols=["EUR/USD"])
+
+    MockExecutor.assert_not_called()
+    assert reports[0]["kill_switch_blocked"] is True

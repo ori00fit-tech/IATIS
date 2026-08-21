@@ -106,6 +106,7 @@ from execution.routes import (
     forward_review,
     health,
     journal,
+    kill_switch,
     logs,
     macro_benchmark,
     missions,
@@ -130,6 +131,7 @@ from execution.routes import (
 # the exact one-segment /research/missions path did. Confirmed by a real
 # failing test before this reorder (tests/test_missions.py).
 app.include_router(health.router)
+app.include_router(kill_switch.router)
 app.include_router(analyze.router)
 app.include_router(auth.router)
 app.include_router(ctrader_auth.router)

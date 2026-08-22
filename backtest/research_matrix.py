@@ -58,29 +58,42 @@ from typing import Any
 # Cell lifecycle
 # ---------------------------------------------------------------------------
 
-# QUEUED -> RUNNING -> SCREENED -> CANDIDATE -> VALIDATED
+# QUEUED -> RUNNING -> SCREENED -> CANDIDATE -> VALIDATING -> VALIDATED
 #                          \-> INSUFFICIENT_DATA / REJECTED (documented reason)
 #                                       \-> REJECTED (documented reason)
+#                                                        \-> REJECTED (documented reason)
 # Never QUEUED -> VALIDATED directly — every intermediate gate is mandatory
 # and every rejection carries a real reason (never silently dropped).
+#
+# VALIDATING (Phase 3A, Matrix Operational Validation) — mirrors RUNNING's
+# own role but for Stage B: storage.claim_candidate_cells() atomically
+# transitions CANDIDATE -> VALIDATING via the same compare-and-set pattern
+# claim_queued_cells() already used for QUEUED -> RUNNING. Without this, two
+# concurrent run_batch() calls against the same family could both SELECT
+# and both run Stage B (run_validation) for the SAME candidate cell — a
+# real race this phase's multi-worker stress test surfaced. A stale
+# VALIDATING cell (its process died mid-Stage-B) is requeued back to
+# CANDIDATE (never QUEUED — Stage A already ran) by storage.requeue_stale_
+# validating_cells(), skipping a redundant re-screen.
 QUEUED = "QUEUED"
 RUNNING = "RUNNING"
 SCREENED = "SCREENED"
 CANDIDATE = "CANDIDATE"
+VALIDATING = "VALIDATING"
 VALIDATED = "VALIDATED"
 REJECTED = "REJECTED"
 INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 FAILED = "FAILED"
 
 CELL_STATUSES: tuple[str, ...] = (
-    QUEUED, RUNNING, SCREENED, CANDIDATE, VALIDATED, REJECTED, INSUFFICIENT_DATA, FAILED,
+    QUEUED, RUNNING, SCREENED, CANDIDATE, VALIDATING, VALIDATED, REJECTED, INSUFFICIENT_DATA, FAILED,
 )
 
 # Statuses a cell may still transition out of. VALIDATED/REJECTED/
 # INSUFFICIENT_DATA/FAILED are terminal for that cell's fixed fingerprint —
 # a fingerprint change (any change to the hypothesis) always produces a
 # brand-new cell rather than mutating a terminal one's result.
-_NON_TERMINAL_STATUSES: tuple[str, ...] = (QUEUED, RUNNING, SCREENED, CANDIDATE)
+_NON_TERMINAL_STATUSES: tuple[str, ...] = (QUEUED, RUNNING, SCREENED, CANDIDATE, VALIDATING)
 
 # ---------------------------------------------------------------------------
 # Named, mission-wide-only risk presets (operator's condition #1). A

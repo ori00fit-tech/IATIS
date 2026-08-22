@@ -11,9 +11,11 @@ import { apiGet, apiPost } from '../../lib/api'
 // below was already decided by backtest/matrix_orchestrator.py; the UI
 // only displays and sorts it.
 
-// Mirrors backtest.research_matrix.CELL_STATUSES exactly.
+// Mirrors backtest.research_matrix.CELL_STATUSES exactly. VALIDATING
+// (Phase 3A) is Stage B's own atomic-claim state, mirroring RUNNING's role
+// for Stage A — see storage.claim_candidate_cells()'s own docstring.
 export const CELL_STATUSES = [
-  'QUEUED', 'RUNNING', 'SCREENED', 'CANDIDATE', 'VALIDATED', 'REJECTED', 'INSUFFICIENT_DATA', 'FAILED',
+  'QUEUED', 'RUNNING', 'SCREENED', 'CANDIDATE', 'VALIDATING', 'VALIDATED', 'REJECTED', 'INSUFFICIENT_DATA', 'FAILED',
 ] as const
 export type CellStatus = (typeof CELL_STATUSES)[number]
 

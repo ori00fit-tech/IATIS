@@ -35,9 +35,14 @@ mandatory, every rejection carries a documented reason):
     SCREENED -> (Matrix Family correction — see below) -> CANDIDATE, or
                                                         -> REJECTED (did not
                                                            survive correction)
-    CANDIDATE -> (Stage B via run_validation, SAME_SYMBOL mode) -> VALIDATED, or
-                                                                  -> REJECTED
-                                                                     (real verdict)
+    CANDIDATE -> VALIDATING -> (Stage B via run_validation, SAME_SYMBOL mode) -> VALIDATED, or
+                                                                               -> REJECTED
+                                                                                  (real verdict)
+
+Phase 3A (Matrix Operational Validation) added the CANDIDATE -> VALIDATING
+atomic claim (storage.claim_candidate_cells, mirroring claim_queued_cells
+exactly) — before this, two concurrent run_batch() calls against the same
+family could both SELECT and both run Stage B for the SAME candidate cell.
 
 Forensic Audit hardening, Finding 4 — the correction family and its
 denominator, resolved and fixed (not "documented after the fact"):
@@ -334,7 +339,9 @@ def apply_matrix_wide_correction(family_id: str) -> dict:
 
 
 def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str | None, output_dir: Path) -> None:
-    """Stage B for one CANDIDATE cell — SAME_SYMBOL mode only in Phase 1
+    """Stage B for one VALIDATING cell (already claimed by storage.
+    claim_candidate_cells() — see this module's docstring, Phase 3A) —
+    SAME_SYMBOL mode only in Phase 1
     (the safe default the existing validation_mode infrastructure already
     ships; cross-symbol validation is a legitimate but separate
     escalation, not required to prove the Matrix Engine's own evidence
@@ -394,6 +401,9 @@ def run_batch(
     requeued = storage.requeue_stale_running_cells(stale_running_seconds)
     if requeued:
         logger.info(f"Matrix run {run_id}: requeued {requeued} stale RUNNING cell(s) from a previous crashed run.")
+    requeued_validating = storage.requeue_stale_validating_cells(stale_running_seconds)
+    if requeued_validating:
+        logger.info(f"Matrix run {run_id}: requeued {requeued_validating} stale VALIDATING cell(s) (back to CANDIDATE) from a previous crashed run.")
 
     claimed = storage.claim_queued_cells(family_id, batch_size)
     logger.info(f"Matrix run {run_id} (family {family_id}): claimed {len(claimed)} QUEUED cell(s) for Stage A.")
@@ -410,11 +420,15 @@ def run_batch(
 
     significance = apply_matrix_wide_correction(family_id)
 
-    candidates = storage.list_cells(status=rm.CANDIDATE, family_id=family_id, limit=stage_b_batch_size)
+    # Phase 3A: atomic claim (CANDIDATE -> VALIDATING), not a plain SELECT
+    # — see storage.claim_candidate_cells()'s own docstring for the race
+    # this closes (two concurrent run_batch() calls both running Stage B
+    # for the same cell).
+    candidates = storage.claim_candidate_cells(family_id, stage_b_batch_size)
     validated_count = 0
     for cell in candidates:
         if max_wall_clock_seconds is not None and (time.monotonic() - t0) >= max_wall_clock_seconds:
-            logger.info(f"Matrix run {run_id}: wall-clock budget reached mid-Stage-B, stopping (remaining CANDIDATE cells wait for a later run).")
+            logger.info(f"Matrix run {run_id}: wall-clock budget reached mid-Stage-B, stopping (remaining claimed VALIDATING cells wait for a later run's stale-requeue).")
             break
         try:
             _run_stage_b_cell(cell, data_dir=data_dir, start=start, end=end, output_dir=output_dir)

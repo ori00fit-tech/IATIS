@@ -34,6 +34,24 @@ row-modification count (meta.changes from the D1 Worker response). Two
 concurrent claim_queued_cells() calls racing on the same cell will see
 EXACTLY ONE of their conditional UPDATEs report rowcount==1 -- the other
 reports 0 and correctly does not treat that cell as claimed.
+
+Phase 3A (Matrix Operational Validation, tests/test_matrix_operational_
+validation.py) added three more safety invariants, all proven under real
+concurrent threads, not just single-threaded call sequences:
+
+  1. claim_candidate_cells() — the exact same atomic compare-and-set
+     mechanism as claim_queued_cells(), but for Stage B (CANDIDATE ->
+     VALIDATING). Its absence was a REAL race: two concurrent run_batch()
+     calls could both SELECT and both run Stage B for the same cell.
+  2. update_cell() now refuses to mutate a cell already in a terminal
+     status (see TERMINAL_STATUSES) -- evidence immutability. This
+     guard is what actually SURFACED finding #1 above during Phase 3A's
+     multi-worker stress test (a silent last-writer-wins race turned into
+     a loud, catchable ValueError instead).
+  3. upsert_cells() refuses to push a family's total cell count beyond
+     its own fixed planned_n -- family closure. A family's cell set is
+     closed once its planned research space is generated; nothing may
+     silently grow it afterward.
 """
 from __future__ import annotations
 
@@ -127,6 +145,16 @@ def _row_to_dict(row) -> dict[str, Any]:
 QUEUED_STATUS = "QUEUED"
 RUNNING_STATUS = "RUNNING"
 SCREENED_STATUS = "SCREENED"
+CANDIDATE_STATUS = "CANDIDATE"
+VALIDATING_STATUS = "VALIDATING"
+
+# Phase 3A (Matrix Operational Validation) — evidence immutability. A cell
+# in any of these statuses has reached a documented terminal outcome
+# (backtest/matrix_orchestrator.py's own pipeline docstring: VALIDATED and
+# REJECTED are real verdicts; INSUFFICIENT_DATA/FAILED are documented
+# non-verdict terminations). None of these is ever revisited by the
+# orchestrator itself — see update_cell()'s own guard below.
+TERMINAL_STATUSES = ("VALIDATED", "REJECTED", "INSUFFICIENT_DATA", "FAILED")
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +206,32 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
     IGNORE keyed by cell_id — a duplicate fingerprint is silently skipped
     (not an error), never re-queued or re-run. Every cell in one call
     belongs to the SAME family_id (one /generate call == one family).
-    Returns {"inserted": n, "duplicate": n}."""
+    Returns {"inserted": n, "duplicate": n}.
+
+    Phase 3A (Matrix Operational Validation) — family closure. Raises
+    ValueError if family_id is unknown (a cell must never be orphaned from
+    its own fixed planned_n/family_alpha), or if inserting these cells
+    would push the family's total distinct cell count beyond its own
+    FIXED planned_n (matrix_orchestrator.py's own documented design,
+    point 4: "New cells cannot be added to an already-started family").
+    Re-submitting the exact same cell list (an idempotent retry of a
+    /generate call that crashed after upsert_family but before returning)
+    is always safe — every cell in it is already present, so it counts as
+    `duplicate`, never against planned_n."""
     inserted = 0
     duplicate = 0
     now = _now_iso()
     with d1_client.d1_connection() as con:
         _init(con)
+        family_row = con.execute(
+            "SELECT planned_n FROM research_matrix_families WHERE family_id=?", (family_id,)
+        ).fetchone()
+        if family_row is None:
+            raise ValueError(f"upsert_cells: unknown family_id {family_id!r} — create it via upsert_family first.")
+        planned_n = family_row["planned_n"]
+        existing_count = con.execute(
+            "SELECT COUNT(*) AS n FROM research_matrix_cells WHERE family_id=?", (family_id,)
+        ).fetchone()["n"]
         for cell in cells:
             existing = con.execute(
                 "SELECT 1 FROM research_matrix_cells WHERE cell_id=?", (cell.cell_id,)
@@ -191,6 +239,12 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
             if existing is not None:
                 duplicate += 1
                 continue
+            if existing_count + inserted + 1 > planned_n:
+                raise ValueError(
+                    f"upsert_cells: inserting cell {cell.cell_id!r} would push family {family_id!r} beyond its "
+                    f"fixed planned_n={planned_n} — a family's cell set is closed once its planned research space "
+                    f"is generated (see matrix_orchestrator.py's own family-semantics docstring, point 4)."
+                )
             con.execute(
                 """INSERT OR IGNORE INTO research_matrix_cells
                    (cell_id, family_id, fingerprint, symbol, bundle_json, risk_preset,
@@ -248,7 +302,17 @@ def update_cell(cell_id: str, **fields: Any) -> None:
     """Generic field-setter for whichever stage's result applies.
     `status` is always set to `fields["status"]` when provided; every
     other key must be one of _ALLOWED_UPDATE_FIELDS (fail loud on a typo
-    rather than silently no-op)."""
+    rather than silently no-op).
+
+    Phase 3A (Matrix Operational Validation) — evidence immutability.
+    Raises ValueError if the cell's CURRENT status (read fresh, inside
+    this same call) is already one of TERMINAL_STATUSES: once a cell
+    reaches VALIDATED/REJECTED/INSUFFICIENT_DATA/FAILED its evidence is
+    permanently closed — no dashboard action, no re-run, no resumed batch
+    may ever mutate it again. The orchestrator itself never triggers this
+    (claim_queued_cells/list_cells(status=CANDIDATE) only ever hand it
+    non-terminal cells), so this is a hard safety backstop, not a path any
+    legitimate caller is expected to hit."""
     unknown = set(fields) - set(_ALLOWED_UPDATE_FIELDS)
     if unknown:
         raise ValueError(f"update_cell: unknown field(s) {sorted(unknown)}")
@@ -258,6 +322,12 @@ def update_cell(cell_id: str, **fields: Any) -> None:
     params = list(fields.values()) + [_now_iso(), cell_id]
     with d1_client.d1_connection() as con:
         _init(con)
+        current = con.execute("SELECT status FROM research_matrix_cells WHERE cell_id=?", (cell_id,)).fetchone()
+        if current is not None and current["status"] in TERMINAL_STATUSES:
+            raise ValueError(
+                f"update_cell: cell {cell_id!r} is already in terminal status {current['status']!r} — "
+                f"evidence is immutable once a cell reaches a terminal state."
+            )
         con.execute(f"UPDATE research_matrix_cells SET {set_clause} WHERE cell_id=?", tuple(params))
 
 
@@ -304,6 +374,44 @@ def claim_queued_cells(family_id: str, limit: int) -> list[dict[str, Any]]:
     return [_row_to_dict(r) for r in rows]
 
 
+def claim_candidate_cells(family_id: str, limit: int) -> list[dict[str, Any]]:
+    """Phase 3A (Matrix Operational Validation) — the Stage B counterpart
+    of claim_queued_cells(). Before this function existed, run_batch()
+    selected CANDIDATE cells with a plain SELECT and no compare-and-set,
+    so two concurrent run_batch() calls against the same family could both
+    select AND both run Stage B (run_validation) for the exact same
+    cell — a real race the multi-worker stress test surfaced. Same atomic
+    per-statement compare-and-set mechanism as claim_queued_cells() (see
+    this module's own docstring, Finding 1): `UPDATE ... SET
+    status='VALIDATING' WHERE cell_id=? AND status='CANDIDATE'`, keeping
+    the cell only when THIS call's own statement is the one that actually
+    flipped it."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        candidates = con.execute(
+            "SELECT cell_id FROM research_matrix_cells WHERE family_id=? AND status=? ORDER BY created_at ASC LIMIT ?",
+            (family_id, CANDIDATE_STATUS, limit),
+        ).fetchall()
+        now = _now_iso()
+        claimed_ids: list[str] = []
+        for row in candidates:
+            cell_id = row["cell_id"]
+            cur = con.execute(
+                "UPDATE research_matrix_cells SET status=?, updated_at=? WHERE cell_id=? AND status=?",
+                (VALIDATING_STATUS, now, cell_id, CANDIDATE_STATUS),
+            )
+            if cur.rowcount == 1:
+                claimed_ids.append(cell_id)
+        if not claimed_ids:
+            return []
+        placeholders = ",".join("?" for _ in claimed_ids)
+        rows = con.execute(
+            f"SELECT * FROM research_matrix_cells WHERE cell_id IN ({placeholders})",
+            tuple(claimed_ids),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 def requeue_stale_running_cells(older_than_seconds: float) -> int:
     """Crash-recovery / resume primitive — deliberately NOT family-scoped
     (a stale RUNNING cell should be requeued regardless of which family it
@@ -333,6 +441,34 @@ def requeue_stale_running_cells(older_than_seconds: float) -> int:
             con.execute(
                 "UPDATE research_matrix_cells SET status=?, updated_at=?, requeue_count=requeue_count+1 WHERE cell_id=?",
                 (QUEUED_STATUS, now, cell_id),
+            )
+    return len(stale_ids)
+
+
+def requeue_stale_validating_cells(older_than_seconds: float) -> int:
+    """Phase 3A — the Stage B counterpart of requeue_stale_running_cells().
+    A VALIDATING cell whose process died mid-Stage-B is requeued back to
+    CANDIDATE (never QUEUED — it already passed Stage A and the Matrix
+    Family correction; re-running Stage A would be redundant and would
+    re-litigate a correction decision that must stay fixed). Also
+    increments requeue_count, the same persisted "how many times was this
+    cell resumed" evidence requeue_stale_running_cells() already provides
+    for Stage A."""
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat()
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(
+            "SELECT cell_id FROM research_matrix_cells WHERE status=? AND updated_at < ?",
+            (VALIDATING_STATUS, cutoff),
+        ).fetchall()
+        stale_ids = [r["cell_id"] for r in rows]
+        now = _now_iso()
+        for cell_id in stale_ids:
+            con.execute(
+                "UPDATE research_matrix_cells SET status=?, updated_at=?, requeue_count=requeue_count+1 WHERE cell_id=?",
+                (CANDIDATE_STATUS, now, cell_id),
             )
     return len(stale_ids)
 

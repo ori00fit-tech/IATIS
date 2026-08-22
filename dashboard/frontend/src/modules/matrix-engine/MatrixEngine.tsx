@@ -673,7 +673,8 @@ function useFamilyDetails(familyIds: string[]): Record<string, MatrixFamily> {
 /** Pure re-labeling of the cell's own `status` field into "what Stage A
  * concluded" — no new inference over trades/p-values, just naming which
  * stage a status belongs to (this schema has one `status` field spanning
- * both stages; Stage B only ever advances CANDIDATE -> VALIDATED/REJECTED). */
+ * both stages; Stage B only ever advances CANDIDATE -> VALIDATING ->
+ * VALIDATED/REJECTED, Phase 3A's atomic Stage B claim). */
 function stageAOutcome(cell: ComparedCell): string {
   if (!cell.found) return '—'
   const c = cell as ComparedCell & { found: true }

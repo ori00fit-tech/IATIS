@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from backtest import research_matrix as rm
 from storage import research_matrix as storage
 
@@ -137,6 +139,70 @@ def test_update_cell_rejects_unknown_field():
     import pytest
     with pytest.raises(ValueError):
         storage.update_cell(c1.cell_id, not_a_real_field="x")
+
+
+def test_update_cell_refuses_to_mutate_a_terminal_cell():
+    """Phase 3A -- evidence immutability. Once a cell reaches a terminal
+    status, no caller (dashboard, resumed batch, re-run) may ever mutate
+    it again."""
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam)
+    storage.update_cell(c1.cell_id, status=rm.VALIDATED, stage_b_verdict="SAME_SYMBOL_CONFIRMED")
+    with pytest.raises(ValueError, match="terminal"):
+        storage.update_cell(c1.cell_id, status=rm.REJECTED, rejection_reason="trying to overwrite")
+    # the original terminal evidence is untouched
+    row = storage.get_cell(c1.cell_id)
+    assert row["status"] == rm.VALIDATED
+    assert row["stage_b_verdict"] == "SAME_SYMBOL_CONFIRMED"
+
+
+@pytest.mark.parametrize("terminal_status", [rm.VALIDATED, rm.REJECTED, rm.INSUFFICIENT_DATA, rm.FAILED])
+def test_update_cell_refuses_every_terminal_status(terminal_status):
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam)
+    storage.update_cell(c1.cell_id, status=terminal_status)
+    with pytest.raises(ValueError, match="terminal"):
+        storage.update_cell(c1.cell_id, status=rm.CANDIDATE)
+
+
+def test_update_cell_still_allows_transitions_between_non_terminal_statuses():
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam)
+    storage.update_cell(c1.cell_id, status=rm.SCREENED, stage_a_p_value=0.01)
+    storage.update_cell(c1.cell_id, status=rm.CANDIDATE)
+    assert storage.get_cell(c1.cell_id)["status"] == rm.CANDIDATE
+
+
+def test_upsert_cells_rejects_an_unknown_family_id():
+    c1 = _cell()
+    with pytest.raises(ValueError):
+        storage.upsert_cells([c1], "does-not-exist")
+
+
+def test_upsert_cells_refuses_to_exceed_the_familys_fixed_planned_n():
+    """Phase 3A -- family closure. A family's cell set is closed once its
+    planned research space is generated; nothing may silently grow it
+    beyond planned_n."""
+    fam = _family(planned_n=1)
+    storage.upsert_cells([_cell(symbol="EURUSD")], fam)  # fills planned_n exactly
+    with pytest.raises(ValueError, match="planned_n"):
+        storage.upsert_cells([_cell(symbol="GBPUSD")], fam)
+    # the rejected cell was never inserted
+    assert storage.list_cells(family_id=fam, symbol="GBPUSD") == []
+
+
+def test_upsert_cells_allows_resubmitting_the_exact_same_cells_idempotently():
+    """A retried /generate call (e.g. it crashed after upsert_family but
+    before returning) resubmits the identical cell list -- every cell is
+    already present, so it counts as duplicate, never against planned_n."""
+    fam = _family(planned_n=1)
+    c1 = _cell(symbol="EURUSD")
+    storage.upsert_cells([c1], fam)
+    result = storage.upsert_cells([c1], fam)
+    assert result == {"inserted": 0, "duplicate": 1}
 
 
 def test_update_cell_persists_rejection_reason():

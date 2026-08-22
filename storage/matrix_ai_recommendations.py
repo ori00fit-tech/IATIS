@@ -17,11 +17,15 @@ REJECTED state machine, so a recommendation's review status can never be
 visually or textually confused with a Matrix cell's own authoritative
 evidence-gate verdict. APPROVED means "a human reviewed this proposal and
 thinks it's worth generating real cells for" — it does NOT create,
-promote, or validate anything by itself. Converting an approved
-recommendation into real research_matrix_cells rows (Phase 3B.5, not
-built in this pass — see backtest/matrix_research_planner.py's module
-docstring) remains a deliberate, separate, human-triggered action through
-the existing POST /research/matrix/generate endpoint, never automatic.
+promote, or validate anything by itself. review_recommendation() below
+executes exactly one UPDATE, against this table only — it never calls
+anything in storage.research_matrix, so "APPROVED" is structurally
+incapable of creating a cell/family or touching registry.json. Converting
+an approved recommendation into real research_matrix_cells rows would be
+Phase 3C ("Controlled Recommendation Conversion" — a genuinely new
+capability boundary, not built here) and remains, until then, a
+deliberate, separate, human-triggered action through the existing
+POST /research/matrix/generate endpoint, never automatic.
 """
 from __future__ import annotations
 

@@ -71,6 +71,26 @@ def test_review_recommendation_approves_and_records_reviewer():
     assert row["reviewed_at"] is not None
 
 
+def test_review_recommendation_never_touches_the_snapshot_or_scope_fields():
+    """Phase 3B-H, property 1 -- storage-level proof: review_recommendation()
+    is a single UPDATE against status/reviewed_by/reviewed_at/review_note
+    only. Every other column, including the evidence snapshot itself, is
+    byte-identical before and after."""
+    _record()
+    before = recs.get_recommendation("MATRIX-AI-abc123")
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="promising gap")
+    after = recs.get_recommendation("MATRIX-AI-abc123")
+
+    immutable_fields = (
+        "provider", "model", "input_family_ids_json", "input_cell_ids_json",
+        "evidence_snapshot_json", "evidence_snapshot_hash", "constraints_used_json", "focus_hint",
+        "reasoning_summary", "coverage_gaps_json", "proposed_next_cells_json",
+        "distinct_from_dead_list", "priority", "created_at",
+    )
+    for field in immutable_fields:
+        assert before[field] == after[field], f"{field} changed after review_recommendation()"
+
+
 def test_review_recommendation_rejects():
     _record()
     recs.review_recommendation("MATRIX-AI-abc123", status=recs.REJECTED, reviewed_by="bob", review_note=None)

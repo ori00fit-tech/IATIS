@@ -87,6 +87,14 @@ def test_get_family_requires_auth(client):
     assert client.get("/research/matrix/families/x").status_code == 401
 
 
+def test_family_summary_requires_auth(client):
+    assert client.get("/research/matrix/families/x/summary").status_code == 401
+
+
+def test_cell_evidence_requires_auth(client):
+    assert client.get("/research/matrix/cells/MATRIX-CELL-x/evidence").status_code == 401
+
+
 def test_run_batch_requires_auth(client):
     assert client.post("/research/matrix/run-batch", json={"family_id": "x", "batch_size": 5}).status_code == 401
 
@@ -191,6 +199,46 @@ def test_get_family_404_for_unknown(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /research/matrix/families/{id}/summary -- Phase 2A Evidence Read Model
+# ---------------------------------------------------------------------------
+
+
+def test_family_summary_404_for_unknown(client):
+    resp = client.get("/research/matrix/families/does-not-exist/summary", headers=HDR)
+    assert resp.status_code == 404
+
+
+def test_family_summary_reports_fixed_planned_n_and_status_breakdown(client):
+    body = _generate(client, symbols=["EURUSD", "GBPUSD"]).json()
+    fam = body["family_id"]
+
+    resp = client.get(f"/research/matrix/families/{fam}/summary", headers=HDR)
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["family"]["family_id"] == fam
+    assert payload["family"]["planned_n"] == 2
+    assert payload["family"]["cells_generated"] == 2
+    # every cell is freshly QUEUED right after /generate
+    assert payload["family"]["status_breakdown"]["QUEUED"] == 2
+    assert payload["family"]["status_breakdown"]["VALIDATED"] == 0
+    assert payload["family"]["total_requeues"] == 0
+    assert payload["by_symbol"]["EURUSD"]["total"] == 1
+    assert payload["by_symbol"]["GBPUSD"]["total"] == 1
+    assert payload["by_bundle"]["SMC only"]["total"] == 2
+    assert payload["by_risk_preset"]["balanced"]["total"] == 2
+
+
+def test_family_summary_never_touches_other_families(client):
+    fam_a = _generate(client, symbols=["EURUSD"]).json()["family_id"]
+    _generate(client, symbols=["GBPUSD"])  # a second, independent family
+
+    resp = client.get(f"/research/matrix/families/{fam_a}/summary", headers=HDR)
+    payload = resp.json()
+    assert payload["family"]["cells_generated"] == 1
+    assert list(payload["by_symbol"].keys()) == ["EURUSD"]
+
+
+# ---------------------------------------------------------------------------
 # POST /research/matrix/generate -- Finding 2 (commit-sensitive fingerprint)
 # ---------------------------------------------------------------------------
 
@@ -282,6 +330,84 @@ def test_get_cell_returns_the_real_row(client):
     resp = client.get(f"/research/matrix/cells/{cell_id}", headers=HDR)
     assert resp.status_code == 200
     assert resp.json()["cell_id"] == cell_id
+
+
+# ---------------------------------------------------------------------------
+# GET /research/matrix/cells/{id}/evidence -- Phase 2A Evidence Read Model
+# ---------------------------------------------------------------------------
+
+
+def test_cell_evidence_404_for_unknown(client):
+    resp = client.get("/research/matrix/cells/MATRIX-CELL-doesnotexist/evidence", headers=HDR)
+    assert resp.status_code == 404
+
+
+def test_cell_evidence_decodes_json_and_has_no_stage_detail_before_any_stage_ran(client):
+    _generate(client)
+    cell_id = client.get("/research/matrix/cells", headers=HDR).json()["cells"][0]["cell_id"]
+
+    resp = client.get(f"/research/matrix/cells/{cell_id}/evidence", headers=HDR)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cell_id"] == cell_id
+    assert body["bundle"] == {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    assert body["status"] == "QUEUED"
+    assert body["requeue_count"] == 0
+    assert body["stage_a"]["trial_detail"] is None
+    assert body["stage_b"]["validation_detail"] is None
+
+
+def test_cell_evidence_joins_real_stage_a_and_stage_b_detail(client):
+    """A cell that has actually reached Stage A/B (simulated by writing the
+    same D1 rows the real orchestrator would) must have its evidence
+    endpoint return the REAL joined trial/validation rows, not just the
+    cell's own denormalized summary columns."""
+    from datetime import datetime, timezone
+
+    import backtest.research_matrix as rm
+    from storage import research_matrix as storage
+    from storage import research_mission_validations
+    from storage import research_missions
+
+    _generate(client)
+    cell_id = client.get("/research/matrix/cells", headers=HDR).json()["cells"][0]["cell_id"]
+    cell = storage.get_cell(cell_id)
+
+    now = datetime.now(timezone.utc).isoformat()
+    mission_id = "mtx-testmission"
+    research_missions.upsert_mission(
+        mission_id=mission_id, name="matrix-cell-test", sampler="grid", objective_metric="profit_factor",
+        symbols=[cell["symbol"]], n_trials_per_symbol=1, min_trades=20, seed=42,
+        search_space={}, config={}, status="finished",
+    )
+    research_missions.record_trial(
+        mission_id=mission_id, trial_number=0, symbol=cell["symbol"], state="COMPLETE",
+        objective_value=1.8, params={}, metrics={"profit_factor": 1.8}, trades=50,
+        error=None, started_at=now, finished_at=now,
+    )
+    validation_id = "mtxval-test"
+    research_mission_validations.upsert_validation(
+        validation_id=validation_id, mission_id=mission_id, trial_number=0,
+        trial_symbol=cell["symbol"], validation_symbols=[cell["symbol"]],
+        objective_metric="profit_factor", criteria={}, status="finished", validation_mode="SAME_SYMBOL",
+    )
+    research_mission_validations.set_validation_status(
+        validation_id, "finished", finished=True, overall_verdict="SAME_SYMBOL_CONFIRMED", passing_symbols=1, total_symbols=1,
+    )
+    storage.update_cell(
+        cell_id, status=rm.VALIDATED,
+        stage_a_mission_id=mission_id, stage_a_trial_number=0,
+        stage_b_validation_id=validation_id, stage_b_verdict="SAME_SYMBOL_CONFIRMED",
+    )
+
+    resp = client.get(f"/research/matrix/cells/{cell_id}/evidence", headers=HDR)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stage_a"]["trial_detail"] is not None
+    assert body["stage_a"]["trial_detail"]["state"] == "COMPLETE"
+    assert body["stage_a"]["trial_detail"]["trades"] == 50
+    assert body["stage_b"]["validation_detail"] is not None
+    assert body["stage_b"]["validation_detail"]["overall_verdict"] == "SAME_SYMBOL_CONFIRMED"
 
 
 # ---------------------------------------------------------------------------

@@ -7,11 +7,17 @@ routes/experiments.py's job-execution engine exactly the way execution/
 routes/missions.py already does (a whole batch is ONE subprocess/one job
 slot, looping over many cells in-process internally).
 
-Every write here is confined to storage/research_matrix.py's own two
-tables. This router never writes research/results/registry.json,
-config.yaml, config/engines.yaml, or config/symbols.yaml — cell
-generation and batch runs are both ephemeral, advisory research
+Every write here is confined to storage/research_matrix.py's own three
+tables (families/cells/runs). This router never writes research/results/
+registry.json, config.yaml, config/engines.yaml, or config/symbols.yaml —
+cell generation and batch runs are both ephemeral, advisory research
 artifacts, exactly like every other Mission Center endpoint.
+
+Phase 2A (Evidence & Matrix Read Model) added two READ-ONLY endpoints
+(`/families/{id}/summary`, `/cells/{id}/evidence`) that call into
+backtest/matrix_evidence.py's pure aggregation functions — they never
+write anything and never compute a new verdict, only re-present already-
+decided D1 evidence in joined/aggregated shapes.
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Cookie, Header, HTTPException
 from pydantic import BaseModel
 
+from backtest import matrix_evidence as evidence
 from backtest import research_matrix as rm
 from execution.api_core import _check_auth
 from execution.routes.experiments import (
@@ -172,6 +179,32 @@ async def matrix_get_family(
     return family
 
 
+@router.get("/research/matrix/families/{family_id}/summary")
+async def matrix_family_summary(
+    family_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 2A Evidence Read Model — READ-ONLY. Returns the family's fixed
+    planned_n/corrected alpha, a full status breakdown, total resumptions,
+    and per-symbol/per-bundle/per-risk-preset breakdowns. Computes nothing
+    that isn't already decided: every count here is a plain tally of
+    already-persisted cell statuses."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_matrix as storage
+
+    family = storage.get_family(family_id)
+    if family is None:
+        raise HTTPException(status_code=404, detail="Matrix family not found.")
+    cells = storage.list_cells(family_id=family_id, limit=_MAX_CELLS_PER_GENERATE)
+    return {
+        "family": evidence.family_evidence_summary(family, cells),
+        "by_symbol": evidence.per_symbol_stats(cells),
+        "by_bundle": evidence.per_bundle_stats(cells),
+        "by_risk_preset": evidence.per_risk_preset_stats(cells),
+    }
+
+
 @router.get("/research/matrix/cells")
 async def matrix_list_cells(
     status: str | None = None,
@@ -207,6 +240,42 @@ async def matrix_get_cell(
     if cell is None:
         raise HTTPException(status_code=404, detail="Matrix cell not found.")
     return cell
+
+
+@router.get("/research/matrix/cells/{cell_id}/evidence")
+async def matrix_cell_evidence(
+    cell_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 2A Evidence Read Model — READ-ONLY. The full evidence chain
+    for one cell in one call: the cell's own row (JSON columns decoded)
+    plus, when present, its Stage A trial detail (backtest.mission_runner's
+    own recorded trial) and its Stage B validation detail (backtest.
+    mission_validator's own recorded validation) — the exact join a caller
+    would otherwise need 3 separate round-trips to assemble. Never
+    recomputes or overrides any status/verdict/p-value."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_matrix as storage
+    from storage import research_mission_validations
+    from storage import research_missions
+
+    cell = storage.get_cell(cell_id)
+    if cell is None:
+        raise HTTPException(status_code=404, detail="Matrix cell not found.")
+
+    trial = None
+    mission_id = cell.get("stage_a_mission_id")
+    trial_number = cell.get("stage_a_trial_number")
+    if mission_id and trial_number is not None:
+        trial = research_missions.get_trial(mission_id, trial_number=trial_number, symbol=cell["symbol"])
+
+    validation = None
+    validation_id = cell.get("stage_b_validation_id")
+    if validation_id:
+        validation = research_mission_validations.get_validation(validation_id)
+
+    return evidence.cell_evidence(cell, trial=trial, validation=validation)
 
 
 @router.post("/research/matrix/run-batch")

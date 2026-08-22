@@ -214,6 +214,25 @@ def test_requeue_stale_running_cells_only_touches_old_enough_rows():
     assert storage.get_cell(c1.cell_id)["status"] == rm.QUEUED
 
 
+def test_requeue_stale_running_cells_increments_requeue_count():
+    """Phase 2A Evidence Read Model: requeue_count is real, persisted
+    evidence of how many times a cell was resumed after an interruption —
+    not just a stale-count inferred from logs."""
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam)
+    assert storage.get_cell(c1.cell_id)["requeue_count"] == 0
+
+    storage.claim_queued_cells(fam, 1)
+    storage.requeue_stale_running_cells(older_than_seconds=-1)
+    assert storage.get_cell(c1.cell_id)["requeue_count"] == 1
+
+    # a second crash-and-resume cycle increments it again, not resets it
+    storage.claim_queued_cells(fam, 1)
+    storage.requeue_stale_running_cells(older_than_seconds=-1)
+    assert storage.get_cell(c1.cell_id)["requeue_count"] == 2
+
+
 def test_requeued_stale_cell_can_be_reclaimed_within_its_own_family():
     fam = _family()
     c1 = _cell()

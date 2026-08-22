@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS research_matrix_cells (
     lead_id                     TEXT,
     stage_b_validation_id       TEXT,
     stage_b_verdict             TEXT,
+    requeue_count                INTEGER NOT NULL DEFAULT 0,
     created_at                  TEXT NOT NULL,
     updated_at                  TEXT NOT NULL
 )
@@ -295,7 +296,13 @@ def requeue_stale_running_cells(older_than_seconds: float) -> int:
     it always returns to its own family's QUEUED pool). A cell left in
     RUNNING because its orchestrator process died mid-Stage-A is not a
     permanent loss — it's simply requeued once its `updated_at` is older
-    than the given staleness threshold. Returns the count requeued."""
+    than the given staleness threshold. Returns the count requeued.
+
+    Phase 2A (Evidence Read Model): increments the cell's own persisted
+    `requeue_count` on every requeue, so "how many times was this cell
+    resumed after an interruption" is real, queryable evidence rather than
+    only inferable from log lines — the operator's own explicit ask for
+    "resumptions/requeues" in the family evidence summary."""
     from datetime import timedelta
 
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat()
@@ -309,7 +316,7 @@ def requeue_stale_running_cells(older_than_seconds: float) -> int:
         now = _now_iso()
         for cell_id in stale_ids:
             con.execute(
-                "UPDATE research_matrix_cells SET status=?, updated_at=? WHERE cell_id=?",
+                "UPDATE research_matrix_cells SET status=?, updated_at=?, requeue_count=requeue_count+1 WHERE cell_id=?",
                 (QUEUED_STATUS, now, cell_id),
             )
     return len(stale_ids)

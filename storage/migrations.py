@@ -281,6 +281,20 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE reconciliation_checks ADD COLUMN skip_reason_kind TEXT",
         ],
     ),
+    (
+        18,
+        "matrix_cell_requeue_count",
+        # Hypothesis Discovery Engine Phase 2A — Evidence Read Model
+        # (2026-08-XX): storage.research_matrix.requeue_stale_running_cells()
+        # now increments this counter every time a crashed/stale RUNNING
+        # cell is returned to QUEUED, so "how many times was this cell
+        # resumed" is real, queryable evidence (backtest/matrix_evidence.py)
+        # instead of only inferable from logs. Diagnostic only — never a
+        # gate, never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_matrix_cells ADD COLUMN requeue_count INTEGER NOT NULL DEFAULT 0",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -353,6 +367,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE reconciliation_checks" in s for s in statements):
                 from execution import reconciliation
                 con.execute(reconciliation._DDL)
+            if any("ALTER TABLE research_matrix_cells" in s for s in statements):
+                from storage import research_matrix
+                research_matrix._init(con)
             for sql in statements:
                 try:
                     con.execute(sql)

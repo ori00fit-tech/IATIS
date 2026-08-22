@@ -282,3 +282,91 @@ export const listMatrixRuns = (familyId?: string, limit = 50) =>
 
 export const getMatrixRun = (runId: string) =>
   apiGet<MatrixRunStatusResponse>(`/research/matrix/runs/${encodeURIComponent(runId)}`)
+
+// ── AI Research Planner (Phase 3B) ─────────────────────────────────────────
+//
+// AI is a PLANNER here, never a JUDGE — see execution/routes/matrix_ai.py's
+// own module docstring. Every recommendation is persisted as DRAFT; only a
+// human review action (reviewMatrixAIRecommendation) can ever move it to
+// APPROVED/REJECTED, and even an APPROVED recommendation does not, by
+// itself, generate a single real Matrix cell — that still requires the
+// operator to separately submit proposed_next_cells through the existing
+// generateMatrixCells() above. This module computes/decides nothing; it
+// only calls the API and renders whatever comes back.
+
+export const RECOMMENDATION_STATUSES = ['DRAFT', 'APPROVED', 'REJECTED'] as const
+export type RecommendationStatus = (typeof RECOMMENDATION_STATUSES)[number]
+
+export interface ProposedCell {
+  symbol: string
+  bundle_name: string
+  timeframes: string[]
+  engines: string[]
+  risk_preset: string
+  rationale: string
+}
+
+export interface MatrixAIProposeRequest {
+  family_ids?: string[]
+  cell_ids?: string[]
+  focus_hint?: string
+  provider?: string
+  model?: string
+}
+
+// The AI CALL's own status (ok/error/disabled) -- distinct from a
+// persisted recommendation's review status (DRAFT/APPROVED/REJECTED).
+export interface MatrixAIProposeResponse {
+  status: 'ok' | 'error' | 'disabled'
+  error?: string
+  provider: string
+  recommendation_id?: string
+  evidence_snapshot_hash?: string
+  reasoning_summary?: string
+  coverage_gaps?: string[]
+  proposed_next_cells?: ProposedCell[]
+  distinct_from_dead_list?: string
+  priority?: string
+}
+
+export interface MatrixAIRecommendation {
+  recommendation_id: string
+  provider: string
+  model: string
+  input_family_ids_json: string
+  input_cell_ids_json: string | null
+  evidence_snapshot_json: string
+  evidence_snapshot_hash: string
+  constraints_used_json: string
+  focus_hint: string | null
+  reasoning_summary: string
+  coverage_gaps_json: string | null
+  proposed_next_cells_json: string
+  distinct_from_dead_list: string | null
+  priority: string | null
+  status: RecommendationStatus
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
+  created_at: string
+}
+
+export interface MatrixAIReviewRequest {
+  status: 'APPROVED' | 'REJECTED'
+  reviewed_by?: string
+  review_note?: string
+}
+
+export const proposeMatrixAIRecommendation = (body: MatrixAIProposeRequest) =>
+  apiPost<MatrixAIProposeResponse>('/research/matrix/ai/propose', body)
+
+export const listMatrixAIRecommendations = (params: { status?: RecommendationStatus; limit?: number } = {}) =>
+  apiGet<{ recommendations: MatrixAIRecommendation[]; count: number }>('/research/matrix/ai/recommendations', {
+    status: params.status, limit: params.limit,
+  })
+
+export const getMatrixAIRecommendation = (recommendationId: string) =>
+  apiGet<MatrixAIRecommendation>(`/research/matrix/ai/recommendations/${encodeURIComponent(recommendationId)}`)
+
+export const reviewMatrixAIRecommendation = (recommendationId: string, body: MatrixAIReviewRequest) =>
+  apiPost<MatrixAIRecommendation>(`/research/matrix/ai/recommendations/${encodeURIComponent(recommendationId)}/review`, body)

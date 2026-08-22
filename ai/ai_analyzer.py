@@ -45,7 +45,7 @@ import os
 from typing import Any
 
 from ai.cache import TTLCache
-from ai.models import HypothesisSuggestion, MacroAnalysis, NewsAnalysis, TradeExplanation
+from ai.models import HypothesisSuggestion, MacroAnalysis, MatrixResearchPlan, NewsAnalysis, TradeExplanation
 from ai.providers.base import AIProvider, AIProviderError
 from utils.logger import get_logger
 
@@ -444,6 +444,61 @@ class AIAnalyzer:
             confidence=raw.get("confidence", ""),
             possible_explanation=raw.get("possible_explanation", ""),
             suggested_experiments=list(suggested_experiments or []),
+            priority=raw.get("priority", ""),
+            provider=self._provider.name,
+            status="ok",
+        ).to_dict()
+
+    # ── Matrix research planner (Hypothesis Discovery Engine, Phase 3B) ──
+
+    _REQUIRED_PLAN_FIELDS = ("reasoning_summary", "distinct_from_dead_list")
+    _REQUIRED_CELL_FIELDS = ("symbol", "bundle_name", "timeframes", "engines", "risk_preset", "rationale")
+
+    def propose_matrix_research_plan(self, context: dict, focus_hint: str = "") -> dict:
+        """Draft a proposal of which NEW Matrix cells are worth generating
+        next — a PLANNER output, never a verdict. `context` is the
+        already-assembled evidence snapshot (backtest.matrix_research_
+        planner.build_evidence_context()) — this method never re-derives
+        it and never re-fetches D1 itself. The caller (execution/routes/
+        matrix_ai.py) is the only thing allowed to persist this, always
+        as status="DRAFT" in storage/matrix_ai_recommendations.py, together
+        with the exact context dict's own hash — so if the Matrix evidence
+        changes later, what the AI actually saw at proposal time stays
+        reconstructable."""
+        if not self.available:
+            return MatrixResearchPlan(status="disabled", provider=self.provider_name).to_dict()
+        try:
+            context_text = json.dumps(context, indent=2, default=str)[:16000]
+            raw = self._provider.propose_matrix_plan(context_text, focus_hint)
+        except AIProviderError as exc:
+            logger.warning(f"AIAnalyzer.propose_matrix_research_plan failed: {exc}")
+            return MatrixResearchPlan(
+                status="error", error=_user_safe_error(exc), provider=self.provider_name
+            ).to_dict()
+
+        missing = [f for f in self._REQUIRED_PLAN_FIELDS if not str(raw.get(f, "")).strip()]
+        proposed_cells = raw.get("proposed_next_cells")
+        if not isinstance(proposed_cells, list) or not proposed_cells:
+            missing.append("proposed_next_cells")
+        else:
+            for i, cell in enumerate(proposed_cells):
+                if not isinstance(cell, dict) or any(not str(cell.get(f, "")).strip() for f in self._REQUIRED_CELL_FIELDS):
+                    missing.append(f"proposed_next_cells[{i}]")
+        if raw.get("priority") not in self._VALID_PRIORITIES:
+            missing.append("priority")
+        if missing:
+            logger.warning(f"AIAnalyzer.propose_matrix_research_plan: response missing/malformed fields {missing}")
+            return MatrixResearchPlan(
+                status="error",
+                error="AI response was missing required fields — try again.",
+                provider=self.provider_name,
+            ).to_dict()
+
+        return MatrixResearchPlan(
+            reasoning_summary=raw.get("reasoning_summary", ""),
+            coverage_gaps=list(raw.get("coverage_gaps") or []),
+            proposed_next_cells=proposed_cells,
+            distinct_from_dead_list=raw.get("distinct_from_dead_list", ""),
             priority=raw.get("priority", ""),
             provider=self._provider.name,
             status="ok",

@@ -109,6 +109,7 @@ from execution.routes import (
     kill_switch,
     logs,
     macro_benchmark,
+    matrix_ai,
     missions,
     news_benchmark,
     outcomes,
@@ -144,6 +145,13 @@ app.include_router(missions.router)
 # reasoning as missions.router above: /research/matrix/... registers
 # before research.router's own GET /research/{hypothesis_id} catch-all.
 app.include_router(research_matrix.router)
+# Hypothesis Discovery Engine Phase 3B (2026-08-XX) — /research/matrix/ai/...
+# is a distinct third path segment from research_matrix.router's own
+# /research/matrix/{cells,families,runs}/... routes, so there is no
+# collision between the two Matrix Engine routers; this must still
+# register before research.router's catch-all for the same reason as
+# research_matrix.router above.
+app.include_router(matrix_ai.router)
 app.include_router(diagnostics.router)
 # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — same
 # collision reasoning as missions.router above: GET

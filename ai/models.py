@@ -179,3 +179,40 @@ class HypothesisSuggestion:
             "error": self.error,
             "generated_at": self.generated_at,
         }
+
+
+@dataclass
+class MatrixResearchPlan:
+    """Hypothesis Discovery Engine, Phase 3B — a DRAFT proposal of which
+    NEW Matrix cells (symbol/bundle/risk_preset combinations) are worth
+    generating next. This is a PLANNER output, never a verdict: it carries
+    no p-value, no pass/fail, and nothing here can ever promote a cell's
+    own status. See backtest/matrix_research_planner.py's own NON-
+    NEGOTIABLE rule and execution/routes/matrix_ai.py's persistence layer
+    (storage/matrix_ai_recommendations.py), which is the only thing
+    allowed to save this, always with status="DRAFT" — never "APPROVED"
+    except via a separate, explicit human review action.
+    """
+
+    reasoning_summary: str = ""
+    coverage_gaps: list = field(default_factory=list)
+    proposed_next_cells: list = field(default_factory=list)
+    distinct_from_dead_list: str = ""
+    priority: str = ""  # HIGH | MEDIUM | LOW
+    provider: str = ""
+    status: str = "ok"  # ok | error | disabled -- the AI CALL's own status, distinct from the recommendation's review status (DRAFT/APPROVED/REJECTED)
+    error: str = ""
+    generated_at: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict:
+        return {
+            "reasoning_summary": self.reasoning_summary,
+            "coverage_gaps": self.coverage_gaps,
+            "proposed_next_cells": self.proposed_next_cells,
+            "distinct_from_dead_list": self.distinct_from_dead_list,
+            "priority": self.priority,
+            "provider": self.provider,
+            "status": self.status,
+            "error": self.error,
+            "generated_at": self.generated_at,
+        }

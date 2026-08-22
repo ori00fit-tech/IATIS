@@ -183,3 +183,7 @@ class AIProvider(ABC):
     def suggest_hypothesis(self, context: str, focus_hint: str) -> dict:
         prompt = load_prompt("suggest_hypothesis", context=context, focus_hint=focus_hint or "none")
         return extract_json(self._chat(prompt))
+
+    def propose_matrix_plan(self, context: str, focus_hint: str) -> dict:
+        prompt = load_prompt("matrix_research_plan", context=context, focus_hint=focus_hint or "none")
+        return extract_json(self._chat(prompt))

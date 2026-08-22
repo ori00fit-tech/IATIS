@@ -14,6 +14,7 @@ import {
   type MatrixFamily, type MatrixCell, type MatrixRun, type CellStatus, type BundleSpec,
   type GroupStatsBucket, type ComparedCell, type CompareProvenance,
 } from './matrixApi'
+import { MatrixAiPlanner } from './MatrixAiPlanner'
 
 const POLL_MS = 5_000
 const JOB_POLL_MS = 2_000
@@ -886,6 +887,7 @@ export function MatrixEngine() {
       )}
       {selectedCellId && <CellEvidencePanel cellId={selectedCellId} onClose={() => setSelectedCellId(null)} />}
       {comparing && <EvidenceComparisonPanel cellIds={comparing} onClose={() => setComparing(null)} />}
+      <MatrixAiPlanner familyId={selectedFamilyId} />
     </div>
   )
 }

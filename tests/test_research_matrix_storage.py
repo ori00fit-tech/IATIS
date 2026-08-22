@@ -79,6 +79,26 @@ def test_get_cell_returns_none_for_unknown_id():
     assert storage.get_cell("MATRIX-CELL-doesnotexist") is None
 
 
+def test_upsert_cells_persists_research_code_commit():
+    """Phase 2C (Evidence Comparison): research_code_commit was already
+    folded into the cell's fingerprint hash but never persisted as its
+    own readable column — a comparison across code commits needs it as a
+    real, queryable field, not something buried in an opaque hash."""
+    fam = _family()
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=_BUNDLE, risk_preset="balanced", research_code_commit="abc1234")
+    storage.upsert_cells([c1], fam)
+    row = storage.get_cell(c1.cell_id)
+    assert row["research_code_commit"] == "abc1234"
+
+
+def test_upsert_cells_tolerates_missing_research_code_commit():
+    fam = _family()
+    c1 = _cell()  # no research_code_commit passed
+    storage.upsert_cells([c1], fam)
+    row = storage.get_cell(c1.cell_id)
+    assert row["research_code_commit"] is None
+
+
 def test_list_cells_filters_by_status_and_symbol():
     fam = _family()
     storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD")], fam)

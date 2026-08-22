@@ -295,6 +295,23 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_matrix_cells ADD COLUMN requeue_count INTEGER NOT NULL DEFAULT 0",
         ],
     ),
+    (
+        19,
+        "matrix_cell_research_code_commit",
+        # Hypothesis Discovery Engine Phase 2C — Evidence Comparison
+        # (2026-08-XX): backtest.research_matrix.MatrixCellSpec has always
+        # carried research_code_commit in memory (it's already folded into
+        # the cell's fingerprint hash, per compute_cell_fingerprint()) but
+        # the human-readable commit string was never persisted as its own
+        # column — only buried, unrecoverable, inside the opaque hash. A
+        # cross-cell/cross-family comparison needs this as a real,
+        # queryable field to detect "did this result change because of a
+        # code change, not the hypothesis." Diagnostic only — never a
+        # gate, never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_matrix_cells ADD COLUMN research_code_commit TEXT",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

@@ -170,3 +170,152 @@ def test_cell_evidence_carries_requeue_count_and_identity_fields():
     assert result["family_id"] == "famX"
     assert result["fingerprint"] == "deadbeef"
     assert result["cell_id"] == cell["cell_id"]
+
+
+def test_cell_evidence_carries_research_code_commit():
+    cell = _cell(research_code_commit="abc1234")
+    result = evidence.cell_evidence(cell)
+    assert result["research_code_commit"] == "abc1234"
+
+
+def test_cell_evidence_handles_absent_validation_result():
+    cell = _cell()
+    result = evidence.cell_evidence(cell)
+    assert result["stage_b"]["validation_result"] is None
+
+
+def test_cell_evidence_decodes_validation_result_diagnostics():
+    """Phase 2C: the Stage B per-symbol validation_results row carries
+    Monte Carlo/Walk-Forward/robustness/regime-robustness/stability/
+    cost-stress — all diagnostic-only, never gating `passed`."""
+    cell = _cell(stage_b_validation_id="v1")
+    validation_result_row = {
+        "symbol": "EURUSD",
+        "passed": 1,
+        "metrics_json": json.dumps({"profit_factor": 1.9}),
+        "monte_carlo_json": json.dumps({"p5_pf": 1.1}),
+        "walk_forward_json": json.dumps({"oos_pf": 1.4}),
+        "robustness_json": json.dumps({"stable": True}),
+        "criteria_breakdown_json": json.dumps({"min_trades": True}),
+        "significance_json": json.dumps({"ess": 42}),
+        "regime_robustness_json": json.dumps({"trending_pf": 1.5}),
+        "stability_json": json.dumps({"rolling_pf_std": 0.2}),
+        "cost_stress_json": json.dumps({"pf_at_2x_costs": 1.1}),
+        "discovery_score_json": json.dumps({"score": 0.7}),
+        "error": None,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "finished_at": "2026-01-01T01:00:00+00:00",
+    }
+    result = evidence.cell_evidence(cell, validation_result=validation_result_row)
+    vr = result["stage_b"]["validation_result"]
+    assert vr["symbol"] == "EURUSD"
+    assert vr["passed"] is True
+    assert vr["metrics"] == {"profit_factor": 1.9}
+    assert vr["monte_carlo"] == {"p5_pf": 1.1}
+    assert vr["walk_forward"] == {"oos_pf": 1.4}
+    assert vr["robustness"] == {"stable": True}
+    assert vr["criteria_breakdown"] == {"min_trades": True}
+    assert vr["significance"] == {"ess": 42}
+    assert vr["regime_robustness"] == {"trending_pf": 1.5}
+    assert vr["stability"] == {"rolling_pf_std": 0.2}
+    assert vr["cost_stress"] == {"pf_at_2x_costs": 1.1}
+    assert vr["discovery_score"] == {"score": 0.7}
+
+
+# --- compare_cells_provenance --------------------------------------------
+
+
+def test_compare_cells_provenance_same_family_and_commit():
+    cells = [
+        _cell(family_id="fam1", research_code_commit="abc1234"),
+        _cell(family_id="fam1", research_code_commit="abc1234", symbol="GBPUSD"),
+    ]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["cell_count"] == 2
+    assert result["same_family"] is True
+    assert result["same_commit"] is True
+    assert result["family_ids"] == ["fam1"]
+    assert result["commits"] == ["abc1234"]
+
+
+def test_compare_cells_provenance_cross_family_flags_false():
+    cells = [
+        _cell(family_id="famA"),
+        _cell(family_id="famB", symbol="GBPUSD"),
+    ]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_family"] is False
+    assert result["family_ids"] == ["famA", "famB"]
+
+
+def test_compare_cells_provenance_cross_commit_flags_false():
+    cells = [
+        _cell(research_code_commit="commitA"),
+        _cell(research_code_commit="commitB", symbol="GBPUSD"),
+    ]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_commit"] is False
+    assert result["commits"] == ["commitA", "commitB"]
+
+
+def test_compare_cells_provenance_missing_commit_treated_as_unknown():
+    cells = [_cell(research_code_commit=None), _cell(research_code_commit=None, symbol="GBPUSD")]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_commit"] is True
+    assert result["commits"] == ["unknown"]
+
+
+def test_compare_cells_provenance_same_data_provider():
+    cells = [_cell(data_provider="ccxt"), _cell(data_provider="ccxt", symbol="GBPUSD")]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_data_provider"] is True
+    assert result["data_providers"] == ["ccxt"]
+
+
+def test_compare_cells_provenance_missing_data_provider_treated_as_unspecified():
+    cells = [_cell(data_provider=None)]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["data_providers"] == ["unspecified"]
+
+
+def test_compare_cells_provenance_detects_same_hypothesis_lineage():
+    """Comparison Type 3: same symbol/bundle/risk_preset across different
+    code commits -- detects whether an apparent 'improvement' came only
+    from a code change, not the hypothesis itself."""
+    bundle = json.dumps({"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"]})
+    cells = [
+        _cell(symbol="EURUSD", bundle_json=bundle, risk_preset="balanced", research_code_commit="commitA"),
+        _cell(symbol="EURUSD", bundle_json=bundle, risk_preset="balanced", research_code_commit="commitB"),
+        _cell(symbol="EURUSD", bundle_json=bundle, risk_preset="balanced", research_code_commit="commitC"),
+    ]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_hypothesis_lineage"] is True
+    assert result["lineage_key"] == {"symbol": "EURUSD", "bundle": "SMC only", "risk_preset": "balanced"}
+    assert result["same_commit"] is False
+
+
+def test_compare_cells_provenance_lineage_false_when_symbol_differs():
+    bundle = json.dumps({"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"]})
+    cells = [
+        _cell(symbol="EURUSD", bundle_json=bundle, risk_preset="balanced"),
+        _cell(symbol="GBPUSD", bundle_json=bundle, risk_preset="balanced"),
+    ]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["same_hypothesis_lineage"] is False
+    assert result["lineage_key"] is None
+
+
+def test_compare_cells_provenance_single_cell_all_flags_trivially_true():
+    result = evidence.compare_cells_provenance([_cell()])
+    assert result["cell_count"] == 1
+    assert result["same_family"] is True
+    assert result["same_commit"] is True
+    assert result["same_data_provider"] is True
+    assert result["same_hypothesis_lineage"] is True
+
+
+def test_compare_cells_provenance_ignores_none_family_id():
+    cells = [_cell(family_id=None), _cell(family_id=None, symbol="GBPUSD")]
+    result = evidence.compare_cells_provenance(cells)
+    assert result["family_ids"] == []
+    assert result["same_family"] is True

@@ -24,6 +24,15 @@ already-decided evidence, never as something it can recompute.
 RESEARCH-ONLY, same guarantee as every other module in this engine:
 nothing here reads or writes research/results/registry.json, config.yaml,
 config/engines.yaml, or config/symbols.yaml.
+
+Phase 2C (Evidence Comparison) added `compare_cells_provenance()` and
+threaded a cell's own `research_code_commit` + Stage B per-symbol
+`validation_result` (Monte Carlo/Walk-Forward/robustness/regime-
+robustness/stability/cost-stress) into `cell_evidence()`. The same rule
+applies with extra force here: this module computes zero rankings,
+scores, or "better than" judgments across cells — only identity
+equality checks (same family? same commit? same provider? same
+hypothesis?) and verbatim re-presentation of already-decided evidence.
 """
 from __future__ import annotations
 
@@ -142,16 +151,23 @@ def cell_evidence(
     cell: dict[str, Any],
     trial: dict[str, Any] | None = None,
     validation: dict[str, Any] | None = None,
+    validation_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The full evidence chain for one cell in one call: the raw cell row
     (JSON columns decoded for readability) plus, when present, its Stage A
-    trial detail (from storage.research_missions.get_trial) and its Stage B
-    validation detail (from storage.research_mission_validations.
-    get_validation) — the exact join a UI would otherwise need 3 separate
-    round-trips to assemble. `trial`/`validation` are the caller's own
-    already-fetched rows (this function performs no D1 access itself);
-    either may be None when the cell hasn't reached that stage yet, or its
-    stage_a_mission_id/stage_b_validation_id is unset."""
+    trial detail (from storage.research_missions.get_trial), its Stage B
+    validation-RUN detail (from storage.research_mission_validations.
+    get_validation), and — Phase 2C — its Stage B per-SYMBOL validation
+    result (from storage.research_mission_validations.validation_results,
+    the row whose `symbol` matches this cell's own `symbol`; a CROSS_SYMBOL
+    validation has one row per validated symbol, so the caller must pick
+    the matching one, not just take the first) — the exact join a UI would
+    otherwise need 4 separate round-trips to assemble. `trial`/
+    `validation`/`validation_result` are the caller's own already-fetched
+    rows (this function performs no D1 access itself); any may be None
+    when the cell hasn't reached that stage yet, its stage_a_mission_id/
+    stage_b_validation_id is unset, or the validation never covered this
+    cell's own symbol."""
     return {
         "cell_id": cell["cell_id"],
         "family_id": cell.get("family_id"),
@@ -162,6 +178,7 @@ def cell_evidence(
         "confluence_overrides": _safe_json_loads(cell.get("confluence_overrides_json")),
         "engine_variants": _safe_json_loads(cell.get("engine_variants_json")),
         "data_provider": cell.get("data_provider"),
+        "research_code_commit": cell.get("research_code_commit"),
         "status": cell.get("status"),
         "rejection_reason": cell.get("rejection_reason"),
         "requeue_count": int(cell.get("requeue_count") or 0),
@@ -179,5 +196,88 @@ def cell_evidence(
             "validation_id": cell.get("stage_b_validation_id"),
             "verdict": cell.get("stage_b_verdict"),
             "validation_detail": validation,
+            "validation_result": _decode_validation_result(validation_result),
         },
+    }
+
+
+def _decode_validation_result(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Decodes every JSON column on a research_mission_validation_results
+    row. Every one of these diagnostics (monte_carlo/walk_forward/
+    robustness/significance/regime_robustness/stability/cost_stress/
+    discovery_score) is, per that table's own DDL comments, diagnostic
+    only — none of them is `passed`/`criteria_breakdown`, i.e. none ever
+    participated in the Stage B verdict already carried on `validation`.
+    This function only decodes; it adds no interpretation."""
+    if row is None:
+        return None
+    return {
+        "symbol": row.get("symbol"),
+        "passed": bool(row.get("passed")),
+        "metrics": _safe_json_loads(row.get("metrics_json")),
+        "monte_carlo": _safe_json_loads(row.get("monte_carlo_json")),
+        "walk_forward": _safe_json_loads(row.get("walk_forward_json")),
+        "robustness": _safe_json_loads(row.get("robustness_json")),
+        "criteria_breakdown": _safe_json_loads(row.get("criteria_breakdown_json")),
+        "significance": _safe_json_loads(row.get("significance_json")),
+        "regime_robustness": _safe_json_loads(row.get("regime_robustness_json")),
+        "stability": _safe_json_loads(row.get("stability_json")),
+        "cost_stress": _safe_json_loads(row.get("cost_stress_json")),
+        "discovery_score": _safe_json_loads(row.get("discovery_score_json")),
+        "error": row.get("error"),
+        "started_at": row.get("started_at"),
+        "finished_at": row.get("finished_at"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2C — Evidence Comparison provenance (descriptive only, never a
+# verdict). Every field below is a plain equality/membership check over
+# identity columns already on each cell row — no statistic is computed, no
+# score, no rank, no "better." The comparison UI built on this output must
+# never collapse these flags into a single ranking; see this module's own
+# NON-NEGOTIABLE rule at the top of the file.
+# ---------------------------------------------------------------------------
+
+
+def compare_cells_provenance(cells: list[dict[str, Any]]) -> dict[str, Any]:
+    """Given 2+ already-fetched cell rows, reports whether they share the
+    same Matrix Family (the statistically meaningful axis — same fixed
+    planned_n/Bonferroni alpha), the same research code commit, and the
+    same data provider — plus whether they form a "same-hypothesis
+    lineage" (identical symbol + bundle name + risk_preset, varying only
+    in commit/overrides/provider — the operator's own Comparison Type 3,
+    useful for telling whether an apparent improvement came from a code
+    change rather than the hypothesis itself). A single-cell list still
+    returns a well-formed result (every same_* flag trivially True)."""
+    family_ids = sorted({c.get("family_id") for c in cells if c.get("family_id") is not None})
+    commits = sorted({c.get("research_code_commit") or "unknown" for c in cells})
+    data_providers = sorted({c.get("data_provider") or "unspecified" for c in cells})
+
+    def _bundle_name(cell: dict[str, Any]) -> str:
+        raw = cell.get("bundle_json")
+        if not raw:
+            return "?"
+        try:
+            return json.loads(raw).get("name", "?")
+        except (TypeError, ValueError):
+            return "?"
+
+    lineage_keys = {(c.get("symbol"), _bundle_name(c), c.get("risk_preset")) for c in cells}
+    same_hypothesis_lineage = len(lineage_keys) == 1
+
+    return {
+        "cell_count": len(cells),
+        "family_ids": family_ids,
+        "same_family": len(family_ids) <= 1,
+        "commits": commits,
+        "same_commit": len(commits) <= 1,
+        "data_providers": data_providers,
+        "same_data_provider": len(data_providers) <= 1,
+        "same_hypothesis_lineage": same_hypothesis_lineage,
+        "lineage_key": (
+            {"symbol": next(iter(lineage_keys))[0], "bundle": next(iter(lineage_keys))[1], "risk_preset": next(iter(lineage_keys))[2]}
+            if same_hypothesis_lineage
+            else None
+        ),
     }

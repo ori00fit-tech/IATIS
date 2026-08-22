@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS research_matrix_cells (
     confluence_overrides_json   TEXT,
     engine_variants_json        TEXT,
     data_provider                TEXT,
+    research_code_commit         TEXT,
     status                      TEXT NOT NULL,
     rejection_reason            TEXT,
     stage_a_mission_id          TEXT,
@@ -194,13 +195,13 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
                 """INSERT OR IGNORE INTO research_matrix_cells
                    (cell_id, family_id, fingerprint, symbol, bundle_json, risk_preset,
                     confluence_overrides_json, engine_variants_json, data_provider,
-                    status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    research_code_commit, status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     cell.cell_id, family_id, cell.fingerprint, cell.symbol, json.dumps(cell.bundle), cell.risk_preset,
                     json.dumps(cell.confluence_overrides) if cell.confluence_overrides is not None else None,
                     json.dumps(cell.engine_variants) if cell.engine_variants is not None else None,
-                    cell.data_provider, "QUEUED", now, now,
+                    cell.data_provider, cell.research_code_commit, "QUEUED", now, now,
                 ),
             )
             inserted += 1

@@ -8,11 +8,11 @@ import { KpiCard } from '../../components/KpiCard'
 import { getResearchSymbols } from '../research-backtests/api'
 import { SUPPORTED_TIMEFRAMES, ENGINE_KEYS } from '../backtesting-lab/BacktestingLab'
 import {
-  CELL_STATUSES, RISK_PRESET_NAMES,
-  generateMatrixCells, listMatrixFamilies, getMatrixFamilySummary,
-  listMatrixCells, getMatrixCellEvidence, runMatrixBatch, listMatrixRuns, getMatrixRun,
+  CELL_STATUSES, RISK_PRESET_NAMES, MIN_COMPARED_CELLS, MAX_COMPARED_CELLS,
+  generateMatrixCells, listMatrixFamilies, getMatrixFamily, getMatrixFamilySummary,
+  listMatrixCells, getMatrixCellEvidence, compareMatrixCells, runMatrixBatch, listMatrixRuns, getMatrixRun,
   type MatrixFamily, type MatrixCell, type MatrixRun, type CellStatus, type BundleSpec,
-  type GroupStatsBucket,
+  type GroupStatsBucket, type ComparedCell, type CompareProvenance,
 } from './matrixApi'
 
 const POLL_MS = 5_000
@@ -481,7 +481,14 @@ function RunsPanel({ familyId, refreshKey }: { familyId: string; refreshKey: num
 
 // ── Cells table + evidence drill-down ───────────────────────────────
 
-function CellsTable({ familyId, onSelectCell, refreshKey }: { familyId: string; onSelectCell: (id: string) => void; refreshKey: number }) {
+function CellsTable({ familyId, onSelectCell, refreshKey, selectedIds, onToggleSelect, onCompare }: {
+  familyId: string
+  onSelectCell: (id: string) => void
+  refreshKey: number
+  selectedIds: Set<string>
+  onToggleSelect: (id: string) => void
+  onCompare: () => void
+}) {
   const { markUnauthenticated } = useAuth()
   const [statusFilter, setStatusFilter] = useState<CellStatus | ''>('')
   const { data, refetch } = useApiQuery(
@@ -496,7 +503,20 @@ function CellsTable({ familyId, onSelectCell, refreshKey }: { familyId: string; 
   }, [refreshKey, refetch])
 
   const cells = data?.cells ?? []
+  const atMax = selectedIds.size >= MAX_COMPARED_CELLS
   const columns: Column<MatrixCell>[] = [
+    {
+      header: '',
+      render: (c) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(c.cell_id)}
+          disabled={!selectedIds.has(c.cell_id) && atMax}
+          onChange={() => onToggleSelect(c.cell_id)}
+          title={!selectedIds.has(c.cell_id) && atMax ? `At most ${MAX_COMPARED_CELLS} cells can be compared at once` : 'Select for Evidence Comparison'}
+        />
+      ),
+    },
     { header: 'Symbol', render: (c) => <span className="font-bold text-accent">{c.symbol}</span> },
     { header: 'Bundle', render: (c) => bundleName(c.bundle_json) },
     { header: 'Risk Preset', render: (c) => c.risk_preset },
@@ -520,16 +540,26 @@ function CellsTable({ familyId, onSelectCell, refreshKey }: { familyId: string; 
     <Panel
       title="Cells"
       right={
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as CellStatus | '')}
-          className="bg-bg border border-border rounded px-2 py-1 text-[0.75em] text-text"
-        >
-          <option value="">All statuses</option>
-          {CELL_STATUSES.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as CellStatus | '')}
+            className="bg-bg border border-border rounded px-2 py-1 text-[0.75em] text-text"
+          >
+            <option value="">All statuses</option>
+            {CELL_STATUSES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <button
+            onClick={onCompare}
+            disabled={selectedIds.size < MIN_COMPARED_CELLS}
+            className="px-2.5 py-1.5 text-[0.75em] rounded border border-accent/40 text-accent font-bold hover:bg-accent/10 disabled:opacity-40 min-h-11"
+            title={`Select ${MIN_COMPARED_CELLS}-${MAX_COMPARED_CELLS} cells to compare their evidence side by side`}
+          >
+            Compare Selected ({selectedIds.size})
+          </button>
+        </div>
       }
     >
       {cells.length > 0 ? <DataTable columns={columns} rows={cells} rowKey={(c) => c.cell_id} /> : <Empty>No cells match this filter.</Empty>}
@@ -571,6 +601,7 @@ function CellEvidencePanel({ cellId, onClose }: { cellId: string; onClose: () =>
             <EvidenceField label="Confluence Overrides" value={data.confluence_overrides ? JSON.stringify(data.confluence_overrides) : '—'} />
             <EvidenceField label="Engine Variants" value={data.engine_variants ? JSON.stringify(data.engine_variants) : '—'} />
             <EvidenceField label="Data Provider" value={data.data_provider ?? '—'} />
+            <EvidenceField label="Code Commit" value={data.research_code_commit ?? '—'} />
             <EvidenceField label="Status" value={data.status ?? '—'} />
             <EvidenceField label="Rejection Reason" value={data.rejection_reason ?? '—'} />
             <EvidenceField label="Requeue Count" value={String(data.requeue_count)} />
@@ -593,9 +624,220 @@ function CellEvidencePanel({ cellId, onClose }: { cellId: string; onClose: () =>
             <EvidenceField label="Validation ID" value={data.stage_b.validation_id ?? '—'} />
             <EvidenceField label="Verdict" value={data.stage_b.verdict ?? '—'} />
             <EvidenceField label="Validation Detail" value={data.stage_b.validation_detail ? JSON.stringify(data.stage_b.validation_detail) : 'not yet reached'} />
+            <EvidenceField label="Walk-Forward" value={data.stage_b.validation_result?.walk_forward ? JSON.stringify(data.stage_b.validation_result.walk_forward) : '—'} />
+            <EvidenceField label="Monte Carlo" value={data.stage_b.validation_result?.monte_carlo ? JSON.stringify(data.stage_b.validation_result.monte_carlo) : '—'} />
+            <EvidenceField label="Regime Robustness" value={data.stage_b.validation_result?.regime_robustness ? JSON.stringify(data.stage_b.validation_result.regime_robustness) : '—'} />
+            <EvidenceField label="Cost Stress" value={data.stage_b.validation_result?.cost_stress ? JSON.stringify(data.stage_b.validation_result.cost_stress) : '—'} />
           </div>
         </div>
       )}
+    </Panel>
+  )
+}
+
+// ── Evidence Comparison (Phase 2C) — NOT a leaderboard ─────────────────
+//
+// Operator's own non-negotiable acceptance criterion, verbatim: "No
+// ranking, score, sort order, color, badge, or visual emphasis may be
+// interpreted as a new statistical verdict. Every authoritative verdict
+// must originate from the existing evidence gate." This panel therefore
+// never sorts cells by any metric, never assigns a rank number, and never
+// colors a cell "best" — the only colors used below are the provenance
+// warnings (cross-family / cross-commit), which describe IDENTITY, not
+// performance. Every field rendered is a verbatim re-presentation of a
+// value already decided by backtest/matrix_orchestrator.py.
+
+const DISCLAIMER_TEXT =
+  'No ranking, score, sort order, color, badge, or visual emphasis on this page is a new statistical verdict. ' +
+  'Every verdict shown below (Stage A / Stage B) originates from the existing evidence gate ' +
+  '(backtest/matrix_orchestrator.py) — this panel only re-presents it, side by side, for identity comparison.'
+
+function useFamilyDetails(familyIds: string[]): Record<string, MatrixFamily> {
+  const [details, setDetails] = useState<Record<string, MatrixFamily>>({})
+  const key = familyIds.slice().sort().join(',')
+  useEffect(() => {
+    let cancelled = false
+    if (familyIds.length === 0) return
+    void Promise.all(familyIds.map((id) => getMatrixFamily(id).then((f) => [id, f] as const))).then((pairs) => {
+      if (cancelled) return
+      setDetails(Object.fromEntries(pairs))
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  return details
+}
+
+/** Pure re-labeling of the cell's own `status` field into "what Stage A
+ * concluded" — no new inference over trades/p-values, just naming which
+ * stage a status belongs to (this schema has one `status` field spanning
+ * both stages; Stage B only ever advances CANDIDATE -> VALIDATED/REJECTED). */
+function stageAOutcome(cell: ComparedCell): string {
+  if (!cell.found) return '—'
+  const c = cell as ComparedCell & { found: true }
+  if (c.stage_a.p_value != null) return 'SCREENED'
+  if (c.status === 'INSUFFICIENT_DATA' || c.status === 'FAILED') return c.status
+  return c.status === 'QUEUED' || c.status === 'RUNNING' ? 'not yet run' : c.status ?? '—'
+}
+
+function stageBOutcome(cell: ComparedCell): string {
+  if (!cell.found) return '—'
+  const c = cell as ComparedCell & { found: true }
+  if (c.stage_b.verdict) return c.stage_b.verdict
+  return c.stage_b.validation_id ? 'in progress' : 'not yet run'
+}
+
+function jsonOr(value: unknown, fallback = '—'): string {
+  if (value == null) return fallback
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return fallback
+  }
+}
+
+function ProvenanceBanner({ provenance, familyDetails }: { provenance: CompareProvenance; familyDetails: Record<string, MatrixFamily> }) {
+  if (provenance.same_hypothesis_lineage && provenance.lineage_key) {
+    return (
+      <div className="rounded border border-accent/40 bg-accent/10 px-3 py-2.5 text-[0.8em] text-text leading-relaxed">
+        <strong className="text-accent">Comparison Type 3 — Same-Hypothesis Lineage.</strong> Every compared cell is the
+        exact same symbol/bundle/risk-preset (<code>{provenance.lineage_key.symbol}</code> / <code>{provenance.lineage_key.bundle}</code> /{' '}
+        <code>{provenance.lineage_key.risk_preset}</code>) run under different research code commits
+        (<code>{provenance.commits.join(', ')}</code>). Use this to check whether an apparent improvement came from a
+        code change rather than the hypothesis itself.
+      </div>
+    )
+  }
+  if (!provenance.same_family) {
+    return (
+      <div className="rounded border border-red/40 bg-red/10 px-3 py-2.5 text-[0.8em] text-red leading-relaxed flex flex-col gap-1.5">
+        <div>
+          <strong>Comparison Type 2 — Cross-Family. DESCRIPTIVE ONLY.</strong> These cells come from{' '}
+          {provenance.family_ids.length} different Matrix Families, each with its own fixed <code>planned_n</code> and
+          Bonferroni-corrected α. They must never be read as one unified ranking — a lower p-value in a
+          smaller/looser family is not "better evidence" than a higher p-value in a larger/stricter one.
+        </div>
+        <div className="flex flex-col gap-0.5 text-text/90">
+          {provenance.family_ids.map((fid) => {
+            const fam = familyDetails[fid]
+            return (
+              <span key={fid} className="font-mono">
+                {fid}: planned_n={fam ? fam.planned_n : '…'}, family_α={fam ? fam.family_alpha : '…'}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="rounded border border-green/40 bg-green/10 px-3 py-2.5 text-[0.8em] text-green leading-relaxed">
+      <strong>Comparison Type 1 — Within-Family (primary).</strong> Every compared cell shares Matrix Family{' '}
+      <code>{provenance.family_ids[0] ?? '—'}</code> — same fixed <code>planned_n</code> and Bonferroni α, the most
+      statistically meaningful axis of comparison this engine offers.
+      {!provenance.same_commit && ' Cells differ by research code commit — see per-cell "Code commit" below.'}
+    </div>
+  )
+}
+
+interface ComparisonFieldRow {
+  label: string
+  render: (cell: ComparedCell) => string
+  note?: string
+}
+
+function EvidenceComparisonPanel({ cellIds, onClose }: { cellIds: string[]; onClose: () => void }) {
+  const { markUnauthenticated } = useAuth()
+  const { data } = useApiQuery(['matrix-compare', cellIds.join(',')], () => compareMatrixCells(cellIds), POLL_MS, markUnauthenticated)
+  const familyIds = data?.provenance?.family_ids ?? []
+  const familyDetails = useFamilyDetails(familyIds)
+
+  const rows: ComparisonFieldRow[] = [
+    { label: 'Cell', render: (c) => c.cell_id },
+    { label: 'Symbol', render: (c) => (c.found ? c.symbol ?? '—' : '—') },
+    { label: 'Bundle', render: (c) => (c.found ? jsonOr(c.bundle) : '—') },
+    { label: 'Risk preset', render: (c) => (c.found ? c.risk_preset ?? '—' : '—') },
+    { label: 'Code commit', render: (c) => (c.found ? c.research_code_commit ?? 'unknown' : '—') },
+    { label: 'Data / provider', render: (c) => (c.found ? c.data_provider ?? 'unspecified' : '—') },
+    {
+      label: 'Matrix family',
+      render: (c) => {
+        if (!c.found || !c.family_id) return '—'
+        const fam = familyDetails[c.family_id]
+        return fam ? `${c.family_id} (planned_n=${fam.planned_n})` : c.family_id
+      },
+    },
+    { label: 'Matrix-family alpha', render: (c) => (c.found && c.family_id ? String(familyDetails[c.family_id]?.family_alpha ?? '…') : '—') },
+    { label: 'Stage A verdict', render: (c) => stageAOutcome(c) },
+    { label: 'Stage A p-value', render: (c) => (c.found && c.stage_a.p_value != null ? c.stage_a.p_value.toExponential(4) : '—') },
+    { label: 'Stage B verdict', render: (c) => stageBOutcome(c) },
+    {
+      label: 'OOS result / Walk-forward',
+      render: (c) => (c.found ? jsonOr(c.stage_b.validation_result?.walk_forward) : '—'),
+      note: 'Matrix cells never run a separate Stage A OOS holdout (oos_holdout_fraction is always None) — this Stage B walk-forward result is the only genuine out-of-sample evidence for a cell.',
+    },
+    { label: 'Monte Carlo', render: (c) => (c.found ? jsonOr(c.stage_b.validation_result?.monte_carlo) : '—') },
+    { label: 'Regime robustness', render: (c) => (c.found ? jsonOr(c.stage_b.validation_result?.regime_robustness) : '—') },
+    { label: 'Cost stress', render: (c) => (c.found ? jsonOr(c.stage_b.validation_result?.cost_stress) : '—') },
+  ]
+
+  return (
+    <Panel
+      title={`Evidence Comparison (${cellIds.length} cells)`}
+      right={<button onClick={onClose} className="text-muted hover:text-text px-2 py-1.5">✕ close</button>}
+    >
+      <div className="p-4 flex flex-col gap-4">
+        <div className="rounded border border-amber/40 bg-amber/10 px-3 py-2.5 text-[0.8em] text-amber leading-relaxed font-bold">
+          {DISCLAIMER_TEXT}
+        </div>
+
+        {!data ? (
+          <Empty>Loading…</Empty>
+        ) : (
+          <>
+            {data.provenance && <ProvenanceBanner provenance={data.provenance} familyDetails={familyDetails} />}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-[0.78em] border-collapse">
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.label} className="border-b border-border align-top">
+                      <td className="py-2 pr-3 text-muted whitespace-nowrap font-bold">{row.label}</td>
+                      {data.cells.map((c) => (
+                        <td key={c.cell_id} className="py-2 pr-4 text-text font-mono break-all max-w-[260px]">
+                          {row.render(c)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {rows.filter((r) => r.note).map((r) => (
+              <div key={r.label} className="text-[0.72em] text-muted leading-relaxed">
+                <strong className="text-text">{r.label}:</strong> {r.note}
+              </div>
+            ))}
+
+            <div className="rounded border border-border px-3 py-2.5 text-[0.75em] text-muted leading-relaxed">
+              <strong className="text-text">Not shown — no per-cell record exists:</strong> "Direction symmetry" is a
+              static, codebase-wide scanner (not a per-cell/per-trade metric) — see Mission Center's own Direction
+              Symmetry Audit panel for that report. "Provider robustness" has no record tied to any specific matrix
+              cell's own backtest run — the Provider Benchmark work is a separate, symbol/timeframe-scoped data-quality
+              lab. Neither is fabricated here.
+            </div>
+
+            {data.cells.some((c) => !c.found) && (
+              <div className="text-[0.78em] text-red">
+                Unknown cell ID(s): {data.cells.filter((c) => !c.found).map((c) => c.cell_id).join(', ')}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </Panel>
   )
 }
@@ -605,8 +847,18 @@ function CellEvidencePanel({ cellId, onClose }: { cellId: string; onClose: () =>
 export function MatrixEngine() {
   const [selectedFamilyId, setSelectedFamilyId] = useState<string | null>(null)
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set())
+  const [comparing, setComparing] = useState<string[] | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const bump = () => setRefreshKey((k) => k + 1)
+
+  const toggleSelect = (id: string) =>
+    setSelectedForCompare((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < MAX_COMPARED_CELLS) next.add(id)
+      return next
+    })
 
   return (
     <div className="flex flex-col gap-4">
@@ -621,10 +873,18 @@ export function MatrixEngine() {
         <>
           <FamilyDetail familyId={selectedFamilyId} onDataChanged={bump} />
           <RunsPanel familyId={selectedFamilyId} refreshKey={refreshKey} />
-          <CellsTable familyId={selectedFamilyId} onSelectCell={setSelectedCellId} refreshKey={refreshKey} />
+          <CellsTable
+            familyId={selectedFamilyId}
+            onSelectCell={setSelectedCellId}
+            refreshKey={refreshKey}
+            selectedIds={selectedForCompare}
+            onToggleSelect={toggleSelect}
+            onCompare={() => setComparing(Array.from(selectedForCompare))}
+          />
         </>
       )}
       {selectedCellId && <CellEvidencePanel cellId={selectedCellId} onClose={() => setSelectedCellId(null)} />}
+      {comparing && <EvidenceComparisonPanel cellIds={comparing} onClose={() => setComparing(null)} />}
     </div>
   )
 }

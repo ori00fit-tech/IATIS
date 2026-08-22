@@ -91,6 +91,7 @@ export interface MatrixCell {
   confluence_overrides_json: string | null
   engine_variants_json: string | null
   data_provider: string | null
+  research_code_commit: string | null
   status: CellStatus
   rejection_reason: string | null
   stage_a_mission_id: string | null
@@ -114,10 +115,34 @@ export interface CellStageEvidence {
   trial_detail: Record<string, unknown> | null
 }
 
+// Phase 2C -- backtest.matrix_evidence._decode_validation_result()'s exact
+// shape: the Stage B per-symbol research_mission_validation_results row.
+// Every field here is diagnostic-only, per that table's own DDL comments --
+// none of them ever participated in `passed`/the Stage B verdict already
+// carried on CellStageBEvidence.verdict/validation_detail above.
+export interface ValidationResultEvidence {
+  symbol: string | null
+  passed: boolean
+  metrics: Record<string, unknown> | null
+  monte_carlo: Record<string, unknown> | null
+  walk_forward: Record<string, unknown> | null
+  robustness: Record<string, unknown> | null
+  criteria_breakdown: Record<string, unknown> | null
+  significance: Record<string, unknown> | null
+  regime_robustness: Record<string, unknown> | null
+  stability: Record<string, unknown> | null
+  cost_stress: Record<string, unknown> | null
+  discovery_score: Record<string, unknown> | null
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
 export interface CellStageBEvidence {
   validation_id: string | null
   verdict: string | null
   validation_detail: Record<string, unknown> | null
+  validation_result: ValidationResultEvidence | null
 }
 
 export interface CellEvidence {
@@ -130,6 +155,7 @@ export interface CellEvidence {
   confluence_overrides: Record<string, unknown> | null
   engine_variants: Record<string, unknown> | null
   data_provider: string | null
+  research_code_commit: string | null
   status: string | null
   rejection_reason: string | null
   requeue_count: number
@@ -137,6 +163,35 @@ export interface CellEvidence {
   updated_at: string | null
   stage_a: CellStageEvidence
   stage_b: CellStageBEvidence
+}
+
+// ── Phase 2C -- Evidence Comparison (NOT a leaderboard) ────────────────────
+//
+// GET /research/matrix/cells/compare never computes a ranking, score, or
+// verdict -- see backtest/matrix_evidence.py's own NON-NEGOTIABLE rule.
+// `provenance` is nothing more than identity-equality checks (same family?
+// same commit? same data provider? same hypothesis lineage?) over columns
+// each cell already carries. The UI built on this type must never collapse
+// these flags into a single sort order implying one cell is "better."
+
+export type ComparedCell = ({ found: true } & CellEvidence) | { found: false; cell_id: string }
+
+export interface CompareProvenance {
+  cell_count: number
+  family_ids: string[]
+  same_family: boolean
+  commits: string[]
+  same_commit: boolean
+  data_providers: string[]
+  same_data_provider: boolean
+  same_hypothesis_lineage: boolean
+  lineage_key: { symbol: string; bundle: string; risk_preset: string } | null
+}
+
+export interface CompareResponse {
+  cells: ComparedCell[]
+  count: number
+  provenance: CompareProvenance | null
 }
 
 export interface MatrixRun {
@@ -207,6 +262,13 @@ export const getMatrixCell = (cellId: string) =>
 
 export const getMatrixCellEvidence = (cellId: string) =>
   apiGet<CellEvidence>(`/research/matrix/cells/${encodeURIComponent(cellId)}/evidence`)
+
+// Mirrors execution.routes.research_matrix's own _MIN/_MAX_COMPARED_CELLS.
+export const MIN_COMPARED_CELLS = 2
+export const MAX_COMPARED_CELLS = 10
+
+export const compareMatrixCells = (cellIds: string[]) =>
+  apiGet<CompareResponse>('/research/matrix/cells/compare', { cell_ids: cellIds.join(',') })
 
 // ── runs (batches) ─────────────────────────────────────────────────────
 

@@ -251,6 +251,63 @@ async def matrix_list_cells(
     return {"cells": cells, "count": len(cells)}
 
 
+_MIN_COMPARED_CELLS = 2
+_MAX_COMPARED_CELLS = 10
+
+
+@router.get("/research/matrix/cells/compare")
+async def matrix_cells_compare(
+    cell_ids: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 2C Evidence Comparison — READ-ONLY, DESCRIPTIVE ONLY.
+
+    `cell_ids` is a comma-separated list (2-10 cells). Returns the exact
+    same full evidence join GET /cells/{id}/evidence returns, one entry
+    per cell (an unknown cell_id comes back as {"cell_id": ..., "found":
+    False} rather than failing the whole request — mirrors GET
+    /research/compare's own per-ID `found` convention), plus a
+    `provenance` block from backtest.matrix_evidence.compare_cells_
+    provenance() over only the cells that were actually found.
+
+    Registered BEFORE GET /cells/{cell_id} on purpose — Starlette matches
+    routes in registration order, and "compare" would otherwise be
+    swallowed as a literal {cell_id} path value by the more general route.
+
+    NON-NEGOTIABLE: this endpoint computes no ranking, score, or verdict.
+    `provenance` is nothing more than same-family/same-commit/same-
+    provider/same-hypothesis-lineage equality checks over identity
+    columns each cell already carries — every other field is a verbatim
+    re-presentation of evidence already decided by backtest/
+    matrix_orchestrator.py. A caller (dashboard or AI) must never treat
+    any ordering, color, or emphasis derived from this response as a new
+    statistical conclusion.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_matrix as storage
+
+    ids = [c.strip() for c in cell_ids.split(",") if c.strip()]
+    if not (_MIN_COMPARED_CELLS <= len(ids) <= _MAX_COMPARED_CELLS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"cell_ids must contain between {_MIN_COMPARED_CELLS} and {_MAX_COMPARED_CELLS} cell IDs.",
+        )
+
+    cells_out: list[dict[str, Any]] = []
+    found_rows: list[dict[str, Any]] = []
+    for cell_id in ids:
+        row = storage.get_cell(cell_id)
+        if row is None:
+            cells_out.append({"cell_id": cell_id, "found": False})
+            continue
+        found_rows.append(row)
+        cells_out.append({"found": True, **_build_cell_evidence(row)})
+
+    provenance = evidence.compare_cells_provenance(found_rows) if found_rows else None
+    return {"cells": cells_out, "count": len(cells_out), "provenance": provenance}
+
+
 @router.get("/research/matrix/cells/{cell_id}")
 async def matrix_get_cell(
     cell_id: str,
@@ -265,6 +322,39 @@ async def matrix_get_cell(
     return cell
 
 
+def _build_cell_evidence(cell: dict[str, Any]) -> dict[str, Any]:
+    """Shared by GET /cells/{id}/evidence and GET /cells/compare — the
+    exact same 4-way join (cell row + Stage A trial + Stage B validation
+    run + Stage B per-symbol validation result), so a caller never sees a
+    different evidence shape depending on which endpoint it hit. Takes an
+    already-fetched cell row (never re-fetches it) so callers comparing
+    many cells don't refetch each cell twice."""
+    from storage import research_mission_validations
+    from storage import research_missions
+
+    trial = None
+    mission_id = cell.get("stage_a_mission_id")
+    trial_number = cell.get("stage_a_trial_number")
+    if mission_id and trial_number is not None:
+        trial = research_missions.get_trial(mission_id, trial_number=trial_number, symbol=cell["symbol"])
+
+    validation = None
+    validation_result_row = None
+    validation_id = cell.get("stage_b_validation_id")
+    if validation_id:
+        validation = research_mission_validations.get_validation(validation_id)
+        # Phase 2C: a CROSS_SYMBOL validation has one result row PER
+        # validated symbol — find the one matching THIS cell's own symbol,
+        # never just the first row (which could be a different symbol
+        # entirely).
+        for row in research_mission_validations.validation_results(validation_id):
+            if row.get("symbol") == cell.get("symbol"):
+                validation_result_row = row
+                break
+
+    return evidence.cell_evidence(cell, trial=trial, validation=validation, validation_result=validation_result_row)
+
+
 @router.get("/research/matrix/cells/{cell_id}/evidence")
 async def matrix_cell_evidence(
     cell_id: str,
@@ -274,31 +364,20 @@ async def matrix_cell_evidence(
     """Phase 2A Evidence Read Model — READ-ONLY. The full evidence chain
     for one cell in one call: the cell's own row (JSON columns decoded)
     plus, when present, its Stage A trial detail (backtest.mission_runner's
-    own recorded trial) and its Stage B validation detail (backtest.
-    mission_validator's own recorded validation) — the exact join a caller
-    would otherwise need 3 separate round-trips to assemble. Never
-    recomputes or overrides any status/verdict/p-value."""
+    own recorded trial), its Stage B validation-run detail, and (Phase 2C)
+    its Stage B per-symbol validation result (backtest.mission_validator's
+    own recorded Monte Carlo/Walk-Forward/robustness/regime-robustness/
+    stability/cost-stress diagnostics) — the exact join a caller would
+    otherwise need 4 separate round-trips to assemble. Never recomputes or
+    overrides any status/verdict/p-value."""
     _check_auth(x_api_key, iatis_session)
     from storage import research_matrix as storage
-    from storage import research_mission_validations
-    from storage import research_missions
 
     cell = storage.get_cell(cell_id)
     if cell is None:
         raise HTTPException(status_code=404, detail="Matrix cell not found.")
 
-    trial = None
-    mission_id = cell.get("stage_a_mission_id")
-    trial_number = cell.get("stage_a_trial_number")
-    if mission_id and trial_number is not None:
-        trial = research_missions.get_trial(mission_id, trial_number=trial_number, symbol=cell["symbol"])
-
-    validation = None
-    validation_id = cell.get("stage_b_validation_id")
-    if validation_id:
-        validation = research_mission_validations.get_validation(validation_id)
-
-    return evidence.cell_evidence(cell, trial=trial, validation=validation)
+    return _build_cell_evidence(cell)
 
 
 @router.post("/research/matrix/run-batch")

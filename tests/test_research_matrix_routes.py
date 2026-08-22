@@ -441,6 +441,123 @@ def test_cell_evidence_joins_real_stage_a_and_stage_b_detail(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /research/matrix/cells/compare -- Phase 2C Evidence Comparison
+# ---------------------------------------------------------------------------
+
+
+def test_compare_requires_auth(client):
+    assert client.get("/research/matrix/cells/compare", params={"cell_ids": "a,b"}).status_code == 401
+
+
+def test_compare_rejects_too_few_cell_ids(client):
+    resp = client.get("/research/matrix/cells/compare", headers=HDR, params={"cell_ids": "only-one"})
+    assert resp.status_code == 400
+
+
+def test_compare_rejects_too_many_cell_ids(client):
+    ids = ",".join(f"MATRIX-CELL-{i}" for i in range(11))
+    resp = client.get("/research/matrix/cells/compare", headers=HDR, params={"cell_ids": ids})
+    assert resp.status_code == 400
+
+
+def test_compare_unknown_cell_id_is_reported_not_found_without_failing_the_request(client):
+    fam = _generate(client).json()["family_id"]
+    cell_id = client.get("/research/matrix/cells", headers=HDR, params={"family_id": fam}).json()["cells"][0]["cell_id"]
+    resp = client.get(
+        "/research/matrix/cells/compare", headers=HDR,
+        params={"cell_ids": f"{cell_id},MATRIX-CELL-doesnotexist"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 2
+    assert any(c["found"] is True for c in body["cells"])
+    assert any(c["found"] is False and c.get("cell_id") == "MATRIX-CELL-doesnotexist" for c in body["cells"])
+    # provenance is computed only over the cells that were actually found
+    assert body["provenance"]["cell_count"] == 1
+
+
+def test_compare_returns_none_provenance_when_no_cells_found(client):
+    resp = client.get(
+        "/research/matrix/cells/compare", headers=HDR,
+        params={"cell_ids": "MATRIX-CELL-nope1,MATRIX-CELL-nope2"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provenance"] is None
+    assert all(c["found"] is False for c in body["cells"])
+
+
+def test_compare_within_family_same_family_true(client):
+    """Comparison Type 1 -- within-family, PRIMARY: cells from one
+    /generate call share family_id/planned_n/family_alpha."""
+    fam = _generate(client, symbols=["EURUSD", "GBPUSD"]).json()["family_id"]
+    cell_ids = [c["cell_id"] for c in client.get("/research/matrix/cells", headers=HDR, params={"family_id": fam}).json()["cells"]]
+    resp = client.get(
+        "/research/matrix/cells/compare", headers=HDR,
+        params={"cell_ids": ",".join(cell_ids[:2])},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provenance"]["same_family"] is True
+    assert len(body["provenance"]["family_ids"]) == 1
+    # each returned cell carries its own evidence join, not just the raw row
+    for c in body["cells"]:
+        assert "stage_a" in c
+        assert "stage_b" in c
+
+
+def test_compare_cross_family_flags_different_families_and_commits(client):
+    """Comparison Type 2 -- cross-family, DESCRIPTIVE ONLY: cells from two
+    different /generate calls must never be reported as same_family, and
+    the response must expose each family_id so a UI can render the
+    required warning rather than a unified ranking."""
+    fam_a = _generate(client, symbols=["EURUSD"]).json()["family_id"]
+    fam_b = _generate(client, symbols=["GBPUSD"]).json()["family_id"]
+    fam_a_cell = client.get("/research/matrix/cells", headers=HDR, params={"family_id": fam_a}).json()["cells"][0]["cell_id"]
+    fam_b_cell = client.get("/research/matrix/cells", headers=HDR, params={"family_id": fam_b}).json()["cells"][0]["cell_id"]
+
+    resp = client.get(
+        "/research/matrix/cells/compare", headers=HDR,
+        params={"cell_ids": f"{fam_a_cell},{fam_b_cell}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provenance"]["same_family"] is False
+    assert len(body["provenance"]["family_ids"]) == 2
+
+
+def test_compare_detects_same_hypothesis_lineage_across_commits(client):
+    """Comparison Type 3 -- same symbol/bundle/risk_preset across
+    different research_code_commit values, simulating the same hypothesis
+    re-run after a code change (the operator's own EURUSD/Bundle X/
+    balanced example: commit A -> commit B -> commit C)."""
+    import backtest.research_matrix as rm
+    from storage import research_matrix as storage
+
+    fam = "lineage-fam"
+    storage.upsert_family(fam, planned_n=3, family_alpha=0.05)
+    cells = [
+        rm.MatrixCellSpec(symbol="EURUSD", bundle=_BUNDLE, risk_preset="balanced", research_code_commit=f"commit{c}")
+        for c in ("A", "B", "C")
+    ]
+    storage.upsert_cells(cells, fam)
+
+    resp = client.get(
+        "/research/matrix/cells/compare", headers=HDR,
+        params={"cell_ids": ",".join(c.cell_id for c in cells)},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    prov = body["provenance"]
+    assert prov["same_hypothesis_lineage"] is True
+    assert prov["lineage_key"] == {"symbol": "EURUSD", "bundle": "SMC only", "risk_preset": "balanced"}
+    assert prov["same_commit"] is False
+    assert sorted(prov["commits"]) == ["commitA", "commitB", "commitC"]
+    for c in body["cells"]:
+        assert c["research_code_commit"] in ("commitA", "commitB", "commitC")
+
+
+# ---------------------------------------------------------------------------
 # POST /research/matrix/run-batch
 # ---------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from backtest import matrix_orchestrator as orch
+from backtest import multiple_testing as mt
 from backtest import research_matrix as rm
 from storage import research_matrix as storage
 from storage import research_mission_validations
@@ -27,6 +28,11 @@ _BUNDLE = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indica
 
 def _cell(symbol="EURUSD") -> rm.MatrixCellSpec:
     return rm.MatrixCellSpec(symbol=symbol, bundle=_BUNDLE, risk_preset="balanced")
+
+
+def _family(family_id="fam1", planned_n=1, family_alpha=0.05) -> str:
+    storage.upsert_family(family_id, planned_n=planned_n, family_alpha=family_alpha)
+    return family_id
 
 
 def _now() -> str:
@@ -77,8 +83,9 @@ def _no_real_data_quality_gate(monkeypatch):
 
 def test_stage_a_promotes_a_healthy_trial_to_screened(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.8, "avg_rr": 0.3, "std_rr": 1.1}))
-    storage.upsert_cells([_cell()])
-    cell = storage.claim_queued_cells(1)[0]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
     orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     row = storage.get_cell(cell["cell_id"])
     assert row["status"] == rm.SCREENED
@@ -90,8 +97,9 @@ def test_stage_a_marks_insufficient_data_without_ever_calling_run_mission(monkey
     calls = []
     monkeypatch.setattr(rm, "check_data_quality", lambda *a, **k: rm.DataQualityResult(False, "no dataset found", None, None))
     monkeypatch.setattr(orch, "run_mission", lambda mc: calls.append(mc))
-    storage.upsert_cells([_cell()])
-    cell = storage.claim_queued_cells(1)[0]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
     orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     assert calls == []
     row = storage.get_cell(cell["cell_id"])
@@ -101,8 +109,9 @@ def test_stage_a_marks_insufficient_data_without_ever_calling_run_mission(monkey
 
 def test_stage_a_rejects_when_the_cheap_screen_fails(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 0.6, "avg_rr": -0.1, "std_rr": 1.0}))
-    storage.upsert_cells([_cell()])
-    cell = storage.claim_queued_cells(1)[0]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
     orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     row = storage.get_cell(cell["cell_id"])
     assert row["status"] == rm.REJECTED
@@ -111,8 +120,9 @@ def test_stage_a_rejects_when_the_cheap_screen_fails(monkeypatch):
 
 def test_stage_a_rejects_a_pruned_trial_with_a_documented_reason(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="PRUNED", trades=2, metrics=None))
-    storage.upsert_cells([_cell()])
-    cell = storage.claim_queued_cells(1)[0]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
     orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     row = storage.get_cell(cell["cell_id"])
     assert row["status"] == rm.REJECTED
@@ -124,8 +134,9 @@ def test_stage_a_marks_failed_on_a_run_mission_crash_and_never_aborts_the_batch(
         raise RuntimeError("synthetic crash")
 
     monkeypatch.setattr(orch, "run_mission", _boom)
-    storage.upsert_cells([_cell()])
-    cell = storage.claim_queued_cells(1)[0]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
     orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     row = storage.get_cell(cell["cell_id"])
     assert row["status"] == rm.FAILED
@@ -153,26 +164,74 @@ def test_one_cell_crash_never_aborts_run_batch(monkeypatch):
         )
 
     monkeypatch.setattr(orch, "run_mission", _flaky)
-    storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD")])
-    for cell in storage.claim_queued_cells(2):
+    fam = _family(planned_n=2)
+    storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD")], fam)
+    for cell in storage.claim_queued_cells(fam, 2):
         try:
             orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
         except Exception as exc:  # noqa: BLE001 — proving run_batch's own per-cell isolation would catch this
             pytest.fail(f"_run_stage_a_cell must never propagate a Stage A crash: {exc}")
 
-    statuses = {c["symbol"]: c["status"] for c in storage.list_cells()}
-    assert statuses["EURUSD"] == rm.FAILED
-    assert statuses["GBPUSD"] == rm.SCREENED  # the SECOND claimed cell still ran to completion despite the first one crashing
+    # Both cells share the same insert timestamp (upsert_cells stamps the
+    # whole batch once), so which one is claimed first is not guaranteed —
+    # the load-bearing assertion is that exactly one crashes and the other
+    # still runs to completion, not which specific symbol goes first.
+    statuses = {c["symbol"]: c["status"] for c in storage.list_cells(family_id=fam)}
+    assert sorted(statuses.values()) == sorted([rm.FAILED, rm.SCREENED])
 
 
 # ---------------------------------------------------------------------------
-# Matrix-wide correction
+# Stage A — Finding 5 (std_rr == 0 -> INSUFFICIENT_DATA, never stranded)
+# ---------------------------------------------------------------------------
+
+
+def test_stage_a_terminates_zero_r_multiple_variance_as_insufficient_data(monkeypatch):
+    """Every closed trade produced an identical R-multiple (std_rr == 0),
+    so trial_p_value() is mathematically undefined. The cell must reach a
+    documented TERMINAL status here (INSUFFICIENT_DATA), not sit in
+    SCREENED with a NULL p-value forever — cells_for_matrix_correction()
+    would never revisit it."""
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.5, "avg_rr": 0.5, "std_rr": 0.0}))
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    row = storage.get_cell(cell["cell_id"])
+    assert row["status"] == rm.INSUFFICIENT_DATA
+    assert "ZERO_R_MULTIPLE_VARIANCE" in row["rejection_reason"]
+    assert row["lead_id"] is not None  # still carries a lead id for auditability, even though it never reaches SCREENED
+
+
+def test_zero_r_multiple_variance_cell_is_never_returned_by_cells_for_matrix_correction(monkeypatch):
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.5, "avg_rr": 0.5, "std_rr": 0.0}))
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert storage.cells_for_matrix_correction(fam) == []
+
+
+def test_zero_r_multiple_variance_cell_can_never_reach_candidate_or_validated(monkeypatch):
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.5, "avg_rr": 0.5, "std_rr": 0.0}))
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    orch.apply_matrix_wide_correction(fam)
+    row = storage.get_cell(cell["cell_id"])
+    assert row["status"] not in (rm.CANDIDATE, rm.VALIDATED)
+    assert row["status"] == rm.INSUFFICIENT_DATA
+
+
+# ---------------------------------------------------------------------------
+# Matrix-wide correction (Finding 4 — fixed research family)
 # ---------------------------------------------------------------------------
 
 
 def test_matrix_wide_correction_promotes_significant_and_rejects_the_rest():
-    storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD"), _cell(symbol="XAUUSD")])
-    ids = [c["cell_id"] for c in storage.list_cells()]
+    fam = _family(planned_n=3)
+    storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD"), _cell(symbol="XAUUSD")], fam)
+    ids = [c["cell_id"] for c in storage.list_cells(family_id=fam)]
     # 3 SCREENED cells: one with a very small p-value (survives even a
     # strict Bonferroni correction over 3 trials), two with unremarkable
     # p-values that do not.
@@ -180,35 +239,99 @@ def test_matrix_wide_correction_promotes_significant_and_rejects_the_rest():
     storage.update_cell(ids[1], status=rm.SCREENED, stage_a_p_value=0.4)
     storage.update_cell(ids[2], status=rm.SCREENED, stage_a_p_value=0.6)
 
-    summary = orch.apply_matrix_wide_correction()
-    assert summary["n_trials"] == 3
+    summary = orch.apply_matrix_wide_correction(fam)
+    assert summary["family_id"] == fam
+    assert summary["planned_n"] == 3
+    assert summary["n_screened_this_pass"] == 3
     assert summary["count_surviving_bonferroni"] == 1
 
     assert storage.get_cell(ids[0])["status"] == rm.CANDIDATE
     assert storage.get_cell(ids[1])["status"] == rm.REJECTED
-    assert "Bonferroni" in storage.get_cell(ids[1])["rejection_reason"]
+    assert "did not survive Matrix Family correction" in storage.get_cell(ids[1])["rejection_reason"]
     assert storage.get_cell(ids[2])["status"] == rm.REJECTED
 
 
 def test_matrix_wide_correction_on_an_empty_family_is_a_no_op():
-    summary = orch.apply_matrix_wide_correction()
-    assert summary == {"n_trials": 0, "bonferroni_alpha": None, "count_surviving_bonferroni": 0}
+    fam = _family(planned_n=5)
+    summary = orch.apply_matrix_wide_correction(fam)
+    assert summary["n_screened_this_pass"] == 0
+    assert summary["count_surviving_bonferroni"] == 0
+    assert summary["count_rejected"] == 0
+    assert summary["planned_n"] == 5
+    assert summary["bonferroni_alpha"] == mt.bonferroni_alpha(5, 0.05)
+
+
+def test_matrix_wide_correction_raises_on_an_unknown_family_id():
+    with pytest.raises(ValueError):
+        orch.apply_matrix_wide_correction("does-not-exist")
 
 
 def test_matrix_wide_correction_family_spans_multiple_runs_not_just_one_batch():
     """A cell SCREENED by an earlier run still counts toward a later
     run's correction family size — the family is matrix-wide, not
     per-batch (operator's condition #3)."""
-    storage.upsert_cells([_cell(symbol="EURUSD")])
-    ids1 = [c["cell_id"] for c in storage.list_cells()]
+    fam = _family(planned_n=2)
+    storage.upsert_cells([_cell(symbol="EURUSD")], fam)
+    ids1 = [c["cell_id"] for c in storage.list_cells(family_id=fam)]
     storage.update_cell(ids1[0], status=rm.SCREENED, stage_a_p_value=0.5)
 
-    storage.upsert_cells([_cell(symbol="GBPUSD")])
-    new_cell_id = [c["cell_id"] for c in storage.list_cells(symbol="GBPUSD")][0]
+    storage.upsert_cells([_cell(symbol="GBPUSD")], fam)
+    new_cell_id = [c["cell_id"] for c in storage.list_cells(symbol="GBPUSD", family_id=fam)][0]
     storage.update_cell(new_cell_id, status=rm.SCREENED, stage_a_p_value=0.5)
 
-    summary = orch.apply_matrix_wide_correction()
-    assert summary["n_trials"] == 2  # both cells counted, not just the newest one
+    summary = orch.apply_matrix_wide_correction(fam)
+    assert summary["n_screened_this_pass"] == 2  # both cells counted, not just the newest one
+
+
+def test_matrix_wide_correction_denominator_is_fixed_planned_n_not_current_screened_count():
+    """Finding 4 — the whole point of the fix: the Bonferroni denominator
+    is the family's FIXED planned_n (the full research space at generation
+    time), never `len(currently SCREENED)`. A p-value that would trivially
+    survive under a naive "denominator == 1 currently-screened cell" design
+    must NOT survive once the family's real, larger planned_n is applied."""
+    fam = _family(planned_n=100)  # the full planned research space, even though only 1 cell is screened right now
+    storage.upsert_cells([_cell()], fam)
+    cell_id = storage.list_cells(family_id=fam)[0]["cell_id"]
+    storage.update_cell(cell_id, status=rm.SCREENED, stage_a_p_value=0.01)
+
+    summary = orch.apply_matrix_wide_correction(fam)
+    assert summary["planned_n"] == 100
+    assert summary["bonferroni_alpha"] == pytest.approx(0.05 / 100)
+    # 0.01 would survive an alpha of 0.05 (or even 0.05/1), but not 0.05/100
+    assert storage.get_cell(cell_id)["status"] == rm.REJECTED
+
+
+def test_matrix_wide_correction_resume_reproduces_the_identical_threshold():
+    """A resumed run (a second apply_matrix_wide_correction call against
+    the same family_id, simulating a crash-and-restart) must compute the
+    exact same corrected alpha as the first call — never a moving target."""
+    fam = _family(planned_n=17)
+    storage.upsert_cells([_cell()], fam)
+    first = orch.apply_matrix_wide_correction(fam)
+    second = orch.apply_matrix_wide_correction(fam)
+    assert first["bonferroni_alpha"] == second["bonferroni_alpha"]
+    assert first["planned_n"] == second["planned_n"] == 17
+
+
+def test_two_families_have_fully_independent_corrections():
+    fam_a = _family("famA", planned_n=2)
+    fam_b = _family("famB", planned_n=200)
+    storage.upsert_cells([_cell(symbol="EURUSD")], fam_a)
+    storage.upsert_cells([_cell(symbol="GBPUSD")], fam_b)
+    cell_a = storage.list_cells(family_id=fam_a)[0]["cell_id"]
+    cell_b = storage.list_cells(family_id=fam_b)[0]["cell_id"]
+    storage.update_cell(cell_a, status=rm.SCREENED, stage_a_p_value=0.02)
+    storage.update_cell(cell_b, status=rm.SCREENED, stage_a_p_value=0.02)
+
+    summary_a = orch.apply_matrix_wide_correction(fam_a)
+    summary_b = orch.apply_matrix_wide_correction(fam_b)
+
+    assert summary_a["planned_n"] == 2
+    assert summary_b["planned_n"] == 200
+    assert summary_a["bonferroni_alpha"] != summary_b["bonferroni_alpha"]
+    # p=0.02 survives family A's lenient alpha=0.025 but not family B's strict alpha=0.00025
+    assert storage.get_cell(cell_a)["status"] == rm.CANDIDATE
+    assert storage.get_cell(cell_b)["status"] == rm.REJECTED
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +341,9 @@ def test_matrix_wide_correction_family_spans_multiple_runs_not_just_one_batch():
 
 def test_stage_b_validates_a_confirmed_candidate(monkeypatch):
     monkeypatch.setattr(orch, "run_validation", _stub_run_validation(verdict="SAME_SYMBOL_CONFIRMED"))
-    storage.upsert_cells([_cell()])
-    cell_id = storage.list_cells()[0]["cell_id"]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell_id = storage.list_cells(family_id=fam)[0]["cell_id"]
     storage.update_cell(cell_id, status=rm.CANDIDATE, stage_a_mission_id="m1", stage_a_trial_number=0)
     cell = storage.get_cell(cell_id)
     orch._run_stage_b_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
@@ -230,8 +354,9 @@ def test_stage_b_validates_a_confirmed_candidate(monkeypatch):
 
 def test_stage_b_rejects_a_not_confirmed_verdict(monkeypatch):
     monkeypatch.setattr(orch, "run_validation", _stub_run_validation(verdict="SAME_SYMBOL_NOT_CONFIRMED"))
-    storage.upsert_cells([_cell()])
-    cell_id = storage.list_cells()[0]["cell_id"]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell_id = storage.list_cells(family_id=fam)[0]["cell_id"]
     storage.update_cell(cell_id, status=rm.CANDIDATE, stage_a_mission_id="m1", stage_a_trial_number=0)
     cell = storage.get_cell(cell_id)
     orch._run_stage_b_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
@@ -245,8 +370,9 @@ def test_stage_b_crash_is_rejected_not_a_batch_abort(monkeypatch):
         raise RuntimeError("stage b crash")
 
     monkeypatch.setattr(orch, "run_validation", _boom)
-    storage.upsert_cells([_cell()])
-    cell_id = storage.list_cells()[0]["cell_id"]
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell_id = storage.list_cells(family_id=fam)[0]["cell_id"]
     storage.update_cell(cell_id, status=rm.CANDIDATE, stage_a_mission_id="m1", stage_a_trial_number=0)
     cell = storage.get_cell(cell_id)
     orch._run_stage_b_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
@@ -263,37 +389,61 @@ def test_stage_b_crash_is_rejected_not_a_batch_abort(monkeypatch):
 def test_run_batch_full_pipeline_queued_to_validated(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 2.0, "avg_rr": 0.5, "std_rr": 0.9}))
     monkeypatch.setattr(orch, "run_validation", _stub_run_validation(verdict="SAME_SYMBOL_CONFIRMED"))
-    storage.upsert_cells([_cell(symbol="EURUSD")])
+    fam = _family()
+    storage.upsert_cells([_cell(symbol="EURUSD")], fam)
 
-    orch.run_batch("run-full", batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    orch.run_batch("run-full", family_id=fam, batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
 
-    row = storage.list_cells()[0]
+    row = storage.list_cells(family_id=fam)[0]
     assert row["status"] == rm.VALIDATED
 
     run = storage.get_run("run-full")
     assert run["status"] == "finished"
     assert run["cells_validated"] == 1
+    assert run["family_id"] == fam
+
+
+def test_run_batch_raises_on_an_unknown_family_id():
+    with pytest.raises(ValueError):
+        orch.run_batch("run-bad-family", family_id="nope", batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
 
 
 def test_run_batch_never_touches_more_than_batch_size_cells(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 2.0, "avg_rr": 0.5, "std_rr": 0.9}))
-    storage.upsert_cells([_cell(symbol=s) for s in ("EURUSD", "GBPUSD", "XAUUSD", "USDJPY", "AUDUSD")])
-    orch.run_batch("run-bounded", batch_size=2, stage_b_batch_size=1, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
-    still_queued = storage.list_cells(status=rm.QUEUED)
+    fam = _family(planned_n=5)
+    storage.upsert_cells([_cell(symbol=s) for s in ("EURUSD", "GBPUSD", "XAUUSD", "USDJPY", "AUDUSD")], fam)
+    orch.run_batch("run-bounded", family_id=fam, batch_size=2, stage_b_batch_size=1, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    still_queued = storage.list_cells(status=rm.QUEUED, family_id=fam)
     assert len(still_queued) == 3  # only 2 of 5 claimed this batch
 
 
 def test_run_batch_requeues_stale_running_cells_before_claiming():
-    storage.upsert_cells([_cell()])
-    storage.claim_queued_cells(1)  # leaves the cell RUNNING, simulating a crashed prior run
-    orch.run_batch("run-resume", batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"), stale_running_seconds=-1)
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    storage.claim_queued_cells(fam, 1)  # leaves the cell RUNNING, simulating a crashed prior run
+    orch.run_batch("run-resume", family_id=fam, batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"), stale_running_seconds=-1)
     # the requeue makes it QUEUED again, then this same run_batch call
     # claims and processes it (data-quality gate mocked OK, run_mission
     # not mocked here so a real attempt is made and fails gracefully —
     # the key assertion is that it left QUEUED/RUNNING limbo, not that it
     # necessarily reached a specific terminal status).
-    row = storage.list_cells()[0]
+    row = storage.list_cells(family_id=fam)[0]
     assert row["status"] != rm.RUNNING
+
+
+def test_run_batch_only_ever_claims_and_promotes_cells_within_its_own_family(monkeypatch):
+    """run_batch scoped to family A must never touch family B's QUEUED
+    cells, even when both families' cells sit in the same shared table."""
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 2.0, "avg_rr": 0.5, "std_rr": 0.9}))
+    fam_a = _family("famA", planned_n=1)
+    fam_b = _family("famB", planned_n=1)
+    storage.upsert_cells([_cell(symbol="EURUSD")], fam_a)
+    storage.upsert_cells([_cell(symbol="GBPUSD")], fam_b)
+
+    orch.run_batch("run-a-only", family_id=fam_a, batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+
+    assert storage.get_cell(_cell(symbol="GBPUSD").cell_id)["status"] == rm.QUEUED
+    assert storage.get_cell(_cell(symbol="EURUSD").cell_id)["status"] != rm.QUEUED
 
 
 # ---------------------------------------------------------------------------
@@ -318,12 +468,13 @@ def test_no_write_call_near_a_forbidden_target_anywhere_in_the_matrix_engine():
 def test_config_and_registry_files_are_byte_identical_after_a_real_run_batch_call(monkeypatch):
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 2.0, "avg_rr": 0.5, "std_rr": 0.9}))
     monkeypatch.setattr(orch, "run_validation", _stub_run_validation(verdict="SAME_SYMBOL_CONFIRMED"))
-    storage.upsert_cells([_cell()])
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
 
     watched = [Path("config.yaml"), Path("config/engines.yaml"), Path("research/results/registry.json")]
     before = {p: (p.read_bytes(), p.stat().st_mtime) for p in watched if p.exists()}
 
-    orch.run_batch("run-safety", batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    orch.run_batch("run-safety", family_id=fam, batch_size=10, stage_b_batch_size=5, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
 
     for p in watched:
         if p in before:

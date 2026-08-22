@@ -66,6 +66,7 @@ class _MatrixGenerateRequest(BaseModel):
 
 
 class _MatrixRunBatchRequest(BaseModel):
+    family_id: str
     batch_size: int = 20
     stage_b_batch_size: int = 5
     data_dir: str = "data"
@@ -97,12 +98,18 @@ async def matrix_generate(
 
     bundles = [b.model_dump() for b in body.bundles]
 
+    # Finding 2 fix: the research-code commit is part of every cell's
+    # fingerprint, so a code change (even with the hypothesis spec held
+    # identical) always produces a fresh, distinguishable cell.
+    code_state = rm.resolve_research_code_commit()
+
     try:
         cells = rm.generate_matrix_cells(
             symbols=symbols, bundles=bundles, risk_presets=risk_presets,
             confluence_overrides_choices=(body.confluence_overrides,),
             engine_variants_choices=(body.engine_variants,),
             data_provider=body.data_provider,
+            research_code_commit=code_state["commit"],
         )
     except rm.ResearchMatrixError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -113,22 +120,63 @@ async def matrix_generate(
             detail=f"This spec would generate {len(cells)} cells, over the {_MAX_CELLS_PER_GENERATE} cap per request — narrow the symbol/bundle/preset lists.",
         )
 
+    import json as _json
+
     from storage import research_matrix as storage
-    result = storage.upsert_cells(cells)
+
+    # Finding 4 fix (Design A — fixed research family): planned_n is fixed
+    # HERE, once, to the full planned research space for this call. Every
+    # future correction pass against this family_id reuses this exact N —
+    # it is never recomputed from "currently SCREENED count," so a cell
+    # that fails data-quality/Stage-A screening still counts toward the
+    # denominator (it was part of the planned space), and two batches (or
+    # a resumed run) within the same family always see the identical
+    # Bonferroni threshold. See matrix_orchestrator.py's module docstring
+    # for the full semantics.
+    family_id = uuid.uuid4().hex[:12]
+    storage.upsert_family(
+        family_id, planned_n=len(cells), family_alpha=0.05,
+        symbols_json=_json.dumps(symbols),
+    )
+    result = storage.upsert_cells(cells, family_id)
 
     from storage.audit_log import log_action
     log_action(
         "matrix_generate", x_api_key=x_api_key, session_id=iatis_session,
         detail=f"symbols={len(symbols)} bundles={len(bundles)} risk_presets={risk_presets} "
+               f"commit={code_state['commit']} dirty={code_state['dirty']} "
+               f"family_id={family_id} planned_n={len(cells)} "
                f"-> inserted={result['inserted']} duplicate={result['duplicate']}",
     )
-    return {"cells_considered": len(cells), **result}
+    return {
+        "cells_considered": len(cells),
+        "family_id": family_id,
+        "planned_n": len(cells),
+        "research_code_commit": code_state["commit"],
+        "research_code_dirty": code_state["dirty"],
+        **result,
+    }
+
+
+@router.get("/research/matrix/families/{family_id}")
+async def matrix_get_family(
+    family_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _check_auth(x_api_key, iatis_session)
+    from storage import research_matrix as storage
+    family = storage.get_family(family_id)
+    if family is None:
+        raise HTTPException(status_code=404, detail="Matrix family not found.")
+    return family
 
 
 @router.get("/research/matrix/cells")
 async def matrix_list_cells(
     status: str | None = None,
     symbol: str | None = None,
+    family_id: str | None = None,
     limit: int = 500,
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
@@ -140,7 +188,10 @@ async def matrix_list_cells(
         raise HTTPException(status_code=400, detail="limit must be between 1 and 5000.")
 
     from storage import research_matrix as storage
-    cells = storage.list_cells(status=status, symbol=symbol.upper() if symbol else None, limit=limit)
+    cells = storage.list_cells(
+        status=status, symbol=symbol.upper() if symbol else None,
+        family_id=family_id, limit=limit,
+    )
     return {"cells": cells, "count": len(cells)}
 
 
@@ -166,6 +217,10 @@ async def matrix_run_batch(
 ) -> dict[str, Any]:
     _check_auth(x_api_key, iatis_session)
 
+    from storage import research_matrix as storage
+
+    if storage.get_family(body.family_id) is None:
+        raise HTTPException(status_code=400, detail=f"Unknown family_id {body.family_id!r} — generate cells for it first via POST /research/matrix/generate.")
     if not (1 <= body.batch_size <= _MAX_BATCH_SIZE):
         raise HTTPException(status_code=400, detail=f"batch_size must be between 1 and {_MAX_BATCH_SIZE}.")
     if not (1 <= body.stage_b_batch_size <= _MAX_STAGE_B_BATCH_SIZE):
@@ -178,6 +233,7 @@ async def matrix_run_batch(
     run_id = uuid.uuid4().hex[:12]
     argv = list(_JOB_COMMANDS["matrix_batch"]) + [
         "--run-id", run_id,
+        "--family-id", body.family_id,
         "--batch-size", str(body.batch_size),
         "--stage-b-batch-size", str(body.stage_b_batch_size),
         "--data-dir", body.data_dir,
@@ -197,7 +253,7 @@ async def matrix_run_batch(
     from storage.audit_log import log_action
     log_action(
         "matrix_run_batch", x_api_key=x_api_key, session_id=iatis_session,
-        detail=f"matrix_batch ({run_id}) batch_size={body.batch_size} stage_b_batch_size={body.stage_b_batch_size}",
+        detail=f"matrix_batch ({run_id}) family_id={body.family_id} batch_size={body.batch_size} stage_b_batch_size={body.stage_b_batch_size}",
     )
 
     job.future = _job_executor.submit(_run_job, job)

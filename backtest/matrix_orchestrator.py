@@ -15,33 +15,71 @@ Reuses, never rebuilds (operator's explicit "no architectural regression"
 instruction): backtest.mission_runner.run_mission(), backtest.
 mission_validator.run_validation(), backtest.multiple_testing's Bonferroni
 machinery, backtest.lead_id.lead_id(), storage.research_missions,
-storage.research_mission_validations. Every Stage A trial IS one call to
-the unmodified run_mission() (a single-point grid search of exactly one
-hypothesis bundle at one fixed risk preset — deterministic and
-reproducible by construction); every Stage B validation IS one call to
-the unmodified run_validation().
+storage.research_mission_validations. Neither run_mission() nor
+run_validation() is modified by this module or the Forensic Audit
+hardening pass that added families/atomic-claim/F5 handling below — every
+call into either is byte-identical to Phase 1's original shape. Every
+Stage A trial IS one call to the unmodified run_mission() (a single-point
+grid search of exactly one hypothesis bundle at one fixed risk preset —
+deterministic and reproducible by construction); every Stage B validation
+IS one call to the unmodified run_validation().
 
 Pipeline per cell (operator's condition #4 — every intermediate gate is
 mandatory, every rejection carries a documented reason):
 
     QUEUED -> (data quality gate) -> INSUFFICIENT_DATA, or
     QUEUED -> RUNNING -> (Stage A trial via run_mission) -> SCREENED, or
-                                                          -> REJECTED (cheap-screen fail)
-    SCREENED -> (MATRIX-WIDE Bonferroni correction, across every currently
-                 SCREENED cell, not just this batch) -> CANDIDATE, or
-                                                      -> REJECTED (did not
-                                                         survive correction)
+                                                          -> REJECTED (cheap-screen fail), or
+                                                          -> INSUFFICIENT_DATA (Finding 5:
+                                                             std_rr == 0, significance undefined)
+    SCREENED -> (Matrix Family correction — see below) -> CANDIDATE, or
+                                                        -> REJECTED (did not
+                                                           survive correction)
     CANDIDATE -> (Stage B via run_validation, SAME_SYMBOL mode) -> VALIDATED, or
                                                                   -> REJECTED
                                                                      (real verdict)
 
-Matrix-wide correction (operator's condition #3) is a SEPARATE layer on
-top of — never a substitute for — each Stage B validation's own
-within-validation multiple-testing gate
-(mission_validator._compute_mission_family_significance, unchanged): a
-cell can only ever reach CANDIDATE by surviving the matrix-wide family
-correction FIRST, and can only reach VALIDATED by then also surviving
-Stage B's own, separate, already-existing correction.
+Forensic Audit hardening, Finding 4 — the correction family and its
+denominator, resolved and fixed (not "documented after the fact"):
+
+  1. Correction-family identity: a `research_matrix_families` row,
+     created once per POST /research/matrix/generate call. `family_id` is
+     a NEW identity, distinct from a cell's own MATRIX-CELL-<fingerprint>
+     and from any LEAD-*/HXXX id — see the identity chain in backtest/
+     research_matrix.py's own module docstring.
+  2. N: `planned_n`, set ONCE at family-creation time to the total number
+     of cells generated for that family (len(cells) from generate_matrix_
+     cells()) — the full planned research space, not "however many cells
+     happen to be SCREENED right now."
+  3. When N is fixed: at generation time. It never changes afterward.
+  4. New cells cannot be added to an already-started family — a second
+     POST /research/matrix/generate call always creates a NEW family with
+     its own new family_id and its own new N. This is the simplest,
+     smallest, most auditable answer available (an operator who wants a
+     bigger search space runs a bigger /generate call up front, or treats
+     each family as one bounded research pass and compares results across
+     families explicitly, rather than growing one family's N in place).
+  5. A cell that fails the data-quality gate, or is REJECTED/FAILED at the
+     cheap Stage-A screen, still counts in planned_n (it was part of the
+     planned research space when the family was created) — it just never
+     appears in cells_for_matrix_correction()'s SCREENED-with-p-value
+     pool. This is the textbook-correct Bonferroni-family semantics: the
+     family is "how many hypotheses did we set out to test," not "how
+     many produced a usable p-value" (the latter would inflate survivor
+     significance by shrinking the denominator exactly when weak
+     candidates get filtered out).
+  6. Resume/restart reproduces the identical threshold: planned_n/
+     family_alpha are read fresh from D1 on every call to
+     apply_matrix_wide_correction(), never recomputed from "whatever is
+     SCREENED right now" — a resumed run applies the exact same corrected
+     alpha a crashed earlier run would have.
+  7. Multiple batches within one family: every batch (run_batch() call)
+     that names the same family_id shares the same planned_n/family_alpha
+     — an early batch's small SCREENED cohort and a later batch's large
+     one are judged by the IDENTICAL threshold, closing the exact gap the
+     prior per-batch-cohort design had (a cell promoted early under a
+     lenient small-N correction was never re-checked once a later batch
+     revealed the true, larger scale of the search).
 
 Bounded + resumable + checkpointed (operator's condition #5): every cell
 transition is persisted to D1 the moment it happens (storage.
@@ -49,7 +87,51 @@ research_matrix.update_cell); a crashed run leaves cells in RUNNING,
 requeued by the next invocation via requeue_stale_running_cells(); nothing
 here ever attempts "24 symbols x everything x thousands of trials" in one
 call — batch_size/stage_b_batch_size bound exactly how much work one
-invocation does.
+invocation does. Forensic Audit hardening, Finding 1: claim_queued_cells()
+is now an atomic (per-SQL-statement) compare-and-set, so two concurrent
+run_batch() invocations (nothing in this module enforces single-instance-
+per-process, mirroring research_mission's own deliberate choice to allow
+concurrent missions) can never both claim, and both execute Stage A for,
+the same cell — see storage/research_matrix.py's own module docstring for
+the exact mechanism.
+
+Forensic Audit hardening, Finding 3 (evidence hierarchy — documentation
+only, no changes to run_mission()/run_validation()/multiple_testing.py):
+
+  1. The Matrix Family correction above (apply_matrix_wide_correction) is
+     the ONE authoritative multiple-testing gate for Matrix Engine
+     promotion (QUEUED/SCREENED -> CANDIDATE -> VALIDATED).
+  2. run_mission()'s own mission_wide_significance/per-symbol significance
+     (backtest/mission_runner.py::_write_report, via backtest.
+     multiple_testing.mission_significance_summary) is computed and
+     written to that mission's own report JSON file exactly as it always
+     was — UNCHANGED — but is never read by this module. Since every
+     Matrix Engine cell constructs a single-trial mission
+     (n_trials_per_symbol=1), that computation always sees a family of
+     exactly 1 trial, making its own Bonferroni correction a mathematical
+     no-op (alpha/1 == alpha) even if it WERE read. It is not a second
+     layer of protection for a Matrix cell — it is Mission Center's
+     ordinary per-mission report artifact, unrelated to Matrix Engine
+     promotion.
+  3. Stage B's own `_compute_mission_family_significance()` (mission_
+     validator.py, UNCHANGED) — the `family_survives` gate required for
+     SAME_SYMBOL_CONFIRMED — derives ITS family size from `research_
+     missions.existing_trials(mission_id, symbol)`, which is ALSO always
+     1 for a Matrix Engine cell, for the identical reason as (2). It
+     degenerates into an uncorrected p<0.05 check. This is harmless in
+     practice ONLY because a cell can never reach Stage B without having
+     already survived the (properly-sized) Matrix Family correction
+     first, which is strictly stricter — so Stage B's own family_survives
+     can never wrongly admit or reject a cell beyond what the Matrix
+     Family gate already decided. It is NOT an independent, stronger
+     confirmation for a Matrix cell.
+  4. A future dashboard/UI must never present run_mission()'s mission_
+     wide_significance or Stage B's family_survives/mission_family_
+     significance as independent statistical confirmation for a Matrix
+     Engine cell — the ONLY authoritative multiple-testing evidence for a
+     Matrix cell is its own family's apply_matrix_wide_correction() result
+     (persisted per-run in research_matrix_runs.matrix_significance_json
+     and, per-cell, in the REJECTED reason text when a cell fails it).
 """
 from __future__ import annotations
 
@@ -168,9 +250,24 @@ def _run_stage_a_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
         )
         return
 
-    p_value = None
-    if metrics is not None:
-        p_value = trial_p_value(metrics.get("avg_rr", 0.0), metrics.get("std_rr", 0.0), trial.get("trades", 0))
+    p_value = trial_p_value(metrics.get("avg_rr", 0.0), metrics.get("std_rr", 0.0), trial.get("trades", 0)) if metrics is not None else None
+
+    # Forensic Audit hardening (Finding 5) — trial_p_value() returns None
+    # for exactly one reason at this point: std_rr == 0 (the trades<2 case
+    # is already excluded by screen_stage_a's own STAGE_A_MIN_TRADES=20
+    # floor above). A cell whose significance is mathematically undefined
+    # must reach a documented TERMINAL status here, not sit in SCREENED
+    # with a NULL p-value forever — cells_for_matrix_correction() would
+    # never revisit it (no other code path does either), stranding it
+    # indefinitely with no promotion, no rejection reason, and no
+    # INSUFFICIENT_DATA classification.
+    if p_value is None:
+        storage.update_cell(
+            cell_id, status=rm.INSUFFICIENT_DATA, rejection_reason=rm.REASON_ZERO_R_MULTIPLE_VARIANCE,
+            stage_a_mission_id=mission_id, stage_a_trial_number=0,
+            stage_a_metrics_json=_json.dumps(metrics) if metrics else None, lead_id=lead,
+        )
+        return
 
     storage.update_cell(
         cell_id, status=rm.SCREENED,
@@ -180,32 +277,42 @@ def _run_stage_a_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     )
 
 
-def apply_matrix_wide_correction(family_alpha: float = 0.05) -> dict:
-    """The matrix-wide gate (operator's condition #3) — separate from,
-    and applied AFTER, each Stage A trial's own (trivial, family-size-1)
-    within-mission evaluation. The correction family is every currently
-    SCREENED cell across the WHOLE matrix, not just this batch — a cell
-    promoted to CANDIDATE in an earlier run still counts toward a later
-    run's family size, since it already consumed one of the "how many
-    tests have we run" budget.
+def apply_matrix_wide_correction(family_id: str) -> dict:
+    """The Matrix Family correction gate (operator's condition #3 and
+    Finding 4's resolved design — see this module's own docstring for the
+    full family-semantics answer). Reads the family's FIXED planned_n/
+    family_alpha from D1 (storage.get_family) and applies that SAME
+    denominator to every currently-SCREENED cell in this family, every
+    time this is called — never `len(screened)`, so an early batch's
+    small SCREENED cohort and a later batch's large one are judged by the
+    identical threshold.
 
-    A SCREENED cell whose p-value survives Bonferroni correction is
+    A SCREENED cell whose p-value survives Bonferroni correction (against
+    planned_n, not against how many happen to be SCREENED right now) is
     promoted to CANDIDATE (eligible for Stage B); one that doesn't is
     REJECTED with a documented reason — its fingerprint is fixed, so no
     future evidence can ever accumulate for that exact combination.
-    Returns the same significance-summary shape backtest.multiple_testing
-    already uses elsewhere in this codebase, for the run's own audit
-    record."""
-    screened = storage.cells_for_matrix_correction()
-    n_trials = len(screened)
+    Raises ValueError if family_id is unknown (fail loud — never silently
+    fall back to an ad-hoc denominator)."""
+    family = storage.get_family(family_id)
+    if family is None:
+        raise ValueError(f"Unknown matrix family {family_id!r} — cannot apply correction without its fixed planned_n.")
+    planned_n = family["planned_n"]
+    family_alpha = family["family_alpha"]
+
+    screened = storage.cells_for_matrix_correction(family_id)
+    alpha_corrected = bonferroni_alpha(planned_n, family_alpha)
+    if not screened:
+        return {
+            "family_id": family_id, "planned_n": planned_n, "family_alpha": family_alpha,
+            "bonferroni_alpha": alpha_corrected, "n_screened_this_pass": 0,
+            "count_surviving_bonferroni": 0, "count_rejected": 0,
+        }
+
     promoted = 0
     rejected = 0
-    if n_trials == 0:
-        return {"n_trials": 0, "bonferroni_alpha": None, "count_surviving_bonferroni": 0}
-
-    alpha_corrected = bonferroni_alpha(n_trials, family_alpha)
     for cell in screened:
-        classification = classify_significance(cell["stage_a_p_value"], n_trials, family_alpha)
+        classification = classify_significance(cell["stage_a_p_value"], planned_n, family_alpha)
         if classification == "SURVIVES_CORRECTION":
             storage.update_cell(cell["cell_id"], status=rm.CANDIDATE)
             promoted += 1
@@ -213,13 +320,15 @@ def apply_matrix_wide_correction(family_alpha: float = 0.05) -> dict:
             storage.update_cell(
                 cell["cell_id"], status=rm.REJECTED,
                 rejection_reason=(
-                    f"did not survive matrix-wide Bonferroni correction (p={cell['stage_a_p_value']:.6f}, "
-                    f"family size={n_trials}, corrected alpha={alpha_corrected:.6f}, classification={classification})"
+                    f"did not survive Matrix Family correction (p={cell['stage_a_p_value']:.6f}, "
+                    f"family_id={family_id}, planned_n={planned_n}, corrected alpha={alpha_corrected:.6f}, "
+                    f"classification={classification})"
                 ),
             )
             rejected += 1
     return {
-        "n_trials": n_trials, "bonferroni_alpha": alpha_corrected,
+        "family_id": family_id, "planned_n": planned_n, "family_alpha": family_alpha,
+        "bonferroni_alpha": alpha_corrected, "n_screened_this_pass": len(screened),
         "count_surviving_bonferroni": promoted, "count_rejected": rejected,
     }
 
@@ -230,7 +339,15 @@ def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     ships; cross-symbol validation is a legitimate but separate
     escalation, not required to prove the Matrix Engine's own evidence
     pipeline). Never raises — a Stage B crash is REJECTED with a real
-    reason, not a batch abort."""
+    reason, not a batch abort.
+
+    Finding 3 note: run_validation()'s own family_survives gate
+    (mission_validator._compute_mission_family_significance) is NOT an
+    independent statistical confirmation here — see this module's top-
+    level docstring, point 3. This function does not read or special-case
+    it beyond what run_validation() already does internally; it is
+    mentioned here only so a future reader does not add logic that treats
+    it as a second layer of evidence."""
     cell_id = cell["cell_id"]
     validation_id = f"mtxval-{cell['fingerprint']}"
     try:
@@ -258,11 +375,19 @@ def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
 
 
 def run_batch(
-    run_id: str, *, batch_size: int, stage_b_batch_size: int, data_dir: Path, start: str | None, end: str | None,
-    output_dir: Path, stale_running_seconds: float = DEFAULT_STALE_RUNNING_SECONDS,
-    max_wall_clock_seconds: float | None = None,
+    run_id: str, *, family_id: str, batch_size: int, stage_b_batch_size: int, data_dir: Path,
+    start: str | None, end: str | None, output_dir: Path,
+    stale_running_seconds: float = DEFAULT_STALE_RUNNING_SECONDS, max_wall_clock_seconds: float | None = None,
 ) -> None:
-    storage.upsert_run(run_id, status="running", batch_size=batch_size)
+    """One bounded batch of work against ONE Matrix Family. family_id must
+    already exist (created by POST /research/matrix/generate) — this
+    function never creates a family and never touches another family's
+    cells (claim_queued_cells/apply_matrix_wide_correction/the Stage-B
+    candidate fetch are all scoped to family_id)."""
+    if storage.get_family(family_id) is None:
+        raise ValueError(f"Unknown matrix family {family_id!r} — generate cells for it first via POST /research/matrix/generate.")
+
+    storage.upsert_run(run_id, status="running", batch_size=batch_size, family_id=family_id)
     storage.set_run_status(run_id, "running", started=True)
     t0 = time.monotonic()
 
@@ -270,8 +395,8 @@ def run_batch(
     if requeued:
         logger.info(f"Matrix run {run_id}: requeued {requeued} stale RUNNING cell(s) from a previous crashed run.")
 
-    claimed = storage.claim_queued_cells(batch_size)
-    logger.info(f"Matrix run {run_id}: claimed {len(claimed)} QUEUED cell(s) for Stage A.")
+    claimed = storage.claim_queued_cells(family_id, batch_size)
+    logger.info(f"Matrix run {run_id} (family {family_id}): claimed {len(claimed)} QUEUED cell(s) for Stage A.")
 
     for cell in claimed:
         if max_wall_clock_seconds is not None and (time.monotonic() - t0) >= max_wall_clock_seconds:
@@ -283,9 +408,9 @@ def run_batch(
             logger.warning(f"Matrix cell {cell['cell_id']}: unexpected Stage A failure: {exc}")
             storage.update_cell(cell["cell_id"], status=rm.FAILED, rejection_reason=f"unexpected Stage A failure: {exc}")
 
-    significance = apply_matrix_wide_correction()
+    significance = apply_matrix_wide_correction(family_id)
 
-    candidates = storage.list_cells(status=rm.CANDIDATE, limit=stage_b_batch_size)
+    candidates = storage.list_cells(status=rm.CANDIDATE, family_id=family_id, limit=stage_b_batch_size)
     validated_count = 0
     for cell in candidates:
         if max_wall_clock_seconds is not None and (time.monotonic() - t0) >= max_wall_clock_seconds:
@@ -303,7 +428,7 @@ def run_batch(
 
     storage.set_run_status(
         run_id, "finished", finished=True,
-        cells_claimed=len(claimed), cells_screened=significance.get("n_trials", 0),
+        cells_claimed=len(claimed), cells_screened=significance.get("n_screened_this_pass", 0),
         cells_promoted=significance.get("count_surviving_bonferroni", 0), cells_validated=validated_count,
         matrix_significance=significance,
     )
@@ -312,6 +437,7 @@ def run_batch(
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Hypothesis Discovery Engine — bounded Matrix Engine batch runner")
     parser.add_argument("--run-id", type=str, default=None)
+    parser.add_argument("--family-id", type=str, required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--stage-b-batch-size", type=int, default=10)
     parser.add_argument("--data-dir", type=str, default="data")
@@ -323,11 +449,11 @@ def main(argv: list[str] | None = None) -> None:
 
     run_id = args.run_id or uuid.uuid4().hex[:12]
     run_batch(
-        run_id, batch_size=args.batch_size, stage_b_batch_size=args.stage_b_batch_size,
+        run_id, family_id=args.family_id, batch_size=args.batch_size, stage_b_batch_size=args.stage_b_batch_size,
         data_dir=Path(args.data_dir), start=args.start, end=args.end,
         output_dir=Path(args.output_dir), max_wall_clock_seconds=args.max_wall_clock_seconds,
     )
-    print(f"Matrix run {run_id} finished.")
+    print(f"Matrix run {run_id} (family {args.family_id}) finished.")
 
 
 if __name__ == "__main__":

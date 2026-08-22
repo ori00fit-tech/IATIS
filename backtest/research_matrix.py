@@ -110,6 +110,41 @@ class ResearchMatrixError(ValueError):
     never silently coerce an invalid hypothesis into a runnable one."""
 
 
+# Forensic Audit hardening (Finding 2) — resolves the ACTUAL research
+# repository commit for the fingerprint's research_code_commit field.
+# Previously this field existed on compute_cell_fingerprint()/
+# MatrixCellSpec but nothing in the real generation path ever populated
+# it, so every cell fingerprinted identically regardless of engine-code
+# changes -- a real code change (an engine bugfix, an engine v2 swap)
+# could silently dedupe against a stale-code cell's old result.
+#
+# Reuses research.manifest.git_state() verbatim (the same primitive
+# mission_runner.py/mission_validator.py already fingerprint with) --
+# never a second git-shelling-out implementation. git_state() itself
+# never raises; it degrades to {"commit": "unknown", "dirty": True} when
+# git is unavailable (e.g. no .git directory in some runtime). This
+# function deliberately does NOT special-case that: "unknown" is baked
+# into the fingerprint like any other real value -- deterministic, not
+# fabricated, and every cell generated in such an environment correctly
+# shares one code-identity bucket rather than silently pretending code
+# identity doesn't matter. A dirty working tree also flows through
+# (commit unchanged, but the caller can see `dirty` on request) so an
+# uncommitted local change doesn't merge into the last real commit's
+# identity -- see resolve_research_code_commit()'s return shape.
+def resolve_research_code_commit() -> dict[str, Any]:
+    """Returns {"commit": str, "dirty": bool} straight from git_state().
+    `commit` is what actually goes into the fingerprint; `dirty` is
+    exposed for callers that want to warn an operator their working tree
+    has uncommitted changes (not itself part of the fingerprint -- an
+    uncommitted change already changes the file content the engines
+    import, but "commit" being the last real commit plus a `dirty` flag
+    the caller can log/display is the same convention research/manifest.py
+    already uses everywhere else in this codebase, not a new one)."""
+    from research.manifest import git_state
+    state = git_state()
+    return {"commit": state.get("commit", "unknown"), "dirty": bool(state.get("dirty", True))}
+
+
 def risk_preset_to_grid(preset_name: str) -> dict[str, tuple[float, ...]]:
     """MissionSearchSpace.risk_param_grid shape for a single fixed risk
     preset point — one value per param, so sampler='grid' + n_trials=1
@@ -331,6 +366,21 @@ def check_data_quality(
 
 STAGE_A_MIN_TRADES = 20
 STAGE_A_MIN_PF = 1.0
+
+# Forensic Audit hardening (Finding 5) — the deterministic terminal reason
+# a cell gets when backtest.multiple_testing.trial_p_value() returns None
+# because its trial's std_rr == 0 (every closed trade produced an
+# identical R-multiple -- statistical significance is mathematically
+# undefined, not merely small). Given a cell only reaches this check
+# after already clearing STAGE_A_MIN_TRADES (>=20 >= trial_p_value's own
+# n<2 floor), std_rr==0 is the ONLY remaining reason trial_p_value can
+# return None here -- this reason code is never a guess.
+REASON_ZERO_R_MULTIPLE_VARIANCE = (
+    "ZERO_R_MULTIPLE_VARIANCE: all closed trades in this trial produced an "
+    "identical R-multiple, so trial_p_value() is mathematically undefined "
+    "(std_r == 0). This cell cannot be scored for statistical significance "
+    "and is excluded from matrix-wide correction."
+)
 
 
 @dataclass(frozen=True)

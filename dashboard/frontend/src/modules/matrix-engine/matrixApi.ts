@@ -329,6 +329,23 @@ export interface MatrixAIProposeResponse {
   priority?: string
 }
 
+// Phase 3B-H (AI Boundary Forensic Audit) -- constraint PROVENANCE, not
+// just content. research_code_commit/dirty ties this recommendation to
+// the exact git state of CLAUDE.md/config/engines.yaml/config/symbols.yaml
+// at generation time (same primitive MatrixCellSpec's own fingerprint
+// already relies on); dead_list_hash is a sha256 of the exact dead-list
+// text used, so "some dead list was provided" becomes "this EXACT dead
+// list snapshot was provided."
+export interface ConstraintsUsed {
+  frozen_engines: string[]
+  symbol_universe: string[]
+  dead_list_provided: boolean
+  dead_list_hash: string | null
+  risk_preset_names: string[]
+  research_code_commit: string
+  research_code_dirty: boolean
+}
+
 export interface MatrixAIRecommendation {
   recommendation_id: string
   provider: string

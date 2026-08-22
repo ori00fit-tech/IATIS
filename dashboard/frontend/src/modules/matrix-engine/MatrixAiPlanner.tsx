@@ -7,7 +7,7 @@ import { Badge } from '../../components/Badge'
 import {
   RECOMMENDATION_STATUSES,
   proposeMatrixAIRecommendation, listMatrixAIRecommendations, getMatrixAIRecommendation, reviewMatrixAIRecommendation,
-  type MatrixAIRecommendation, type RecommendationStatus, type ProposedCell,
+  type MatrixAIRecommendation, type RecommendationStatus, type ProposedCell, type ConstraintsUsed,
 } from './matrixApi'
 
 const POLL_MS = 8_000
@@ -46,6 +46,14 @@ function parseJsonArray<T>(raw: string | null): T[] {
     return Array.isArray(parsed) ? (parsed as T[]) : []
   } catch {
     return []
+  }
+}
+
+function parseConstraints(raw: string): ConstraintsUsed | null {
+  try {
+    return JSON.parse(raw) as ConstraintsUsed
+  } catch {
+    return null
   }
 }
 
@@ -319,6 +327,31 @@ function RecommendationDetail({ recommendationId, onClose, onChanged }: {
             <div className="flex justify-between gap-3"><span className="text-muted">Input family_ids</span><span className="font-mono text-right break-all">{parseJsonArray<string>(data.input_family_ids_json).join(', ') || '—'}</span></div>
             <div className="flex justify-between gap-3"><span className="text-muted">Input cell_ids</span><span className="font-mono text-right break-all">{parseJsonArray<string>(data.input_cell_ids_json).join(', ') || '—'}</span></div>
           </div>
+
+          {(() => {
+            const constraints = parseConstraints(data.constraints_used_json)
+            if (!constraints) return null
+            return (
+              <div className="flex flex-col gap-1.5 pt-3 border-t border-border text-[0.8em]">
+                <span className="text-[0.7em] text-muted uppercase tracking-[1px]">
+                  Constraints Used — provenance, not just content (Phase 3B-H)
+                </span>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted">Research code commit</span>
+                  <span className="font-mono text-right">
+                    {constraints.research_code_commit}
+                    {constraints.research_code_dirty && <span className="text-amber"> (dirty working tree)</span>}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted">Dead list hash</span>
+                  <span className="font-mono text-[0.85em] break-all text-right">{constraints.dead_list_hash ?? 'not available'}</span>
+                </div>
+                <div className="flex justify-between gap-3"><span className="text-muted">Frozen engines</span><span className="text-right">{constraints.frozen_engines.join(', ') || '—'}</span></div>
+                <div className="flex justify-between gap-3"><span className="text-muted">Symbol universe size</span><span>{constraints.symbol_universe.length}</span></div>
+              </div>
+            )
+          })()}
 
           <div className="flex flex-col gap-1.5 pt-3 border-t border-border">
             <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Reasoning Summary</span>

@@ -21,10 +21,46 @@ What this router can NEVER do, by construction:
     router's own review endpoint is a thin, unconditional pass-through
     to it — no AI call happens on that path).
   - Auto-convert an APPROVED recommendation into real Matrix cells.
-    That conversion (Phase 3B.5) is deliberately NOT built here — an
-    operator who approves a recommendation still has to read its
+    That conversion is deliberately NOT built here (it would be Phase 3C,
+    "Controlled Recommendation Conversion" — a genuinely new capability
+    boundary, never bundled into this advisory-only phase) — an operator
+    who approves a recommendation still has to read its
     `proposed_next_cells` and submit them through the existing, unchanged
     POST /research/matrix/generate themselves.
+
+Phase 3B-H (AI Boundary Forensic Audit) hardened four properties, each
+with its own regression coverage in tests/test_matrix_ai_boundary_audit.py:
+
+  1. Snapshot immutability — evidence_snapshot_json/_hash/input_family_
+     ids_json/input_cell_ids_json/constraints_used_json are written ONCE,
+     at record_recommendation() time, and never touched again by anything
+     (review_recommendation only ever sets status/reviewed_by/reviewed_at/
+     review_note). A cell's status changing after a recommendation was
+     created can never retroactively alter what that recommendation says
+     the AI saw.
+  2. Approval != research action. "APPROVED" means "a human reviewed this
+     AI recommendation," nothing more — it is structurally incapable of
+     creating a Matrix cell/family, assigning an HXXX, or touching
+     registry.json, because storage.matrix_ai_recommendations.
+     review_recommendation() only ever executes one UPDATE against its
+     own table and calls nothing in storage.research_matrix.
+  3. proposed_next_cells are UNTRUSTED input, same as any hand-typed
+     symbol/bundle/risk_preset. AIAnalyzer.propose_matrix_research_plan()
+     only checks STRUCTURAL completeness (are the required keys present
+     and non-empty) — it deliberately never checks whether a proposed
+     symbol is real, an engine is a valid engine key, or a risk_preset is
+     one of RISK_PRESET_NAMES. That semantic validation happens exactly
+     once, in POST /research/matrix/generate, identically regardless of
+     whether the request body was hand-typed or copied from a
+     recommendation — this router has no code path that skips it.
+  4. Constraint PROVENANCE, not just constraint content. constraints_used
+     carries research_code_commit/research_code_dirty (backtest.
+     research_matrix.resolve_research_code_commit() — the same primitive
+     MatrixCellSpec's own fingerprint already relies on) and a
+     dead_list_hash (sha256 of the exact dead-list text used) — so a
+     recommendation from six months ago can be checked against exactly
+     which commit's CLAUDE.md/config/engines.yaml/config/symbols.yaml
+     produced its constraints, not just "some dead list, some engines."
 
 Every recommendation this router persists carries status="DRAFT" and a
 full audit trail (evidence_snapshot + its hash, the exact constraints the
@@ -33,6 +69,7 @@ recommendations.py's own module docstring.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -156,11 +193,26 @@ async def matrix_ai_propose(
 
     snapshot_hash = planner.evidence_snapshot_hash(context)
     recommendation_id = f"MATRIX-AI-{uuid.uuid4().hex[:12]}"
+    # Phase 3B-H (AI Boundary Forensic Audit) — constraint PROVENANCE, not
+    # just constraint CONTENT. frozen_engines/symbol_universe are already
+    # stored verbatim above (their own content IS their snapshot), but the
+    # dead list previously collapsed to a bare boolean — "was one provided"
+    # says nothing about WHICH version. research_code_commit reuses the
+    # exact same primitive backtest.research_matrix.MatrixCellSpec's own
+    # fingerprint already relies on (Finding 2) — CLAUDE.md, config/
+    # engines.yaml, and config/symbols.yaml are all tracked in this same
+    # git repo, so the commit (+ dirty flag) is the one honest, reusable
+    # "which version of the constraint-bearing files" answer, without
+    # inventing a second code-identity mechanism.
+    code_state = rm.resolve_research_code_commit()
     constraints_used = {
         "frozen_engines": context["frozen_engines"],
         "symbol_universe": context["symbol_universe"],
         "dead_list_provided": dead_list_text is not None,
+        "dead_list_hash": hashlib.sha256(dead_list_text.encode("utf-8")).hexdigest() if dead_list_text else None,
         "risk_preset_names": list(rm.RISK_PRESET_NAMES),
+        "research_code_commit": code_state["commit"],
+        "research_code_dirty": code_state["dirty"],
     }
     recs.record_recommendation(
         recommendation_id,

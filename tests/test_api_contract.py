@@ -2945,6 +2945,26 @@ def test_research_engines_reports_frozen_prod4_set(client):
     assert body["smc_full_spec"] is False  # H017 FAILED
 
 
+def test_research_engine_variants_requires_auth(client):
+    assert client.get("/research/engine-variants").status_code == 401
+
+
+def test_research_engine_variants_reports_only_real_variants(client):
+    # Matrix Engine "Generate Matrix Family" UI (2026-08-22): must reflect
+    # backtesting.backtest_engine.ENGINE_VARIANT_KEYS exactly — only
+    # price_action and wyckoff have a real v2 today. No other engine may
+    # be reported as having a variant (that would be inventing one).
+    r = client.get("/research/engine-variants", headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["engine_variants"] == {"price_action": ["v1", "v2"], "wyckoff": ["v1", "v2"]}
+    assert "price_action" not in body["engines_without_variants"]
+    assert "wyckoff" not in body["engines_without_variants"]
+    for name in ("smc", "nnfx", "ict", "quant", "divergence", "market_structure", "sentiment"):
+        assert name in body["engines_without_variants"]
+    assert body["default_variant"] == "v1"
+
+
 def test_research_algorithm_inventory_requires_auth(client):
     assert client.get("/research/algorithm-inventory").status_code == 401
 

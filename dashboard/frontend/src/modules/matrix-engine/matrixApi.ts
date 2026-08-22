@@ -31,6 +31,20 @@ export interface BundleSpec {
   context_filters: Record<string, unknown>[]
 }
 
+// Generate Matrix Family UI (2026-08-22): the real, existing engine-
+// variant choices, sourced from GET /research/engine-variants (itself a
+// direct read of backtesting.backtest_engine.ENGINE_VARIANT_KEYS — the
+// exact same dict the backend validates `engine_variants` against). The
+// frontend must never invent a variant for an engine absent from
+// `engine_variants` below.
+export interface EngineVariantsResponse {
+  engine_variants: Record<string, string[]>
+  engines_without_variants: string[]
+  default_variant: string
+}
+
+export const getEngineVariants = () => apiGet<EngineVariantsResponse>('/research/engine-variants')
+
 export interface MatrixGenerateRequest {
   symbols?: string[] // omitted -> every configured symbol
   bundles: BundleSpec[]

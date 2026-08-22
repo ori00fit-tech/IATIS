@@ -44,6 +44,26 @@ Phase 3B-H hardening pass 2 (second audit's findings):
     review_note columns remain a denormalized "latest review" cache for
     simple queries; the history table is the authoritative full record.
 
+Phase 3B-H re-audit fix (operator's own follow-up, 2026-08-22): the CAS
+UPDATE and the history INSERT above USED TO be two separate
+`con.execute()` calls. storage/d1_client.py's own module docstring is
+explicit that this is NOT atomic as a group — each `execute()` is its
+own independent HTTPS request/independent D1 statement, so a crash or
+network failure between the two calls could leave a recommendation's
+status changed with NO corresponding row in the append-only history
+table, silently breaking the "every status transition is recorded"
+guarantee this table exists for. Fixed by moving both statements into
+one `d1_client.d1_batch()` call (Cloudflare D1's own `.batch()` API —
+"all succeed or all fail", the exact same primitive storage/
+decision_db.py already relies on for its own decision+engine_votes
+atomicity). The history INSERT is written as a conditional
+`INSERT ... SELECT ... WHERE changes() = 1` — SQLite's `changes()`
+reports how many rows the immediately preceding statement in the SAME
+connection/batch modified — so a CAS that lost the race (WHERE
+status='DRAFT' matched zero rows) can never produce a spurious history
+row claiming a transition happened when it didn't, regardless of what
+status the row happens to already be in.
+
 Hash verification procedure (documented per the second audit's LOW
 finding): evidence_snapshot_hash (execution/routes/matrix_ai.py, via
 backtest.matrix_research_planner.evidence_snapshot_hash) is computed as
@@ -222,15 +242,15 @@ def review_recommendation(recommendation_id: str, *, status: str, reviewed_by: s
       - a recommendation that is no longer DRAFT (message contains
         "already reviewed" — the route maps this to 409 Conflict).
 
-    Phase 3B-H hardening pass 2: the transition itself is an ATOMIC
-    compare-and-swap (`UPDATE ... WHERE status='DRAFT'`, mirroring the
-    same per-statement atomic-claim pattern storage.research_matrix uses
-    for its own Matrix cell state machine, not a separate SELECT-then-
-    UPDATE), and every call that
-    actually changes status appends one row to research_matrix_ai_
-    recommendation_reviews before returning — a re-review can change
-    the CURRENT state but can never erase that an earlier review
-    happened."""
+    Phase 3B-H hardening pass 2 + re-audit fix: the transition itself is
+    an ATOMIC compare-and-swap (`UPDATE ... WHERE status='DRAFT'`,
+    mirroring the same per-statement atomic-claim pattern storage.
+    research_matrix uses for its own Matrix cell state machine), and the
+    matching history-table append happens in the SAME `d1_batch()` call
+    as that UPDATE — never as a second, independent `execute()` — so the
+    two can no longer become separated by a crash/network failure
+    between them (see module docstring). A re-review can change the
+    CURRENT state but can never erase that an earlier review happened."""
     if status not in (APPROVED, REJECTED):
         raise ValueError(f"review_recommendation: status must be one of ({APPROVED!r}, {REJECTED!r}), got {status!r}")
     with d1_client.d1_connection() as con:
@@ -241,23 +261,31 @@ def review_recommendation(recommendation_id: str, *, status: str, reviewed_by: s
         if existing is None:
             raise ValueError(f"review_recommendation: unknown recommendation_id {recommendation_id!r}")
         old_status = existing["status"]
-        now = _now_iso()
-        cur = con.execute(
+
+    now = _now_iso()
+    update_cursor, _insert_cursor = d1_client.d1_batch([
+        (
             """UPDATE research_matrix_ai_recommendations
                SET status=?, reviewed_by=?, reviewed_at=?, review_note=?
                WHERE recommendation_id=? AND status=?""",
             (status, reviewed_by, now, review_note, recommendation_id, DRAFT),
-        )
-        if cur.rowcount != 1:
-            raise ValueError(
-                f"review_recommendation: {recommendation_id!r} has already reviewed (current status={old_status!r}) "
-                f"— re-review is refused, not silently overwritten."
-            )
-        con.execute(
+        ),
+        (
+            # changes() reflects the UPDATE immediately above (same
+            # batch, same underlying D1 connection) — this INSERT
+            # writes a history row IF AND ONLY IF that UPDATE actually
+            # transitioned this row, never merely because the row's
+            # CURRENT status happens to already equal the target status.
             """INSERT INTO research_matrix_ai_recommendation_reviews
                (recommendation_id, old_status, new_status, reviewed_by, reviewed_at, review_note)
-               VALUES (?,?,?,?,?,?)""",
+               SELECT ?, ?, ?, ?, ?, ? WHERE changes() = 1""",
             (recommendation_id, old_status, status, reviewed_by, now, review_note),
+        ),
+    ])
+    if update_cursor.rowcount != 1:
+        raise ValueError(
+            f"review_recommendation: {recommendation_id!r} has already reviewed (current status={old_status!r}) "
+            f"— re-review is refused, not silently overwritten."
         )
 
 

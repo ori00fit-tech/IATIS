@@ -71,10 +71,20 @@ function flattenSymbols(byAssetClass: Record<string, SymbolEntry[]> | undefined)
   return Object.values(byAssetClass).flat()
 }
 
-function SymbolPicker({ entries, selected, onChange }: {
+// "No symbols checked" and "every configured symbol" used to be the SAME
+// state (an empty selectedSymbols set silently meant "run against all
+// 24" at submit time) — a Clear-All click followed by Generate could
+// launch a full-universe run the operator believed they'd just emptied.
+// useEntireUniverse now makes that choice its own explicit, visible
+// state: Generate is disabled while nothing is picked AND entire-universe
+// mode isn't on, so an accidental full-universe run requires a deliberate
+// second click, never a side effect of clearing a checkbox list.
+function SymbolPicker({ entries, selected, onChange, useEntireUniverse, onUseEntireUniverse }: {
   entries: SymbolEntry[]
   selected: Set<string>
   onChange: (next: Set<string>) => void
+  useEntireUniverse: boolean
+  onUseEntireUniverse: (next: boolean) => void
 }) {
   const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
@@ -83,33 +93,35 @@ function SymbolPicker({ entries, selected, onChange }: {
     return entries.filter((e) => e.internal.toUpperCase().includes(q) || e.symbol.toUpperCase().includes(q))
   }, [entries, search])
 
+  // Any explicit interaction with the specific-selection UI exits
+  // entire-universe mode — the two are mutually exclusive, never blended.
   const toggleOne = (internal: string) => {
+    onUseEntireUniverse(false)
     const next = new Set(selected)
     if (next.has(internal)) next.delete(internal)
     else next.add(internal)
     onChange(next)
+  }
+  const selectAll = () => {
+    onUseEntireUniverse(false)
+    onChange(new Set(entries.map((e) => e.internal)))
+  }
+  const clearAll = () => {
+    onUseEntireUniverse(false)
+    onChange(new Set())
   }
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className="text-[0.7em] text-muted uppercase tracking-[1px]">
-          Symbols — {selected.size} / {entries.length} selected
-          {selected.size === 0 && entries.length > 0 && ' (none checked = every configured symbol)'}
+          Symbols — {useEntireUniverse ? `entire universe (${entries.length})` : `${selected.size} / ${entries.length} selected`}
         </span>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onChange(new Set(entries.map((e) => e.internal)))}
-            className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9"
-          >
+          <button type="button" onClick={selectAll} className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9">
             Select All
           </button>
-          <button
-            type="button"
-            onClick={() => onChange(new Set())}
-            className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9"
-          >
+          <button type="button" onClick={clearAll} className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9">
             Clear All
           </button>
         </div>
@@ -124,12 +136,26 @@ function SymbolPicker({ entries, selected, onChange }: {
         {filtered.length > 0 ? (
           filtered.map((e) => (
             <label key={e.internal} className="flex items-center gap-1.5 text-[0.78em] min-h-9">
-              <input type="checkbox" checked={selected.has(e.internal)} onChange={() => toggleOne(e.internal)} />
+              <input type="checkbox" checked={!useEntireUniverse && selected.has(e.internal)} onChange={() => toggleOne(e.internal)} />
               {e.internal}
             </label>
           ))
         ) : (
           <span className="text-[0.75em] text-muted py-1">No symbols match "{search}".</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onUseEntireUniverse(true)}
+          className={`px-2.5 py-1.5 text-[0.75em] rounded border min-h-9 font-bold ${useEntireUniverse ? 'border-accent bg-accent/10 text-accent' : 'border-border text-text hover:bg-surface'}`}
+        >
+          {useEntireUniverse ? '✓ Using Entire Universe' : `Use Entire Universe (${entries.length})`}
+        </button>
+        {!useEntireUniverse && selected.size === 0 && entries.length > 0 && (
+          <span className="text-[0.72em] text-amber">
+            Pick at least one symbol, or click "Use Entire Universe" — Generate is disabled otherwise.
+          </span>
         )}
       </div>
     </div>
@@ -246,6 +272,7 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
   const engineVariantChoices = engineVariantsQuery.data?.engine_variants ?? {}
 
   const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set())
+  const [useEntireUniverse, setUseEntireUniverse] = useState(false)
   const [bundles, setBundles] = useState<BundleRowState[]>([blankBundle()])
   const [riskPresets, setRiskPresets] = useState<string[]>([...RISK_PRESET_NAMES])
   const [quorum, setQuorum] = useState('')
@@ -267,7 +294,11 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
       setError('At least one bundle needs a name.')
       return
     }
-    const symbols = Array.from(selectedSymbols)
+    if (!useEntireUniverse && selectedSymbols.size === 0) {
+      setError('Pick at least one symbol, or click "Use Entire Universe" — an empty selection is refused rather than silently treated as "all symbols."')
+      return
+    }
+    const symbols = useEntireUniverse ? [] : Array.from(selectedSymbols)
 
     // The real variant identifier reaches the backend here — never just a
     // UI label. Only engines actually used by a bundle AND that genuinely
@@ -307,7 +338,13 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
           it is the sole Bonferroni-correction denominator for every batch run against this family.
         </div>
 
-        <SymbolPicker entries={symbolEntries} selected={selectedSymbols} onChange={setSelectedSymbols} />
+        <SymbolPicker
+          entries={symbolEntries}
+          selected={selectedSymbols}
+          onChange={setSelectedSymbols}
+          useEntireUniverse={useEntireUniverse}
+          onUseEntireUniverse={setUseEntireUniverse}
+        />
 
         <div className="flex flex-col gap-2">
           <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Bundles</span>
@@ -368,7 +405,8 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
 
         <button
           onClick={submit}
-          disabled={submitting}
+          disabled={submitting || (!useEntireUniverse && selectedSymbols.size === 0)}
+          title={!useEntireUniverse && selectedSymbols.size === 0 ? 'Pick at least one symbol, or click "Use Entire Universe" first.' : undefined}
           className="self-start px-3 py-1.5 rounded border border-accent/40 text-accent text-[0.8em] font-bold hover:bg-accent/10 disabled:opacity-50 min-h-11"
         >
           {submitting ? 'Generating…' : 'Generate Cells'}

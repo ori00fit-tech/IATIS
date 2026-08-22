@@ -119,7 +119,7 @@ def test_review_never_touches_the_snapshot_scope_or_constraint_fields(client, mo
     immutable_fields = (
         "evidence_snapshot_json", "evidence_snapshot_hash", "input_family_ids_json", "input_cell_ids_json",
         "constraints_used_json", "reasoning_summary", "coverage_gaps_json", "proposed_next_cells_json",
-        "distinct_from_dead_list", "priority", "provider", "model", "created_at",
+        "distinct_from_dead_list", "priority", "provider", "requested_model", "actual_model", "created_at",
     )
     for field in immutable_fields:
         assert before[field] == after[field], f"{field} changed after review — snapshot is not immutable"
@@ -170,7 +170,7 @@ def test_approving_a_recommendation_creates_zero_new_cells_or_families(client, m
 
     client.post(
         f"/research/matrix/ai/recommendations/{rec['recommendation_id']}/review", headers=HDR,
-        json={"status": "APPROVED", "reviewed_by": "operator", "review_note": "looks promising"},
+        json={"status": "APPROVED", "review_note": "looks promising"},
     )
 
     cells_after = storage.list_cells(limit=5000)
@@ -298,7 +298,7 @@ def test_constraints_used_dead_list_hash_reflects_the_exact_text_used(client, mo
     row = client.get(f"/research/matrix/ai/recommendations/{rec['recommendation_id']}", headers=HDR).json()
     import json
     constraints = json.loads(row["constraints_used_json"])
-    assert constraints["dead_list_provided"] is True
+    assert constraints["dead_list_present"] is True
     assert constraints["dead_list_hash"] == hashlib.sha256(b"a specific dead list snapshot").hexdigest()
 
 
@@ -327,5 +327,28 @@ def test_constraints_used_dead_list_hash_is_none_when_dead_list_unavailable(clie
     row = client.get(f"/research/matrix/ai/recommendations/{rec['recommendation_id']}", headers=HDR).json()
     import json
     constraints = json.loads(row["constraints_used_json"])
-    assert constraints["dead_list_provided"] is False
+    assert constraints["dead_list_present"] is False
     assert constraints["dead_list_hash"] is None
+
+
+def test_constraints_used_empty_dead_list_section_normalizes_to_absent_not_a_contradiction(client, monkeypatch):
+    """P1 regression: CLAUDE.md's dead-list heading existing with ZERO
+    content before the next heading (_extract_markdown_section returns
+    "") used to produce THREE mutually contradictory fields --
+    dead_list_provided=True, dead_list_hash=None, and the evidence text
+    itself saying 'Not available'. _dead_list_text() now normalizes this
+    to the SAME None state as "heading missing entirely" at the source,
+    so all three can never disagree again."""
+    import execution.routes.ai as ai_routes_module
+
+    with patch.object(ai_routes_module, "_extract_markdown_section", return_value=""):
+        fam, _ = _generate(client)
+        rec = _propose(client, monkeypatch, fam)
+
+    row = client.get(f"/research/matrix/ai/recommendations/{rec['recommendation_id']}", headers=HDR).json()
+    import json
+    constraints = json.loads(row["constraints_used_json"])
+    snapshot = json.loads(row["evidence_snapshot_json"])
+    assert constraints["dead_list_present"] is False
+    assert constraints["dead_list_hash"] is None
+    assert "Not available" in snapshot["already_killed_ideas"]

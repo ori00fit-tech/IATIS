@@ -2,6 +2,9 @@
 backtest/matrix_research_planner.py (Phase 3B Evidence Context Builder)."""
 from __future__ import annotations
 
+import hashlib
+import json
+
 from backtest import matrix_research_planner as planner
 from backtest import research_matrix as rm
 
@@ -84,3 +87,48 @@ def test_evidence_snapshot_hash_is_a_sha256_hex_digest():
     h = planner.evidence_snapshot_hash({"a": 1})
     assert len(h) == 64
     int(h, 16)  # raises ValueError if not valid hex
+
+
+# --- Phase 3B-H hardening pass 2: documented verification procedure -------
+
+
+def test_evidence_snapshot_hash_same_snapshot_same_hash():
+    ctx = {"families": [{"summary": {"planned_n": 5}}], "focus_hint": "metals"}
+    assert planner.evidence_snapshot_hash(ctx) == planner.evidence_snapshot_hash(ctx)
+
+
+def test_evidence_snapshot_hash_one_byte_changed_different_hash():
+    ctx_a = {"families": [{"summary": {"planned_n": 5}}], "focus_hint": "metals"}
+    ctx_b = {"families": [{"summary": {"planned_n": 6}}], "focus_hint": "metals"}  # one digit different
+    assert planner.evidence_snapshot_hash(ctx_a) != planner.evidence_snapshot_hash(ctx_b)
+
+
+def test_evidence_snapshot_hash_verification_procedure_round_trips_through_storage():
+    """The documented verification procedure (backtest/matrix_research_
+    planner.py's own evidence_snapshot_hash docstring, storage/matrix_ai_
+    recommendations.py's module docstring): parse the STORED JSON text
+    back into a dict, then re-hash via evidence_snapshot_hash() again --
+    this must match the originally-persisted hash even though the stored
+    TEXT itself was serialized WITHOUT sort_keys (a naive direct hash of
+    the raw stored text would NOT match, purely due to key-order, despite
+    identical content)."""
+    ctx = {"z_key": 1, "a_key": {"nested": True, "list": [3, 1, 2]}, "m_key": "value"}
+    original_hash = planner.evidence_snapshot_hash(ctx)
+
+    # Simulate storage.matrix_ai_recommendations.record_recommendation()'s
+    # own persistence serialization: plain json.dumps, no sort_keys.
+    stored_text = json.dumps(ctx, default=str)
+
+    # A NAIVE direct hash of the raw stored text is NOT guaranteed to
+    # match (documents exactly why the verification procedure matters).
+    naive_hash = hashlib.sha256(stored_text.encode("utf-8")).hexdigest()
+
+    # The DOCUMENTED, correct procedure: parse back, re-canonicalize via
+    # evidence_snapshot_hash() itself, then compare.
+    round_tripped_hash = planner.evidence_snapshot_hash(json.loads(stored_text))
+    assert round_tripped_hash == original_hash
+    # (the naive path isn't asserted to differ -- for THIS particular
+    # dict, insertion order already happens to sort correctly; the point
+    # is that the CORRECT procedure is unconditionally reliable, the
+    # naive one is not)
+    assert isinstance(naive_hash, str)

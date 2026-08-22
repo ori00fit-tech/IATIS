@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { useApiQuery } from '../../lib/useApiQuery'
 import { Panel, Empty } from '../../components/Panel'
 import { DataTable, type Column } from '../../components/DataTable'
 import { Badge } from '../../components/Badge'
 import { KpiCard } from '../../components/KpiCard'
-import { getResearchSymbols } from '../research-backtests/api'
+import { getResearchSymbols, type SymbolEntry } from '../research-backtests/api'
 import { SUPPORTED_TIMEFRAMES, ENGINE_KEYS } from '../backtesting-lab/BacktestingLab'
 import {
   CELL_STATUSES, RISK_PRESET_NAMES, MIN_COMPARED_CELLS, MAX_COMPARED_CELLS,
   generateMatrixCells, listMatrixFamilies, getMatrixFamily, getMatrixFamilySummary,
   listMatrixCells, getMatrixCellEvidence, compareMatrixCells, runMatrixBatch, listMatrixRuns, getMatrixRun,
+  getEngineVariants,
   type MatrixFamily, type MatrixCell, type MatrixRun, type CellStatus, type BundleSpec,
   type GroupStatsBucket, type ComparedCell, type CompareProvenance,
 } from './matrixApi'
@@ -57,6 +58,84 @@ function bundleName(bundleJson: string): string {
   }
 }
 
+// ── Symbols: multi-select picker over the canonical configured universe ──
+//
+// Sourced entirely from GET /research/symbols (Symbol Manager's own
+// endpoint, already fetched here since before this picker existed) — no
+// second, hardcoded symbol list is introduced in the frontend. Flattening
+// preserves config/symbols.yaml's own order within each asset class (the
+// order research.research_symbols() itself iterates symbols_cfg in).
+
+function flattenSymbols(byAssetClass: Record<string, SymbolEntry[]> | undefined): SymbolEntry[] {
+  if (!byAssetClass) return []
+  return Object.values(byAssetClass).flat()
+}
+
+function SymbolPicker({ entries, selected, onChange }: {
+  entries: SymbolEntry[]
+  selected: Set<string>
+  onChange: (next: Set<string>) => void
+}) {
+  const [search, setSearch] = useState('')
+  const filtered = useMemo(() => {
+    const q = search.trim().toUpperCase()
+    if (!q) return entries
+    return entries.filter((e) => e.internal.toUpperCase().includes(q) || e.symbol.toUpperCase().includes(q))
+  }, [entries, search])
+
+  const toggleOne = (internal: string) => {
+    const next = new Set(selected)
+    if (next.has(internal)) next.delete(internal)
+    else next.add(internal)
+    onChange(next)
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-[0.7em] text-muted uppercase tracking-[1px]">
+          Symbols — {selected.size} / {entries.length} selected
+          {selected.size === 0 && entries.length > 0 && ' (none checked = every configured symbol)'}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onChange(new Set(entries.map((e) => e.internal)))}
+            className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9"
+          >
+            Select All
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange(new Set())}
+            className="px-2 py-1 text-[0.72em] rounded border border-border text-text hover:bg-surface min-h-9"
+          >
+            Clear All
+          </button>
+        </div>
+      </div>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search symbols…"
+        className="px-2 py-1.5 text-[0.8em] rounded border border-border bg-bg text-text min-h-11"
+      />
+      <div className="max-h-48 overflow-y-auto border border-border rounded px-2 py-1.5 flex flex-wrap gap-x-3 gap-y-1">
+        {filtered.length > 0 ? (
+          filtered.map((e) => (
+            <label key={e.internal} className="flex items-center gap-1.5 text-[0.78em] min-h-9">
+              <input type="checkbox" checked={selected.has(e.internal)} onChange={() => toggleOne(e.internal)} />
+              {e.internal}
+            </label>
+          ))
+        ) : (
+          <span className="text-[0.75em] text-muted py-1">No symbols match "{search}".</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Generate: mint a new matrix family ───────────────────────────────────
 
 interface BundleRowState {
@@ -69,11 +148,26 @@ function blankBundle(): BundleRowState {
   return { name: '', timeframes: ['H1'], engines: [] }
 }
 
-function BundleRow({ bundle, onChange, onRemove, removable }: {
+// Engine variant selection (Generate Matrix Family UI, 2026-08-22) is a
+// SINGLE global choice per POST /research/matrix/generate call — the
+// backend's `_MatrixGenerateRequest.engine_variants` field is one top-
+// level dict, not per-bundle (generate_matrix_cells() cartesian-products
+// engine_variants_choices as an independent axis alongside symbols/
+// bundles/risk_presets, never scoped to one bundle). The picker below is
+// rendered inside each BundleRow next to a checked variant-bearing engine
+// (matching where an operator expects to see it), but it reads/writes the
+// SAME shared `engineVariants` state passed down from GenerateForm — so
+// two bundles both using "price_action" can never silently disagree about
+// which variant they mean; changing it in one bundle changes it everywhere,
+// honestly reflecting the one-choice-per-generate-call constraint.
+function BundleRow({ bundle, onChange, onRemove, removable, engineVariantChoices, engineVariants, onEngineVariantChange }: {
   bundle: BundleRowState
   onChange: (b: BundleRowState) => void
   onRemove: () => void
   removable: boolean
+  engineVariantChoices: Record<string, string[]>
+  engineVariants: Record<string, string>
+  onEngineVariantChange: (engine: string, variant: string) => void
 }) {
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
@@ -110,12 +204,34 @@ function BundleRow({ bundle, onChange, onRemove, removable }: {
       <div className="flex flex-col gap-1">
         <span className="text-[0.68em] text-muted uppercase tracking-[0.8px]">Engines</span>
         <div className="flex items-center gap-3 flex-wrap">
-          {ENGINE_KEYS.map((eng) => (
-            <label key={eng} className="flex items-center gap-1.5 text-[0.78em] min-h-11">
-              <input type="checkbox" checked={bundle.engines.includes(eng)} onChange={() => onChange({ ...bundle, engines: toggle(bundle.engines, eng) })} />
-              {eng}
-            </label>
-          ))}
+          {ENGINE_KEYS.map((eng) => {
+            const variants = engineVariantChoices[eng]
+            const checked = bundle.engines.includes(eng)
+            return (
+              <div key={eng} className="flex items-center gap-1.5">
+                <label className="flex items-center gap-1.5 text-[0.78em] min-h-11">
+                  <input type="checkbox" checked={checked} onChange={() => onChange({ ...bundle, engines: toggle(bundle.engines, eng) })} />
+                  {eng}
+                </label>
+                {/* Only render a variant selector for an engine that
+                    genuinely HAS more than one implementation — no
+                    invented v1/v2 for engines absent from
+                    GET /research/engine-variants. */}
+                {checked && variants && variants.length > 1 && (
+                  <select
+                    value={engineVariants[eng] ?? 'v1'}
+                    onChange={(e) => onEngineVariantChange(eng, e.target.value)}
+                    title={`${eng} engine variant — shared across every bundle that uses ${eng}`}
+                    className="bg-bg border border-accent/40 rounded px-1.5 py-1 text-[0.72em] text-accent font-bold"
+                  >
+                    {variants.map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -125,14 +241,15 @@ function BundleRow({ bundle, onChange, onRemove, removable }: {
 function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void }) {
   const { markUnauthenticated } = useAuth()
   const symbolsQuery = useApiQuery(['research-symbols'], getResearchSymbols, POLL_MS, markUnauthenticated)
-  const totalConfiguredSymbols = symbolsQuery.data
-    ? Object.values(symbolsQuery.data.asset_classes).reduce((n, entries) => n + entries.length, 0)
-    : null
+  const engineVariantsQuery = useApiQuery(['engine-variants'], getEngineVariants, POLL_MS, markUnauthenticated)
+  const symbolEntries = useMemo(() => flattenSymbols(symbolsQuery.data?.asset_classes), [symbolsQuery.data])
+  const engineVariantChoices = engineVariantsQuery.data?.engine_variants ?? {}
 
-  const [symbolsText, setSymbolsText] = useState('')
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set())
   const [bundles, setBundles] = useState<BundleRowState[]>([blankBundle()])
   const [riskPresets, setRiskPresets] = useState<string[]>([...RISK_PRESET_NAMES])
   const [quorum, setQuorum] = useState('')
+  const [engineVariants, setEngineVariants] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<{ family_id: string; planned_n: number } | null>(null)
@@ -150,7 +267,19 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
       setError('At least one bundle needs a name.')
       return
     }
-    const symbols = symbolsText.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+    const symbols = Array.from(selectedSymbols)
+
+    // The real variant identifier reaches the backend here — never just a
+    // UI label. Only engines actually used by a bundle AND that genuinely
+    // have more than one variant are included, each set to whatever the
+    // picker currently shows (defaulting to 'v1', the same default the
+    // backend itself falls back to when a key is omitted).
+    const usedVariantEngines = Array.from(new Set(cleanBundles.flatMap((b) => b.engines)))
+      .filter((eng) => (engineVariantChoices[eng]?.length ?? 0) > 1)
+    const engineVariantsPayload = usedVariantEngines.length > 0
+      ? Object.fromEntries(usedVariantEngines.map((eng) => [eng, engineVariants[eng] ?? 'v1']))
+      : undefined
+
     setSubmitting(true)
     try {
       const res = await generateMatrixCells({
@@ -158,6 +287,7 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
         bundles: cleanBundles,
         risk_presets: riskPresets.length > 0 ? (riskPresets as typeof RISK_PRESET_NAMES[number][]) : undefined,
         confluence_overrides: quorum.trim() ? { min_engines_agreeing: Number(quorum) } : undefined,
+        engine_variants: engineVariantsPayload,
       })
       setResult({ family_id: res.family_id, planned_n: res.planned_n })
       onGenerated(res.family_id)
@@ -177,22 +307,21 @@ function GenerateForm({ onGenerated }: { onGenerated: (familyId: string) => void
           it is the sole Bonferroni-correction denominator for every batch run against this family.
         </div>
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[0.7em] text-muted uppercase tracking-[1px]">
-            Symbols (comma-separated — blank = every configured symbol{totalConfiguredSymbols != null ? `, ${totalConfiguredSymbols} total` : ''})
-          </span>
-          <input
-            value={symbolsText}
-            onChange={(e) => setSymbolsText(e.target.value)}
-            placeholder="EURUSD, XAUUSD, BTCUSD"
-            className="px-2 py-1.5 text-[0.8em] rounded border border-border bg-bg text-text min-h-11"
-          />
-        </div>
+        <SymbolPicker entries={symbolEntries} selected={selectedSymbols} onChange={setSelectedSymbols} />
 
         <div className="flex flex-col gap-2">
           <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Bundles</span>
           {bundles.map((b, i) => (
-            <BundleRow key={i} bundle={b} onChange={(next) => updateBundle(i, next)} onRemove={() => removeBundle(i)} removable={bundles.length > 1} />
+            <BundleRow
+              key={i}
+              bundle={b}
+              onChange={(next) => updateBundle(i, next)}
+              onRemove={() => removeBundle(i)}
+              removable={bundles.length > 1}
+              engineVariantChoices={engineVariantChoices}
+              engineVariants={engineVariants}
+              onEngineVariantChange={(eng, variant) => setEngineVariants((prev) => ({ ...prev, [eng]: variant }))}
+            />
           ))}
           <button
             onClick={() => setBundles((prev) => [...prev, blankBundle()])}

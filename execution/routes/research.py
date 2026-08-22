@@ -143,6 +143,33 @@ async def research_engines(
     }
 
 
+@router.get("/research/engine-variants")
+async def research_engine_variants(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Matrix Engine "Generate Matrix Family" UI (2026-08-22): the real,
+    existing engine-variant choices a Matrix cell's `engine_variants` field
+    may set, sourced directly from backtesting.backtest_engine.
+    ENGINE_VARIANT_KEYS — the exact same dict backtest.optimizer.
+    MissionSearchSpace._validate_engine_variant_map() validates against and
+    backtesting.backtest_engine.run_backtest() resolves variant classes
+    from (Track C, 2026-08-01). This endpoint invents nothing: an engine
+    absent from `engine_variants` below has no variant beyond its one
+    implementation (its bare ENGINE_KEYS name IS "v1" — there is no v2 to
+    pick), and the frontend must not fabricate a version selector for it.
+    Read-only, no config/registry write path.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from backtesting.backtest_engine import ENGINE_KEYS, ENGINE_VARIANT_KEYS
+
+    return {
+        "engine_variants": {engine: list(variants) for engine, variants in ENGINE_VARIANT_KEYS.items()},
+        "engines_without_variants": [e for e in ENGINE_KEYS if e not in ENGINE_VARIANT_KEYS],
+        "default_variant": "v1",
+    }
+
+
 @router.get("/research/algorithm-inventory")
 async def research_algorithm_inventory(
     x_api_key: str | None = Header(default=None),

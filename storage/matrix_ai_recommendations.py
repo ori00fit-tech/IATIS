@@ -6,8 +6,8 @@ Hypothesis Discovery Engine, Phase 3B — AI Research Orchestrator, Stage
 
 One row per AI-proposed research plan (backtest.matrix_research_planner
 + ai.ai_analyzer.AIAnalyzer.propose_matrix_research_plan()). Same
-`_DDL` + `_init(con)` idiom as storage/research_matrix.py — a brand-new
-table, created lazily on first use, no storage/migrations.py entry needed
+`_DDL` + `_init(con)` idiom as storage/research_matrix.py — brand-new
+tables, created lazily on first use, no storage/migrations.py entry needed
 (that file is for ALTERing existing tables — see its own docstring).
 
 NON-NEGOTIABLE (operator's own explicit Phase 3B boundary): `status` here
@@ -18,7 +18,8 @@ visually or textually confused with a Matrix cell's own authoritative
 evidence-gate verdict. APPROVED means "a human reviewed this proposal and
 thinks it's worth generating real cells for" — it does NOT create,
 promote, or validate anything by itself. review_recommendation() below
-executes exactly one UPDATE, against this table only — it never calls
+executes exactly one atomic UPDATE, against this table (plus an append-
+only INSERT into the review-history table below) — it never calls
 anything in storage.research_matrix, so "APPROVED" is structurally
 incapable of creating a cell/family or touching registry.json. Converting
 an approved recommendation into real research_matrix_cells rows would be
@@ -26,6 +27,34 @@ Phase 3C ("Controlled Recommendation Conversion" — a genuinely new
 capability boundary, not built here) and remains, until then, a
 deliberate, separate, human-triggered action through the existing
 POST /research/matrix/generate endpoint, never automatic.
+
+Phase 3B-H hardening pass 2 (second audit's findings):
+  - `model` (a single column that could silently mismatch what actually
+    ran) is replaced by `requested_model`/`actual_model` — see
+    record_recommendation()'s own docstring.
+  - `review_recommendation()` is now an atomic compare-and-swap
+    (`UPDATE ... WHERE status='DRAFT'`) instead of a separate SELECT-
+    then-UPDATE, and raises a distinguishable error when the target row
+    is no longer DRAFT (the caller maps this to HTTP 409) rather than
+    silently overwriting a prior review.
+  - Every review action (including ones later superseded) is appended to
+    `research_matrix_ai_recommendation_reviews`, an append-only history
+    table — re-reviewing a recommendation never erases the record of an
+    earlier review. The main row's own reviewed_by/reviewed_at/
+    review_note columns remain a denormalized "latest review" cache for
+    simple queries; the history table is the authoritative full record.
+
+Hash verification procedure (documented per the second audit's LOW
+finding): evidence_snapshot_hash (execution/routes/matrix_ai.py, via
+backtest.matrix_research_planner.evidence_snapshot_hash) is computed as
+sha256(json.dumps(context, sort_keys=True, default=str)). To verify a
+stored row's evidence_snapshot_json against its evidence_snapshot_hash,
+an auditor MUST re-canonicalize before hashing — `json.loads()` the
+stored text back into a dict, then `json.dumps(parsed, sort_keys=True,
+default=str)` before sha256 — never hash the raw stored TEXT directly
+(it was persisted via plain `json.dumps(..., default=str)`, without
+sort_keys, so its key order is not guaranteed to match the hash's own
+canonical serialization even though the CONTENT is identical).
 """
 from __future__ import annotations
 
@@ -39,7 +68,8 @@ _DDL_RECOMMENDATIONS = """
 CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendations (
     recommendation_id           TEXT PRIMARY KEY,
     provider                    TEXT NOT NULL,
-    model                       TEXT NOT NULL,
+    requested_model             TEXT,
+    actual_model                TEXT,
     input_family_ids_json       TEXT NOT NULL,
     input_cell_ids_json         TEXT,
     evidence_snapshot_json      TEXT NOT NULL,
@@ -60,6 +90,22 @@ CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendations (
 """
 _DDL_STATUS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmair_status ON research_matrix_ai_recommendations(status)"
 
+# Append-only review history — Phase 3B-H hardening pass 2. One row per
+# review ACTION (not per recommendation): a recommendation reviewed twice
+# has two rows here, oldest first by rowid/reviewed_at.
+_DDL_REVIEWS = """
+CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendation_reviews (
+    review_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id TEXT NOT NULL,
+    old_status        TEXT NOT NULL,
+    new_status        TEXT NOT NULL,
+    reviewed_by       TEXT,
+    reviewed_at       TEXT NOT NULL,
+    review_note       TEXT
+)
+"""
+_DDL_REVIEWS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmairr_recommendation ON research_matrix_ai_recommendation_reviews(recommendation_id)"
+
 DRAFT = "DRAFT"
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
@@ -69,6 +115,8 @@ RECOMMENDATION_STATUSES: tuple[str, ...] = (DRAFT, APPROVED, REJECTED)
 def _init(con) -> None:
     con.execute(_DDL_RECOMMENDATIONS)
     con.execute(_DDL_STATUS_IDX)
+    con.execute(_DDL_REVIEWS)
+    con.execute(_DDL_REVIEWS_IDX)
 
 
 def _now_iso() -> str:
@@ -83,7 +131,8 @@ def record_recommendation(
     recommendation_id: str,
     *,
     provider: str,
-    model: str,
+    requested_model: str | None,
+    actual_model: str | None,
     input_family_ids: list[str],
     input_cell_ids: list[str] | None,
     evidence_snapshot: dict[str, Any],
@@ -103,18 +152,29 @@ def record_recommendation(
     operator's own audit-trail schema asked for is captured verbatim,
     including the full evidence_snapshot (not just its hash) so a human
     reviewing this later can see exactly what the AI saw without having
-    to trust that current Matrix state still matches."""
+    to trust that current Matrix state still matches.
+
+    `requested_model` is whatever was ASKED for (an explicit per-call
+    override, or the base config's own ai.model — possibly None if
+    unset). `actual_model` is what the constructed AI provider instance
+    ACTUALLY used (AIAnalyzer.resolved_model) — the caller must pass None
+    here rather than guess/fabricate a value when it cannot be
+    established (in practice this only happens on a disabled/unavailable
+    provider, a state execution/routes/matrix_ai.py never reaches this
+    function from, since persistence only happens after a successful
+    call — but this function itself makes no such assumption)."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
             """INSERT INTO research_matrix_ai_recommendations
-               (recommendation_id, provider, model, input_family_ids_json, input_cell_ids_json,
+               (recommendation_id, provider, requested_model, actual_model,
+                input_family_ids_json, input_cell_ids_json,
                 evidence_snapshot_json, evidence_snapshot_hash, constraints_used_json, focus_hint,
                 reasoning_summary, coverage_gaps_json, proposed_next_cells_json,
                 distinct_from_dead_list, priority, status, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                recommendation_id, provider, model,
+                recommendation_id, provider, requested_model, actual_model,
                 json.dumps(input_family_ids), json.dumps(input_cell_ids) if input_cell_ids is not None else None,
                 json.dumps(evidence_snapshot, default=str), evidence_snapshot_hash,
                 json.dumps(constraints_used), focus_hint,
@@ -150,11 +210,27 @@ def list_recommendations(status: str | None = None, limit: int = 50) -> list[dic
 
 def review_recommendation(recommendation_id: str, *, status: str, reviewed_by: str | None, review_note: str | None) -> None:
     """Human approval/rejection — the ONLY way a recommendation's status
-    ever changes after creation (never AI-driven, never automatic). Raises
-    ValueError for an unknown recommendation_id or an invalid target
-    status (DRAFT is the creation-only initial value — a reviewer may only
-    move a recommendation to APPROVED or REJECTED, never back to DRAFT or
-    to a Matrix-cell-style status like VALIDATED)."""
+    ever changes after creation (never AI-driven, never automatic).
+
+    Raises ValueError for:
+      - an unknown recommendation_id (message contains "unknown
+        recommendation_id" — the route maps this to 404).
+      - an invalid target status (DRAFT is the creation-only initial
+        value; a reviewer may only move a recommendation to APPROVED or
+        REJECTED, never back to DRAFT or to a Matrix-cell-style status
+        like VALIDATED — message contains "status must be one of").
+      - a recommendation that is no longer DRAFT (message contains
+        "already reviewed" — the route maps this to 409 Conflict).
+
+    Phase 3B-H hardening pass 2: the transition itself is an ATOMIC
+    compare-and-swap (`UPDATE ... WHERE status='DRAFT'`, mirroring the
+    same per-statement atomic-claim pattern storage.research_matrix uses
+    for its own Matrix cell state machine, not a separate SELECT-then-
+    UPDATE), and every call that
+    actually changes status appends one row to research_matrix_ai_
+    recommendation_reviews before returning — a re-review can change
+    the CURRENT state but can never erase that an earlier review
+    happened."""
     if status not in (APPROVED, REJECTED):
         raise ValueError(f"review_recommendation: status must be one of ({APPROVED!r}, {REJECTED!r}), got {status!r}")
     with d1_client.d1_connection() as con:
@@ -164,9 +240,35 @@ def review_recommendation(recommendation_id: str, *, status: str, reviewed_by: s
         ).fetchone()
         if existing is None:
             raise ValueError(f"review_recommendation: unknown recommendation_id {recommendation_id!r}")
-        con.execute(
+        old_status = existing["status"]
+        now = _now_iso()
+        cur = con.execute(
             """UPDATE research_matrix_ai_recommendations
                SET status=?, reviewed_by=?, reviewed_at=?, review_note=?
-               WHERE recommendation_id=?""",
-            (status, reviewed_by, _now_iso(), review_note, recommendation_id),
+               WHERE recommendation_id=? AND status=?""",
+            (status, reviewed_by, now, review_note, recommendation_id, DRAFT),
         )
+        if cur.rowcount != 1:
+            raise ValueError(
+                f"review_recommendation: {recommendation_id!r} has already reviewed (current status={old_status!r}) "
+                f"— re-review is refused, not silently overwritten."
+            )
+        con.execute(
+            """INSERT INTO research_matrix_ai_recommendation_reviews
+               (recommendation_id, old_status, new_status, reviewed_by, reviewed_at, review_note)
+               VALUES (?,?,?,?,?,?)""",
+            (recommendation_id, old_status, status, reviewed_by, now, review_note),
+        )
+
+
+def list_recommendation_reviews(recommendation_id: str) -> list[dict[str, Any]]:
+    """The full, append-only review history for one recommendation,
+    oldest first — every review action ever taken, including ones a
+    later re-review superseded. Empty for a recommendation still DRAFT."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(
+            "SELECT * FROM research_matrix_ai_recommendation_reviews WHERE recommendation_id=? ORDER BY review_id ASC",
+            (recommendation_id,),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]

@@ -2,6 +2,8 @@
 for storage/matrix_ai_recommendations.py (Phase 3B audit trail)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from storage import matrix_ai_recommendations as recs
@@ -9,7 +11,7 @@ from storage import matrix_ai_recommendations as recs
 
 def _record(recommendation_id="MATRIX-AI-abc123", **overrides):
     kwargs = {
-        "provider": "anthropic", "model": "claude-sonnet-4-6",
+        "provider": "anthropic", "requested_model": "claude-sonnet-4-6", "actual_model": "claude-sonnet-4-6",
         "input_family_ids": ["fam1"], "input_cell_ids": None,
         "evidence_snapshot": {"families": []}, "evidence_snapshot_hash": "deadbeef",
         "constraints_used": {"frozen_engines": ["smc"]}, "focus_hint": "crypto",
@@ -26,10 +28,11 @@ def test_record_and_get_recommendation_round_trip():
     row = recs.get_recommendation("MATRIX-AI-abc123")
     assert row is not None
     assert row["provider"] == "anthropic"
+    assert row["requested_model"] == "claude-sonnet-4-6"
+    assert row["actual_model"] == "claude-sonnet-4-6"
     assert row["status"] == recs.DRAFT
     assert row["reasoning_summary"] == "gap in XAUUSD coverage"
     assert row["priority"] == "MEDIUM"
-    import json
     assert json.loads(row["input_family_ids_json"]) == ["fam1"]
     assert json.loads(row["proposed_next_cells_json"])[0]["symbol"] == "XAUUSD"
 
@@ -73,16 +76,16 @@ def test_review_recommendation_approves_and_records_reviewer():
 
 def test_review_recommendation_never_touches_the_snapshot_or_scope_fields():
     """Phase 3B-H, property 1 -- storage-level proof: review_recommendation()
-    is a single UPDATE against status/reviewed_by/reviewed_at/review_note
-    only. Every other column, including the evidence snapshot itself, is
-    byte-identical before and after."""
+    only ever changes status/reviewed_by/reviewed_at/review_note. Every
+    other column, including the evidence snapshot itself, is byte-
+    identical before and after."""
     _record()
     before = recs.get_recommendation("MATRIX-AI-abc123")
     recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="promising gap")
     after = recs.get_recommendation("MATRIX-AI-abc123")
 
     immutable_fields = (
-        "provider", "model", "input_family_ids_json", "input_cell_ids_json",
+        "provider", "requested_model", "actual_model", "input_family_ids_json", "input_cell_ids_json",
         "evidence_snapshot_json", "evidence_snapshot_hash", "constraints_used_json", "focus_hint",
         "reasoning_summary", "coverage_gaps_json", "proposed_next_cells_json",
         "distinct_from_dead_list", "priority", "created_at",
@@ -115,13 +118,72 @@ def test_review_recommendation_rejects_invalid_target_status():
 
 def test_record_recommendation_tolerates_missing_optional_fields():
     recs.record_recommendation(
-        "MATRIX-AI-minimal", provider="gemini", model="gemini-flash-latest",
+        "MATRIX-AI-minimal", provider="gemini", requested_model=None, actual_model="gemini-flash-latest",
         input_family_ids=["fam1"], input_cell_ids=None,
         evidence_snapshot={}, evidence_snapshot_hash="h", constraints_used={},
         focus_hint=None, reasoning_summary="r", coverage_gaps=None,
         proposed_next_cells=[{"symbol": "EURUSD"}], distinct_from_dead_list=None, priority=None,
     )
     row = recs.get_recommendation("MATRIX-AI-minimal")
+    assert row["requested_model"] is None
+    assert row["actual_model"] == "gemini-flash-latest"
     assert row["focus_hint"] is None
     assert row["coverage_gaps_json"] is None
     assert row["priority"] is None
+
+
+def test_record_recommendation_tolerates_unknown_actual_model():
+    """Phase 3B-H hardening -- never fabricate a model; None is the
+    honest value when it cannot be established."""
+    recs.record_recommendation(
+        "MATRIX-AI-unknown-model", provider="gemini", requested_model="gemini-flash-latest", actual_model=None,
+        input_family_ids=["fam1"], input_cell_ids=None,
+        evidence_snapshot={}, evidence_snapshot_hash="h", constraints_used={},
+        focus_hint=None, reasoning_summary="r", coverage_gaps=None,
+        proposed_next_cells=[{"symbol": "EURUSD"}], distinct_from_dead_list=None, priority=None,
+    )
+    assert recs.get_recommendation("MATRIX-AI-unknown-model")["actual_model"] is None
+
+
+# --- Phase 3B-H hardening pass 2: atomic review + append-only history ------
+
+
+def test_review_recommendation_is_atomic_a_second_review_is_refused_not_overwritten():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="first review")
+    with pytest.raises(ValueError, match="already reviewed"):
+        recs.review_recommendation("MATRIX-AI-abc123", status=recs.REJECTED, reviewed_by="bob", review_note="second review")
+    # the FIRST review's outcome survives untouched
+    row = recs.get_recommendation("MATRIX-AI-abc123")
+    assert row["status"] == recs.APPROVED
+    assert row["reviewed_by"] == "alice"
+    assert row["review_note"] == "first review"
+
+
+def test_review_history_records_every_review_action_oldest_first():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="first review")
+    history = recs.list_recommendation_reviews("MATRIX-AI-abc123")
+    assert len(history) == 1
+    assert history[0]["old_status"] == recs.DRAFT
+    assert history[0]["new_status"] == recs.APPROVED
+    assert history[0]["reviewed_by"] == "alice"
+    assert history[0]["review_note"] == "first review"
+
+
+def test_review_history_is_empty_for_a_still_draft_recommendation():
+    _record()
+    assert recs.list_recommendation_reviews("MATRIX-AI-abc123") == []
+
+
+def test_review_history_accumulates_across_a_refused_second_attempt():
+    """The REFUSED second review attempt (rejected by the atomic CAS) must
+    NOT itself appear in history -- only review actions that actually
+    changed status are recorded."""
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="ok")
+    with pytest.raises(ValueError):
+        recs.review_recommendation("MATRIX-AI-abc123", status=recs.REJECTED, reviewed_by="bob", review_note="too late")
+    history = recs.list_recommendation_reviews("MATRIX-AI-abc123")
+    assert len(history) == 1  # the refused attempt left no trace
+    assert history[0]["reviewed_by"] == "alice"

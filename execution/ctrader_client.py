@@ -54,6 +54,7 @@ from pathlib import Path
 from queue import Queue
 from typing import Any
 
+from risk.pretrade_limits import SymbolSpec
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

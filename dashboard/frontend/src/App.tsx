@@ -68,6 +68,8 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/experiment-runner/ExperimentRunner').then((m) => ({ default: m.ExperimentRunner }))),
   'mission-center': lazy(() =>
     import('./modules/mission-center/MissionCenter').then((m) => ({ default: m.MissionCenter }))),
+  'matrix-engine': lazy(() =>
+    import('./modules/matrix-engine/MatrixEngine').then((m) => ({ default: m.MatrixEngine }))),
   ops: lazy(() =>
     import('./modules/vps-operations/VpsOperations').then((m) => ({ default: m.VpsOperations }))),
   roadmap: lazy(() =>

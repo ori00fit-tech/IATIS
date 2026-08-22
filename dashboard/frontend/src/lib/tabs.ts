@@ -37,6 +37,7 @@ export const TABS: readonly TabDef[] = [
   { id: 'backtesting-charts', label: 'Backtesting Charts', hint: 'Equity curve, per-symbol comparison, score calibration', glyph: '📈', section: 'Research & Backtests' },
   { id: 'experiments', label: 'Experiment Runner', hint: 'Whitelisted subprocess jobs', glyph: '⏵', section: 'Research & Backtests' },
   { id: 'mission-center', label: 'Mission Center', hint: 'AI Research Lab — Optuna-sampled search missions, exploratory only', glyph: '◭', section: 'Research & Backtests' },
+  { id: 'matrix-engine', label: 'Matrix Engine', hint: 'Hypothesis Discovery matrix — family/cell evidence, read-only projection of authoritative D1 evidence', glyph: '▦', section: 'Research & Backtests' },
   { id: 'data-center', label: 'Data Center', hint: 'OHLCV cache completeness, provider chains', glyph: '⛁', section: 'Data & Providers' },
   { id: 'provider-eval', label: 'Provider Eval', hint: 'Rank data providers for best valid data + advisory chain order', glyph: '⇅', section: 'Data & Providers' },
   { id: 'ctrader-connect', label: 'cTrader Connection', hint: 'OAuth connection status, token expiry, re-authorize', glyph: '🔌', section: 'Data & Providers' },

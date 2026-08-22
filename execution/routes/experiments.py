@@ -97,6 +97,17 @@ _JOB_COMMANDS: dict[str, list[str]] = {
     # trial. Same one-subprocess-per-job-slot model as research_mission.
     # Full argv is built per-request in execution/routes/missions.py.
     "mission_validate": [sys.executable, "-m", "backtest.mission_validator"],
+    # Hypothesis Discovery Engine Phase 1 (2026-08-XX) — one bounded batch
+    # of the Matrix Engine (backtest/matrix_orchestrator.py): claims a
+    # capped number of QUEUED research_matrix cells, runs Stage A
+    # (backtest.mission_runner.run_mission, unmodified) for each, applies
+    # matrix-wide Bonferroni correction, then runs Stage B
+    # (backtest.mission_validator.run_validation, unmodified) for the
+    # survivors. Same one-subprocess-per-job-slot model as research_mission/
+    # mission_validate. Full argv built per-request in execution/routes/
+    # research_matrix.py. Never runs "24 symbols x everything" in one call
+    # — bounded strictly by --batch-size/--stage-b-batch-size.
+    "matrix_batch": [sys.executable, "-m", "backtest.matrix_orchestrator"],
     # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — a whole
     # benchmark run is ONE subprocess (same one-job-slot-per-run model as
     # research_mission/mission_validate), looping over every
@@ -178,6 +189,7 @@ _JOB_DESCRIPTIONS: dict[str, str] = {
     "robustness": "Parameter-sensitivity sweep (backtest/robustness.py): perturbs one cost/risk parameter at a time around its frozen production value. Requires --symbols. NOT out-of-sample validation, does not itself justify changing a parameter.",
     "research_mission": "AI Research Lab mission (backtest/mission_runner.py): Optuna-sampled joint search over timeframes/engines/indicators/risk params per symbol. Launched via POST /research/missions, not this endpoint directly — every result is EXPLORATORY, never auto-registered.",
     "mission_validate": "Multi-stage validation (backtest/mission_validator.py) of one operator-chosen mission trial across operator-chosen validation symbols: re-evaluation + Monte Carlo + walk-forward + robustness sweep per symbol. Launched via POST /research/missions/{id}/validate, not this endpoint directly — result is a LEAD (NO_EDGE/WEAK_LEAD/STRONG_LEAD), never a registry.json promotion.",
+    "matrix_batch": "Hypothesis Discovery Engine Matrix Engine batch (backtest/matrix_orchestrator.py): a bounded, resumable pass over QUEUED research_matrix cells — data-quality gate, Stage A screen (backtest.mission_runner.run_mission), matrix-wide Bonferroni correction, Stage B validation (backtest.mission_validator.run_validation) for survivors. Launched via POST /research/matrix/run-batch, not this endpoint directly — a VALIDATED cell is a LEAD, never a registry.json promotion.",
     "price_benchmark": "Provider Benchmark & Data Quality Lab (backtest/price_benchmark.py): scores every FX/metals/crypto/indices provider's fetched candles for completeness, per-field correctness vs. a median consensus, timestamp integrity, OHLC integrity, cross-provider agreement, freshness, and latency. Launched via POST /research/provider-benchmark, not this endpoint directly — measurement/advisory only, never auto-changes config.yaml's provider_chains.",
     "news_benchmark": "Provider Benchmark & Data Quality Lab Phase 2 (backtest/news_benchmark.py): scores MarketAux and Finnhub news feeds per symbol for coverage, source diversity, duplicate-headline rate, freshness, latency, sentiment availability, and cross-provider coverage agreement. Launched via POST /research/news-benchmark, not this endpoint directly — measurement/advisory only, never influences H021's own pre-registered process or config.yaml.",
     "macro_benchmark": "Provider Benchmark & Data Quality Lab Phase 3 (backtest/macro_benchmark.py): scores FRED/CBOE/Alpha Vantage macro series (VIX, DXY, yields, credit spread, Fed balance sheet, CPI, GDP, ...) for completeness, freshness, timestamp integrity, latency, and — for VIX/US10Y/US02Y only, the 3 series with a genuine second source — cross-provider agreement. Launched via POST /research/macro-benchmark, not this endpoint directly — measurement/advisory only, never touches core.alt_data_loader.load_macro_snapshot() (the Macro engine's live source) or config.yaml.",
@@ -205,6 +217,7 @@ _JOB_CATEGORIES: dict[str, str] = {
     "robustness": "research",
     "research_mission": "research",
     "mission_validate": "research",
+    "matrix_batch": "research",
     "price_benchmark": "research",
     "news_benchmark": "research",
     "macro_benchmark": "research",
@@ -236,6 +249,14 @@ _JOB_TIMEOUTS: dict[str, int] = {
     # ceiling exists purely so a misbehaving/unbounded mission can't
     # occupy a job slot forever if that internal check is ever bypassed.
     "research_mission": 21_600,  # 6h hard ceiling
+    # Hypothesis Discovery Engine Phase 1 (2026-08-XX) — same "last-resort
+    # net only" framing as research_mission above: --max-wall-clock-seconds
+    # (set per-request, checked between cells) is the PRIMARY, graceful
+    # stop mechanism; the real bound on one call's cost is --batch-size/
+    # --stage-b-batch-size (each Stage A cell is exactly one single-trial
+    # mission; each Stage B cell is one full validation, cost-class-
+    # equivalent to mission_validate above).
+    "matrix_batch": 21_600,  # 6h hard ceiling
     # AI Research Lab / Mission Center Phase 3 (2026-07-30) — worst case
     # per validation symbol is ~1 (direct eval) + wf_windows (default 3)
     # + len(rb_params)*len(rb_multipliers) (default 4x5=20) backtests, so

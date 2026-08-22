@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import socket
 import sqlite3
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -142,6 +143,21 @@ def fake_d1(monkeypatch: pytest.MonkeyPatch):
     # too, unlike sqlite3's single-thread-only default.
     con = sqlite3.connect(":memory:", check_same_thread=False)
     con.row_factory = sqlite3.Row
+    # check_same_thread=False only disables sqlite3's same-thread check —
+    # it does NOT make concurrent execute()/commit() calls from multiple
+    # real threads on one shared Connection object safe (confirmed: a real
+    # two-thread race test against this fixture hit a rare, genuine CPython
+    # sqlite3 "SystemError: error return without exception set" without
+    # this lock). A real D1 Worker has no such hazard — every call is an
+    # independent HTTP request, never a shared native connection object
+    # across threads — so serializing PER STATEMENT here (not per whole
+    # storage-function call) is the correct fix: it removes the test
+    # double's own artificial unsafety while still letting two threads'
+    # individual statements interleave arbitrarily at the statement
+    # boundary, which is exactly what a real atomic-compare-and-set race
+    # test (e.g. storage/research_matrix.py's claim_queued_cells) needs to
+    # meaningfully exercise.
+    _con_lock = threading.Lock()
 
     # 2026-08-11 — confirmed live on the VPS: storage/market_bars.py's
     # upsert_bars() batched 100 rows/statement (900 bound params, 9/row)
@@ -164,8 +180,9 @@ def fake_d1(monkeypatch: pytest.MonkeyPatch):
                 "error": f"D1_ERROR: too many SQL variables (got {len(params)}, D1's real limit is {_D1_MAX_BOUND_PARAMS})",
             }
         try:
-            cur = con.execute(sql, params)
-            con.commit()
+            with _con_lock:
+                cur = con.execute(sql, params)
+                con.commit()
         except sqlite3.Error as exc:
             return {"success": False, "error": str(exc)}
         rows = [dict(r) for r in cur.fetchall()] if cur.description else []

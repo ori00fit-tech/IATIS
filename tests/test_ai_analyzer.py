@@ -454,3 +454,86 @@ def test_ai_analyzer_suggest_next_hypothesis_handles_provider_error(monkeypatch)
     with patch.object(GeminiProvider, "_chat", return_value="not json at all, sorry"):
         result = analyzer.suggest_next_hypothesis({})
     assert result["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# propose_matrix_research_plan (Hypothesis Discovery Engine, Phase 3B)
+# ---------------------------------------------------------------------------
+
+_FULL_VALID_PLAN_JSON = (
+    '{"reasoning_summary": "XAUUSD has no NNFX-bundle cells tested yet.", '
+    '"coverage_gaps": ["XAUUSD x NNFX trend x balanced untested"], '
+    '"proposed_next_cells": [{"symbol": "XAUUSD", "bundle_name": "NNFX trend", '
+    '"timeframes": ["H4"], "engines": ["nnfx"], "risk_preset": "balanced", '
+    '"rationale": "coverage gap, not adjacent to any dead-list idea"}], '
+    '"distinct_from_dead_list": "not a liquidity sweep or SMC idea", '
+    '"priority": "MEDIUM"}'
+)
+
+
+def test_ai_analyzer_propose_matrix_research_plan_disabled():
+    analyzer = AIAnalyzer(_config(enabled=False))
+    result = analyzer.propose_matrix_research_plan({"families": []})
+    assert result["status"] == "disabled"
+
+
+def test_ai_analyzer_propose_matrix_research_plan_ok(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(GeminiProvider, "_chat", return_value=_FULL_VALID_PLAN_JSON):
+        result = analyzer.propose_matrix_research_plan({"families": []}, focus_hint="metals")
+    assert result["status"] == "ok"
+    assert result["reasoning_summary"] == "XAUUSD has no NNFX-bundle cells tested yet."
+    assert result["proposed_next_cells"][0]["symbol"] == "XAUUSD"
+    assert result["priority"] == "MEDIUM"
+    assert result["coverage_gaps"] == ["XAUUSD x NNFX trend x balanced untested"]
+
+
+def test_ai_analyzer_propose_matrix_research_plan_rejects_missing_required_fields(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = '{"reasoning_summary": "r"}'  # missing distinct_from_dead_list, proposed_next_cells, priority
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.propose_matrix_research_plan({})
+    assert result["status"] == "error"
+    assert "required fields" in result["error"].lower()
+
+
+def test_ai_analyzer_propose_matrix_research_plan_rejects_empty_proposed_cells(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = _FULL_VALID_PLAN_JSON.replace(
+        '"proposed_next_cells": [{"symbol": "XAUUSD", "bundle_name": "NNFX trend", '
+        '"timeframes": ["H4"], "engines": ["nnfx"], "risk_preset": "balanced", '
+        '"rationale": "coverage gap, not adjacent to any dead-list idea"}]',
+        '"proposed_next_cells": []',
+    )
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.propose_matrix_research_plan({})
+    assert result["status"] == "error"
+
+
+def test_ai_analyzer_propose_matrix_research_plan_rejects_a_cell_missing_a_required_field(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = _FULL_VALID_PLAN_JSON.replace('"risk_preset": "balanced", ', "")  # drop risk_preset from the cell
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.propose_matrix_research_plan({})
+    assert result["status"] == "error"
+
+
+def test_ai_analyzer_propose_matrix_research_plan_rejects_bad_priority_enum(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    fake_json = _FULL_VALID_PLAN_JSON.replace('"priority": "MEDIUM"', '"priority": "URGENT"')
+    with patch.object(GeminiProvider, "_chat", return_value=fake_json):
+        result = analyzer.propose_matrix_research_plan({})
+    assert result["status"] == "error"
+
+
+def test_ai_analyzer_propose_matrix_research_plan_handles_provider_error(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    with patch.object(GeminiProvider, "_chat", return_value="not json at all"):
+        result = analyzer.propose_matrix_research_plan({})
+    assert result["status"] == "error"

@@ -168,6 +168,18 @@ class AIAnalyzer:
     def available(self) -> bool:
         return self.enabled and self._provider is not None
 
+    @property
+    def resolved_model(self) -> str | None:
+        """Phase 3B-H hardening — the ACTUAL model string the active
+        provider was constructed with (AIProvider.__init__'s own `model`
+        arg, already resolved through _build_provider's config-value-or-
+        _DEFAULT_MODELS fallback), as opposed to re-deriving it from a raw
+        config dict a caller might read independently (which can diverge
+        from what was actually resolved when the config didn't set an
+        explicit model). None when no provider is available (disabled/
+        misconfigured) — callers must never fabricate a value here."""
+        return self._provider.model if self._provider is not None else None
+
     # ── Trade explanation ──────────────────────────────────────────────
 
     def explain_trade(self, report: dict, cache_key: str | None = None) -> dict:
@@ -464,11 +476,21 @@ class AIAnalyzer:
         as status="DRAFT" in storage/matrix_ai_recommendations.py, together
         with the exact context dict's own hash — so if the Matrix evidence
         changes later, what the AI actually saw at proposal time stays
-        reconstructable."""
+        reconstructable.
+
+        Phase 3B-H hardening: NEVER silently truncates `context` before
+        sending it. The audit's own P0 finding was that a prior [:16000]
+        slice here meant the AI could reason over less evidence than what
+        got hashed/persisted as the recommendation's "exact snapshot" —
+        the ONE guarantee this whole audit trail exists to provide. The
+        full canonical serialization is always sent whole; the caller
+        (execution/routes/matrix_ai.py) is responsible for rejecting an
+        oversized request BEFORE calling this method at all, never for
+        truncating after the fact."""
         if not self.available:
             return MatrixResearchPlan(status="disabled", provider=self.provider_name).to_dict()
         try:
-            context_text = json.dumps(context, indent=2, default=str)[:16000]
+            context_text = json.dumps(context, indent=2, default=str)
             raw = self._provider.propose_matrix_plan(context_text, focus_hint)
         except AIProviderError as exc:
             logger.warning(f"AIAnalyzer.propose_matrix_research_plan failed: {exc}")

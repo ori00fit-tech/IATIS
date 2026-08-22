@@ -94,6 +94,16 @@ def evidence_snapshot_hash(context: dict[str, Any]) -> str:
     auditor can tell whether a given recommendation's snapshot still
     matches current evidence or was computed against a stale view.
     sort_keys=True makes this independent of dict insertion order, the
-    only source of nondeterminism in an otherwise-plain-data structure."""
+    only source of nondeterminism in an otherwise-plain-data structure.
+
+    Verification procedure (documented per the Phase 3B-H audit's own LOW
+    finding — storage/matrix_ai_recommendations.py's module docstring
+    carries the same note): to verify a STORED evidence_snapshot_json
+    against its evidence_snapshot_hash, re-canonicalize before hashing —
+    `json.loads()` the stored text, then call THIS function again on the
+    parsed dict. Do not sha256 the raw stored text directly; it was
+    persisted without sort_keys, so its byte-for-byte serialization does
+    not necessarily match this function's own canonical form even when
+    the content is identical and untampered."""
     canonical = json.dumps(context, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

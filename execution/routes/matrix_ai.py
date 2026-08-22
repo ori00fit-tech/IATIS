@@ -66,10 +66,45 @@ Every recommendation this router persists carries status="DRAFT" and a
 full audit trail (evidence_snapshot + its hash, the exact constraints the
 AI was given, provider/model, timestamps) — see storage/matrix_ai_
 recommendations.py's own module docstring.
+
+A second Phase 3B-H hardening pass (still no Phase 3C capability added)
+fixed eight findings the first audit surfaced, none of which touched the
+governance boundary above — all four properties still hold exactly as
+described:
+  P0. No silent context truncation before hashing/persisting — see
+      ai/ai_analyzer.py's propose_matrix_research_plan() and
+      _MAX_CONTEXT_CHARS below (reject outright, never truncate).
+  P1. dead_list_present/dead_list_hash can no longer disagree with each
+      other or with the evidence text — _dead_list_text() normalizes an
+      empty extracted section to None at the source.
+  P1. focus_hint is now explicitly framed as DATA, never an instruction,
+      in ai/prompts/matrix_research_plan.txt (with delimiter markers),
+      and is length-bounded + control-character-stripped before it ever
+      reaches a prompt — see _sanitize_focus_hint.
+  P1. constraints_used now carries requested_model AND actual_model
+      (AIAnalyzer.resolved_model) separately — the recorded model can no
+      longer diverge from what actually executed.
+  P1 (moderate). review_recommendation() is now atomic (compare-and-swap
+      on status='DRAFT', 409 on conflict) and every review is appended to
+      research_matrix_ai_recommendation_reviews — re-review never erases
+      prior history.
+  P1 (moderate). reviewed_by is now derived server-side from the
+      authenticated caller's masked identity (storage.audit_log.
+      _mask_actor), never trusted from the request body; an optional,
+      narrower MATRIX_AI_APPROVAL_KEY gate (see
+      _check_approval_authorization) can restrict APPROVE/REJECT beyond
+      the base _check_auth bar, disabled by default.
+  LOW. evidence_snapshot_hash's verification procedure (canonicalize with
+      sort_keys=True, then sha256) is now documented explicitly in
+      backtest/matrix_research_planner.py and storage/matrix_ai_
+      recommendations.py, with a byte-mutation regression test.
 """
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import re
 import uuid
 from typing import Any
 
@@ -84,12 +119,48 @@ router = APIRouter()
 _MAX_RECOMMENDATIONS_LIST_LIMIT = 200
 _KNOWN_AI_PROVIDERS = ("gemini", "openai", "anthropic")
 
+# Phase 3B-H hardening (P0) — a hard REJECTION threshold, never a
+# truncation point. If the full canonical evidence context exceeds this,
+# the request is refused outright (400) before the AI is ever called and
+# before anything is persisted — see ai/ai_analyzer.py's propose_matrix_
+# research_plan() for why silent truncation was the audit's top finding
+# (a persisted "exact snapshot" that the AI never actually fully read).
+_MAX_CONTEXT_CHARS = 200_000
+
+# Phase 3B-H hardening (P1) — same 300-char convention execution/routes/
+# ai.py's own POST /ai/suggest-hypothesis already applies to its own
+# focus_hint, reused here rather than inventing a new bound.
+_MAX_FOCUS_HINT_CHARS = 300
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_focus_hint(raw: str) -> str:
+    """Bounds length and strips non-printable control characters before a
+    caller-supplied focus_hint ever reaches the AI prompt. This is NOT
+    prompt-injection prevention by itself — see ai/prompts/matrix_
+    research_plan.txt's own explicit "focus_hint is DATA, not an
+    instruction" framing and delimiter markers for that — it only removes
+    characters that could otherwise obscure or forge delimiter-like
+    sequences, and caps length so a caller can't smuggle in an arbitrarily
+    long injection payload."""
+    cleaned = _CONTROL_CHAR_RE.sub(" ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:_MAX_FOCUS_HINT_CHARS]
+
 
 def _dead_list_text() -> str | None:
     """Reuses execution.routes.ai's own CLAUDE.md dead-list extraction
     verbatim — never a second implementation of "find the ## The dead
     list section." Degrades to None on any failure, exactly like its
-    source (a missing/renamed heading must never 500 this endpoint)."""
+    source (a missing/renamed heading must never 500 this endpoint).
+
+    Phase 3B-H hardening: a heading that exists but has ZERO content
+    before the next heading (`_extract_markdown_section` returns "" in
+    that case) is normalized to None here, at the source — the SAME
+    "nothing real to report" state as "heading missing entirely." Fixing
+    this once here (rather than patching every downstream truthy/is-not-
+    None check separately) is what makes dead_list_present/dead_list_hash/
+    the evidence text itself impossible to disagree with each other."""
     from pathlib import Path
 
     from execution.routes.ai import _extract_markdown_section
@@ -98,7 +169,8 @@ def _dead_list_text() -> str | None:
     if not claude_md.exists():
         return None
     try:
-        return _extract_markdown_section(claude_md.read_text(encoding="utf-8"), "## The dead list")
+        text = _extract_markdown_section(claude_md.read_text(encoding="utf-8"), "## The dead list")
+        return text or None
     except Exception:  # noqa: BLE001 — advisory context only, never fatal
         return None
 
@@ -161,7 +233,12 @@ async def matrix_ai_propose(
     (3B.2), and — only when the AI call itself succeeds — persists the
     result as a DRAFT recommendation (3B.3). A failed/disabled AI call
     returns that status directly and persists NOTHING (there is no real
-    plan to audit)."""
+    plan to audit).
+
+    Phase 3B-H hardening: the evidence context is REJECTED outright
+    (400) if it exceeds _MAX_CONTEXT_CHARS, before the AI is ever called
+    — never truncated and sent partially (see _MAX_CONTEXT_CHARS's own
+    comment for why silent truncation was the audit's top finding)."""
     _check_auth(x_api_key, iatis_session)
     if not body.family_ids and not body.cell_ids:
         raise HTTPException(status_code=400, detail="At least one of family_ids/cell_ids is required.")
@@ -170,8 +247,20 @@ async def matrix_ai_propose(
     from backtest import research_matrix as rm
     from storage import matrix_ai_recommendations as recs
 
+    focus_hint = _sanitize_focus_hint(body.focus_hint)
     dead_list_text = _dead_list_text()
-    context = _build_context(body.family_ids, body.cell_ids, body.focus_hint, dead_list_text)
+    context = _build_context(body.family_ids, body.cell_ids, focus_hint, dead_list_text)
+
+    context_size = len(json.dumps(context, sort_keys=True, default=str))
+    if context_size > _MAX_CONTEXT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Evidence context is too large ({context_size} chars, limit {_MAX_CONTEXT_CHARS}) — "
+                f"narrow family_ids/cell_ids scope. Never silently truncated: the full evidence is always "
+                f"sent to the AI in full, or the request is refused outright."
+            ),
+        )
 
     config = _get_config()
     if body.provider is not None:
@@ -186,18 +275,29 @@ async def matrix_ai_propose(
             override_ai_cfg["model"] = str(body.model)[:200]
         config = {**config, "ai": override_ai_cfg}
 
+    # Phase 3B-H (P1, model provenance) — `requested_model` is whatever
+    # was ASKED for (the override above if body.model was given, else the
+    # base config's own ai.model, possibly None if unset). `actual_model`
+    # (below, after the call) is what the constructed provider instance
+    # ACTUALLY used — AIAnalyzer.resolved_model, never re-derived from
+    # this same config dict, which can diverge from it when ai.model is
+    # unset and the provider fell back to its own per-provider default.
+    requested_model = (config.get("ai", {}) or {}).get("model")
+
     analyzer = AIAnalyzer(config)
-    plan = analyzer.propose_matrix_research_plan(context, body.focus_hint)
+    plan = analyzer.propose_matrix_research_plan(context, focus_hint)
     if plan["status"] != "ok":
         return plan
+    actual_model = analyzer.resolved_model
 
     snapshot_hash = planner.evidence_snapshot_hash(context)
     recommendation_id = f"MATRIX-AI-{uuid.uuid4().hex[:12]}"
     # Phase 3B-H (AI Boundary Forensic Audit) — constraint PROVENANCE, not
     # just constraint CONTENT. frozen_engines/symbol_universe are already
-    # stored verbatim above (their own content IS their snapshot), but the
-    # dead list previously collapsed to a bare boolean — "was one provided"
-    # says nothing about WHICH version. research_code_commit reuses the
+    # stored verbatim above (their own content IS their snapshot); dead_
+    # list_present/dead_list_hash are now internally consistent by
+    # construction (_dead_list_text() normalizes "" to None at the
+    # source — see its own docstring). research_code_commit reuses the
     # exact same primitive backtest.research_matrix.MatrixCellSpec's own
     # fingerprint already relies on (Finding 2) — CLAUDE.md, config/
     # engines.yaml, and config/symbols.yaml are all tracked in this same
@@ -208,18 +308,18 @@ async def matrix_ai_propose(
     constraints_used = {
         "frozen_engines": context["frozen_engines"],
         "symbol_universe": context["symbol_universe"],
-        "dead_list_provided": dead_list_text is not None,
-        "dead_list_hash": hashlib.sha256(dead_list_text.encode("utf-8")).hexdigest() if dead_list_text else None,
+        "dead_list_present": dead_list_text is not None,
+        "dead_list_hash": hashlib.sha256(dead_list_text.encode("utf-8")).hexdigest() if dead_list_text is not None else None,
         "risk_preset_names": list(rm.RISK_PRESET_NAMES),
         "research_code_commit": code_state["commit"],
         "research_code_dirty": code_state["dirty"],
     }
     recs.record_recommendation(
         recommendation_id,
-        provider=plan["provider"], model=config.get("ai", {}).get("model", ""),
+        provider=plan["provider"], requested_model=requested_model, actual_model=actual_model,
         input_family_ids=body.family_ids, input_cell_ids=body.cell_ids or None,
         evidence_snapshot=context, evidence_snapshot_hash=snapshot_hash,
-        constraints_used=constraints_used, focus_hint=body.focus_hint or None,
+        constraints_used=constraints_used, focus_hint=focus_hint or None,
         reasoning_summary=plan["reasoning_summary"], coverage_gaps=plan["coverage_gaps"],
         proposed_next_cells=plan["proposed_next_cells"], distinct_from_dead_list=plan["distinct_from_dead_list"],
         priority=plan["priority"],
@@ -231,7 +331,10 @@ async def matrix_ai_propose(
         detail=f"recommendation_id={recommendation_id} family_ids={body.family_ids} cell_ids={body.cell_ids} priority={plan['priority']}",
     )
 
-    return {"recommendation_id": recommendation_id, "evidence_snapshot_hash": snapshot_hash, **plan}
+    return {
+        "recommendation_id": recommendation_id, "evidence_snapshot_hash": snapshot_hash,
+        "requested_model": requested_model, "actual_model": actual_model, **plan,
+    }
 
 
 @router.get("/research/matrix/ai/recommendations")
@@ -268,9 +371,34 @@ async def matrix_ai_get_recommendation(
     return row
 
 
+# Phase 3B-H hardening (P1, authorization) — an OPT-IN, narrower gate
+# specifically for APPROVE/REJECT, layered ON TOP OF (never instead of)
+# _check_auth. Disabled by default (MATRIX_AI_APPROVAL_KEY unset), so
+# every existing single-operator deployment sees zero behavior change;
+# an operator who wants a stricter boundary for this one, higher-stakes
+# action sets the env var and must then also supply a matching
+# X-Approval-Key header. This deliberately reuses _check_auth's own
+# hmac.compare_digest shared-secret-comparison SHAPE rather than
+# inventing a new authorization paradigm (no roles, no user table) — it
+# adds one more optional, narrowly-scoped shared secret, nothing else.
+# This codebase has no per-user identity anywhere (see reviewed_by
+# below), so a role/permission system is a genuinely new capability this
+# hardening pass deliberately does not build.
+_APPROVAL_KEY_ENV = "MATRIX_AI_APPROVAL_KEY"
+
+
+def _check_approval_authorization(x_approval_key: str | None) -> None:
+    import hmac
+
+    required = os.environ.get(_APPROVAL_KEY_ENV)
+    if not required:
+        return  # not configured -- today's exact, unchanged behavior
+    if not x_approval_key or not hmac.compare_digest(x_approval_key, required):
+        raise HTTPException(status_code=403, detail="Missing or invalid X-Approval-Key for this review action.")
+
+
 class _ReviewRequest(BaseModel):
     status: str
-    reviewed_by: str = "operator"
     review_note: str = ""
 
 
@@ -280,6 +408,7 @@ async def matrix_ai_review_recommendation(
     body: _ReviewRequest,
     x_api_key: str | None = Header(default=None),
     iatis_session: str | None = Cookie(default=None),
+    x_approval_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """3B.4 Human approval. The ONLY endpoint that can ever move a
     recommendation off DRAFT — status must be exactly APPROVED or
@@ -288,24 +417,75 @@ async def matrix_ai_review_recommendation(
     approving a recommendation only records that a human reviewed it and
     thinks it's worth acting on — converting `proposed_next_cells` into
     a real family is still a separate, manual POST /research/matrix/
-    generate call the operator makes themselves."""
+    generate call the operator makes themselves.
+
+    Phase 3B-H hardening:
+    - `reviewed_by` is derived SERVER-SIDE from the authenticated
+      caller's own masked identity (storage.audit_log._mask_actor,
+      reused verbatim — the same masking already applied to every
+      audit_log entry), never trusted from the request body. This
+      codebase has no per-user identity beyond "holds the shared
+      X-API-Key" or "holds a valid session cookie" (both callers using
+      the API key are indistinguishable from each other — an honest
+      limit of this system's existing auth model, not something this
+      endpoint can fabricate around); a caller who wants to leave
+      human-readable context can still do so via review_note, which is
+      never treated as an identity claim.
+    - the transition is atomic (`UPDATE ... WHERE status='DRAFT'`,
+      compare-and-swap) — a second review attempt on an already-
+      APPROVED/REJECTED recommendation gets 409 Conflict, never a
+      silent overwrite.
+    - every review action is appended to research_matrix_ai_
+      recommendation_reviews (storage.matrix_ai_recommendations.
+      list_recommendation_reviews) — re-reviewing never erases the
+      history of a prior review.
+    """
     _check_auth(x_api_key, iatis_session)
+    _check_approval_authorization(x_approval_key)
     from storage import matrix_ai_recommendations as recs
+    from storage.audit_log import _mask_actor
+
+    reviewed_by = _mask_actor(x_api_key, iatis_session)
 
     try:
         recs.review_recommendation(
-            recommendation_id, status=body.status, reviewed_by=body.reviewed_by or "operator",
+            recommendation_id, status=body.status, reviewed_by=reviewed_by,
             review_note=body.review_note or None,
         )
     except ValueError as exc:
         message = str(exc)
-        status_code = 404 if "unknown recommendation_id" in message else 400
+        if "unknown recommendation_id" in message:
+            status_code = 404
+        elif "already reviewed" in message or "no longer DRAFT" in message:
+            status_code = 409
+        else:
+            status_code = 400
         raise HTTPException(status_code=status_code, detail=message)
 
     from storage.audit_log import log_action
     log_action(
         "matrix_ai_review", x_api_key=x_api_key, session_id=iatis_session,
-        detail=f"recommendation_id={recommendation_id} status={body.status} reviewed_by={body.reviewed_by}",
+        detail=f"recommendation_id={recommendation_id} status={body.status} reviewed_by={reviewed_by}",
     )
 
     return recs.get_recommendation(recommendation_id)
+
+
+@router.get("/research/matrix/ai/recommendations/{recommendation_id}/reviews")
+async def matrix_ai_list_recommendation_reviews(
+    recommendation_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 3B-H hardening — the full, append-only review history for
+    one recommendation (every review action, including ones superseded
+    by a later re-review), distinct from the recommendation's own row
+    which only ever carries the LATEST review's summary."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import matrix_ai_recommendations as recs
+
+    if recs.get_recommendation(recommendation_id) is None:
+        raise HTTPException(status_code=404, detail="AI recommendation not found.")
+
+    reviews = recs.list_recommendation_reviews(recommendation_id)
+    return {"reviews": reviews, "count": len(reviews)}

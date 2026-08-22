@@ -322,6 +322,8 @@ export interface MatrixAIProposeResponse {
   provider: string
   recommendation_id?: string
   evidence_snapshot_hash?: string
+  requested_model?: string | null
+  actual_model?: string | null
   reasoning_summary?: string
   coverage_gaps?: string[]
   proposed_next_cells?: ProposedCell[]
@@ -329,17 +331,19 @@ export interface MatrixAIProposeResponse {
   priority?: string
 }
 
-// Phase 3B-H (AI Boundary Forensic Audit) -- constraint PROVENANCE, not
-// just content. research_code_commit/dirty ties this recommendation to
-// the exact git state of CLAUDE.md/config/engines.yaml/config/symbols.yaml
-// at generation time (same primitive MatrixCellSpec's own fingerprint
-// already relies on); dead_list_hash is a sha256 of the exact dead-list
-// text used, so "some dead list was provided" becomes "this EXACT dead
-// list snapshot was provided."
+// Phase 3B-H (AI Boundary Forensic Audit, hardening pass 2) -- constraint
+// PROVENANCE, not just content. research_code_commit/dirty ties this
+// recommendation to the exact git state of CLAUDE.md/config/engines.yaml/
+// config/symbols.yaml at generation time (same primitive MatrixCellSpec's
+// own fingerprint already relies on); dead_list_hash is a sha256 of the
+// exact dead-list text used, so "some dead list was provided" becomes
+// "this EXACT dead list snapshot was provided" -- dead_list_present/
+// dead_list_hash can no longer disagree with each other (an empty
+// extracted section is normalized to "absent" at the source).
 export interface ConstraintsUsed {
   frozen_engines: string[]
   symbol_universe: string[]
-  dead_list_provided: boolean
+  dead_list_present: boolean
   dead_list_hash: string | null
   risk_preset_names: string[]
   research_code_commit: string
@@ -349,7 +353,8 @@ export interface ConstraintsUsed {
 export interface MatrixAIRecommendation {
   recommendation_id: string
   provider: string
-  model: string
+  requested_model: string | null
+  actual_model: string | null
   input_family_ids_json: string
   input_cell_ids_json: string | null
   evidence_snapshot_json: string
@@ -368,10 +373,22 @@ export interface MatrixAIRecommendation {
   created_at: string
 }
 
+// reviewed_by is deliberately ABSENT here (Phase 3B-H hardening pass 2)
+// -- the server derives it from the authenticated caller's own masked
+// identity (storage.audit_log._mask_actor), never from the request body.
 export interface MatrixAIReviewRequest {
   status: 'APPROVED' | 'REJECTED'
-  reviewed_by?: string
   review_note?: string
+}
+
+export interface RecommendationReview {
+  review_id: number
+  recommendation_id: string
+  old_status: string
+  new_status: string
+  reviewed_by: string | null
+  reviewed_at: string
+  review_note: string | null
 }
 
 export const proposeMatrixAIRecommendation = (body: MatrixAIProposeRequest) =>
@@ -387,3 +404,8 @@ export const getMatrixAIRecommendation = (recommendationId: string) =>
 
 export const reviewMatrixAIRecommendation = (recommendationId: string, body: MatrixAIReviewRequest) =>
   apiPost<MatrixAIRecommendation>(`/research/matrix/ai/recommendations/${encodeURIComponent(recommendationId)}/review`, body)
+
+export const listMatrixAIRecommendationReviews = (recommendationId: string) =>
+  apiGet<{ reviews: RecommendationReview[]; count: number }>(
+    `/research/matrix/ai/recommendations/${encodeURIComponent(recommendationId)}/reviews`,
+  )

@@ -537,3 +537,57 @@ def test_ai_analyzer_propose_matrix_research_plan_handles_provider_error(monkeyp
     with patch.object(GeminiProvider, "_chat", return_value="not json at all"):
         result = analyzer.propose_matrix_research_plan({})
     assert result["status"] == "error"
+
+
+# --- Phase 3B-H hardening pass 2: no silent context truncation -------------
+
+
+def test_ai_analyzer_propose_matrix_research_plan_never_truncates_large_context(monkeypatch):
+    """P0 regression: a context whose serialization exceeds the OLD 16000-
+    char silent-truncation threshold must still reach the provider in
+    FULL -- the persisted evidence_snapshot must never be able to
+    overstate what the AI actually read."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    big_context = {"families": [{"padding": "x" * 500} for _ in range(50)]}  # well over 16000 chars serialized
+    captured_prompt: dict[str, str] = {}
+
+    def _capture_chat(self, prompt: str) -> str:
+        captured_prompt["prompt"] = prompt
+        return _FULL_VALID_PLAN_JSON
+
+    with patch.object(GeminiProvider, "_chat", _capture_chat):
+        result = analyzer.propose_matrix_research_plan(big_context, focus_hint="metals")
+    assert result["status"] == "ok"
+    full_context_text = __import__("json").dumps(big_context, indent=2, default=str)
+    assert len(full_context_text) > 16_000
+    assert full_context_text in captured_prompt["prompt"]  # the WHOLE context reached the prompt, not a prefix
+
+
+# --- Phase 3B-H hardening pass 2: model provenance (resolved_model) --------
+
+
+def test_ai_analyzer_resolved_model_reflects_the_actual_provider_instance(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    analyzer = AIAnalyzer(_config(enabled=True))
+    assert analyzer.resolved_model == "gemini-flash-latest"
+
+
+def test_ai_analyzer_resolved_model_falls_back_to_the_per_provider_default_when_config_model_unset():
+    """The exact gap the audit found: config.get('ai',{}).get('model','')
+    would have returned '' here, while the REAL provider instance
+    resolved and used the per-provider default."""
+    import os
+    os.environ["GEMINI_API_KEY"] = "test-key"
+    try:
+        config = {"ai": {"enabled": True, "provider": "gemini", "model": None, "cache": {"news_ttl_min": 20, "macro_ttl_min": 60}}}
+        analyzer = AIAnalyzer(config)
+        assert config["ai"].get("model") is None  # what a naive config read would (wrongly) report
+        assert analyzer.resolved_model == "gemini-flash-latest"  # what actually executes
+    finally:
+        os.environ.pop("GEMINI_API_KEY", None)
+
+
+def test_ai_analyzer_resolved_model_is_none_when_unavailable():
+    analyzer = AIAnalyzer(_config(enabled=False))
+    assert analyzer.resolved_model is None

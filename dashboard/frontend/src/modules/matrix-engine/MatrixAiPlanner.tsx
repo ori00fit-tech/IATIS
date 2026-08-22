@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../../lib/auth'
 import { useApiQuery } from '../../lib/useApiQuery'
+import { ApiError } from '../../lib/api'
 import { Panel, Empty } from '../../components/Panel'
 import { DataTable, type Column } from '../../components/DataTable'
 import { Badge } from '../../components/Badge'
 import {
   RECOMMENDATION_STATUSES,
   proposeMatrixAIRecommendation, listMatrixAIRecommendations, getMatrixAIRecommendation, reviewMatrixAIRecommendation,
+  listMatrixAIRecommendationReviews,
   type MatrixAIRecommendation, type RecommendationStatus, type ProposedCell, type ConstraintsUsed,
 } from './matrixApi'
 
@@ -230,7 +232,6 @@ function ReviewControls({ recommendationId, status, onReviewed }: {
   status: RecommendationStatus
   onReviewed: () => void
 }) {
-  const [reviewedBy, setReviewedBy] = useState('')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -241,10 +242,17 @@ function ReviewControls({ recommendationId, status, onReviewed }: {
     setError(null)
     setSubmitting(true)
     try {
-      await reviewMatrixAIRecommendation(recommendationId, { status: target, reviewed_by: reviewedBy || undefined, review_note: note || undefined })
+      await reviewMatrixAIRecommendation(recommendationId, { status: target, review_note: note || undefined })
       onReviewed()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      // 409 -- another caller already reviewed this recommendation
+      // between this panel's last refresh and this click (Phase 3B-H
+      // hardening: the transition is atomic, never a silent overwrite).
+      if (e instanceof ApiError && e.status === 409) {
+        setError('This recommendation was already reviewed by someone else — refresh to see the current status.')
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       setSubmitting(false)
     }
@@ -252,14 +260,11 @@ function ReviewControls({ recommendationId, status, onReviewed }: {
 
   return (
     <div className="flex flex-col gap-2 pt-3 border-t border-border">
-      <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Human Review (3B.4) — the only way this can leave DRAFT</span>
+      <span className="text-[0.7em] text-muted uppercase tracking-[1px]">
+        Human Review (3B.4) — the only way this can leave DRAFT. Reviewer identity is derived from your own
+        authenticated session, not typed here.
+      </span>
       <div className="flex items-center gap-2 flex-wrap">
-        <input
-          value={reviewedBy}
-          onChange={(e) => setReviewedBy(e.target.value)}
-          placeholder="reviewed_by (optional)"
-          className="px-2 py-1.5 text-[0.8em] rounded border border-border bg-bg text-text min-h-11"
-        />
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
@@ -284,6 +289,39 @@ function ReviewControls({ recommendationId, status, onReviewed }: {
         </button>
       </div>
       {error && <div className="text-[0.78em] text-red">{error}</div>}
+    </div>
+  )
+}
+
+function ReviewHistory({ recommendationId, refreshKey }: { recommendationId: string; refreshKey: string }) {
+  // Phase 3B-H hardening pass 2 -- append-only history: re-reviewing a
+  // recommendation never erases an earlier review, so this can show more
+  // than one row even though the recommendation's own status only ever
+  // reflects the LATEST one above.
+  const { markUnauthenticated } = useAuth()
+  const { data, refetch } = useApiQuery(
+    ['matrix-ai-recommendation-reviews', recommendationId],
+    () => listMatrixAIRecommendationReviews(recommendationId),
+    POLL_MS,
+    markUnauthenticated,
+  )
+
+  useEffect(() => {
+    void refetch()
+  }, [refreshKey, refetch])
+
+  const reviews = data?.reviews ?? []
+  if (reviews.length === 0) return null
+
+  return (
+    <div className="flex flex-col gap-1.5 pt-3 border-t border-border text-[0.8em]">
+      <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Review History (append-only)</span>
+      {reviews.map((r) => (
+        <div key={r.review_id} className="flex justify-between gap-3 text-[0.78em]">
+          <span className="text-muted">{fmtDate(r.reviewed_at)}</span>
+          <span>{r.old_status} → {r.new_status} by {r.reviewed_by ?? '—'}{r.review_note ? ` — "${r.review_note}"` : ''}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -321,7 +359,9 @@ function RecommendationDetail({ recommendationId, onClose, onChanged }: {
           </div>
 
           <div className="flex flex-col gap-1.5 text-[0.8em]">
-            <div className="flex justify-between gap-3"><span className="text-muted">Provider / Model</span><span>{data.provider} / {data.model}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-muted">Provider</span><span>{data.provider}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-muted">Requested model</span><span>{data.requested_model ?? '(provider default)'}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-muted">Actual model</span><span>{data.actual_model ?? 'UNKNOWN'}</span></div>
             <div className="flex justify-between gap-3"><span className="text-muted">Created</span><span>{fmtDate(data.created_at)}</span></div>
             <div className="flex justify-between gap-3"><span className="text-muted">Evidence snapshot hash</span><span className="font-mono text-[0.85em] break-all text-right">{data.evidence_snapshot_hash}</span></div>
             <div className="flex justify-between gap-3"><span className="text-muted">Input family_ids</span><span className="font-mono text-right break-all">{parseJsonArray<string>(data.input_family_ids_json).join(', ') || '—'}</span></div>
@@ -383,12 +423,14 @@ function RecommendationDetail({ recommendationId, onClose, onChanged }: {
 
           {data.status !== 'DRAFT' && (
             <div className="flex flex-col gap-1 pt-3 border-t border-border text-[0.8em]">
-              <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Review</span>
+              <span className="text-[0.7em] text-muted uppercase tracking-[1px]">Review (latest)</span>
               <div className="flex justify-between gap-3"><span className="text-muted">Reviewed by</span><span>{data.reviewed_by ?? '—'}</span></div>
               <div className="flex justify-between gap-3"><span className="text-muted">Reviewed at</span><span>{fmtDate(data.reviewed_at)}</span></div>
               {data.review_note && <div className="flex justify-between gap-3"><span className="text-muted">Note</span><span className="text-right">{data.review_note}</span></div>}
             </div>
           )}
+
+          <ReviewHistory recommendationId={data.recommendation_id} refreshKey={data.status} />
 
           <ReviewControls
             recommendationId={data.recommendation_id}

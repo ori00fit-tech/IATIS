@@ -34,6 +34,18 @@ def test_get_family_returns_none_for_unknown_id():
     assert storage.get_family("nope") is None
 
 
+def test_list_families_empty_by_default():
+    assert storage.list_families() == []
+
+
+def test_list_families_respects_limit_and_returns_every_row():
+    for i in range(5):
+        storage.upsert_family(f"famL{i}", planned_n=1, family_alpha=0.05)
+    assert len(storage.list_families(limit=2)) == 2
+    ids = {f["family_id"] for f in storage.list_families(limit=10)}
+    assert ids == {f"famL{i}" for i in range(5)}
+
+
 # --- cells -------------------------------------------------------------
 
 
@@ -290,3 +302,23 @@ def test_run_lifecycle_round_trip():
 
 def test_get_run_returns_none_for_unknown_id():
     assert storage.get_run("nope") is None
+
+
+def test_list_runs_empty_by_default():
+    assert storage.list_runs() == []
+
+
+def test_list_runs_scopes_by_family_and_respects_limit():
+    fam_a = _family("famRunsA")
+    fam_b = _family("famRunsB")
+    storage.upsert_run("runA1", status="running", batch_size=5, family_id=fam_a)
+    storage.upsert_run("runA2", status="finished", batch_size=5, family_id=fam_a)
+    storage.upsert_run("runB1", status="running", batch_size=5, family_id=fam_b)
+
+    all_runs = storage.list_runs(limit=50)
+    assert {r["run_id"] for r in all_runs} == {"runA1", "runA2", "runB1"}
+
+    fam_a_runs = storage.list_runs(family_id=fam_a, limit=50)
+    assert {r["run_id"] for r in fam_a_runs} == {"runA1", "runA2"}
+
+    assert len(storage.list_runs(limit=1)) == 1

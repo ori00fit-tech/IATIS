@@ -83,6 +83,10 @@ def test_get_cell_requires_auth(client):
     assert client.get("/research/matrix/cells/MATRIX-CELL-x").status_code == 401
 
 
+def test_list_families_requires_auth(client):
+    assert client.get("/research/matrix/families").status_code == 401
+
+
 def test_get_family_requires_auth(client):
     assert client.get("/research/matrix/families/x").status_code == 401
 
@@ -101,6 +105,10 @@ def test_run_batch_requires_auth(client):
 
 def test_run_status_requires_auth(client):
     assert client.get("/research/matrix/runs/x").status_code == 401
+
+
+def test_list_runs_requires_auth(client):
+    assert client.get("/research/matrix/runs").status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +204,28 @@ def test_two_separate_generate_calls_mint_two_independent_families(client):
 def test_get_family_404_for_unknown(client):
     resp = client.get("/research/matrix/families/does-not-exist", headers=HDR)
     assert resp.status_code == 404
+
+
+def test_list_families_empty_by_default(client):
+    resp = client.get("/research/matrix/families", headers=HDR)
+    assert resp.status_code == 200
+    assert resp.json() == {"families": [], "count": 0}
+
+
+def test_list_families_reflects_real_generated_families(client):
+    fam_a = _generate(client, symbols=["EURUSD"]).json()["family_id"]
+    fam_b = _generate(client, symbols=["GBPUSD"]).json()["family_id"]
+    resp = client.get("/research/matrix/families", headers=HDR)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["count"] == 2
+    ids = {f["family_id"] for f in body["families"]}
+    assert ids == {fam_a, fam_b}
+
+
+def test_list_families_rejects_out_of_range_limit(client):
+    assert client.get("/research/matrix/families", headers=HDR, params={"limit": 0}).status_code == 400
+    assert client.get("/research/matrix/families", headers=HDR, params={"limit": 501}).status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +501,34 @@ def test_run_status_returns_job_and_run_after_submission(client):
     resp = client.get(f"/research/matrix/runs/{run_id}", headers=HDR)
     assert resp.status_code == 200
     assert resp.json()["job"] is not None
+
+
+def test_list_runs_empty_by_default(client):
+    resp = client.get("/research/matrix/runs", headers=HDR)
+    assert resp.status_code == 200
+    assert resp.json() == {"runs": [], "count": 0}
+
+
+def test_list_runs_scopes_by_family_id(client):
+    from storage import research_matrix as storage
+
+    fam_a = _generate(client, symbols=["EURUSD"]).json()["family_id"]
+    fam_b = _generate(client, symbols=["GBPUSD"]).json()["family_id"]
+    storage.upsert_run("runA", status="running", batch_size=5, family_id=fam_a)
+    storage.upsert_run("runB", status="running", batch_size=5, family_id=fam_b)
+
+    all_resp = client.get("/research/matrix/runs", headers=HDR)
+    assert all_resp.json()["count"] == 2
+
+    scoped_resp = client.get("/research/matrix/runs", headers=HDR, params={"family_id": fam_a})
+    scoped_body = scoped_resp.json()
+    assert scoped_body["count"] == 1
+    assert scoped_body["runs"][0]["run_id"] == "runA"
+
+
+def test_list_runs_rejects_out_of_range_limit(client):
+    assert client.get("/research/matrix/runs", headers=HDR, params={"limit": 0}).status_code == 400
+    assert client.get("/research/matrix/runs", headers=HDR, params={"limit": 501}).status_code == 400
 
 
 def test_run_batch_appears_in_the_shared_job_catalog_whitelist():

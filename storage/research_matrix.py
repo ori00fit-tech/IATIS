@@ -153,6 +153,20 @@ def get_family(family_id: str) -> dict[str, Any] | None:
     return _row_to_dict(row) if row else None
 
 
+def list_families(limit: int = 50) -> list[dict[str, Any]]:
+    """Newest first — Phase 2B Matrix Dashboard's family-browser list. No
+    aggregation happens here (that's GET /research/matrix/families/{id}/
+    summary's job, via backtest.matrix_evidence) — this is a lightweight
+    index over the family rows themselves, matching storage.research_
+    missions.list_recent_missions()'s own precedent."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(
+            "SELECT * FROM research_matrix_families ORDER BY created_at DESC LIMIT ?", (limit,),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Cells
 # ---------------------------------------------------------------------------
@@ -394,3 +408,19 @@ def get_run(run_id: str) -> dict[str, Any] | None:
         _init(con)
         row = con.execute("SELECT * FROM research_matrix_runs WHERE run_id=?", (run_id,)).fetchone()
     return _row_to_dict(row) if row else None
+
+
+def list_runs(family_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Newest first, optionally scoped to one family — Phase 2B Matrix
+    Dashboard's "recent batch runs" panel."""
+    query = "SELECT * FROM research_matrix_runs WHERE 1=1"
+    params: list[Any] = []
+    if family_id is not None:
+        query += " AND family_id=?"
+        params.append(family_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(query, tuple(params)).fetchall()
+    return [_row_to_dict(r) for r in rows]

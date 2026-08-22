@@ -18,6 +18,12 @@ Phase 2A (Evidence & Matrix Read Model) added two READ-ONLY endpoints
 backtest/matrix_evidence.py's pure aggregation functions — they never
 write anything and never compute a new verdict, only re-present already-
 decided D1 evidence in joined/aggregated shapes.
+
+Phase 2B (Matrix Dashboard) added two more READ-ONLY list endpoints
+(`GET /families`, `GET /runs`) — thin index views over storage.
+research_matrix.list_families()/list_runs() so the dashboard can browse
+without a caller already knowing a family_id/run_id. Same guarantee:
+list-only, no aggregation, no verdict, no write.
 """
 from __future__ import annotations
 
@@ -163,6 +169,23 @@ async def matrix_generate(
         "research_code_dirty": code_state["dirty"],
         **result,
     }
+
+
+@router.get("/research/matrix/families")
+async def matrix_list_families(
+    limit: int = 50,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 2B Matrix Dashboard — READ-ONLY family browser. Newest first,
+    no aggregation (a caller wanting per-family status breakdown/corrected
+    alpha follows up with GET /research/matrix/families/{id}/summary)."""
+    _check_auth(x_api_key, iatis_session)
+    if not (1 <= limit <= 500):
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    from storage import research_matrix as storage
+    families = storage.list_families(limit=limit)
+    return {"families": families, "count": len(families)}
 
 
 @router.get("/research/matrix/families/{family_id}")
@@ -327,6 +350,25 @@ async def matrix_run_batch(
 
     job.future = _job_executor.submit(_run_job, job)
     return {"run_id": run_id, **_job_summary(job)}
+
+
+@router.get("/research/matrix/runs")
+async def matrix_list_runs(
+    family_id: str | None = None,
+    limit: int = 50,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Phase 2B Matrix Dashboard — READ-ONLY recent-batch-runs browser,
+    optionally scoped to one family_id. D1-persisted run rows only (no
+    in-process job merge — a caller wanting a run's live job state
+    already has GET /research/matrix/runs/{run_id} for that)."""
+    _check_auth(x_api_key, iatis_session)
+    if not (1 <= limit <= 500):
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    from storage import research_matrix as storage
+    runs = storage.list_runs(family_id=family_id, limit=limit)
+    return {"runs": runs, "count": len(runs)}
 
 
 @router.get("/research/matrix/runs/{run_id}")

@@ -18,6 +18,7 @@ from execution.dukascopy_jforex_client import (
     DukascopyJForexError,
     DukascopyJForexOrder,
 )
+from risk.pretrade_limits import manual_override_context
 
 
 def _fake_resp(status_code=200, json_data=None):
@@ -96,6 +97,7 @@ def _order(symbol="EURUSD", direction="BUY", quantity=0.01, sl=1.0920, tp=1.0640
     return DukascopyJForexOrder(
         symbol=symbol, direction=direction, quantity=quantity,
         stop_loss=sl, take_profit=tp, client_order_id=f"IATIS_{symbol}",
+        decision_id="test_dukas",
     )
 
 
@@ -109,7 +111,8 @@ def test_place_market_order_success_attaches_sl_tp(monkeypatch):
     put_resp = _fake_resp(200, {})
 
     with patch("requests.post", return_value=post_resp) as mock_post, \
-         patch("requests.put", return_value=put_resp) as mock_put:
+         patch("requests.put", return_value=put_resp) as mock_put, \
+         manual_override_context("test_dukas", "unit test: success attaches SL/TP"):
         result = client.place_market_order(_order())
 
     assert result.success is True
@@ -130,7 +133,8 @@ def test_place_market_order_rejected_by_bridge(monkeypatch):
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
     client = DukascopyJForexClient()
     post_resp = _fake_resp(200, {"orderSuccess": False, "rejectReason": "insufficient margin"})
-    with patch("requests.post", return_value=post_resp):
+    with patch("requests.post", return_value=post_resp), \
+         manual_override_context("test_dukas", "unit test: bridge rejection"):
         result = client.place_market_order(_order())
 
     assert result.success is False
@@ -140,7 +144,8 @@ def test_place_market_order_rejected_by_bridge(monkeypatch):
 def test_place_market_order_http_error(monkeypatch):
     monkeypatch.setenv("DUKASCOPY_JFOREX_BRIDGE_URL", "http://127.0.0.1:7080")
     client = DukascopyJForexClient()
-    with patch("requests.post", side_effect=Exception("connection refused")):
+    with patch("requests.post", side_effect=Exception("connection refused")), \
+         manual_override_context("test_dukas", "unit test: HTTP error"):
         result = client.place_market_order(_order())
 
     assert result.success is False
@@ -156,7 +161,8 @@ def test_place_market_order_success_survives_sl_tp_attach_failure(monkeypatch):
     client = DukascopyJForexClient()
     post_resp = _fake_resp(200, {"orderSuccess": True, "dukasOrderID": "jf999", "fillPrice": 1.0850})
     with patch("requests.post", return_value=post_resp), \
-         patch("requests.put", side_effect=Exception("PUT failed")):
+         patch("requests.put", side_effect=Exception("PUT failed")), \
+         manual_override_context("test_dukas", "unit test: SL/TP attach failure survives"):
         result = client.place_market_order(_order())
 
     assert result.success is True
@@ -172,7 +178,8 @@ def test_place_market_order_refuses_unknown_pip_size(monkeypatch):
     client = DukascopyJForexClient()
     post_resp = _fake_resp(200, {"orderSuccess": True, "dukasOrderID": "jf1", "fillPrice": 1.0850})
     with patch("requests.post", return_value=post_resp), \
-         patch("requests.put") as mock_put:
+         patch("requests.put") as mock_put, \
+         manual_override_context("test_dukas", "unit test: unknown pip size refuses"):
         result = client.place_market_order(_order(symbol="UNKNOWNSYM"))
 
     assert result.success is True  # fill still succeeded

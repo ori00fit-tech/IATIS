@@ -238,6 +238,26 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                 report = run_pipeline(sym_config)
                 reports.append(report)
                 if report.get("final_verdict") == "EXECUTE":
+                    # Kill switch (storage/kill_switch.py): a manually-
+                    # activated operational halt on NEW order submission
+                    # (RTS 6 Art.12 / PRA SS5/18 "kill functionality").
+                    # Checked fresh every EXECUTE, fail-closed on any read
+                    # error — an unreadable state must block, never allow.
+                    try:
+                        from storage.kill_switch import get_state as _kill_switch_state
+                        ks_state = _kill_switch_state()
+                    except Exception as exc:
+                        logger.error(f"[KILL-SWITCH] state check failed — blocking (fail-closed): {exc}")
+                        ks_state = {"active": True, "reason": f"kill switch check failed: {exc}"}
+                    if ks_state.get("active"):
+                        logger.warning(
+                            f"[KILL-SWITCH] EXECUTE for {internal} suppressed — "
+                            f"kill switch ACTIVE ({ks_state.get('reason')}). "
+                            f"Manual reactivation required."
+                        )
+                        report["kill_switch_blocked"] = True
+                        report["summary"] = f"NO_TRADE (blocked): kill switch active — {ks_state.get('reason')}"
+                        continue
                     execute_signals.append(internal)
                     # B1: Execute the trade. Broker execution runs when the
                     # matching broker is enabled; otherwise dry_run simulates.
@@ -256,6 +276,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                   (dukascopy_jforex_enabled and broker == "dukascopy_jforex")
                     if dry_run or broker_live:
                         try:
+                            from risk.pretrade_limits import load_pretrade_limits
+
                             executor = TradeExecutor(
                                 dry_run=dry_run,
                                 broker=broker,
@@ -263,6 +285,13 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                                 min_score=exec_cfg.get("min_score_to_execute", 60.0),
                                 allow_live_trading=exec_cfg.get("allow_live_trading", False),
                                 dukascopy_jforex_fixed_quantity=exec_cfg.get("dukascopy_jforex_fixed_quantity", 0.0),
+                                # Loaded fresh from THIS tick's already-loaded
+                                # config — avoids a second load_config() read
+                                # per order (config/risk.yaml's own "loaded
+                                # fresh on every order" contract is still met:
+                                # config itself is reloaded every run_once()
+                                # tick, scheduler.py:591).
+                                pretrade_limits=load_pretrade_limits(config),
                             )
                             exec_result = executor.execute_from_report(report)
                             if exec_result.executed:
@@ -417,6 +446,8 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
         # runs every tick, acts only when the cTrader path is live
         # (reconcile() self-gates on ctrader_enabled + dry_run). Alert
         # with the standard per-key cooldown on any mismatch.
+        rec = None
+        repair = None
         if config.get("features", {}).get("broker_reconciliation", True):
             try:
                 from execution.reconciliation import format_alert, reconcile, repair_mismatches, store_result
@@ -443,6 +474,23 @@ def run_once(config: dict, symbols: list[str] | None = None) -> list[dict]:
                             logger.warning(f"Reconciliation auto-repair failed (non-fatal): {exc}")
             except Exception as exc:
                 logger.warning(f"Reconciliation failed (non-fatal): {exc}")
+
+        # Unified Post-Trade Control / Incident Register (execution/
+        # post_trade_monitor.py): turns this tick's ALREADY-COMPUTED
+        # reconciliation/execution_attempts/execution_quality/kill_switch/
+        # forward_review evidence into durable incidents. Runs every tick
+        # regardless of feature flags above (rec/repair are None when
+        # reconciliation didn't run this tick — scan_reconciliation()
+        # handles that by falling back to the last stored result). Its own
+        # internal per-scan try/except already isolates one subsystem's
+        # failure from the others; this outer try/except additionally
+        # ensures a monitoring-layer failure can never affect trading.
+        if config.get("features", {}).get("post_trade_monitoring", True):
+            try:
+                from execution.post_trade_monitor import run_all_scans
+                run_all_scans(reconciliation_report=rec, reconciliation_repair=repair)
+            except Exception as exc:
+                logger.warning(f"Post-trade incident monitoring failed (non-fatal): {exc}")
 
         # TCA async-fill resolution pass (2026-08-17 fix): completes any
         # fill queued as PENDING by record_or_queue_fill() earlier this

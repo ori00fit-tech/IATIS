@@ -116,6 +116,7 @@ class TradeExecutor:
         min_score: float = 60.0,
         allow_live_trading: bool = False,
         dukascopy_jforex_fixed_quantity: float = 0.0,
+        pretrade_limits: "PretradeLimits | None" = None,
     ):
         self.dry_run = dry_run
         self.broker = broker
@@ -135,12 +136,101 @@ class TradeExecutor:
         # a silently-guessed default size.
         self.dukascopy_jforex_fixed_quantity = dukascopy_jforex_fixed_quantity
         self._client = None
+        # P0 pre-trade hard limits (risk/pretrade_limits.py) — loaded fresh
+        # per TradeExecutor construction (which itself happens fresh per
+        # order, in scheduler.py's run_once() loop), matching config/
+        # risk.yaml's own "loaded fresh on every order (never cached)"
+        # documented contract. A caller may pass an already-loaded
+        # PretradeLimits (scheduler.py does, from its own already-loaded
+        # config); anyone else gets a fresh load_config() read.
+        if pretrade_limits is None:
+            from risk.pretrade_limits import load_pretrade_limits
+            from utils.helpers import load_config
+
+            pretrade_limits = load_pretrade_limits(load_config())
+        self.pretrade_limits = pretrade_limits
 
         mode = "DRY RUN" if dry_run else f"LIVE ({broker.upper()})"
         logger.info(
             f"TradeExecutor: mode={mode}, max_trades={max_open_trades}, "
             f"min_score={min_score}, allow_live={allow_live_trading}"
         )
+
+    def _pretrade_check(
+        self,
+        report: dict,
+        symbol: str,
+        direction: str,
+        quantity: float | None,
+        entry: float,
+        sl: float,
+        tp: float,
+        account_equity: float | None,
+        open_positions_notional: dict[str, float] | None,
+        portfolio_notional: float | None,
+        symbol_spec,
+        executable_price: float | None,
+    ):
+        """Builds the concrete order/context and runs risk/pretrade_
+        limits.py::evaluate_pretrade() — the P0 pre-trade hard-limits
+        authority every live order must clear immediately before broker
+        submission (PRE-TRADE HARD LIMITS stage of the DECISION -> RISK
+        GATE -> KILL SWITCH -> PRE-TRADE HARD LIMITS -> BROKER VALIDATION
+        pipeline). Every decision (approved or rejected) is persisted via
+        storage/pretrade_decisions.py, best-effort, before returning.
+
+        TOCTOU note: `executable_price`/positions/equity are gathered by
+        the caller immediately before this call (not reused from earlier
+        pipeline stages), keeping the validate-then-submit gap to the
+        time between this check and the broker call that immediately
+        follows it — no cross-process coordination exists to make that
+        gap zero (scheduler.py's run_once() loop is the sole, sequential,
+        single-process live-order submitter, so no OTHER IATIS process
+        can race this order; an external, out-of-band broker-side action
+        — e.g. a human closing a position from the mobile app between
+        this check and submission — is a residual risk this layer cannot
+        close, and is not claimed to).
+        """
+        from datetime import datetime, timezone
+
+        from risk.pretrade_limits import PendingOrder, PretradeContext, compute_decision_id, evaluate_pretrade
+
+        bar_time = report.get("bar_time")
+        decision_id = compute_decision_id(symbol, direction, str(bar_time), float(entry), float(sl), float(tp))
+        order = PendingOrder(
+            decision_id=decision_id, symbol=symbol, direction=direction,
+            quantity=quantity, reference_price=float(entry),
+            stop_loss=float(sl), take_profit=float(tp), bar_time=bar_time,
+            broker=self.broker,
+        )
+        context = PretradeContext(
+            now_utc=datetime.now(timezone.utc),
+            account_equity=account_equity,
+            open_positions_notional=open_positions_notional,
+            portfolio_notional=portfolio_notional,
+            symbol_spec=symbol_spec,
+            executable_price=executable_price,
+        )
+        decision = evaluate_pretrade(order, context, self.pretrade_limits)
+
+        try:
+            from storage.kill_switch import is_active as _kill_switch_is_active
+            try:
+                ks_active = _kill_switch_is_active()
+            except Exception:
+                ks_active = True  # fail-closed for the AUDIT RECORD too — never record an unknown state as "inactive"
+            from storage.pretrade_decisions import record_pretrade_decision
+            record_pretrade_decision(
+                decision, order, context, kill_switch_active=ks_active, strategy_engine=order.strategy,
+            )
+        except Exception as exc:
+            logger.debug(f"pretrade_decisions recording skipped for {symbol}: {exc}")
+
+        if not decision.approved:
+            reasons = "; ".join(f"{v.check}: {v.detail}" for v in decision.violations)
+            logger.error(f"🚫 PRE-TRADE HARD LIMITS REJECTED {direction} {symbol}: {reasons}")
+
+        return order, decision
 
     def _get_client(self):
         """Lazy-load broker client.
@@ -312,6 +402,33 @@ class TradeExecutor:
                         dry_run=False,
                     )
 
+                # P0 PRE-TRADE HARD LIMITS — the central authority every
+                # live order must clear before broker submission. Built
+                # from state gathered THIS call (account, open positions,
+                # independently-re-verified symbol precision), immediately
+                # before the broker call that follows.
+                open_positions_notional = {
+                    p.symbol: (p.volume / 100.0) * self.pretrade_limits.standard_contract_units * p.current_price
+                    for p in client.get_open_positions()
+                }
+                portfolio_notional = sum(open_positions_notional.values())
+                symbol_spec = client.get_symbol_details(symbol)
+                pending_order, pretrade_decision = self._pretrade_check(
+                    report, symbol, direction, float(volume), float(entry), float(sl), float(tp),
+                    account_equity=account.balance,
+                    open_positions_notional=open_positions_notional,
+                    portfolio_notional=portfolio_notional,
+                    symbol_spec=symbol_spec,
+                    executable_price=float(entry),
+                )
+                if not pretrade_decision.approved:
+                    reasons = "; ".join(f"{v.check}: {v.detail}" for v in pretrade_decision.violations)
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Pre-trade hard limits rejected: {reasons}",
+                        dry_run=False,
+                    )
+
                 ct_order = CTraderOrder(
                     symbol=symbol,
                     direction=direction,
@@ -319,9 +436,13 @@ class TradeExecutor:
                     stop_loss=float(sl),
                     take_profit=float(tp),
                     comment=f"IATIS_{symbol}",
+                    decision_id=pending_order.decision_id,
                 )
 
-                result = client.place_market_order(ct_order)
+                from risk.pretrade_limits import approved_context
+
+                with approved_context(pending_order.decision_id):
+                    result = client.place_market_order(ct_order)
 
                 if result.success:
                     _record_ctrader_attempt(
@@ -422,6 +543,34 @@ class TradeExecutor:
                         dry_run=False,
                     )
 
+                # P0 PRE-TRADE HARD LIMITS. dukas-api documents no
+                # account-balance/list-open-positions/symbol-precision
+                # endpoint (execution/dukascopy_jforex_client.py's own
+                # module docstring) — account_equity/open_positions_
+                # notional/portfolio_notional/symbol_spec are all
+                # genuinely UNKNOWN here, not guessed. Per Phase 4's own
+                # "UNKNOWN STATE = REJECT" rule this means every Dukascopy
+                # order is rejected by SYMBOL METADATA FAILURE until this
+                # bridge gains a real precision accessor — intentional
+                # fail-closed behavior, not an oversight (see the final
+                # report's residual-risks section).
+                pending_order, pretrade_decision = self._pretrade_check(
+                    report, symbol, direction, self.dukascopy_jforex_fixed_quantity,
+                    float(entry), float(sl), float(tp),
+                    account_equity=None,
+                    open_positions_notional=None,
+                    portfolio_notional=None,
+                    symbol_spec=None,
+                    executable_price=float(entry),
+                )
+                if not pretrade_decision.approved:
+                    reasons = "; ".join(f"{v.check}: {v.detail}" for v in pretrade_decision.violations)
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Pre-trade hard limits rejected: {reasons}",
+                        dry_run=False,
+                    )
+
                 jf_order = DukascopyJForexOrder(
                     symbol=symbol,
                     direction=direction,
@@ -429,8 +578,12 @@ class TradeExecutor:
                     stop_loss=float(sl),
                     take_profit=float(tp),
                     client_order_id=f"IATIS_{symbol}",
+                    decision_id=pending_order.decision_id,
                 )
-                result = client.place_market_order(jf_order)
+                from risk.pretrade_limits import approved_context
+
+                with approved_context(pending_order.decision_id):
+                    result = client.place_market_order(jf_order)
 
                 if result.success:
                     logger.info(
@@ -484,13 +637,44 @@ class TradeExecutor:
                         skip_reason=f"Invalid units ({units})", dry_run=False,
                     )
 
+                # P0 PRE-TRADE HARD LIMITS. OandaClient exposes no
+                # symbol-precision endpoint — symbol_spec is genuinely
+                # UNKNOWN, not guessed, so this order is rejected by
+                # SYMBOL METADATA FAILURE per Phase 4's "UNKNOWN STATE =
+                # REJECT" rule (same intentional fail-closed behavior as
+                # the dukascopy_jforex branch above, and same reasoning:
+                # OANDA is also disabled by default).
+                open_positions_notional = {
+                    t.symbol: abs(t.units) * t.entry_price for t in client.get_open_trades()
+                }
+                portfolio_notional = sum(open_positions_notional.values())
+                pending_order, pretrade_decision = self._pretrade_check(
+                    report, symbol, direction, float(units), float(entry), float(sl), float(tp),
+                    account_equity=account.balance,
+                    open_positions_notional=open_positions_notional,
+                    portfolio_notional=portfolio_notional,
+                    symbol_spec=None,
+                    executable_price=float(entry),
+                )
+                if not pretrade_decision.approved:
+                    reasons = "; ".join(f"{v.check}: {v.detail}" for v in pretrade_decision.violations)
+                    return ExecutionResult(
+                        executed=False, symbol=symbol,
+                        skip_reason=f"Pre-trade hard limits rejected: {reasons}",
+                        dry_run=False,
+                    )
+
                 from execution.oanda_client import TradeOrder
                 order = TradeOrder(
                     symbol=symbol, direction=direction, units=units,
                     stop_loss=float(sl), take_profit=float(tp),
                     client_id=f"IATIS_{symbol}_{datetime.now(timezone.utc).strftime('%H%M')}",
+                    decision_id=pending_order.decision_id,
                 )
-                result = client.place_market_order(order)
+                from risk.pretrade_limits import approved_context
+
+                with approved_context(pending_order.decision_id):
+                    result = client.place_market_order(order)
 
                 if result.success:
                     return ExecutionResult(

@@ -4,6 +4,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 from execution.oanda_client import IATIS_TO_OANDA, OANDA_TO_IATIS, OandaClient
 from execution.trade_executor import TradeExecutor, ExecutionResult
+from risk.pretrade_limits import PretradeLimits
+
+# These tests exercise broker-mechanics (request/response shape, money-
+# safety gates, retry/timeout handling) via mocked clients — not P0 pre-
+# trade hard limits, which have their own dedicated tests/test_pretrade_
+# limits.py. Disabling the layer here keeps a MagicMock-based fake client
+# (no real symbol precision/account/position data) from being rejected by
+# the hard-limits layer's own correct, fail-closed "unknown state" checks.
+_NO_PRETRADE_LIMITS = PretradeLimits(enabled=False)
 
 
 # ─── Symbol mapping ───────────────────────────────────────────────────────────
@@ -141,7 +150,7 @@ def test_executor_crypto_dry_run():
 def test_ctrader_refuses_live_account_without_allow_flag():
     """A real order must NEVER hit a non-demo cTrader account unless
     allow_live_trading is explicitly True — even when dry_run is off."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "live"
@@ -157,7 +166,7 @@ def test_ctrader_places_on_demo_account():
     """On a demo account, a real order IS placed (this is layer-2 evidence)."""
     from execution.trade_executor import ExecutionResult as _ER  # noqa
 
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -179,7 +188,7 @@ def test_ctrader_places_on_demo_account():
 def test_ctrader_live_allowed_when_flag_set():
     """With allow_live_trading=True, a live account is permitted (the
     explicit real-money path)."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=True)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=True, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "live"
@@ -207,7 +216,7 @@ def test_ctrader_refuses_duplicate_position():
     confirmation timed out but was actually filled (the late execution
     event still updates client._positions, so a later has_open_position()
     check correctly catches it)."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -224,7 +233,7 @@ def test_ctrader_refuses_duplicate_position():
 def test_ctrader_duplicate_check_runs_before_account_lookup():
     """The duplicate check must short-circuit before any account/sizing
     call — no wasted API calls once a duplicate is already known."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -241,7 +250,7 @@ def test_ctrader_duplicate_check_runs_before_account_lookup():
 # is persisted to storage.execution_attempts, never just a log line. ───────
 
 def test_ctrader_rejected_order_persists_rejected_status():
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -270,7 +279,7 @@ def test_ctrader_timeout_checks_broker_truth_and_reports_timeout_unknown():
     clean rejection — status is TIMEOUT_UNKNOWN, and has_open_position()
     is consulted immediately (broker truth) rather than blindly assuming
     failure. This is observation only: it does NOT retry the order."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -296,7 +305,7 @@ def test_ctrader_timeout_checks_broker_truth_and_reports_timeout_unknown():
 
 
 def test_ctrader_timeout_without_broker_confirmation_says_so():
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -314,7 +323,7 @@ def test_ctrader_timeout_without_broker_confirmation_says_so():
 
 
 def test_ctrader_accepted_order_persists_accepted_status():
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -338,7 +347,7 @@ def test_ctrader_accepted_order_persists_accepted_status():
 def test_ctrader_execution_attempts_recording_failure_never_masks_the_real_result():
     """A storage hiccup while persisting the attempt must never turn a
     real (successful or failed) execution outcome into an exception."""
-    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False)
+    executor = TradeExecutor(dry_run=False, broker="ctrader", allow_live_trading=False, pretrade_limits=_NO_PRETRADE_LIMITS)
 
     fake_client = MagicMock()
     fake_client.environment = "demo"
@@ -387,7 +396,7 @@ def test_dukascopy_jforex_refuses_when_no_fixed_quantity_configured():
 
 
 def test_dukascopy_jforex_refuses_duplicate_open_position():
-    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01, pretrade_limits=_NO_PRETRADE_LIMITS)
     fake_client = MagicMock()
     fake_client.environment = "demo"
     fake_client.has_open_position.return_value = True
@@ -400,7 +409,7 @@ def test_dukascopy_jforex_refuses_duplicate_open_position():
 
 
 def test_dukascopy_jforex_places_order_on_demo_account():
-    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01, pretrade_limits=_NO_PRETRADE_LIMITS)
     fake_client = MagicMock()
     fake_client.environment = "demo"
     fake_client.has_open_position.return_value = False
@@ -420,7 +429,7 @@ def test_dukascopy_jforex_places_order_on_demo_account():
 
 
 def test_dukascopy_jforex_reports_bridge_rejection():
-    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01)
+    executor = TradeExecutor(dry_run=False, broker="dukascopy_jforex", dukascopy_jforex_fixed_quantity=0.01, pretrade_limits=_NO_PRETRADE_LIMITS)
     fake_client = MagicMock()
     fake_client.environment = "demo"
     fake_client.has_open_position.return_value = False
@@ -435,7 +444,7 @@ def test_dukascopy_jforex_reports_bridge_rejection():
 def test_dukascopy_jforex_live_allowed_when_flag_set():
     executor = TradeExecutor(
         dry_run=False, broker="dukascopy_jforex", allow_live_trading=True,
-        dukascopy_jforex_fixed_quantity=0.01,
+        dukascopy_jforex_fixed_quantity=0.01, pretrade_limits=_NO_PRETRADE_LIMITS,
     )
     fake_client = MagicMock()
     fake_client.environment = "live"

@@ -532,6 +532,52 @@ def pending_fill_position_ids() -> list[str]:
         return []
 
 
+def unavailable_fill_count() -> int:
+    """Count of pending_fills rows that hit the bounded wait
+    (sweep_stale_pending_fills) or an explicit mark_pending_fill_
+    unavailable() without ever being resolved with a real broker price.
+    Post-trade monitoring's evidence source for FILL_UNAVAILABLE
+    incidents (execution/post_trade_monitor.py) — never fabricates a
+    slippage figure for these, matches this module's own convention."""
+    try:
+        with d1_client.d1_connection() as con:
+            _init_pending(con)
+            row = con.execute(
+                "SELECT COUNT(*) AS n FROM pending_fills WHERE status=?", (UNAVAILABLE,)
+            ).fetchone()
+        return int(row["n"]) if row else 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"TCA unavailable-fill count failed (non-fatal): {exc}")
+        return 0
+
+
+def latency_stats() -> dict[str, Any]:
+    """Aggregate fill_latency_seconds across every recorded fill (async
+    path only — synchronous fills always have fill_latency_seconds=NULL,
+    excluded here the same way summary()'s _bucket() excludes rows
+    lacking the field in question). Read-only aggregation over the same
+    `fills` table summary() already reads — no new measurement, no new
+    table."""
+    try:
+        with d1_client.d1_connection() as con:
+            _init(con)
+            rows = con.execute(
+                "SELECT fill_latency_seconds FROM fills WHERE fill_latency_seconds IS NOT NULL"
+            ).fetchall()
+        values = sorted(r["fill_latency_seconds"] for r in rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"TCA latency stats failed (non-fatal): {exc}")
+        return {"n": 0}
+    if not values:
+        return {"n": 0}
+    return {
+        "n": len(values),
+        "mean_seconds": round(statistics.fmean(values), 3),
+        "p95_seconds": round(values[min(len(values) - 1, int(0.95 * len(values)))], 3),
+        "worst_seconds": round(max(values), 3),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Read / report
 # ---------------------------------------------------------------------------

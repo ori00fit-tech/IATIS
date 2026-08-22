@@ -47,8 +47,14 @@ def reconcile(config: dict) -> dict[str, Any]:
     exec_cfg = config.get("execution", {})
 
     if not exec_cfg.get("ctrader_enabled", False) or exec_cfg.get("dry_run", True):
+        # Not a control failure — reconciliation legitimately has nothing
+        # to check in paper mode. skip_reason_kind lets a downstream
+        # monitor (execution/post_trade_monitor.py) tell this apart from
+        # a genuine control-visibility gap below, without string-matching
+        # `reason`.
         return {"status": "skipped", "checked_at": checked_at,
-                "reason": "broker execution not live (ctrader_enabled+dry_run gate)"}
+                "reason": "broker execution not live (ctrader_enabled+dry_run gate)",
+                "skip_reason_kind": "not_live"}
 
     try:
         from core.data_providers import get_shared_ctrader_client
@@ -57,7 +63,8 @@ def reconcile(config: dict) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — monitoring must not kill the run
         logger.warning(f"reconciliation: broker side unavailable (non-fatal): {exc}")
         return {"status": "skipped", "checked_at": checked_at,
-                "reason": f"broker client unavailable: {type(exc).__name__}: {exc}"}
+                "reason": f"broker client unavailable: {type(exc).__name__}: {exc}",
+                "skip_reason_kind": "control_failure"}
 
     try:
         from storage.outcome_tracker import get_open_signals
@@ -65,7 +72,8 @@ def reconcile(config: dict) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"reconciliation: internal side unavailable (non-fatal): {exc}")
         return {"status": "skipped", "checked_at": checked_at,
-                "reason": f"outcome tracker unavailable: {type(exc).__name__}: {exc}"}
+                "reason": f"outcome tracker unavailable: {type(exc).__name__}: {exc}",
+                "skip_reason_kind": "control_failure"}
 
     broker_syms = {p.symbol for p in broker_positions}
     internal_syms = {r.get("symbol") for r in internal_open}
@@ -109,14 +117,15 @@ def reconcile(config: dict) -> dict[str, Any]:
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS reconciliation_checks (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts            TEXT NOT NULL,
-    status        TEXT NOT NULL,
-    reason        TEXT,
-    broker_only   TEXT,
-    internal_only TEXT,
-    n_broker      INTEGER,
-    n_internal    INTEGER
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    reason           TEXT,
+    broker_only      TEXT,
+    internal_only    TEXT,
+    n_broker         INTEGER,
+    n_internal       INTEGER,
+    skip_reason_kind TEXT
 )
 """
 
@@ -131,8 +140,9 @@ def store_result(report: dict[str, Any]) -> None:
             con.execute(_DDL)
             con.execute(
                 """INSERT INTO reconciliation_checks
-                   (ts, status, reason, broker_only, internal_only, n_broker, n_internal)
-                   VALUES (?,?,?,?,?,?,?)""",
+                   (ts, status, reason, broker_only, internal_only, n_broker, n_internal,
+                    skip_reason_kind)
+                   VALUES (?,?,?,?,?,?,?,?)""",
                 (
                     report.get("checked_at"),
                     report.get("status", "unknown"),
@@ -141,6 +151,7 @@ def store_result(report: dict[str, Any]) -> None:
                     json.dumps(report.get("internal_only", [])),
                     report.get("n_broker"),
                     report.get("n_internal"),
+                    report.get("skip_reason_kind"),
                 ),
             )
     except Exception as exc:  # noqa: BLE001 — monitoring must not kill the run
@@ -156,7 +167,7 @@ def last_result() -> dict[str, Any] | None:
         con.execute(_DDL)
         row = con.execute(
             "SELECT ts, status, reason, broker_only, internal_only, "
-            "n_broker, n_internal FROM reconciliation_checks "
+            "n_broker, n_internal, skip_reason_kind FROM reconciliation_checks "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
     if row is None:
@@ -169,6 +180,7 @@ def last_result() -> dict[str, Any] | None:
         "internal_only": json.loads(row["internal_only"] or "[]"),
         "n_broker": row["n_broker"],
         "n_internal": row["n_internal"],
+        "skip_reason_kind": row["skip_reason_kind"],
     }
 
 

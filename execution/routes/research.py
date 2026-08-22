@@ -143,6 +143,29 @@ async def research_engines(
     }
 
 
+@router.get("/research/algorithm-inventory")
+async def research_algorithm_inventory(
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Algorithm & Control Inventory (RTS 6 Art.5 / PRA SS5/18-style
+    register) — every trading-decision algorithm this system contains,
+    live or research-only, with its activation state, confluence weight,
+    version, parameters, and hypothesis/promotion approval basis.
+    Distinct from GET /research/engines (a lighter Backtesting-Lab
+    research-workspace tool covering only the 10 base engines' bare
+    enabled/weight/version): this endpoint is the compliance-facing
+    register, also covers the price_action_v2/wyckoff_v2 ad-hoc research
+    variants, and states WHY each algorithm may or may not run live.
+    Computed fresh from config/engines.yaml + config.yaml + research/
+    edge_gate.py on every call — read-only, no write path exists.
+    """
+    _check_auth(x_api_key, iatis_session)
+    from research.algorithm_inventory import build_algorithm_inventory
+
+    return build_algorithm_inventory(_get_config())
+
+
 # Technical Indicator catalog (Dataset Builder, 2026-07-24) — a read-only
 # inventory of the indicator math that ALREADY exists in this codebase
 # (grep-verified against the source, not guessed), for the Dataset

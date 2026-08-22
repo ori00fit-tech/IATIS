@@ -241,6 +241,12 @@ features:
   # diff. Self-gates: only acts when ctrader_enabled and dry_run:false
   # (paper mode has no broker book to reconcile). Mismatch → Telegram.
   broker_reconciliation: true
+  # execution/post_trade_monitor.py — turns each tick's ALREADY-COMPUTED
+  # reconciliation/execution_attempts/execution_quality/kill_switch/
+  # forward_review evidence into durable incidents (storage/
+  # post_trade_incidents.py). Purely observational: never gates trading,
+  # never mutates the kill switch, never auto-closes a position.
+  post_trade_monitoring: true
 fundamentals:
   blackout_look_ahead_min: 60
   news_filter_enabled: true

@@ -19,3 +19,44 @@ min_risk_reward: 2.0
 risk_per_trade_max: 0.01
 risk_per_trade_min: 0.0025
 sl_atr_multiplier: 2.5
+
+# Pre-trade hard limits (P0, RTS 6 Art.15 / PRA SS5/18 pre-trade controls,
+# 2026-08-XX) — risk/pretrade_limits.py, enforced in execution/
+# trade_executor.py immediately before every live broker order. A SAFETY
+# layer, not a strategy input: never influences which symbol/direction
+# IATIS decides to trade, only whether the concrete order that decision
+# produced is allowed to reach the broker. Loaded fresh on every order
+# (never cached), so a change here takes effect on the very next order
+# with no restart needed.
+#
+# Every field is optional — omitting one (or setting it null) makes that
+# specific check SKIP, not pass-by-default; risk/pretrade_limits.py's own
+# evaluate_pretrade() records the SKIP/PASS/REJECT distinction on every
+# decision, so a disabled check is always visible in the audit trail, not
+# silently absent.
+#
+# Defaults below are conservative-but-generous relative to the current
+# $10,000 demo account and risk_per_trade_max=0.01 above — they exist to
+# catch a RUNAWAY ORDER (a sizing bug, a corrupted price, a duplicate
+# submission), not to constrain normal operation. Not yet calibrated from
+# live shadow-book data (same "frozen until n~=50/gate" caveat as the
+# rest of this file) — revisit once real order history exists to
+# calibrate against, not from opinion.
+pretrade_limits:
+  enabled: true
+  max_notional_usd: 50000.0          # 5x account equity — catches a sizing bug, not normal trading
+  max_quantity: 1000                  # centi-lots (10.0 real lots) — client.calculate_volume()'s own units
+  max_position_per_symbol_usd: 20000.0
+  max_portfolio_notional_usd: 50000.0
+  max_symbol_concentration_pct: 0.5   # this order's post-fill notional / total portfolio notional
+  price_collar_pct: 0.02              # executable price vs. decision-time reference price, +/-2%
+  max_slippage_pct: 0.02
+  require_stop_loss: true
+  min_stop_distance_pct: 0.0005       # SL distance / reference price — catches an effectively-zero stop
+  max_stop_distance_pct: 0.10         # catches a wildly-wrong stop
+  min_risk_reward: 2.0                # independent re-check of the min_risk_reward floor above
+  max_stale_data_seconds: 21600       # 6h — generous relative to the live H4/D1 decision timeframe
+  max_orders_per_window: 10
+  order_window_seconds: 3600
+  duplicate_window_seconds: 30
+  standard_contract_units: 100000.0   # FX-standard lot size, used only for the notional estimate

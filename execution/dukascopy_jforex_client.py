@@ -90,6 +90,11 @@ class DukascopyJForexOrder:
     stop_loss: float
     take_profit: float
     client_order_id: str
+    # risk/pretrade_limits.py's decision_id for THIS exact order (distinct
+    # from client_order_id, which is a deterministic per-symbol duplicate-
+    # position key) — required by place_market_order()'s require_pretrade_
+    # approval() bypass guard.
+    decision_id: str = ""
 
 
 @dataclass
@@ -152,6 +157,10 @@ class DukascopyJForexClient:
         return status not in ("", "CLOSED", "REJECTED")
 
     def place_market_order(self, order: DukascopyJForexOrder) -> DukascopyJForexOrderResult:
+        from risk.pretrade_limits import require_pretrade_approval
+
+        require_pretrade_approval(order.decision_id)
+
         payload = {
             "instID": order.symbol,
             "clientOrderID": order.client_order_id,

@@ -1,4 +1,24 @@
-import { apiGet, apiGetText } from '../../lib/api'
+import { apiGet, apiGetText, apiPost } from '../../lib/api'
+
+// Operational kill switch (RTS 6 Art.12 / PRA SS5/18 "kill functionality"):
+// a manual, operator-triggered halt on NEW order submission — backed by
+// storage/kill_switch.py (a local file, not D1, so it works even if the
+// database is unreachable). Blocks scheduler.py's EXECUTE branch only; it
+// does not cancel pending orders (none exist — IATIS only ever places
+// protected market orders) and does not force-close open positions.
+export interface KillSwitchState {
+  active: boolean
+  reason: string | null
+  activated_at: string | null
+  activated_by: string | null
+  deactivated_at: string | null
+  deactivated_by: string | null
+}
+
+export const getKillSwitchStatus = () => apiGet<KillSwitchState>('/risk/kill-switch')
+export const activateKillSwitch = (reason: string) =>
+  apiPost<KillSwitchState>('/risk/kill-switch/activate', { reason })
+export const deactivateKillSwitch = () => apiPost<KillSwitchState>('/risk/kill-switch/deactivate')
 
 export interface Health {
   status: string

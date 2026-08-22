@@ -958,13 +958,19 @@ def test_experiment_job_catalog_is_the_narrow_whitelist(client):
     # whitelisted jobs — --symbols/--timeframe/--years all server-validated
     # before reaching argv (see _WAREHOUSE_JOBS in execution/routes/
     # experiments.py), never user-shaped.
+    # matrix_batch added 2026-08-XX (Hypothesis Discovery Engine Phase 1):
+    # same one-subprocess-per-run model (see execution/routes/
+    # research_matrix.py) — full argv built per-request there, not
+    # user-shaped. A whole bounded batch is one job slot, looping over
+    # many cells in-process internally, mirroring research_mission/
+    # mission_validate's own model.
     assert ids == {
         "verify_data_integrity", "forward_review", "backup_d1", "backtest",
         "hypothesis_H019", "hypothesis_H023", "hypothesis_H024",
         "hypothesis_H033", "hypothesis_H037", "hypothesis_H103",
         "walk_forward", "robustness", "research_mission", "mission_validate",
         "price_benchmark", "news_benchmark", "macro_benchmark", "analytics_benchmark",
-        "engine_benchmark", "download_history", "push_to_warehouse",
+        "engine_benchmark", "download_history", "push_to_warehouse", "matrix_batch",
     }
 
 

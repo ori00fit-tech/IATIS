@@ -116,6 +116,7 @@ from execution.routes import (
     provider_benchmark,
     provider_scorecard,
     research,
+    research_matrix,
 )
 
 # Included in the same relative order their endpoints first appeared in
@@ -139,6 +140,10 @@ app.include_router(ctrader_auth.router)
 app.include_router(dashboard_legacy.router)
 app.include_router(experience.router)
 app.include_router(missions.router)
+# Hypothesis Discovery Engine Phase 1 (2026-08-XX) — same collision
+# reasoning as missions.router above: /research/matrix/... registers
+# before research.router's own GET /research/{hypothesis_id} catch-all.
+app.include_router(research_matrix.router)
 app.include_router(diagnostics.router)
 # Provider Benchmark & Data Quality Lab Phase 1 (2026-08-08) — same
 # collision reasoning as missions.router above: GET

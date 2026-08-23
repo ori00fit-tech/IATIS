@@ -128,6 +128,79 @@ def test_per_risk_preset_stats_groups_correctly():
     assert stats["aggressive"]["total"] == 1
 
 
+# --- Phase 1: per_engine_stats / per_timeframe_stats / composites ---------
+
+
+def test_per_engine_stats_groups_correctly():
+    cells = [
+        _cell(engine="price_action", status=rm.SCREENED),
+        _cell(engine="price_action", status=rm.REJECTED),
+        _cell(engine="smc", status=rm.VALIDATED),
+    ]
+    stats = evidence.per_engine_stats(cells)
+    assert stats["price_action"]["total"] == 2
+    assert stats["smc"]["total"] == 1
+    assert stats["smc"][rm.VALIDATED] == 1
+
+
+def test_per_engine_stats_groups_confluence_cells_under_unknown():
+    """A multi-engine confluence cell (engine column NULL, per storage.
+    research_matrix's own backward-compatibility design) must never be
+    coerced into a fabricated single engine group."""
+    cells = [_cell(engine=None)]
+    stats = evidence.per_engine_stats(cells)
+    assert stats["?"]["total"] == 1
+
+
+def test_per_timeframe_stats_groups_correctly():
+    cells = [_cell(timeframe="H1"), _cell(timeframe="H1"), _cell(timeframe="H4")]
+    stats = evidence.per_timeframe_stats(cells)
+    assert stats["H1"]["total"] == 2
+    assert stats["H4"]["total"] == 1
+
+
+def test_per_symbol_engine_stats_groups_by_composite_key():
+    cells = [
+        _cell(symbol="EURUSD", engine="price_action", status=rm.VALIDATED),
+        _cell(symbol="EURUSD", engine="smc", status=rm.REJECTED),
+        _cell(symbol="GBPUSD", engine="price_action", status=rm.REJECTED),
+    ]
+    stats = evidence.per_symbol_engine_stats(cells)
+    assert stats["EURUSD / price_action"]["total"] == 1
+    assert stats["EURUSD / price_action"][rm.VALIDATED] == 1
+    assert stats["EURUSD / smc"]["total"] == 1
+    assert stats["GBPUSD / price_action"]["total"] == 1
+
+
+def test_per_symbol_timeframe_stats_groups_by_composite_key():
+    cells = [_cell(symbol="EURUSD", timeframe="H1"), _cell(symbol="EURUSD", timeframe="H4")]
+    stats = evidence.per_symbol_timeframe_stats(cells)
+    assert stats["EURUSD / H1"]["total"] == 1
+    assert stats["EURUSD / H4"]["total"] == 1
+
+
+def test_per_symbol_engine_timeframe_stats_groups_by_full_identity():
+    cells = [
+        _cell(symbol="EURUSD", engine="price_action", timeframe="H1", status=rm.VALIDATED),
+        _cell(symbol="EURUSD", engine="price_action", timeframe="H4"),
+    ]
+    stats = evidence.per_symbol_engine_timeframe_stats(cells)
+    assert stats["EURUSD / price_action / H1"]["total"] == 1
+    assert stats["EURUSD / price_action / H1"][rm.VALIDATED] == 1
+    assert stats["EURUSD / price_action / H4"]["total"] == 1
+    assert "EURUSD / price_action / H1" != "EURUSD / price_action / H4"
+
+
+def test_per_engine_stats_never_infers_a_verdict():
+    """Item 8 -- aggregation is diagnostic only. A high count of VALIDATED
+    cells for one engine must not appear as any kind of score/rank field
+    -- the return shape is strictly {status: count}, nothing else."""
+    cells = [_cell(engine="price_action", status=rm.VALIDATED) for _ in range(5)]
+    stats = evidence.per_engine_stats(cells)
+    for forbidden_key in ("score", "rank", "verdict", "edge", "best", "winner"):
+        assert forbidden_key not in stats["price_action"]
+
+
 # --- cell_evidence -------------------------------------------------------
 
 

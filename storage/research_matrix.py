@@ -102,6 +102,9 @@ CREATE TABLE IF NOT EXISTS research_matrix_cells (
     stage_b_validation_id       TEXT,
     stage_b_verdict             TEXT,
     requeue_count                INTEGER NOT NULL DEFAULT 0,
+    engine                       TEXT,
+    engine_version                TEXT,
+    timeframe                    TEXT,
     created_at                  TEXT NOT NULL,
     updated_at                  TEXT NOT NULL
 )
@@ -110,6 +113,15 @@ CREATE TABLE IF NOT EXISTS research_matrix_cells (
 _DDL_CELLS_STATUS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_status ON research_matrix_cells(status)"
 _DDL_CELLS_SYMBOL_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_symbol ON research_matrix_cells(symbol)"
 _DDL_CELLS_FAMILY_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_family ON research_matrix_cells(family_id)"
+# Phase 1 (Research Matrix Normalization) — engine/timeframe are NULL for
+# every pre-existing/confluence-research cell whose bundle combines
+# multiple engines or multiple timeframes (backtest.research_matrix.
+# single_engine_identity() returns None for those, never a guess) — only
+# indexed here for the genuinely single-engine/single-timeframe cells
+# generate_discovery_cells() (and any hand-built single-engine bundle)
+# produces.
+_DDL_CELLS_ENGINE_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_engine ON research_matrix_cells(engine)"
+_DDL_CELLS_TIMEFRAME_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_timeframe ON research_matrix_cells(timeframe)"
 
 _DDL_RUNS = """
 CREATE TABLE IF NOT EXISTS research_matrix_runs (
@@ -137,6 +149,8 @@ def _init(con) -> None:
     con.execute(_DDL_CELLS_STATUS_IDX)
     con.execute(_DDL_CELLS_SYMBOL_IDX)
     con.execute(_DDL_CELLS_FAMILY_IDX)
+    con.execute(_DDL_CELLS_ENGINE_IDX)
+    con.execute(_DDL_CELLS_TIMEFRAME_IDX)
     con.execute(_DDL_RUNS)
 
 
@@ -146,6 +160,27 @@ def _now_iso() -> str:
 
 def _row_to_dict(row) -> dict[str, Any]:
     return {k: row[k] for k in row.keys()}
+
+
+# Deliberately a LOCAL duplicate of backtest.research_matrix.single_engine_
+# identity()'s logic (Phase 1, Research Matrix Normalization), not an
+# import — same "storage modules stay leaf-level" convention this file's
+# own module docstring already documents for the status-string constants
+# above (the STRING/LOGIC is the actual contract, not the module it's
+# spelled out in). Keeping these two implementations in sync is a
+# deliberate tradeoff: no storage/*.py -> backtest/*.py import ever exists
+# in this codebase, and both copies are covered by their own tests.
+def _single_engine_identity(
+    bundle: dict[str, Any], engine_variants: dict[str, Any] | None,
+) -> tuple[str | None, str | None, str | None]:
+    engines = bundle.get("engines") or []
+    timeframes = bundle.get("timeframes") or []
+    if len(engines) != 1 or len(timeframes) != 1:
+        return None, None, None
+    engine = engines[0]
+    timeframe = timeframes[0]
+    engine_version = (engine_variants or {}).get(engine) or "v1"
+    return engine, engine_version, timeframe
 
 
 # Status string constants (kept as plain strings, not imported from
@@ -287,17 +322,25 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
                     f"fixed planned_n={planned_n} — a family's cell set is closed once its planned research space "
                     f"is generated (see matrix_orchestrator.py's own family-semantics docstring, point 4)."
                 )
+            # Phase 1 (Research Matrix Normalization) — denormalized identity
+            # columns, derived (never guessed) from this cell's own bundle +
+            # engine_variants. NULL for any multi-engine/multi-timeframe
+            # bundle (confluence-research cells, including every pre-existing
+            # one) — never coerced, never a reinterpretation of what the
+            # bundle actually specifies.
+            engine, engine_version, timeframe = _single_engine_identity(cell.bundle, cell.engine_variants)
             con.execute(
                 """INSERT OR IGNORE INTO research_matrix_cells
                    (cell_id, family_id, fingerprint, symbol, bundle_json, risk_preset,
                     confluence_overrides_json, engine_variants_json, data_provider,
-                    research_code_commit, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    research_code_commit, status, engine, engine_version, timeframe, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     cell.cell_id, family_id, cell.fingerprint, cell.symbol, json.dumps(cell.bundle), cell.risk_preset,
                     json.dumps(cell.confluence_overrides) if cell.confluence_overrides is not None else None,
                     json.dumps(cell.engine_variants) if cell.engine_variants is not None else None,
-                    cell.data_provider, cell.research_code_commit, "QUEUED", now, now,
+                    cell.data_provider, cell.research_code_commit, "QUEUED",
+                    engine, engine_version, timeframe, now, now,
                 ),
             )
             inserted += 1

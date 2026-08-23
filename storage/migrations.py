@@ -358,6 +358,33 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_rmf_source_recommendation ON research_matrix_families(source_recommendation_id)",
         ],
     ),
+    (
+        22,
+        "matrix_cell_engine_timeframe_columns",
+        # Hypothesis Discovery Engine Phase 1 — Research Matrix Normalization
+        # (2026-08-23): ENGINE and TIMEFRAME as explicit, independently
+        # queryable identity columns, denormalized from a cell's own
+        # bundle_json + engine_variants_json via storage.research_matrix.
+        # _single_engine_identity() at INSERT time. NULL for every existing
+        # cell whose bundle combines multiple engines/timeframes (confluence-
+        # research cells) — never coerced, never reinterpreted; this
+        # migration changes no existing cell's meaning, only adds columns
+        # nothing previously populated. Reuses the ALREADY-narrowed "ALTER
+        # TABLE research_matrix_cells" guard in apply_migrations() below
+        # (bare _DDL_CELLS only, never the full _init() — see migration 21's
+        # own incident postmortem for why that distinction matters: _init()
+        # also builds idx_rmc_engine/idx_rmc_timeframe, which would fail
+        # with "no such column" if invoked before THIS migration's own ALTER
+        # statements, below, have run). Diagnostic/query-support only —
+        # never a gate, never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_matrix_cells ADD COLUMN engine TEXT",
+            "ALTER TABLE research_matrix_cells ADD COLUMN engine_version TEXT",
+            "ALTER TABLE research_matrix_cells ADD COLUMN timeframe TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_rmc_engine ON research_matrix_cells(engine)",
+            "CREATE INDEX IF NOT EXISTS idx_rmc_timeframe ON research_matrix_cells(timeframe)",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

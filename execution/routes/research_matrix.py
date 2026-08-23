@@ -231,7 +231,13 @@ async def matrix_family_summary(
     planned_n/corrected alpha, a full status breakdown, total resumptions,
     and per-symbol/per-bundle/per-risk-preset breakdowns. Computes nothing
     that isn't already decided: every count here is a plain tally of
-    already-persisted cell statuses."""
+    already-persisted cell statuses.
+
+    Phase 1 (Research Matrix Normalization) adds by_engine/by_timeframe/
+    by_symbol_engine/by_symbol_timeframe/by_symbol_engine_timeframe —
+    "?" groups every cell whose bundle combines multiple engines or
+    multiple timeframes (never coerced into a single scalar; see
+    backtest.research_matrix.single_engine_identity())."""
     _check_auth(x_api_key, iatis_session)
     from storage import research_matrix as storage
 
@@ -244,6 +250,11 @@ async def matrix_family_summary(
         "by_symbol": evidence.per_symbol_stats(cells),
         "by_bundle": evidence.per_bundle_stats(cells),
         "by_risk_preset": evidence.per_risk_preset_stats(cells),
+        "by_engine": evidence.per_engine_stats(cells),
+        "by_timeframe": evidence.per_timeframe_stats(cells),
+        "by_symbol_engine": evidence.per_symbol_engine_stats(cells),
+        "by_symbol_timeframe": evidence.per_symbol_timeframe_stats(cells),
+        "by_symbol_engine_timeframe": evidence.per_symbol_engine_timeframe_stats(cells),
     }
 
 

@@ -1,7 +1,10 @@
 """
 execution/routes/matrix_ai.py
 ------------------------------------
-Hypothesis Discovery Engine, Phase 3B — AI Research Orchestrator.
+Hypothesis Discovery Engine, Phase 3B — AI Research Orchestrator — plus
+Phase 3C — Controlled Recommendation Conversion (see the module-level
+comment block above the /convert endpoint further down for that phase's
+full boundary list).
 
 AI is a PLANNER here, never a JUDGE. It reads already-decided Matrix
 evidence (via backtest/matrix_research_planner.py's Evidence Context
@@ -13,20 +16,26 @@ What this router can NEVER do, by construction:
   - Write research/results/registry.json, config.yaml, config/engines.yaml,
     or config/symbols.yaml.
   - Assign an HXXX id.
-  - Change a research_matrix_cells row's status (nothing here calls
-    storage.research_matrix.update_cell/upsert_cells/claim_*).
+  - Let the AI itself trigger a Matrix write. AI -> DRAFT is the only
+    write path the AI's own output ever reaches; APPROVED and CONVERTED
+    are both exclusively human-triggered, separately-authorized actions
+    (review_recommendation()/convert_recommendation() respectively) that
+    this router's endpoints call, never something an AI response can
+    invoke on its own.
   - Move a recommendation to APPROVED itself — only a human, through
     POST .../review, can do that (storage.matrix_ai_recommendations.
     review_recommendation is the only writer of that field, and this
     router's own review endpoint is a thin, unconditional pass-through
     to it — no AI call happens on that path).
-  - Auto-convert an APPROVED recommendation into real Matrix cells.
-    That conversion is deliberately NOT built here (it would be Phase 3C,
-    "Controlled Recommendation Conversion" — a genuinely new capability
-    boundary, never bundled into this advisory-only phase) — an operator
-    who approves a recommendation still has to read its
-    `proposed_next_cells` and submit them through the existing, unchanged
-    POST /research/matrix/generate themselves.
+  - AUTOMATICALLY convert an APPROVED recommendation into real Matrix
+    cells. Phase 3C (below) adds a CONTROLLED, always human-triggered
+    conversion path — POST .../convert — sitting behind its own,
+    separate authorization gate from review's; there is still no code
+    path from "AI proposed this" or even "a human approved this" straight
+    to a Matrix write with no further, distinctly-authorized human action
+    in between. Conversion also stops at QUEUED — running those cells is
+    still the same separate POST /research/matrix/run-batch action it
+    always was.
 
 Phase 3B-H (AI Boundary Forensic Audit) hardened four properties, each
 with its own regression coverage in tests/test_matrix_ai_boundary_audit.py:
@@ -386,15 +395,36 @@ async def matrix_ai_get_recommendation(
 # hardening pass deliberately does not build.
 _APPROVAL_KEY_ENV = "MATRIX_AI_APPROVAL_KEY"
 
+# Phase 3C (Controlled Recommendation Conversion) — the operator's own
+# explicit decision: conversion is a HIGHER-STAKES action than review
+# (APPROVE only records a human opinion; CONVERT creates a real,
+# executable-later Matrix Family) and must sit behind a permission
+# separate from review's own, not the same one. Reuses the exact shared-
+# secret CHECK SHAPE below rather than duplicating hmac.compare_digest
+# logic a second time ("no ad-hoc keys scattered in the code") — the only
+# thing that differs between the two gates is which env var/header they
+# read. Disabled by default (unset), same as MATRIX_AI_APPROVAL_KEY, so
+# every existing single-operator deployment sees zero behavior change
+# until an operator opts in.
+_CONVERSION_KEY_ENV = "MATRIX_AI_CONVERSION_KEY"
 
-def _check_approval_authorization(x_approval_key: str | None) -> None:
+
+def _check_shared_secret_gate(value: str | None, *, env_var: str, header_name: str) -> None:
     import hmac
 
-    required = os.environ.get(_APPROVAL_KEY_ENV)
+    required = os.environ.get(env_var)
     if not required:
         return  # not configured -- today's exact, unchanged behavior
-    if not x_approval_key or not hmac.compare_digest(x_approval_key, required):
-        raise HTTPException(status_code=403, detail="Missing or invalid X-Approval-Key for this review action.")
+    if not value or not hmac.compare_digest(value, required):
+        raise HTTPException(status_code=403, detail=f"Missing or invalid {header_name} for this action.")
+
+
+def _check_approval_authorization(x_approval_key: str | None) -> None:
+    _check_shared_secret_gate(x_approval_key, env_var=_APPROVAL_KEY_ENV, header_name="X-Approval-Key")
+
+
+def _check_conversion_authorization(x_conversion_key: str | None) -> None:
+    _check_shared_secret_gate(x_conversion_key, env_var=_CONVERSION_KEY_ENV, header_name="X-Conversion-Key")
 
 
 class _ReviewRequest(BaseModel):
@@ -489,3 +519,278 @@ async def matrix_ai_list_recommendation_reviews(
 
     reviews = recs.list_recommendation_reviews(recommendation_id)
     return {"reviews": reviews, "count": len(reviews)}
+
+
+# =============================================================================
+# Phase 3C — Controlled Recommendation Conversion
+# =============================================================================
+#
+# The ONE new capability this phase adds: a human can turn an APPROVED
+# recommendation into a real, QUEUED Matrix Family, through the SAME
+# validation a hand-typed POST /research/matrix/generate request would
+# hit. This is deliberately NOT "AI -> Approved -> Execute":
+#
+#   AI recommendation -> DRAFT -> (human) APPROVED -> (authorized human)
+#   CONVERTED -> QUEUED Matrix Cells -> (separate human action) RUNNING
+#
+# Non-negotiable boundaries (operator's own explicit GO conditions):
+#   1. No path from the AI analyzer itself to any Matrix write function --
+#      conversion is triggered ONLY by an explicit, separately-authorized
+#      human action, never automatically on APPROVED.
+#   2. No research/results/registry.json write, no HXXX id, ever.
+#   3. proposed_next_cells is revalidated as UNTRUSTED input against the
+#      CURRENT symbol/engine universe -- never trusted because "the AI
+#      already checked" or "a human already approved the text."
+#   4. No silent dropping of an invalid symbol/engine -- always a hard
+#      409/400, never a partial conversion.
+#   5. Research-code-commit drift between proposal and conversion is
+#      informational only, never a blocker.
+#   6. Conversion stops at QUEUED -- POST /research/matrix/run-batch
+#      remains the same separate, human-triggered step it always was.
+#   7. One recommendation -> at most one family, never bulk.
+#   8. Conversion sits behind its OWN authorization gate
+#      (_check_conversion_authorization), separate from review's
+#      (_check_approval_authorization) -- reusing the same shared-secret
+#      CHECK SHAPE, never the same key.
+_MAX_CELLS_PER_CONVERSION = 5_000  # mirrors execution.routes.research_matrix._MAX_CELLS_PER_GENERATE
+
+
+def _proposed_cells_to_matrix_specs(proposed_next_cells: Any, *, research_code_commit: str | None) -> list[Any]:
+    """Untrusted input -> list[backtest.research_matrix.MatrixCellSpec],
+    revalidated against the CURRENT universe -- never a looser path than
+    a hand-typed POST /research/matrix/generate request would go through.
+    Reuses execution.routes.research_matrix's own validate_symbols_
+    against_universe()/validate_risk_presets_against_known() verbatim
+    (the exact same functions matrix_generate() itself calls), plus an
+    engine-name check proposed_next_cells has no equivalent for
+    elsewhere today (ai.ai_analyzer.AIAnalyzer only checks STRUCTURAL
+    completeness -- required keys present and non-empty when stringified
+    -- never that a symbol is real, an engine is a valid engine key, or
+    timeframes/engines are actually lists of strings; see this module's
+    own docstring, property 3). Every failure is a plain HTTPException
+    (400) naming the offending index -- never a silent drop, never a
+    partial conversion.
+
+    Deliberately does NOT call execution.routes.research_matrix.
+    generate_matrix_cells()'s cartesian-product path: each proposed cell
+    already fully specifies its own (symbol, bundle, risk_preset)
+    combination -- treating them as independent symbols/bundles/
+    risk_presets axes to cross-product would silently generate MANY more
+    cells than were actually proposed and approved."""
+    from backtest.research_matrix import MatrixCellSpec
+    from backtesting.backtest_engine import ENGINE_KEYS
+    from execution.routes.research_matrix import (
+        _BundleSpec,
+        validate_risk_presets_against_known,
+        validate_symbols_against_universe,
+    )
+
+    if not isinstance(proposed_next_cells, list) or not proposed_next_cells:
+        raise HTTPException(status_code=400, detail="proposed_next_cells is empty or malformed — nothing to convert.")
+    if len(proposed_next_cells) > _MAX_CELLS_PER_CONVERSION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"proposed_next_cells has {len(proposed_next_cells)} entries, over the {_MAX_CELLS_PER_CONVERSION} cap per conversion.",
+        )
+
+    specs = []
+    for i, raw in enumerate(proposed_next_cells):
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}] is not an object.")
+
+        symbol = raw.get("symbol")
+        risk_preset = raw.get("risk_preset")
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}].symbol is missing or not a string.")
+        if not isinstance(risk_preset, str) or not risk_preset.strip():
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}].risk_preset is missing or not a string.")
+
+        try:
+            bundle_spec = _BundleSpec(
+                name=raw.get("bundle_name") or "", timeframes=raw.get("timeframes") or [], engines=raw.get("engines") or [],
+            )
+        except Exception as exc:  # pydantic.ValidationError — kept broad, message is user-safe either way
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}] has a malformed bundle: {exc}")
+
+        symbol = validate_symbols_against_universe([symbol])[0]
+        validate_risk_presets_against_known([risk_preset])
+        unknown_engines = sorted(set(bundle_spec.engines) - set(ENGINE_KEYS))
+        if unknown_engines:
+            raise HTTPException(
+                status_code=400,
+                detail=f"proposed_next_cells[{i}] references unknown engine(s) {unknown_engines} — choose from {list(ENGINE_KEYS)}",
+            )
+
+        specs.append(MatrixCellSpec(
+            symbol=symbol, bundle=bundle_spec.model_dump(), risk_preset=risk_preset,
+            confluence_overrides=None, engine_variants=None,
+            data_provider=None, research_code_commit=research_code_commit,
+        ))
+    return specs
+
+
+def _convert_recommendation_core(recommendation_id: str, *, converted_by: str | None) -> dict[str, Any]:
+    """The conversion's actual business logic, called only by the route
+    below (kept separate so the route stays a thin auth+audit-log
+    wrapper, matching every other endpoint in this router).
+
+    Idempotent under crash recovery: if a PRIOR attempt already created a
+    family for this recommendation_id but crashed before the final CAS+
+    audit-insert (research_matrix_ai_recommendations still says APPROVED),
+    this call finds that family via storage.research_matrix.
+    get_family_by_source_recommendation() and calls upsert_cells() again
+    with the SAME (deterministically-recomputed, since proposed_next_
+    cells_json is immutable) cell specs — upsert_cells()'s own per-
+    fingerprint dedup reports every one of them as `duplicate`, which
+    is itself the "does the cell set correspond" verification: if it
+    DIDN'T correspond, upsert_cells() would try to insert genuinely new
+    fingerprints and hit its own planned_n-closure guard, raising
+    ValueError — surfaced here as a loud 500, never silently reconciled.
+    """
+    from backtest.research_matrix import resolve_research_code_commit
+    from storage import matrix_ai_recommendations as recs
+    from storage import research_matrix as storage
+    from storage.d1_client import D1Error
+
+    row = recs.get_recommendation(recommendation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="AI recommendation not found.")
+    if row["status"] != recs.APPROVED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Recommendation {recommendation_id!r} is {row['status']!r}, not APPROVED — only an APPROVED "
+                   f"recommendation may be converted, and only once.",
+        )
+
+    proposed_next_cells_json = row["proposed_next_cells_json"]
+    proposed_next_cells_hash = hashlib.sha256(proposed_next_cells_json.encode("utf-8")).hexdigest()
+    proposed_next_cells = json.loads(proposed_next_cells_json)
+
+    try:
+        constraints_used = json.loads(row["constraints_used_json"])
+    except Exception:  # noqa: BLE001 — provenance is best-effort informational, never fatal here
+        constraints_used = {}
+    proposed_at_commit = constraints_used.get("research_code_commit")
+
+    code_state = resolve_research_code_commit()
+    converted_at_commit = code_state["commit"]
+
+    cell_specs = _proposed_cells_to_matrix_specs(proposed_next_cells, research_code_commit=converted_at_commit)
+
+    existing_family = storage.get_family_by_source_recommendation(recommendation_id)
+    if existing_family is not None:
+        family_id = existing_family["family_id"]
+        try:
+            result = storage.upsert_cells(cell_specs, family_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"An orphaned family {family_id!r} already exists for recommendation {recommendation_id!r} "
+                    f"but its cell set does not match this recommendation's own proposed_next_cells ({exc}) — "
+                    f"refusing to silently reconcile. Manual investigation required."
+                ),
+            )
+    else:
+        family_id = uuid.uuid4().hex[:12]
+        symbols_json = json.dumps(sorted({c.symbol for c in cell_specs}))
+        try:
+            storage.upsert_family(
+                family_id, planned_n=len(cell_specs), family_alpha=0.05,
+                symbols_json=symbols_json, source_recommendation_id=recommendation_id,
+            )
+        except D1Error as exc:
+            # UNIQUE(source_recommendation_id) — a concurrent conversion
+            # attempt for this SAME recommendation_id won the race.
+            raise HTTPException(
+                status_code=409,
+                detail=f"Recommendation {recommendation_id!r} is already being (or has already been) converted "
+                       f"by a concurrent request ({exc}).",
+            )
+        result = storage.upsert_cells(cell_specs, family_id)
+
+    try:
+        recs.convert_recommendation(
+            recommendation_id, family_id=family_id,
+            proposed_next_cells_hash=proposed_next_cells_hash, cells_considered=len(cell_specs),
+            proposed_at_commit=proposed_at_commit, converted_at_commit=converted_at_commit,
+            converted_by=converted_by,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 409 if "cannot be converted" in message else (404 if "unknown recommendation_id" in message else 400)
+        raise HTTPException(status_code=status_code, detail=message)
+
+    return {
+        "recommendation_id": recommendation_id, "family_id": family_id,
+        "planned_n": len(cell_specs), "cells_considered": len(cell_specs),
+        "commit_drift": proposed_at_commit != converted_at_commit,
+        "proposed_at_commit": proposed_at_commit, "converted_at_commit": converted_at_commit,
+        **result,
+    }
+
+
+@router.post("/research/matrix/ai/recommendations/{recommendation_id}/convert")
+async def matrix_ai_convert_recommendation(
+    recommendation_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+    x_conversion_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """3C — Controlled Recommendation Conversion. Takes NO request body:
+    conversion always acts on the recommendation's own already-persisted,
+    already-immutable proposed_next_cells — a caller cannot supply
+    alternate cell data through this endpoint, only trigger the
+    conversion of what a human already reviewed and approved.
+
+    Behind its OWN, separate authorization gate
+    (_check_conversion_authorization / MATRIX_AI_CONVERSION_KEY) — an
+    operator who can APPROVE is not automatically able to CONVERT unless
+    they also hold the (separately-configured, also opt-in and disabled
+    by default) conversion key. `converted_by` is derived server-side
+    from the authenticated caller's own masked identity
+    (storage.audit_log._mask_actor), exactly like reviewed_by — never
+    trusted from a request body.
+
+    Structurally incapable of writing research/results/registry.json,
+    config.yaml, config/engines.yaml, or config/symbols.yaml, and never
+    assigns an HXXX id — see the module-level comment block above this
+    endpoint for the full boundary list. Stops at QUEUED: the resulting
+    family's cells are exactly as "ephemeral research" as any hand-typed
+    POST /research/matrix/generate family — POST /research/matrix/
+    run-batch remains a separate, human-triggered action."""
+    _check_auth(x_api_key, iatis_session)
+    _check_conversion_authorization(x_conversion_key)
+    from storage.audit_log import _mask_actor, log_action
+
+    converted_by = _mask_actor(x_api_key, iatis_session)
+    result = _convert_recommendation_core(recommendation_id, converted_by=converted_by)
+
+    log_action(
+        "matrix_ai_convert", x_api_key=x_api_key, session_id=iatis_session,
+        detail=f"recommendation_id={recommendation_id} family_id={result['family_id']} "
+               f"cells_considered={result['cells_considered']} commit_drift={result['commit_drift']} "
+               f"converted_by={converted_by}",
+    )
+    return result
+
+
+@router.get("/research/matrix/ai/recommendations/{recommendation_id}/conversion")
+async def matrix_ai_get_conversion(
+    recommendation_id: str,
+    x_api_key: str | None = Header(default=None),
+    iatis_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Read-only — the conversion-audit record for one recommendation, if
+    it has been converted. Lets a caller confirm a conversion actually
+    completed (e.g. after a 409 on a naive retry) without re-deriving
+    anything from the recommendation row itself."""
+    _check_auth(x_api_key, iatis_session)
+    from storage import matrix_ai_recommendations as recs
+
+    if recs.get_recommendation(recommendation_id) is None:
+        raise HTTPException(status_code=404, detail="AI recommendation not found.")
+    conversion = recs.get_conversion(recommendation_id)
+    if conversion is None:
+        raise HTTPException(status_code=404, detail="This recommendation has not been converted.")
+    return conversion

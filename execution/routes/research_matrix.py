@@ -78,6 +78,31 @@ class _MatrixGenerateRequest(BaseModel):
     data_provider: str | None = None
 
 
+def validate_symbols_against_universe(symbols: list[str]) -> list[str]:
+    """Uppercase + reject any symbol not in the CURRENT configured
+    universe. The exact check matrix_generate() has always applied inline
+    — pulled out to a module-level function so Phase 3C's conversion path
+    (execution/routes/matrix_ai.py) revalidates a recommendation's
+    proposed_next_cells against the SAME rule a hand-typed request would
+    hit, never a separately-written (and possibly looser) copy. Pure
+    refactor: matrix_generate()'s own behavior is unchanged byte-for-byte."""
+    universe = _configured_symbol_universe()
+    normed = [s.upper() for s in symbols]
+    unknown = sorted(set(normed) - universe)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown symbol(s): {unknown}")
+    return normed
+
+
+def validate_risk_presets_against_known(risk_presets: list[str]) -> None:
+    """Same reasoning as validate_symbols_against_universe() above —
+    extracted from matrix_generate()'s own inline check, reused verbatim
+    by Phase 3C's conversion path."""
+    unknown = sorted(set(risk_presets) - set(rm.RISK_PRESET_NAMES))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown risk_preset(s) {unknown} — choose from {rm.RISK_PRESET_NAMES}")
+
+
 class _MatrixRunBatchRequest(BaseModel):
     family_id: str
     batch_size: int = 20
@@ -96,18 +121,12 @@ async def matrix_generate(
 ) -> dict[str, Any]:
     _check_auth(x_api_key, iatis_session)
 
-    universe = _configured_symbol_universe()
-    symbols = [s.upper() for s in body.symbols] if body.symbols else sorted(universe)
-    unknown_symbols = sorted(set(symbols) - universe)
-    if unknown_symbols:
-        raise HTTPException(status_code=400, detail=f"Unknown symbol(s): {unknown_symbols}")
+    symbols = validate_symbols_against_universe(body.symbols) if body.symbols else sorted(_configured_symbol_universe())
     if not body.bundles:
         raise HTTPException(status_code=400, detail="bundles must be non-empty.")
 
     risk_presets = body.risk_presets or list(rm.RISK_PRESET_NAMES)
-    unknown_presets = sorted(set(risk_presets) - set(rm.RISK_PRESET_NAMES))
-    if unknown_presets:
-        raise HTTPException(status_code=400, detail=f"Unknown risk_preset(s) {unknown_presets} — choose from {rm.RISK_PRESET_NAMES}")
+    validate_risk_presets_against_known(risk_presets)
 
     bundles = [b.model_dump() for b in body.bundles]
 

@@ -63,13 +63,22 @@ from storage import d1_client
 
 _DDL_FAMILIES = """
 CREATE TABLE IF NOT EXISTS research_matrix_families (
-    family_id       TEXT PRIMARY KEY,
-    planned_n       INTEGER NOT NULL,
-    family_alpha    REAL NOT NULL,
-    symbols_json    TEXT,
-    created_at      TEXT NOT NULL
+    family_id                TEXT PRIMARY KEY,
+    planned_n                INTEGER NOT NULL,
+    family_alpha              REAL NOT NULL,
+    symbols_json              TEXT,
+    source_recommendation_id TEXT,
+    created_at                TEXT NOT NULL
 )
 """
+# Phase 3C (Controlled Recommendation Conversion) — pure provenance
+# pointer, NULL for every family created the normal way. UNIQUE so a
+# second conversion attempt for the same recommendation_id cannot attach
+# a second family even if the caller's own atomic CAS were somehow
+# bypassed — an independent, defense-in-depth half of replay prevention
+# (see storage.matrix_ai_recommendations.convert_recommendation()'s own
+# CAS for the primary half).
+_DDL_FAMILIES_SOURCE_REC_IDX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_rmf_source_recommendation ON research_matrix_families(source_recommendation_id)"
 
 _DDL_CELLS = """
 CREATE TABLE IF NOT EXISTS research_matrix_cells (
@@ -123,6 +132,7 @@ CREATE TABLE IF NOT EXISTS research_matrix_runs (
 
 def _init(con) -> None:
     con.execute(_DDL_FAMILIES)
+    con.execute(_DDL_FAMILIES_SOURCE_REC_IDX)
     con.execute(_DDL_CELLS)
     con.execute(_DDL_CELLS_STATUS_IDX)
     con.execute(_DDL_CELLS_SYMBOL_IDX)
@@ -162,16 +172,31 @@ TERMINAL_STATUSES = ("VALIDATED", "REJECTED", "INSUFFICIENT_DATA", "FAILED")
 # ---------------------------------------------------------------------------
 
 
-def upsert_family(family_id: str, planned_n: int, family_alpha: float, symbols_json: str | None = None) -> None:
+def upsert_family(
+    family_id: str, planned_n: int, family_alpha: float, symbols_json: str | None = None,
+    source_recommendation_id: str | None = None,
+) -> None:
     """Always INSERT — a family_id is minted once, at generation time, and
     planned_n/family_alpha never change afterward (the whole point of
     Finding 4's fix: every batch and every resume reads the SAME fixed
-    denominator, forever, for this family_id)."""
+    denominator, forever, for this family_id).
+
+    `source_recommendation_id` (Phase 3C) is None for every ordinary
+    generate call (a human typing symbols/bundles by hand) — it is set
+    ONLY by storage.matrix_ai_recommendations.convert_recommendation()'s
+    own conversion path, as a pure provenance pointer back to the AI
+    recommendation this family came from. It is never an HXXX id and
+    never touches research/results/registry.json. The column carries a
+    UNIQUE index (idx_rmf_source_recommendation) — a second INSERT
+    reusing the same non-NULL source_recommendation_id raises D1Error,
+    the second, independent half of Phase 3C's replay-prevention pair."""
     with d1_client.d1_connection() as con:
         _init(con)
         con.execute(
-            "INSERT INTO research_matrix_families (family_id, planned_n, family_alpha, symbols_json, created_at) VALUES (?,?,?,?,?)",
-            (family_id, planned_n, family_alpha, symbols_json, _now_iso()),
+            """INSERT INTO research_matrix_families
+               (family_id, planned_n, family_alpha, symbols_json, source_recommendation_id, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (family_id, planned_n, family_alpha, symbols_json, source_recommendation_id, _now_iso()),
         )
 
 
@@ -179,6 +204,23 @@ def get_family(family_id: str) -> dict[str, Any] | None:
     with d1_client.d1_connection() as con:
         _init(con)
         row = con.execute("SELECT * FROM research_matrix_families WHERE family_id=?", (family_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def get_family_by_source_recommendation(recommendation_id: str) -> dict[str, Any] | None:
+    """Phase 3C crash-recovery lookup — "does a family already exist for
+    this recommendation?" the conversion path checks BEFORE minting a new
+    family_id, so a retry after a crash reuses the existing family instead
+    of attempting (and failing, via the UNIQUE index) to create a second
+    one. Relies on source_recommendation_id being written by NO code path
+    other than convert_recommendation()'s own family creation, using that
+    recommendation's own (immutable) proposed_next_cells — so a family
+    found here is provenance-verified by construction, not by guesswork."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        row = con.execute(
+            "SELECT * FROM research_matrix_families WHERE source_recommendation_id=?", (recommendation_id,)
+        ).fetchone()
     return _row_to_dict(row) if row else None
 
 

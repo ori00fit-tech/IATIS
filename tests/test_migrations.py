@@ -49,6 +49,161 @@ def test_duplicate_column_is_tolerated(fake_d1):
     assert {"git_commit", "config_hash", "data_versions"} <= cols
 
 
+# --- Production incident regression (2026-08-23) -----------------------------
+#
+# Root cause: apply_migrations()'s guard blocks for research_matrix_cells/
+# research_matrix_families/research_matrix_ai_recommendations used to call
+# the module's FULL _init(con) — which, after Phase 3C, also creates
+# idx_rmf_source_recommendation (a UNIQUE INDEX on research_matrix_families.
+# source_recommendation_id). On a PRE-Phase-3C production table (this
+# column doesn't exist yet), calling that from an EARLIER, unrelated
+# migration's guard (18's own ALTER targets research_matrix_cells, nothing
+# to do with families) tried to create that index BEFORE migration 21's own
+# ALTER TABLE had a chance to add the column — "no such column:
+# source_recommendation_id", a D1Error NOT in _ALREADY_APPLIED_MARKERS, so
+# it aborted apply_migrations() entirely. Nothing from that point onward
+# ever got stamped, and — because apply_migrations_safe() is (correctly)
+# non-fatal at API boot — EVERY subsequent restart repeated the identical
+# failure forever, while EVERY ordinary storage.research_matrix call's own
+# _init(con) also independently hit the same missing-column error (GET
+# /research/matrix/families -> 500 in production). Fixed by narrowing
+# those three guards to the module's bare CREATE TABLE IF NOT EXISTS DDL
+# only, matching every other guard's own established convention in this
+# file (decision_db._CREATE_DECISIONS, reconciliation._DDL, ...).
+
+
+def _legacy_pre_phase3c_research_matrix_families_schema(con) -> None:
+    """The EXACT research_matrix_families shape from before Phase 3C —
+    hand-written here (not imported from storage.research_matrix, whose
+    _DDL_FAMILIES string already includes source_recommendation_id) so
+    this test genuinely exercises migrating an OLD production table, not
+    a fresh-install one that already has the column baked in."""
+    con.execute("""
+        CREATE TABLE research_matrix_families (
+            family_id       TEXT PRIMARY KEY,
+            planned_n       INTEGER NOT NULL,
+            family_alpha    REAL NOT NULL,
+            symbols_json    TEXT,
+            created_at      TEXT NOT NULL
+        )
+    """)
+    con.execute(
+        "INSERT INTO research_matrix_families (family_id, planned_n, family_alpha, symbols_json, created_at) "
+        "VALUES ('preexisting-fam', 5, 0.05, '[\"EURUSD\"]', '2026-01-01T00:00:00+00:00')"
+    )
+    con.commit()
+
+
+def test_old_research_matrix_families_schema_migrates_to_current(fake_d1):
+    """The exact incident, reproduced and proven fixed: an old production
+    research_matrix_families table (no source_recommendation_id) migrates
+    cleanly to LATEST_VERSION, ends up with the column AND the unique
+    index, and its pre-existing row survives untouched with a NULL
+    source_recommendation_id (never another value the migration never
+    said to fabricate)."""
+    _legacy_pre_phase3c_research_matrix_families_schema(fake_d1)
+
+    applied = migrations.apply_migrations()
+    assert "matrix_family_source_recommendation_column" in applied
+    assert _version() == migrations.LATEST_VERSION
+
+    cols = {r[1] for r in fake_d1.execute("PRAGMA table_info(research_matrix_families)").fetchall()}
+    assert "source_recommendation_id" in cols
+
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_matrix_families'"
+        ).fetchall()
+    }
+    assert "idx_rmf_source_recommendation" in idx_names
+
+    row = dict(fake_d1.execute("SELECT * FROM research_matrix_families WHERE family_id='preexisting-fam'").fetchone())
+    assert row["planned_n"] == 5  # untouched
+    assert row["source_recommendation_id"] is None  # migration never fabricates a value
+
+
+def test_old_schema_migration_is_idempotent_on_reapply(fake_d1):
+    _legacy_pre_phase3c_research_matrix_families_schema(fake_d1)
+    migrations.apply_migrations()
+    assert migrations.apply_migrations() == []
+    assert _version() == migrations.LATEST_VERSION
+
+
+def test_source_recommendation_id_unique_index_permits_many_nulls_after_migration(fake_d1):
+    """Ordinary, hand-typed Matrix families (NULL source_recommendation_id)
+    must keep working exactly as before Phase 3C after migrating an old
+    table -- a UNIQUE index must never treat multiple NULLs as duplicates
+    of each other."""
+    _legacy_pre_phase3c_research_matrix_families_schema(fake_d1)
+    migrations.apply_migrations()
+
+    from storage import research_matrix as rm_storage
+    rm_storage.upsert_family("famA", planned_n=1, family_alpha=0.05)
+    rm_storage.upsert_family("famB", planned_n=1, family_alpha=0.05)
+    assert rm_storage.get_family("famA") is not None
+    assert rm_storage.get_family("famB") is not None
+
+
+def test_source_recommendation_id_unique_index_rejects_duplicates_after_migration(fake_d1):
+    """The other half: a converted family's non-NULL source_recommendation_
+    id must be genuinely unique -- one recommendation maps to at most one
+    family, enforced at the schema level even on a table that was just
+    migrated from the old shape, not only on a fresh install."""
+    from storage.d1_client import D1Error
+
+    _legacy_pre_phase3c_research_matrix_families_schema(fake_d1)
+    migrations.apply_migrations()
+
+    from storage import research_matrix as rm_storage
+    rm_storage.upsert_family("famA", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+    with pytest.raises(D1Error):
+        rm_storage.upsert_family("famB", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+
+
+def test_migration_touched_tables_includes_the_matrix_tables():
+    tables = migrations._migration_touched_tables()
+    assert "research_matrix_families" in tables
+    assert "research_matrix_cells" in tables
+    assert "research_matrix_ai_recommendations" in tables
+
+
+def test_print_report_shows_version_columns_and_indexes(fake_d1, capsys):
+    """The operational verification command (--report): confirms it reads
+    the REAL schema, not a cached/assumed one -- run it before and after
+    migrating an old table and check the reported columns/indexes change
+    accordingly."""
+    _legacy_pre_phase3c_research_matrix_families_schema(fake_d1)
+
+    migrations._print_report()
+    before = capsys.readouterr().out
+    assert "source_recommendation_id" not in before
+    assert "idx_rmf_source_recommendation" not in before
+
+    migrations.apply_migrations()
+
+    migrations._print_report()
+    after = capsys.readouterr().out
+    assert f"schema_version: {migrations.LATEST_VERSION}" in after
+    assert "source_recommendation_id" in after
+    assert "idx_rmf_source_recommendation" in after
+
+
+def test_migration_guards_never_call_the_full_init_for_migrated_tables():
+    """Static proof of the actual fix, not just an outcome-level test: the
+    guard blocks for research_matrix_cells/research_matrix_families/
+    research_matrix_ai_recommendations must reference the module's bare
+    table DDL constant, never the module's own _init (which also builds
+    indexes that can depend on a column an EARLIER, unrelated migration's
+    guard would be running before that column's own ALTER TABLE has had a
+    chance to execute)."""
+    import inspect
+
+    source = inspect.getsource(migrations.apply_migrations)
+    guard_block = source[source.index('if any("ALTER TABLE research_matrix_cells"'):]
+    assert "research_matrix._init(con)" not in guard_block.split("for sql in statements")[0]
+    assert "matrix_ai_recommendations._init(con)" not in guard_block.split("for sql in statements")[0]
+
+
 def test_failed_migration_is_not_stamped(monkeypatch):
     """A genuinely failing statement aborts WITHOUT stamping its version,
     so the migration retries in full on the next run."""

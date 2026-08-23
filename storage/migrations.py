@@ -33,6 +33,15 @@ Usage:
     python -m storage.migrations            # apply, from a deploy step
     python -m storage.migrations --status   # current vs latest, no writes
     python -m storage.migrations --sql      # print SQL for manual wrangler use
+    python -m storage.migrations --report   # version + real columns/indexes
+                                             # of every migration-touched
+                                             # table, read directly from
+                                             # whatever D1_WORKER_URL points
+                                             # at right now — the operational
+                                             # verification command for
+                                             # confirming a deploy's schema
+                                             # actually matches the code
+                                             # (production incident 2026-08-23)
 """
 from __future__ import annotations
 
@@ -423,14 +432,38 @@ def apply_migrations() -> list[str]:
                 con.execute(reconciliation._DDL)
             if any("ALTER TABLE research_matrix_cells" in s for s in statements):
                 from storage import research_matrix
-                research_matrix._init(con)
+                con.execute(research_matrix._DDL_CELLS)
             if any("ALTER TABLE research_matrix_ai_recommendations " in s for s in statements):
                 # trailing space excludes "_reviews"/"_conversions"
                 from storage import matrix_ai_recommendations
-                matrix_ai_recommendations._init(con)
+                con.execute(matrix_ai_recommendations._DDL_RECOMMENDATIONS)
             if any("ALTER TABLE research_matrix_families" in s for s in statements):
                 from storage import research_matrix
-                research_matrix._init(con)
+                con.execute(research_matrix._DDL_FAMILIES)
+            # NOTE: these guards call the bare CREATE TABLE IF NOT EXISTS
+            # DDL only -- matching every other guard's own convention in
+            # this function (decision_db._CREATE_DECISIONS, reconciliation.
+            # _DDL, ...) -- deliberately NEVER the module's full _init(con).
+            # Root cause of a real production incident (2026-08-23):
+            # research_matrix._init() also creates idx_rmf_source_
+            # recommendation, a UNIQUE INDEX on research_matrix_families.
+            # source_recommendation_id -- a column ONLY migration 21's own
+            # ALTER TABLE (below, in this SAME migration's statements list)
+            # adds. Calling the full _init() from an EARLIER migration's
+            # guard (18/19, whose own ALTER targets research_matrix_cells,
+            # nothing to do with families) tried to create that index
+            # against a still-unmigrated families table -- "no such column:
+            # source_recommendation_id", a D1Error NOT in _ALREADY_APPLIED_
+            # MARKERS, so it aborted apply_migrations() entirely, migration
+            # 21 (and everything from wherever it first broke) never got
+            # stamped, and EVERY subsequent boot repeated the identical
+            # failure -- migrations permanently stuck, and every ordinary
+            # storage.research_matrix call's own _init(con) hit the same
+            # missing-column error on every request (GET /research/matrix/
+            # families -> 500). Confirmed via direct reproduction against a
+            # simulated pre-migration schema. Bare-table-only guards avoid
+            # this entirely: a table's own indexes are only ever created by
+            # _init() once its migration-added columns genuinely exist.
             for sql in statements:
                 try:
                     con.execute(sql)
@@ -484,6 +517,56 @@ def _print_sql() -> None:
         )
 
 
+def _migration_touched_tables() -> list[str]:
+    """Every table name any migration's own statements reference (ALTER
+    TABLE / CREATE TABLE), in first-seen order, deduplicated. Used by
+    --report so a NEW migration's table is picked up automatically
+    without a second, hand-maintained list to keep in sync."""
+    import re
+
+    pattern = re.compile(r"(?:ALTER TABLE|CREATE TABLE(?:\s+IF NOT EXISTS)?)\s+(\w+)")
+    seen: list[str] = []
+    for _version, _name, statements in MIGRATIONS:
+        for sql in statements:
+            m = pattern.search(sql)
+            if m and m.group(1) not in seen:
+                seen.append(m.group(1))
+    return seen
+
+
+def _print_report() -> None:
+    """Operational verification (production incident 2026-08-23): prints
+    exactly what an operator needs to confirm a deploy's schema actually
+    matches the code — migration version, and for every table any
+    migration has ever touched, its real columns and real indexes,
+    queried directly against whatever D1 D1_WORKER_URL currently points
+    at (production when run there). Never trust `applied` from a prior
+    apply_migrations() call alone; this reads the schema itself."""
+    ver = current_version()
+    state = "current" if ver >= LATEST_VERSION else f"BEHIND (latest {LATEST_VERSION})"
+    print(f"schema_version: {ver} — {state}")
+    print()
+    with d1_client.d1_connection() as con:
+        for table in _migration_touched_tables():
+            try:
+                cols = con.execute(f"PRAGMA table_info({table})").fetchall()
+            except D1Error as exc:
+                print(f"[{table}] ERROR reading schema: {exc}")
+                continue
+            if not cols:
+                print(f"[{table}] does not exist")
+                continue
+            col_names = ", ".join(c["name"] for c in cols)
+            print(f"[{table}] columns: {col_names}")
+            idx_rows = con.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=?", (table,)
+            ).fetchall()
+            if idx_rows:
+                for idx in idx_rows:
+                    print(f"[{table}] index: {idx['name']}")
+            print()
+
+
 def main() -> int:
     import sys
 
@@ -499,6 +582,9 @@ def main() -> int:
 
     if "--sql" in sys.argv:
         _print_sql()
+        return 0
+    if "--report" in sys.argv:
+        _print_report()
         return 0
     if "--status" in sys.argv:
         ver = current_version()

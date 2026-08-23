@@ -176,6 +176,44 @@ def test_review_history_is_empty_for_a_still_draft_recommendation():
     assert recs.list_recommendation_reviews("MATRIX-AI-abc123") == []
 
 
+def test_review_recommendation_writes_status_and_history_in_one_atomic_batch():
+    """Re-audit fix (2026-08-22): storage/d1_client.py's own module
+    docstring says a sequence of separate execute() calls within one
+    `with d1_connection() as con:` block is NOT atomic as a group -- each
+    is its own independent HTTPS request/D1 statement. review_
+    recommendation() used to issue the status UPDATE and the history
+    INSERT as two such separate calls, so a crash/network failure between
+    them could change status with no corresponding history row. This
+    proves the fix structurally: exactly one d1_client.d1_batch() call
+    carries BOTH statements together (Cloudflare D1's own .batch() API --
+    "all succeed or all fail" -- the same primitive storage.decision_db
+    already relies on), not two independent d1_connection().execute()
+    round-trips."""
+    import storage.d1_client as d1_client_module
+    from storage import matrix_ai_recommendations as recs_module
+
+    _record()
+    calls: list[list[str]] = []
+    real_batch = d1_client_module.d1_batch
+
+    def spy_batch(statements):
+        calls.append([sql for sql, _params in statements])
+        return real_batch(statements)
+
+    original = recs_module.d1_client.d1_batch
+    recs_module.d1_client.d1_batch = spy_batch
+    try:
+        recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note="ok")
+    finally:
+        recs_module.d1_client.d1_batch = original
+
+    assert len(calls) == 1, "status UPDATE + history INSERT must travel in exactly one d1_batch() call"
+    assert len(calls[0]) == 2
+    assert "UPDATE research_matrix_ai_recommendations" in calls[0][0]
+    assert "INSERT INTO research_matrix_ai_recommendation_reviews" in calls[0][1]
+    assert "changes() = 1" in calls[0][1]
+
+
 def test_review_history_accumulates_across_a_refused_second_attempt():
     """The REFUSED second review attempt (rejected by the atomic CAS) must
     NOT itself appear in history -- only review actions that actually

@@ -385,6 +385,30 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "CREATE INDEX IF NOT EXISTS idx_rmc_timeframe ON research_matrix_cells(timeframe)",
         ],
     ),
+    (
+        23,
+        "matrix_cell_source_hypothesis_column",
+        # Hypothesis Discovery Engine Phase 3 — Hypothesis Execution / Mission
+        # Binding (2026-08-23): a pure provenance pointer from a Matrix cell
+        # back to the backtest.hypothesis_factory.Hypothesis that requested
+        # it (storage.research_matrix.upsert_cells()'s new, optional
+        # source_hypothesis_ids param). NULL for every existing cell and
+        # every ordinary hand-typed generate call — this migration changes
+        # no existing cell's meaning. Deliberately NOT unique (unlike
+        # source_recommendation_id on research_matrix_families): the SAME
+        # hypothesis may be legitimately re-executed later under a
+        # different research code commit, producing a genuinely different,
+        # coexisting cell — see backtest.hypothesis_execution's own module
+        # docstring for why that must never collide or overwrite. Reuses
+        # the already-narrowed "ALTER TABLE research_matrix_cells" guard in
+        # apply_migrations() below (bare _DDL_CELLS only, never the full
+        # _init() — see migration 21's own incident postmortem). Diagnostic/
+        # query-support only — never a gate, never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_matrix_cells ADD COLUMN source_hypothesis_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_rmc_source_hypothesis ON research_matrix_cells(source_hypothesis_id)",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

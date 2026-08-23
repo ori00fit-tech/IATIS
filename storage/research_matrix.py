@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS research_matrix_cells (
     engine                       TEXT,
     engine_version                TEXT,
     timeframe                    TEXT,
+    source_hypothesis_id         TEXT,
     created_at                  TEXT NOT NULL,
     updated_at                  TEXT NOT NULL
 )
@@ -122,6 +123,17 @@ _DDL_CELLS_FAMILY_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_family ON research_m
 # produces.
 _DDL_CELLS_ENGINE_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_engine ON research_matrix_cells(engine)"
 _DDL_CELLS_TIMEFRAME_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_timeframe ON research_matrix_cells(timeframe)"
+# Phase 3 (Hypothesis Execution / Mission Binding) — pure provenance
+# pointer back to the backtest.hypothesis_factory.Hypothesis that
+# requested this exact cell be generated. NULL for every cell created the
+# ordinary way (a human typing symbols/bundles by hand, or a Phase 1
+# discovery batch generated without going through hypothesis binding).
+# Deliberately NOT unique: the SAME hypothesis may be legitimately
+# re-executed later under a different research code commit, producing a
+# genuinely different cell (a different fingerprint, since commit is part
+# of it) that must coexist with the earlier one, never collide with or
+# overwrite it — see backtest.hypothesis_execution's own module docstring.
+_DDL_CELLS_SOURCE_HYPOTHESIS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmc_source_hypothesis ON research_matrix_cells(source_hypothesis_id)"
 
 _DDL_RUNS = """
 CREATE TABLE IF NOT EXISTS research_matrix_runs (
@@ -151,6 +163,7 @@ def _init(con) -> None:
     con.execute(_DDL_CELLS_FAMILY_IDX)
     con.execute(_DDL_CELLS_ENGINE_IDX)
     con.execute(_DDL_CELLS_TIMEFRAME_IDX)
+    con.execute(_DDL_CELLS_SOURCE_HYPOTHESIS_IDX)
     con.execute(_DDL_RUNS)
 
 
@@ -278,7 +291,9 @@ def list_families(limit: int = 50) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
+def upsert_cells(
+    cells: list[Any], family_id: str, source_hypothesis_ids: dict[str, str] | None = None,
+) -> dict[str, int]:
     """cells: list[backtest.research_matrix.MatrixCellSpec]. INSERT OR
     IGNORE keyed by cell_id — a duplicate fingerprint is silently skipped
     (not an error), never re-queued or re-run. Every cell in one call
@@ -294,7 +309,13 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
     Re-submitting the exact same cell list (an idempotent retry of a
     /generate call that crashed after upsert_family but before returning)
     is always safe — every cell in it is already present, so it counts as
-    `duplicate`, never against planned_n."""
+    `duplicate`, never against planned_n.
+
+    Phase 3 (Hypothesis Execution / Mission Binding) — source_hypothesis_
+    ids is an OPTIONAL {cell_id: hypothesis_id} map (default None, zero
+    behavior change for every existing caller). Only cells present as a
+    key get their source_hypothesis_id column set; every other cell in
+    the same call gets NULL, exactly as before this parameter existed."""
     inserted = 0
     duplicate = 0
     now = _now_iso()
@@ -329,18 +350,20 @@ def upsert_cells(cells: list[Any], family_id: str) -> dict[str, int]:
             # one) — never coerced, never a reinterpretation of what the
             # bundle actually specifies.
             engine, engine_version, timeframe = _single_engine_identity(cell.bundle, cell.engine_variants)
+            source_hypothesis_id = (source_hypothesis_ids or {}).get(cell.cell_id)
             con.execute(
                 """INSERT OR IGNORE INTO research_matrix_cells
                    (cell_id, family_id, fingerprint, symbol, bundle_json, risk_preset,
                     confluence_overrides_json, engine_variants_json, data_provider,
-                    research_code_commit, status, engine, engine_version, timeframe, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    research_code_commit, status, engine, engine_version, timeframe,
+                    source_hypothesis_id, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     cell.cell_id, family_id, cell.fingerprint, cell.symbol, json.dumps(cell.bundle), cell.risk_preset,
                     json.dumps(cell.confluence_overrides) if cell.confluence_overrides is not None else None,
                     json.dumps(cell.engine_variants) if cell.engine_variants is not None else None,
                     cell.data_provider, cell.research_code_commit, "QUEUED",
-                    engine, engine_version, timeframe, now, now,
+                    engine, engine_version, timeframe, source_hypothesis_id, now, now,
                 ),
             )
             inserted += 1
@@ -355,7 +378,8 @@ def get_cell(cell_id: str) -> dict[str, Any] | None:
 
 
 def list_cells(
-    status: str | None = None, symbol: str | None = None, family_id: str | None = None, limit: int = 500,
+    status: str | None = None, symbol: str | None = None, family_id: str | None = None,
+    source_hypothesis_id: str | None = None, limit: int = 500,
 ) -> list[dict[str, Any]]:
     query = "SELECT * FROM research_matrix_cells WHERE 1=1"
     params: list[Any] = []
@@ -368,6 +392,9 @@ def list_cells(
     if family_id is not None:
         query += " AND family_id=?"
         params.append(family_id)
+    if source_hypothesis_id is not None:
+        query += " AND source_hypothesis_id=?"
+        params.append(source_hypothesis_id)
     query += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     with d1_client.d1_connection() as con:

@@ -227,6 +227,57 @@ def test_old_research_matrix_cells_schema_migration_is_idempotent_on_reapply(fak
     assert _version() == migrations.LATEST_VERSION
 
 
+# --- Phase 3 (Hypothesis Execution / Mission Binding, 2026-08-23) regression -
+
+
+def test_old_research_matrix_cells_schema_migrates_source_hypothesis_column(fake_d1):
+    """Migration 23, reproduced against the SAME pre-Phase-1 legacy schema
+    (missing both the Phase 1 engine/timeframe columns AND the Phase 3
+    source_hypothesis_id column) -- both migrations must apply cleanly in
+    sequence, ending with all columns/indexes present and the pre-existing
+    row's source_hypothesis_id NULL, never fabricated."""
+    _legacy_pre_phase1_research_matrix_cells_schema(fake_d1)
+
+    applied = migrations.apply_migrations()
+    assert "matrix_cell_source_hypothesis_column" in applied
+    assert _version() == migrations.LATEST_VERSION
+
+    cols = {r[1] for r in fake_d1.execute("PRAGMA table_info(research_matrix_cells)").fetchall()}
+    assert "source_hypothesis_id" in cols
+
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_matrix_cells'"
+        ).fetchall()
+    }
+    assert "idx_rmc_source_hypothesis" in idx_names
+
+    row = dict(fake_d1.execute("SELECT * FROM research_matrix_cells WHERE cell_id='MATRIX-CELL-preexisting'").fetchone())
+    assert row["source_hypothesis_id"] is None
+
+
+def test_source_hypothesis_id_permits_multiple_cells_after_migration(fake_d1):
+    """Not unique: after migrating an old table, the SAME hypothesis may
+    still legitimately map to two different, coexisting cells (e.g. two
+    different research code commits)."""
+    _legacy_pre_phase1_research_matrix_cells_schema(fake_d1)
+    migrations.apply_migrations()
+
+    from backtest import research_matrix as rm
+    from storage import research_matrix as rm_storage
+
+    bundle = {"name": "PA v2", "timeframes": ["H1"], "engines": ["price_action"], "indicators": [], "context_filters": []}
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=bundle, risk_preset="balanced", research_code_commit="commit-A")
+    c2 = rm.MatrixCellSpec(symbol="EURUSD", bundle=bundle, risk_preset="balanced", research_code_commit="commit-B")
+    rm_storage.upsert_family("famX", planned_n=2, family_alpha=0.05)
+    rm_storage.upsert_cells(
+        [c1, c2], "famX",
+        source_hypothesis_ids={c1.cell_id: "DISCOVERY-HYPOTHESIS-abc", c2.cell_id: "DISCOVERY-HYPOTHESIS-abc"},
+    )
+    matching = rm_storage.list_cells(source_hypothesis_id="DISCOVERY-HYPOTHESIS-abc")
+    assert len(matching) == 2
+
+
 def test_migration_touched_tables_includes_the_matrix_tables():
     tables = migrations._migration_touched_tables()
     assert "research_matrix_families" in tables

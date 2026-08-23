@@ -218,6 +218,7 @@ def cell_evidence(
         "engine": cell.get("engine"),
         "engine_version": cell.get("engine_version"),
         "timeframe": cell.get("timeframe"),
+        "source_hypothesis_id": cell.get("source_hypothesis_id"),
         "risk_preset": cell.get("risk_preset"),
         "confluence_overrides": _safe_json_loads(cell.get("confluence_overrides_json")),
         "engine_variants": _safe_json_loads(cell.get("engine_variants_json")),

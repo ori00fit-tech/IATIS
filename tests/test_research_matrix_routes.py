@@ -256,6 +256,13 @@ def test_family_summary_reports_fixed_planned_n_and_status_breakdown(client):
     assert payload["by_symbol"]["GBPUSD"]["total"] == 1
     assert payload["by_bundle"]["SMC only"]["total"] == 2
     assert payload["by_risk_preset"]["balanced"]["total"] == 2
+    # Phase 1 (Research Matrix Normalization) — _BUNDLE is single-engine/
+    # single-timeframe, so these are real values, not "?"
+    assert payload["by_engine"]["smc"]["total"] == 2
+    assert payload["by_timeframe"]["H1"]["total"] == 2
+    assert payload["by_symbol_engine"]["EURUSD / smc"]["total"] == 1
+    assert payload["by_symbol_timeframe"]["EURUSD / H1"]["total"] == 1
+    assert payload["by_symbol_engine_timeframe"]["EURUSD / smc / H1"]["total"] == 1
 
 
 def test_family_summary_never_touches_other_families(client):

@@ -149,6 +149,77 @@ def test_upsert_cells_tolerates_missing_research_code_commit():
     assert row["research_code_commit"] is None
 
 
+# --- Phase 1: engine/engine_version/timeframe identity columns -------------
+
+
+def test_upsert_cells_persists_engine_identity_for_single_engine_single_tf_bundle():
+    fam = _family()
+    single_bundle = {"name": "SMC only", "timeframes": ["H1"], "engines": ["smc"], "indicators": [], "context_filters": []}
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=single_bundle, risk_preset="balanced")
+    storage.upsert_cells([c1], fam)
+    row = storage.get_cell(c1.cell_id)
+    assert row["engine"] == "smc"
+    assert row["engine_version"] == "v1"
+    assert row["timeframe"] == "H1"
+
+
+def test_upsert_cells_persists_engine_version_from_engine_variants():
+    fam = _family()
+    single_bundle = {"name": "PA v2", "timeframes": ["H1"], "engines": ["price_action"], "indicators": [], "context_filters": []}
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=single_bundle, risk_preset="balanced", engine_variants={"price_action": "v2"})
+    storage.upsert_cells([c1], fam)
+    row = storage.get_cell(c1.cell_id)
+    assert row["engine"] == "price_action"
+    assert row["engine_version"] == "v2"
+
+
+def test_upsert_cells_leaves_engine_identity_null_for_multi_engine_bundle():
+    """Backward compatibility (item F): a confluence-research bundle
+    combining multiple engines/timeframes must NEVER get a coerced
+    single engine/timeframe value -- NULL, exactly as before Phase 1."""
+    fam = _family(planned_n=1)
+    multi = {"name": "confluence", "timeframes": ["H1", "H4"], "engines": ["smc", "nnfx"], "indicators": [], "context_filters": []}
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=multi, risk_preset="balanced")
+    storage.upsert_cells([c1], fam)
+    row = storage.get_cell(c1.cell_id)
+    assert row["engine"] is None
+    assert row["engine_version"] is None
+    assert row["timeframe"] is None
+
+
+def test_upsert_cells_engine_and_timeframe_indexes_exist(fake_d1):
+    storage.list_cells()  # triggers _init(con) -- the table/indexes don't exist until first touched
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_matrix_cells'"
+        ).fetchall()
+    }
+    assert "idx_rmc_engine" in idx_names
+    assert "idx_rmc_timeframe" in idx_names
+
+
+def test_generate_discovery_cells_round_trips_through_storage():
+    """End-to-end: a real generate_discovery_cells() batch, persisted via
+    upsert_cells(), is queryable by engine/timeframe via list_cells()'s
+    own row shape."""
+    fam = _family(planned_n=4)
+    cells = rm.generate_discovery_cells(
+        symbols=["EURUSD"], engines=["price_action"], timeframes=["H1", "H4"],
+        engine_versions={"price_action": ("v1", "v2")}, risk_presets=["balanced"],
+    )
+    assert len(cells) == 4
+    result = storage.upsert_cells(cells, fam)
+    assert result == {"inserted": 4, "duplicate": 0}
+
+    rows = storage.list_cells(family_id=fam)
+    engines_seen = {r["engine"] for r in rows}
+    versions_seen = {r["engine_version"] for r in rows}
+    timeframes_seen = {r["timeframe"] for r in rows}
+    assert engines_seen == {"price_action"}
+    assert versions_seen == {"v1", "v2"}
+    assert timeframes_seen == {"H1", "H4"}
+
+
 def test_list_cells_filters_by_status_and_symbol():
     fam = _family()
     storage.upsert_cells([_cell(symbol="EURUSD"), _cell(symbol="GBPUSD")], fam)

@@ -160,6 +160,73 @@ def test_source_recommendation_id_unique_index_rejects_duplicates_after_migratio
         rm_storage.upsert_family("famB", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
 
 
+# --- Phase 1 (Research Matrix Normalization, 2026-08-23) regression ---------
+
+
+def _legacy_pre_phase1_research_matrix_cells_schema(con) -> None:
+    """The EXACT research_matrix_cells shape from before Phase 1 (no
+    engine/engine_version/timeframe columns) — hand-written, not imported
+    from storage.research_matrix's own _DDL_CELLS (which already includes
+    them for fresh installs), so this test genuinely exercises migrating
+    an OLD production table."""
+    con.execute("""
+        CREATE TABLE research_matrix_cells (
+            cell_id TEXT PRIMARY KEY, family_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            symbol TEXT NOT NULL, bundle_json TEXT NOT NULL, risk_preset TEXT NOT NULL,
+            confluence_overrides_json TEXT, engine_variants_json TEXT, data_provider TEXT,
+            research_code_commit TEXT, status TEXT NOT NULL, rejection_reason TEXT,
+            stage_a_mission_id TEXT, stage_a_trial_number INTEGER, stage_a_metrics_json TEXT,
+            stage_a_p_value REAL, lead_id TEXT, stage_b_validation_id TEXT, stage_b_verdict TEXT,
+            requeue_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )
+    """)
+    con.execute(
+        "INSERT INTO research_matrix_cells (cell_id, family_id, fingerprint, symbol, bundle_json, risk_preset, "
+        "status, created_at, updated_at) VALUES "
+        "('MATRIX-CELL-preexisting', 'fam1', 'preexisting', 'EURUSD', "
+        "'{\"name\":\"legacy confluence\",\"engines\":[\"smc\",\"nnfx\"],\"timeframes\":[\"H1\",\"H4\"]}', "
+        "'balanced', 'QUEUED', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+    )
+    con.commit()
+
+
+def test_old_research_matrix_cells_schema_migrates_to_current(fake_d1):
+    """Migration 22, reproduced and proven: an old production
+    research_matrix_cells table (no engine/engine_version/timeframe)
+    migrates cleanly to LATEST_VERSION, ends up with all three columns
+    AND both indexes, and its pre-existing (multi-engine, confluence-
+    research) row survives untouched with all three columns NULL — never
+    coerced into a fabricated single engine/timeframe."""
+    _legacy_pre_phase1_research_matrix_cells_schema(fake_d1)
+
+    applied = migrations.apply_migrations()
+    assert "matrix_cell_engine_timeframe_columns" in applied
+    assert _version() == migrations.LATEST_VERSION
+
+    cols = {r[1] for r in fake_d1.execute("PRAGMA table_info(research_matrix_cells)").fetchall()}
+    assert {"engine", "engine_version", "timeframe"} <= cols
+
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_matrix_cells'"
+        ).fetchall()
+    }
+    assert {"idx_rmc_engine", "idx_rmc_timeframe"} <= idx_names
+
+    row = dict(fake_d1.execute("SELECT * FROM research_matrix_cells WHERE cell_id='MATRIX-CELL-preexisting'").fetchone())
+    assert row["symbol"] == "EURUSD"  # untouched
+    assert row["engine"] is None
+    assert row["engine_version"] is None
+    assert row["timeframe"] is None
+
+
+def test_old_research_matrix_cells_schema_migration_is_idempotent_on_reapply(fake_d1):
+    _legacy_pre_phase1_research_matrix_cells_schema(fake_d1)
+    migrations.apply_migrations()
+    assert migrations.apply_migrations() == []
+    assert _version() == migrations.LATEST_VERSION
+
+
 def test_migration_touched_tables_includes_the_matrix_tables():
     tables = migrations._migration_touched_tables()
     assert "research_matrix_families" in tables

@@ -303,6 +303,159 @@ def generate_matrix_cells(
 
 
 # ---------------------------------------------------------------------------
+# Phase 1 — Research Matrix Normalization: ENGINE and TIMEFRAME as explicit,
+# independent Cartesian axes (2026-08-23). generate_matrix_cells() above is
+# UNCHANGED and remains the right tool for multi-engine confluence-research
+# bundles (a bundle may legitimately combine several engines/timeframes to
+# test THAT combination together — that is a different, still-valid
+# research question). generate_discovery_cells() below is a NEW, PARALLEL
+# generator for the different question this phase exists to answer:
+# "does THIS single engine, on THIS single timeframe, have an independent,
+# repeatable edge for THIS symbol" — never inferring an edge itself (see
+# backtest/matrix_evidence.py's own NON-NEGOTIABLE rule), only producing
+# the exhaustive set of cells whose evidence, once measured, could answer
+# that question per (symbol, engine, timeframe) combination.
+# ---------------------------------------------------------------------------
+
+
+def single_engine_identity(
+    bundle: dict[str, Any], engine_variants: dict[str, str] | None,
+) -> tuple[str | None, str | None, str | None]:
+    """If `bundle` unambiguously represents exactly ONE engine and exactly
+    ONE timeframe, returns (engine, engine_version, timeframe) — the
+    denormalized identity storage.research_matrix.upsert_cells() persists
+    as its own indexed columns (Phase 1). Returns (None, None, None) for
+    any bundle combining multiple engines and/or multiple timeframes
+    (confluence-research bundles): such a cell genuinely has no single
+    scalar engine/timeframe, so it is never coerced into one — its
+    identity stays expressed only inside bundle_json, exactly as it was
+    before this function existed. This is why backward compatibility
+    holds by construction: applying this function to every PRE-EXISTING
+    cell's own (already-immutable) bundle either correctly reveals an
+    identity that was always implicitly true (a bundle that already
+    happened to be single-engine/single-timeframe), or correctly yields
+    None for one that genuinely isn't — never a reinterpretation of what
+    the bundle actually specifies.
+
+    engine_version defaults to "v1" when `engine_variants` doesn't name
+    this engine — the same "omitted key = v1" convention
+    compute_cell_fingerprint()/the Matrix Engine frontend already use."""
+    engines = bundle.get("engines") or []
+    timeframes = bundle.get("timeframes") or []
+    if len(engines) != 1 or len(timeframes) != 1:
+        return None, None, None
+    engine = engines[0]
+    timeframe = timeframes[0]
+    engine_version = (engine_variants or {}).get(engine) or "v1"
+    return engine, engine_version, timeframe
+
+
+def generate_discovery_cells(
+    *,
+    symbols: list[str],
+    engines: list[str],
+    timeframes: list[str],
+    engine_versions: dict[str, tuple[str, ...]] | None = None,
+    risk_presets: list[str] | None = None,
+    confluence_overrides_choices: tuple[dict[str, float] | None, ...] = (None,),
+    data_provider: str | None = None,
+    research_code_commit: str | None = None,
+) -> list[MatrixCellSpec]:
+    """Exhaustive Symbol x Engine x EngineVersion x Timeframe discovery
+    matrix. Every cell is a genuinely single-engine, single-timeframe
+    bundle — ENGINE and TIMEFRAME are independent, explicit axes here,
+    never bundled opaquely, so a later evidence breakdown can cleanly
+    answer "is the engine the reason it worked, or the timeframe, or only
+    that exact combination" (backtest/matrix_evidence.py's new
+    per_engine_stats/per_timeframe_stats/per_symbol_engine_stats/
+    per_symbol_timeframe_stats/per_symbol_engine_timeframe_stats).
+
+    Fingerprint-COMPATIBLE with generate_matrix_cells(): a cell this
+    function produces for (symbol, engine, version, timeframe) fingerprints
+    IDENTICALLY to a hand-constructed single-engine bundle passed through
+    generate_matrix_cells() for the same combination — both flow through
+    the exact same compute_cell_fingerprint()/MatrixCellSpec, and the
+    bundle/engine_variants shape built here matches the Matrix Engine
+    frontend's own established convention exactly (an engine absent from
+    backtesting.backtest_engine.ENGINE_VARIANT_KEYS never appears as an
+    engine_variants key). Old and new generation paths therefore dedupe
+    against each other's evidence for the same logical hypothesis rather
+    than silently duplicating it.
+
+    Deliberately does NOT infer, rank, or select an edge — this function
+    only enumerates cells; every cell starts QUEUED like any other, and
+    whether one is ever promoted still runs through the exact same
+    Stage A screen / Bonferroni-corrected Matrix Family evidence gate /
+    Stage B validation this engine already has (never rebuilt here).
+
+    engine_versions: optional {engine: (version, ...)} restricting which
+    variant(s) of a variant-bearing engine to enumerate. An engine absent
+    from this dict — or from ENGINE_VARIANT_KEYS entirely — defaults to
+    EVERY real variant ENGINE_VARIANT_KEYS lists for it (or just ("v1",)
+    if it has none): exhaustive by default, since narrowing the search is
+    the caller's explicit choice to make, not this function's to assume.
+
+    Symbols/engines/timeframes/per-engine versions are each deduplicated
+    (order-preserving) before the Cartesian expansion, so a caller
+    accidentally passing a repeated entry can never produce two cells for
+    the same (symbol, engine, version, timeframe) identity tuple — the
+    risk_preset/confluence_overrides axes still vary independently on top
+    of that identity, exactly as generate_matrix_cells() already does,
+    since a different risk preset is a genuinely different research
+    question, not a duplicate of the same one."""
+    from backtesting.backtest_engine import ENGINE_KEYS, ENGINE_VARIANT_KEYS
+
+    if not symbols:
+        raise ResearchMatrixError("symbols must be non-empty")
+    if not engines:
+        raise ResearchMatrixError("engines must be non-empty")
+    if not timeframes:
+        raise ResearchMatrixError("timeframes must be non-empty")
+    unknown_engines = sorted(set(engines) - set(ENGINE_KEYS))
+    if unknown_engines:
+        raise ResearchMatrixError(f"unknown engine(s) {unknown_engines} — choose from {list(ENGINE_KEYS)}")
+    presets = risk_presets or list(RISK_PRESET_NAMES)
+    for preset in presets:
+        if preset not in RISK_PRESETS:
+            raise ResearchMatrixError(f"unknown risk_preset {preset!r} — choose from {RISK_PRESET_NAMES}")
+
+    symbols = list(dict.fromkeys(symbols))
+    engines = list(dict.fromkeys(engines))
+    timeframes = list(dict.fromkeys(timeframes))
+
+    versions_by_engine: dict[str, tuple[str, ...]] = {}
+    for engine in engines:
+        real_variants = ENGINE_VARIANT_KEYS.get(engine, ("v1",))
+        requested = tuple(dict.fromkeys((engine_versions or {}).get(engine, real_variants)))
+        unknown_versions = sorted(set(requested) - set(real_variants))
+        if unknown_versions:
+            raise ResearchMatrixError(
+                f"engine {engine!r} has no variant(s) {unknown_versions} — choose from {list(real_variants)}"
+            )
+        versions_by_engine[engine] = requested
+
+    cells: list[MatrixCellSpec] = []
+    for symbol in symbols:
+        for engine in engines:
+            for version in versions_by_engine[engine]:
+                engine_variants = {engine: version} if engine in ENGINE_VARIANT_KEYS else None
+                for timeframe in timeframes:
+                    bundle = {
+                        "name": f"{engine}:{version} @ {timeframe}",
+                        "timeframes": [timeframe], "engines": [engine],
+                        "indicators": [], "context_filters": [],
+                    }
+                    for preset in presets:
+                        for confluence in confluence_overrides_choices:
+                            cells.append(MatrixCellSpec(
+                                symbol=symbol, bundle=bundle, risk_preset=preset,
+                                confluence_overrides=confluence, engine_variants=engine_variants,
+                                data_provider=data_provider, research_code_commit=research_code_commit,
+                            ))
+    return cells
+
+
+# ---------------------------------------------------------------------------
 # Data quality gate — reused primitives only (core.data_validator,
 # backtest.runner.build_dataset_descriptor), never a second implementation.
 # Insufficient/invalid data must classify as INSUFFICIENT_DATA, never be

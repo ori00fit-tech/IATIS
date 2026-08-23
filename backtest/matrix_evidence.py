@@ -134,6 +134,47 @@ def per_risk_preset_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, in
 
 
 # ---------------------------------------------------------------------------
+# Phase 1 (Research Matrix Normalization, 2026-08-23) — per-engine and
+# per-timeframe breakdowns, now that storage.research_matrix.upsert_cells()
+# persists these as their own indexed columns (backtest.research_matrix.
+# single_engine_identity()) rather than leaving them buried inside
+# bundle_json. "?" groups every pre-existing/confluence-research cell whose
+# bundle combines multiple engines or multiple timeframes — such a cell
+# genuinely has no single scalar engine/timeframe, so it is never coerced
+# into one; these functions do not attempt to attribute it to any single
+# engine or timeframe. Same NON-NEGOTIABLE rule as every other function in
+# this module: a plain tally of already-decided statuses, never a verdict,
+# never a ranking, never "engine X is best."
+# ---------------------------------------------------------------------------
+
+
+def per_engine_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    return _group_stats(cells, lambda c: c.get("engine") or "?")
+
+
+def per_timeframe_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    return _group_stats(cells, lambda c: c.get("timeframe") or "?")
+
+
+def per_symbol_engine_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Keyed by "SYMBOL / engine" — a composite key rather than a nested
+    dict, matching this module's own flat {key: {status: count}} shape so
+    a caller (dashboard, AI copilot) doesn't need a different traversal
+    pattern for the composite breakdowns than the single-dimension ones."""
+    return _group_stats(cells, lambda c: f"{c.get('symbol') or '?'} / {c.get('engine') or '?'}")
+
+
+def per_symbol_timeframe_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    return _group_stats(cells, lambda c: f"{c.get('symbol') or '?'} / {c.get('timeframe') or '?'}")
+
+
+def per_symbol_engine_timeframe_stats(cells: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    return _group_stats(
+        cells, lambda c: f"{c.get('symbol') or '?'} / {c.get('engine') or '?'} / {c.get('timeframe') or '?'}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Single-cell evidence (raw cell row + Stage A trial + Stage B validation)
 # ---------------------------------------------------------------------------
 
@@ -174,6 +215,9 @@ def cell_evidence(
         "fingerprint": cell.get("fingerprint"),
         "symbol": cell.get("symbol"),
         "bundle": _safe_json_loads(cell.get("bundle_json")),
+        "engine": cell.get("engine"),
+        "engine_version": cell.get("engine_version"),
+        "timeframe": cell.get("timeframe"),
         "risk_preset": cell.get("risk_preset"),
         "confluence_overrides": _safe_json_loads(cell.get("confluence_overrides_json")),
         "engine_variants": _safe_json_loads(cell.get("engine_variants_json")),

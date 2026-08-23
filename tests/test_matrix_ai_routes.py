@@ -492,11 +492,20 @@ def test_convert_succeeds_after_approval(client, monkeypatch):
 
 def test_convert_a_second_time_is_refused_not_a_duplicate_family(client, monkeypatch):
     """Replay prevention, primary control: the atomic APPROVED->CONVERTED
-    CAS on the recommendation itself."""
+    CAS on the recommendation itself. Also covers the "opposite" crash
+    scenario the operator flagged explicitly: the CAS+audit already
+    committed successfully on the first call, but a caller retries anyway
+    (e.g. because its own connection dropped before seeing the response)
+    -- the retry must be refused (409, matching review_recommendation()'s
+    own precedent for "already reviewed"), and must produce NO second
+    family and NO second/overwritten conversion-audit row. The correct
+    move for that caller is GET .../conversion, not a silently-succeeding
+    second POST."""
     rec_id = _propose_one(client, monkeypatch)
     _approve(client, rec_id)
     first = client.post(f"/research/matrix/ai/recommendations/{rec_id}/convert", headers=HDR)
     assert first.status_code == 200
+    family_id = first.json()["family_id"]
 
     second = client.post(f"/research/matrix/ai/recommendations/{rec_id}/convert", headers=HDR)
     assert second.status_code == 409
@@ -505,6 +514,76 @@ def test_convert_a_second_time_is_refused_not_a_duplicate_family(client, monkeyp
     families = client.get("/research/matrix/families", headers=HDR, params={"limit": 500}).json()["families"]
     matching = [f for f in families if f.get("source_recommendation_id") == rec_id]
     assert len(matching) == 1
+
+    # the conversion-audit record is unchanged, still pointing at the
+    # FIRST family (recommendation_id carries its own DB-level UNIQUE
+    # constraint on research_matrix_ai_recommendation_conversions, so a
+    # second row for this recommendation_id is not even representable).
+    conversion = client.get(f"/research/matrix/ai/recommendations/{rec_id}/conversion", headers=HDR).json()
+    assert conversion["family_id"] == family_id
+
+
+def test_convert_real_crash_between_cell_creation_and_final_cas_then_retry(client, monkeypatch):
+    """Real fault-injection, not hand-constructed state or unit reasoning:
+    monkeypatches storage.matrix_ai_recommendations.convert_recommendation
+    to raise on its FIRST call only, forcing _convert_recommendation_core
+    to run its REAL family/cell-creation code path and then genuinely
+    fail before the CAS+audit step — exactly the crash window the
+    operator asked to see proven, not simulated by a test pre-seeding an
+    already-orphaned family through direct storage calls.
+
+    Sequence exercised:
+      APPROVED -> family INSERT -> cells INSERT -> CRASH (injected) ->
+      [recommendation still APPROVED, a real orphaned family now exists]
+      -> retry -> finds it via source_recommendation_id -> reuses it ->
+      no duplicate cells -> CAS APPROVED->CONVERTED -> exactly one
+      conversion-audit row.
+    """
+    from storage import matrix_ai_recommendations as recs_module
+
+    rec_id = _propose_one(client, monkeypatch)
+    _approve(client, rec_id)
+
+    real_convert_recommendation = recs_module.convert_recommendation
+    calls = {"n": 0}
+
+    def crashing_convert_recommendation(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated crash: family+cells already committed, CAS+audit never ran")
+        return real_convert_recommendation(*args, **kwargs)
+
+    monkeypatch.setattr(recs_module, "convert_recommendation", crashing_convert_recommendation)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        client.post(f"/research/matrix/ai/recommendations/{rec_id}/convert", headers=HDR)
+    monkeypatch.setattr(recs_module, "convert_recommendation", real_convert_recommendation)
+
+    # Post-crash state: the recommendation is STILL APPROVED (the CAS
+    # never ran) — but a REAL, orphaned family+cells now exist, created
+    # by the first attempt's genuine execution before it crashed.
+    row = client.get(f"/research/matrix/ai/recommendations/{rec_id}", headers=HDR).json()
+    assert row["status"] == "APPROVED"
+    families_before = client.get("/research/matrix/families", headers=HDR, params={"limit": 500}).json()["families"]
+    orphaned = [f for f in families_before if f.get("source_recommendation_id") == rec_id]
+    assert len(orphaned) == 1, "the crash should have left exactly one real orphaned family"
+    orphan_family_id = orphaned[0]["family_id"]
+
+    retry = client.post(f"/research/matrix/ai/recommendations/{rec_id}/convert", headers=HDR)
+    assert retry.status_code == 200, retry.text
+    body = retry.json()
+    assert body["family_id"] == orphan_family_id  # reused, never a second family
+    assert body["inserted"] == 0
+    assert body["duplicate"] == 1  # upsert_cells()'s own dedup IS the correspondence check
+
+    row_after = client.get(f"/research/matrix/ai/recommendations/{rec_id}", headers=HDR).json()
+    assert row_after["status"] == "CONVERTED"
+
+    families_after = client.get("/research/matrix/families", headers=HDR, params={"limit": 500}).json()["families"]
+    matching = [f for f in families_after if f.get("source_recommendation_id") == rec_id]
+    assert len(matching) == 1  # still exactly one family after the retry
+
+    conversion = client.get(f"/research/matrix/ai/recommendations/{rec_id}/conversion", headers=HDR).json()
+    assert conversion["family_id"] == orphan_family_id  # exactly one conversion-audit row
 
 
 def test_convert_conversion_record_retrievable(client, monkeypatch):

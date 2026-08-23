@@ -179,24 +179,84 @@ def test_approving_a_recommendation_creates_zero_new_cells_or_families(client, m
     assert {f["family_id"] for f in families_after} == {f["family_id"] for f in families_before}
 
 
-def test_matrix_ai_module_never_calls_any_research_matrix_write_function():
-    """Static proof, not just a runtime observation: neither the router nor
-    the storage module powering AI recommendations references any of the
-    functions that actually mutate research_matrix_cells/families. Mirrors
-    tests/test_matrix_orchestrator.py's own forbidden-target source scan."""
+def test_matrix_ai_recommendations_storage_never_calls_any_research_matrix_write_function():
+    """Static proof, not just a runtime observation: storage/matrix_ai_
+    recommendations.py — covering the recommendation row's own DRAFT/
+    APPROVED/REJECTED/CONVERTED state machine — never references any
+    function that mutates research_matrix_cells/families. Phase 3C's
+    conversion write path lives entirely in execution/routes/matrix_ai.py
+    (see the two tests below) — this storage module's own job stays
+    strictly the recommendation row's bookkeeping, exactly as before
+    Phase 3C. Mirrors tests/test_matrix_orchestrator.py's own forbidden-
+    target source scan."""
     import inspect
 
-    from execution.routes import matrix_ai as router_module
     from storage import matrix_ai_recommendations as recs_module
 
     forbidden_calls = (
         "upsert_cells(", "upsert_family(", "update_cell(", "claim_queued_cells(",
         "claim_candidate_cells(", "requeue_stale_running_cells(", "requeue_stale_validating_cells(",
     )
-    for module in (router_module, recs_module):
-        source = inspect.getsource(module)
+    source = inspect.getsource(recs_module)
+    for call in forbidden_calls:
+        assert call not in source, f"{recs_module.__name__} references forbidden research-state mutator {call!r}"
+
+
+def test_matrix_ai_propose_and_review_never_call_any_research_matrix_write_function():
+    """The Phase 3B/3B-H boundary, PRESERVED exactly as it was before
+    Phase 3C: every non-conversion function in execution/routes/
+    matrix_ai.py (propose, list, get, review, review-history, plus their
+    private helpers) still never references a Matrix-state mutator.
+    Scoped to each function's OWN source (inspect.getsource(fn), not the
+    whole module) — Phase 3C's conversion function lives in this SAME
+    file and legitimately calls these (see the next test), so a whole-
+    module scan would no longer prove anything about the OTHER
+    functions. This one does."""
+    import inspect
+
+    from execution.routes import matrix_ai as router_module
+
+    forbidden_calls = (
+        "upsert_cells(", "upsert_family(", "update_cell(", "claim_queued_cells(",
+        "claim_candidate_cells(", "requeue_stale_running_cells(", "requeue_stale_validating_cells(",
+    )
+    non_conversion_functions = (
+        router_module.matrix_ai_propose,
+        router_module.matrix_ai_list_recommendations,
+        router_module.matrix_ai_get_recommendation,
+        router_module.matrix_ai_review_recommendation,
+        router_module.matrix_ai_list_recommendation_reviews,
+        router_module._build_context,
+        router_module._check_approval_authorization,
+        router_module._check_shared_secret_gate,
+        router_module._dead_list_text,
+        router_module._frozen_engines,
+        router_module._sanitize_focus_hint,
+    )
+    for fn in non_conversion_functions:
+        source = inspect.getsource(fn)
         for call in forbidden_calls:
-            assert call not in source, f"{module.__name__} references forbidden research-state mutator {call!r}"
+            assert call not in source, f"{fn.__qualname__} references forbidden research-state mutator {call!r}"
+
+
+def test_matrix_ai_convert_is_the_only_path_that_calls_matrix_write_functions():
+    """Phase 3C's own, deliberate exception to the boundary above,
+    verified POSITIVELY rather than merely implied by the previous
+    test's exclusion list: ONLY _convert_recommendation_core — called
+    ONLY by POST .../convert, itself gated by _check_auth AND
+    _check_conversion_authorization, and only after the target
+    recommendation's status is confirmed APPROVED — calls
+    upsert_family()/upsert_cells(). This is the ONE, intentional,
+    always-human-triggered write path Phase 3C adds; every other
+    function in this module remains exactly as incapable of a Matrix
+    write as it was in Phase 3B."""
+    import inspect
+
+    from execution.routes import matrix_ai as router_module
+
+    source = inspect.getsource(router_module._convert_recommendation_core)
+    assert "upsert_family(" in source
+    assert "upsert_cells(" in source
 
 
 def test_approval_endpoint_response_never_mentions_hxxx_or_registry():

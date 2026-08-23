@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendations (
     reviewed_by                 TEXT,
     reviewed_at                 TEXT,
     review_note                 TEXT,
+    converted_at                TEXT,
     created_at                  TEXT NOT NULL
 )
 """
@@ -126,10 +127,39 @@ CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendation_reviews (
 """
 _DDL_REVIEWS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmairr_recommendation ON research_matrix_ai_recommendation_reviews(recommendation_id)"
 
+# Phase 3C (Controlled Recommendation Conversion) — kept as a SEPARATE
+# table from the reviews table above rather than adding nullable
+# conversion-only columns to it: a conversion carries a materially
+# different payload (family_id, cell count, commit provenance, a content
+# hash) than a review action (old/new status, a note), and a
+# recommendation is converted AT MOST ONCE (both recommendation_id and
+# family_id are UNIQUE here — one recommendation can never produce two
+# families, and one family can never claim to come from two
+# recommendations). converted_at above is a denormalized "latest state"
+# cache on the main row, matching how reviewed_at already sits there;
+# this table is the authoritative, append-worthy-in-principle (though
+# never more than one row per recommendation today) detail record.
+_DDL_CONVERSIONS = """
+CREATE TABLE IF NOT EXISTS research_matrix_ai_recommendation_conversions (
+    conversion_id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id         TEXT NOT NULL UNIQUE,
+    family_id                 TEXT NOT NULL UNIQUE,
+    proposed_next_cells_hash  TEXT NOT NULL,
+    cells_considered          INTEGER NOT NULL,
+    proposed_at_commit        TEXT,
+    converted_at_commit       TEXT,
+    commit_drift              INTEGER NOT NULL,
+    converted_by              TEXT,
+    converted_at              TEXT NOT NULL
+)
+"""
+_DDL_CONVERSIONS_IDX = "CREATE INDEX IF NOT EXISTS idx_rmaic_recommendation ON research_matrix_ai_recommendation_conversions(recommendation_id)"
+
 DRAFT = "DRAFT"
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
-RECOMMENDATION_STATUSES: tuple[str, ...] = (DRAFT, APPROVED, REJECTED)
+CONVERTED = "CONVERTED"
+RECOMMENDATION_STATUSES: tuple[str, ...] = (DRAFT, APPROVED, REJECTED, CONVERTED)
 
 
 def _init(con) -> None:
@@ -137,6 +167,8 @@ def _init(con) -> None:
     con.execute(_DDL_STATUS_IDX)
     con.execute(_DDL_REVIEWS)
     con.execute(_DDL_REVIEWS_IDX)
+    con.execute(_DDL_CONVERSIONS)
+    con.execute(_DDL_CONVERSIONS_IDX)
 
 
 def _now_iso() -> str:
@@ -300,3 +332,101 @@ def list_recommendation_reviews(recommendation_id: str) -> list[dict[str, Any]]:
             (recommendation_id,),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+# --- Phase 3C: Controlled Recommendation Conversion -------------------------
+
+
+def convert_recommendation(
+    recommendation_id: str, *, family_id: str,
+    proposed_next_cells_hash: str, cells_considered: int,
+    proposed_at_commit: str | None, converted_at_commit: str | None,
+    converted_by: str | None,
+) -> None:
+    """The ONLY writer of status=CONVERTED. Structurally identical to
+    review_recommendation()'s own CAS-plus-history-append pattern:
+
+      - ATOMIC compare-and-swap (`UPDATE ... WHERE status='APPROVED'`) --
+        a REJECTED row's status is never 'APPROVED' (so converting a
+        rejected recommendation is refused by construction, no special-
+        case branch needed) and an already-CONVERTED row's status is no
+        longer 'APPROVED' either (so a second conversion attempt --
+        replay -- is refused the exact same way a second review is).
+      - the matching conversions-table INSERT happens in the SAME
+        `d1_batch()` call, guarded by `WHERE changes() = 1`, so the
+        status transition and its audit record can never become
+        separated by a crash/network failure between two independent
+        `execute()` calls (the same class of bug storage/d1_client.py's
+        own module docstring warns about, and the exact bug this
+        function's sibling review_recommendation() was fixed for).
+
+    Every argument here is caller-supplied because THIS function has no
+    way to independently derive them (family creation, proposal-time
+    commit lookup, and current-commit resolution all happen in the
+    caller, execution/routes/matrix_ai.py, which already has access to
+    backtest.research_matrix.resolve_research_code_commit() and the
+    recommendation's own constraints_used_json) — this function's own
+    job is strictly the atomic bookkeeping, not the conversion's business
+    logic. `converted_by` is expected to already be server-derived
+    (storage.audit_log._mask_actor), never trusted from a request body,
+    mirroring reviewed_by's own convention exactly.
+
+    `commit_drift` is computed here, once, as `proposed_at_commit !=
+    converted_at_commit` — informational only (CLAUDE.md rule 6 doesn't
+    apply to research-code commits; the resulting cells are correctly
+    stamped with the CURRENT commit at conversion time either way), never
+    a precondition for conversion succeeding.
+
+    Raises ValueError for an unknown recommendation_id, or for a
+    recommendation that is not (or no longer) APPROVED (message contains
+    "cannot be converted" — the route maps this to 404/409)."""
+    commit_drift = proposed_at_commit != converted_at_commit
+    with d1_client.d1_connection() as con:
+        _init(con)
+        existing = con.execute(
+            "SELECT status FROM research_matrix_ai_recommendations WHERE recommendation_id=?", (recommendation_id,)
+        ).fetchone()
+        if existing is None:
+            raise ValueError(f"convert_recommendation: unknown recommendation_id {recommendation_id!r}")
+        old_status = existing["status"]
+
+    now = _now_iso()
+    update_cursor, _insert_cursor = d1_client.d1_batch([
+        (
+            """UPDATE research_matrix_ai_recommendations
+               SET status=?, converted_at=?
+               WHERE recommendation_id=? AND status=?""",
+            (CONVERTED, now, recommendation_id, APPROVED),
+        ),
+        (
+            # changes() reflects the UPDATE immediately above, same as
+            # review_recommendation()'s own history INSERT -- a lost CAS
+            # (row was DRAFT, REJECTED, or already CONVERTED) can never
+            # produce a spurious conversion-audit row.
+            """INSERT INTO research_matrix_ai_recommendation_conversions
+               (recommendation_id, family_id, proposed_next_cells_hash, cells_considered,
+                proposed_at_commit, converted_at_commit, commit_drift, converted_by, converted_at)
+               SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1""",
+            (
+                recommendation_id, family_id, proposed_next_cells_hash, cells_considered,
+                proposed_at_commit, converted_at_commit, int(commit_drift), converted_by, now,
+            ),
+        ),
+    ])
+    if update_cursor.rowcount != 1:
+        raise ValueError(
+            f"convert_recommendation: {recommendation_id!r} cannot be converted (current status={old_status!r}) "
+            f"— only an APPROVED recommendation may be converted, and only once."
+        )
+
+
+def get_conversion(recommendation_id: str) -> dict[str, Any] | None:
+    """The conversion-audit record for one recommendation, if it has been
+    converted. None for a recommendation still DRAFT/APPROVED/REJECTED."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        row = con.execute(
+            "SELECT * FROM research_matrix_ai_recommendation_conversions WHERE recommendation_id=?",
+            (recommendation_id,),
+        ).fetchone()
+    return _row_to_dict(row) if row else None

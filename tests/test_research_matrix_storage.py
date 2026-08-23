@@ -36,6 +36,54 @@ def test_get_family_returns_none_for_unknown_id():
     assert storage.get_family("nope") is None
 
 
+# --- Phase 3C: source_recommendation_id provenance --------------------------
+
+
+def test_upsert_family_source_recommendation_id_defaults_to_none():
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05)
+    assert storage.get_family("famA")["source_recommendation_id"] is None
+
+
+def test_upsert_family_persists_source_recommendation_id():
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+    row = storage.get_family("famA")
+    assert row["source_recommendation_id"] == "MATRIX-AI-abc123"
+
+
+def test_get_family_by_source_recommendation_round_trip():
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+    row = storage.get_family_by_source_recommendation("MATRIX-AI-abc123")
+    assert row is not None
+    assert row["family_id"] == "famA"
+
+
+def test_get_family_by_source_recommendation_returns_none_when_absent():
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05)  # ordinary family, no recommendation
+    assert storage.get_family_by_source_recommendation("MATRIX-AI-abc123") is None
+
+
+def test_source_recommendation_id_is_unique_across_families():
+    """The second, independent half of Phase 3C's replay-prevention pair
+    (the first half is the atomic APPROVED->CONVERTED CAS on the
+    recommendation itself) -- even a bug that skipped the CAS could not
+    silently attach a second family to one recommendation."""
+    from storage.d1_client import D1Error
+
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+    with pytest.raises(D1Error):
+        storage.upsert_family("famB", planned_n=1, family_alpha=0.05, source_recommendation_id="MATRIX-AI-abc123")
+
+
+def test_multiple_ordinary_families_can_all_have_a_null_source_recommendation_id():
+    """A UNIQUE index must not treat multiple NULLs as duplicates of each
+    other -- every ordinary, hand-typed generate call must keep working
+    exactly as before Phase 3C."""
+    storage.upsert_family("famA", planned_n=1, family_alpha=0.05)
+    storage.upsert_family("famB", planned_n=1, family_alpha=0.05)
+    assert storage.get_family("famA") is not None
+    assert storage.get_family("famB") is not None
+
+
 def test_list_families_empty_by_default():
     assert storage.list_families() == []
 

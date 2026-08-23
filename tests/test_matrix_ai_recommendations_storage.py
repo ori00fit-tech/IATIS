@@ -225,3 +225,128 @@ def test_review_history_accumulates_across_a_refused_second_attempt():
     history = recs.list_recommendation_reviews("MATRIX-AI-abc123")
     assert len(history) == 1  # the refused attempt left no trace
     assert history[0]["reviewed_by"] == "alice"
+
+
+# --- Phase 3C: Controlled Recommendation Conversion -------------------------
+
+
+def test_convert_recommendation_requires_approved_status():
+    _record()
+    with pytest.raises(ValueError, match="cannot be converted"):
+        recs.convert_recommendation(
+            "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+            proposed_at_commit="abc", converted_at_commit="abc", converted_by="alice",
+        )
+
+
+def test_convert_recommendation_rejects_unknown_id():
+    with pytest.raises(ValueError, match="unknown recommendation_id"):
+        recs.convert_recommendation(
+            "nope", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+            proposed_at_commit="abc", converted_at_commit="abc", converted_by="alice",
+        )
+
+
+def test_convert_recommendation_succeeds_after_approval():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note=None)
+    recs.convert_recommendation(
+        "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=2,
+        proposed_at_commit="abc123", converted_at_commit="abc123", converted_by="bob",
+    )
+    row = recs.get_recommendation("MATRIX-AI-abc123")
+    assert row["status"] == recs.CONVERTED
+    assert row["converted_at"] is not None
+
+
+def test_convert_recommendation_is_atomic_a_second_conversion_is_refused():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note=None)
+    recs.convert_recommendation(
+        "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=2,
+        proposed_at_commit="abc", converted_at_commit="abc", converted_by="bob",
+    )
+    with pytest.raises(ValueError, match="cannot be converted"):
+        recs.convert_recommendation(
+            "MATRIX-AI-abc123", family_id="fam2", proposed_next_cells_hash="h", cells_considered=2,
+            proposed_at_commit="abc", converted_at_commit="def", converted_by="carol",
+        )
+    # the FIRST conversion's own record is untouched
+    conversion = recs.get_conversion("MATRIX-AI-abc123")
+    assert conversion["family_id"] == "fam1"
+    assert conversion["converted_by"] == "bob"
+
+
+def test_convert_recommendation_rejects_a_rejected_recommendation():
+    """No special-case branch needed: the CAS is WHERE status='APPROVED',
+    and a REJECTED row's status is never 'APPROVED' -- correctness by
+    construction, the same reason double-review needs no special case."""
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.REJECTED, reviewed_by="alice", review_note=None)
+    with pytest.raises(ValueError, match="cannot be converted"):
+        recs.convert_recommendation(
+            "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+            proposed_at_commit="abc", converted_at_commit="abc", converted_by="bob",
+        )
+
+
+def test_convert_recommendation_records_commit_drift():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note=None)
+    recs.convert_recommendation(
+        "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+        proposed_at_commit="commit-A", converted_at_commit="commit-B", converted_by="bob",
+    )
+    conversion = recs.get_conversion("MATRIX-AI-abc123")
+    assert conversion["commit_drift"] == 1
+    assert conversion["proposed_at_commit"] == "commit-A"
+    assert conversion["converted_at_commit"] == "commit-B"
+
+
+def test_convert_recommendation_no_drift_when_commits_match():
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note=None)
+    recs.convert_recommendation(
+        "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+        proposed_at_commit="commit-A", converted_at_commit="commit-A", converted_by="bob",
+    )
+    assert recs.get_conversion("MATRIX-AI-abc123")["commit_drift"] == 0
+
+
+def test_get_conversion_returns_none_when_not_converted():
+    _record()
+    assert recs.get_conversion("MATRIX-AI-abc123") is None
+
+
+def test_convert_recommendation_writes_status_and_audit_in_one_atomic_batch():
+    """Same structural proof as review_recommendation()'s own atomicity
+    test -- the status CAS and the conversion-audit INSERT travel in
+    exactly one d1_batch() call, never two independent execute()s."""
+    import storage.d1_client as d1_client_module
+    from storage import matrix_ai_recommendations as recs_module
+
+    _record()
+    recs.review_recommendation("MATRIX-AI-abc123", status=recs.APPROVED, reviewed_by="alice", review_note=None)
+
+    calls: list[list[str]] = []
+    real_batch = d1_client_module.d1_batch
+
+    def spy_batch(statements):
+        calls.append([sql for sql, _params in statements])
+        return real_batch(statements)
+
+    original = recs_module.d1_client.d1_batch
+    recs_module.d1_client.d1_batch = spy_batch
+    try:
+        recs.convert_recommendation(
+            "MATRIX-AI-abc123", family_id="fam1", proposed_next_cells_hash="h", cells_considered=1,
+            proposed_at_commit="abc", converted_at_commit="abc", converted_by="bob",
+        )
+    finally:
+        recs_module.d1_client.d1_batch = original
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+    assert "UPDATE research_matrix_ai_recommendations" in calls[0][0]
+    assert "INSERT INTO research_matrix_ai_recommendation_conversions" in calls[0][1]
+    assert "changes() = 1" in calls[0][1]

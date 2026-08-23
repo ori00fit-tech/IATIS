@@ -312,6 +312,43 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "ALTER TABLE research_matrix_cells ADD COLUMN research_code_commit TEXT",
         ],
     ),
+    (
+        20,
+        "matrix_ai_recommendation_converted_at_column",
+        # Hypothesis Discovery Engine Phase 3C — Controlled Recommendation
+        # Conversion (2026-08-XX): a recommendation's status vocabulary
+        # gains a fourth, terminal value, CONVERTED (DRAFT -> APPROVED ->
+        # CONVERTED), set only by storage.matrix_ai_recommendations.
+        # convert_recommendation()'s own atomic CAS. converted_at is a
+        # denormalized "latest state" cache on the main row, mirroring how
+        # reviewed_at already sits there — the authoritative detail lives
+        # in the new research_matrix_ai_recommendation_conversions table
+        # (a brand-new table, no migration needed for it). Never a gate,
+        # never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_matrix_ai_recommendations ADD COLUMN converted_at TEXT",
+        ],
+    ),
+    (
+        21,
+        "matrix_family_source_recommendation_column",
+        # Hypothesis Discovery Engine Phase 3C — links a family that was
+        # created via a controlled AI-recommendation conversion back to
+        # the recommendation it came from, WITHOUT ever creating an HXXX
+        # identity or touching registry.json (source_recommendation_id is
+        # a pure provenance pointer, exactly like research_matrix_cells.
+        # research_code_commit already is). NULL for every family created
+        # the normal way (a human typing symbols/bundles by hand) — this
+        # migration changes no existing family's meaning. The UNIQUE index
+        # is the second, independent half of Phase 3C's replay-prevention
+        # pair (the first half is the atomic APPROVED->CONVERTED CAS on
+        # the recommendation itself): even a bug that skipped the CAS
+        # could not silently attach a second family to one recommendation.
+        [
+            "ALTER TABLE research_matrix_families ADD COLUMN source_recommendation_id TEXT",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_rmf_source_recommendation ON research_matrix_families(source_recommendation_id)",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -385,6 +422,13 @@ def apply_migrations() -> list[str]:
                 from execution import reconciliation
                 con.execute(reconciliation._DDL)
             if any("ALTER TABLE research_matrix_cells" in s for s in statements):
+                from storage import research_matrix
+                research_matrix._init(con)
+            if any("ALTER TABLE research_matrix_ai_recommendations " in s for s in statements):
+                # trailing space excludes "_reviews"/"_conversions"
+                from storage import matrix_ai_recommendations
+                matrix_ai_recommendations._init(con)
+            if any("ALTER TABLE research_matrix_families" in s for s in statements):
                 from storage import research_matrix
                 research_matrix._init(con)
             for sql in statements:

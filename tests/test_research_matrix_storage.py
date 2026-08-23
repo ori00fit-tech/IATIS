@@ -527,3 +527,70 @@ def test_list_runs_scopes_by_family_and_respects_limit():
     assert {r["run_id"] for r in fam_a_runs} == {"runA1", "runA2"}
 
     assert len(storage.list_runs(limit=1)) == 1
+
+
+# --- Phase 3: source_hypothesis_id provenance -------------------------------
+
+
+def test_upsert_cells_source_hypothesis_id_defaults_to_none():
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam)
+    assert storage.get_cell(c1.cell_id)["source_hypothesis_id"] is None
+
+
+def test_upsert_cells_persists_source_hypothesis_id_when_provided():
+    fam = _family()
+    c1 = _cell()
+    storage.upsert_cells([c1], fam, source_hypothesis_ids={c1.cell_id: "DISCOVERY-HYPOTHESIS-abc123"})
+    row = storage.get_cell(c1.cell_id)
+    assert row["source_hypothesis_id"] == "DISCOVERY-HYPOTHESIS-abc123"
+
+
+def test_upsert_cells_source_hypothesis_id_only_applies_to_named_cells():
+    """A mapping covering only SOME cells in the batch must leave every
+    other cell in that same call with a NULL source_hypothesis_id --
+    never guessed, never applied to the wrong cell."""
+    fam = _family(planned_n=2)
+    c1 = _cell(symbol="EURUSD")
+    c2 = _cell(symbol="GBPUSD")
+    storage.upsert_cells([c1, c2], fam, source_hypothesis_ids={c1.cell_id: "DISCOVERY-HYPOTHESIS-abc123"})
+    assert storage.get_cell(c1.cell_id)["source_hypothesis_id"] == "DISCOVERY-HYPOTHESIS-abc123"
+    assert storage.get_cell(c2.cell_id)["source_hypothesis_id"] is None
+
+
+def test_list_cells_filters_by_source_hypothesis_id():
+    fam = _family(planned_n=2)
+    c1 = _cell(symbol="EURUSD")
+    c2 = _cell(symbol="GBPUSD")
+    storage.upsert_cells([c1, c2], fam, source_hypothesis_ids={c1.cell_id: "DISCOVERY-HYPOTHESIS-abc123"})
+    matching = storage.list_cells(source_hypothesis_id="DISCOVERY-HYPOTHESIS-abc123")
+    assert len(matching) == 1
+    assert matching[0]["cell_id"] == c1.cell_id
+
+
+def test_source_hypothesis_id_permits_multiple_cells_for_the_same_hypothesis():
+    """Deliberately NOT unique (unlike source_recommendation_id on
+    families): the same hypothesis may be legitimately re-executed under
+    a different research code commit, producing a second, coexisting
+    cell that must never collide with or overwrite the first."""
+    fam = _family(planned_n=2)
+    c1 = rm.MatrixCellSpec(symbol="EURUSD", bundle=_BUNDLE, risk_preset="balanced", research_code_commit="commit-A")
+    c2 = rm.MatrixCellSpec(symbol="EURUSD", bundle=_BUNDLE, risk_preset="balanced", research_code_commit="commit-B")
+    assert c1.cell_id != c2.cell_id  # different commit -> different fingerprint
+    result = storage.upsert_cells(
+        [c1, c2], fam, source_hypothesis_ids={c1.cell_id: "DISCOVERY-HYPOTHESIS-abc123", c2.cell_id: "DISCOVERY-HYPOTHESIS-abc123"},
+    )
+    assert result == {"inserted": 2, "duplicate": 0}
+    matching = storage.list_cells(source_hypothesis_id="DISCOVERY-HYPOTHESIS-abc123")
+    assert len(matching) == 2
+
+
+def test_source_hypothesis_id_index_exists(fake_d1):
+    storage.list_cells()  # triggers _init(con)
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_matrix_cells'"
+        ).fetchall()
+    }
+    assert "idx_rmc_source_hypothesis" in idx_names

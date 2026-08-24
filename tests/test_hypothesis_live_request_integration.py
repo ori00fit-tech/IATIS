@@ -70,10 +70,64 @@ def _granted_confluence_hypothesis(**overrides) -> tuple[hf.Hypothesis, dict]:
     return h, grant
 
 
+def _granted_single_engine_hypothesis(**overrides) -> tuple[hf.Hypothesis, dict]:
+    """The SINGLE_ENGINE counterpart of _granted_confluence_hypothesis():
+    a real Hypothesis -> Mission -> VALIDATED+CONFIRMED Cell -> PROMOTED
+    Promotion -> GRANTED Policy, through the real Phase 4-6 pipeline, for
+    an ordinary (pre-Phase-8B) single-engine hypothesis."""
+    engine = overrides.get("engine", "wyckoff")
+    h = hf.generate_hypotheses(
+        symbols=[overrides.get("symbol", "EURUSD")], engines=[engine],
+        timeframes=[overrides.get("timeframe", "H4")], risk_presets=[overrides.get("risk_preset", "balanced")],
+        engine_versions=overrides.get("engine_versions", {engine: ("v2",)}),
+    )[0]
+    hf_storage.record_hypotheses([h])
+    result = hm.record_mission([h.hypothesis_id], research_code_commit="commit-A")
+    cell_id = result["bindings"][0]["cell_id"]
+    rm_storage.update_cell(cell_id, status="VALIDATED", stage_b_verdict="SAME_SYMBOL_CONFIRMED")
+    promotion = hp.record_promotion(h.hypothesis_id, result["mission_id"], cell_id)
+    grant = hpol.grant_policy(promotion["promotion_id"], "alice", "approved for live gate testing")
+    return h, grant
+
+
 def _fake_run_pipeline(verdict: str):
     def _fn(config: dict) -> dict:
         return {"final_verdict": verdict, "seen_config": config}
     return _fn
+
+
+# --- the operator's required SINGLE_ENGINE scenario (Point 1) --------------
+
+
+def test_single_engine_wyckoff_v2_only_wyckoff_active_fresh_gate(monkeypatch):
+    """The operator's own explicit required test: SINGLE_ENGINE / Wyckoff /
+    v2 -> only Wyckoff active -> attributable identity preserved -> fresh
+    Gate. Proves the SINGLE_ENGINE path runs through the exact same real
+    Phase 4-6-7 chain as CONFLUENCE, with direct (never bundle-derived)
+    engine attribution."""
+    h, grant = _granted_single_engine_hypothesis(engine="wyckoff", timeframe="H4")
+    assert h.decision_type == hf.SINGLE_ENGINE
+    assert h.engine_version == "v2"
+
+    captured = {}
+
+    def _capturing_run_pipeline(config):
+        captured.update(config)
+        return {"final_verdict": "EXECUTE"}
+
+    monkeypatch.setattr("main.run_pipeline", _capturing_run_pipeline)
+
+    result = hlr.evaluate_live_identity_request(h.hypothesis_id, _base_config())
+
+    assert result["identity"]["decision_type"] == hf.SINGLE_ENGINE
+    assert result["identity"]["engine"] == "wyckoff"
+    assert result["identity"]["engines_for_computation"] == ["wyckoff"]
+    assert captured["engines"]["enabled"] == {"wyckoff": True}
+    assert result["decision"] == "PROCEED"
+    assert result["gate_result"]["policy_lookup_result"] == hpol.GRANTED
+    # the fresh Gate call used the SAME attributed identity that was
+    # resolved -- never a bundle, never CONFLUENCE.
+    assert result["gate_result"]["engine"] == "wyckoff"
 
 
 # --- the positive scenario -------------------------------------------------
@@ -179,7 +233,8 @@ def test_asking_for_whatever_is_currently_granted_has_no_code_path():
             continue
         params = inspect.signature(fn).parameters
         identity_params = {"hypothesis_id"} & set(params)
-        assert identity_params or name == "build_governed_risk_config" or name == "build_governed_config", (
+        pure_config_helpers = {"build_governed_risk_config", "build_governed_config", "compute_preset_definition_hash"}
+        assert identity_params or name in pure_config_helpers, (
             f"{name}() has no way to be told WHICH identity to act on — this would be exactly the "
             f"forbidden 'whatever is granted' shape."
         )

@@ -13,7 +13,17 @@ Completes the chain, one link past the Live Decision Gate (Phase 7):
     resolve_governed_identity()   -- fetch the ALREADY-immutable
                 |                    Hypothesis row; this is the ONE
                 |                    authoritative source for every
-                |                    identity field this module uses
+                |                    identity field this module uses.
+                |                    Dispatches on the row's own
+                |                    decision_type (never inferred from
+                |                    `engine`'s string value) to either
+                |                    the SINGLE_ENGINE shape (exactly one
+                |                    engine, read directly off the
+                |                    hypothesis's own `engine` column) or
+                |                    the CONFLUENCE shape (the bundle's
+                |                    own engine list, `engine`=CONFLUENCE
+                |                    is the decision mechanism's own
+                |                    identity, never an engine's).
                 v
     build_governed_config()        -- construct a run_pipeline()-
                 |                     compatible config dict from that
@@ -29,16 +39,27 @@ Completes the chain, one link past the Live Decision Gate (Phase 7):
                 |                     from inside run_pipeline() itself)
                 v
     evaluate_live_decision()       -- Phase 7, UNCHANGED, reused as-is,
-                                       called ONLY when the live
-                                       computation itself produced
-                                       final_verdict == "EXECUTE"
-                                       (mirrors scheduler.py's own
-                                       existing "only gate an EXECUTE"
-                                       pattern) -- Kill Switch -> Policy
-                                       -> Live Decision, fresh, exactly
-                                       as already locked; this module
-                                       never reorders, bypasses, or
-                                       duplicates that gate.
+                |                      called ONLY when the live
+                |                      computation itself produced
+                |                      final_verdict == "EXECUTE"
+                |                      (mirrors scheduler.py's own
+                |                      existing "only gate an EXECUTE"
+                |                      pattern) -- Kill Switch -> Policy
+                |                      -> Live Decision, fresh, exactly
+                |                      as already locked; this module
+                |                      never reorders, bypasses, or
+                |                      duplicates that gate.
+                v
+    storage.hypothesis_live_request.record_live_identity_request()
+                                    -- persists the full governed risk
+                                       provenance snapshot (risk_preset +
+                                       preset_definition_hash +
+                                       risk_parameters_used_json) as an
+                                       IMMUTABLE record, never re-derived
+                                       later from RISK_PRESETS or config/
+                                       risk.yaml — a future edit to what a
+                                       preset name means numerically can
+                                       never reinterpret a past decision.
 
 NOT part of this module's scope (deferred, per the operator's own
 Roster Contract): how a hypothesis_id gets onto the Roster in the first
@@ -57,10 +78,11 @@ NON-NEGOTIABLE invariants (operator's own locked Phase 8C contract):
      there is no "whatever is currently granted" code path; that shape
      of call is structurally impossible (no such parameter exists).
   3. NO inference from engine_outputs/contributions/voting/contradiction
-     veto. The governed identity (decision_type, decision_version,
-     bundle_id, symbol, timeframe, risk_preset) is fixed BEFORE
-     run_pipeline() is ever called, from the resolved hypothesis alone
-     -- never derived from what the confluence computation concludes.
+     veto. The governed identity (decision_type, decision_version or
+     engine_version, bundle_id, symbol, timeframe, risk_preset) is fixed
+     BEFORE run_pipeline() is ever called, from the resolved hypothesis
+     alone -- never derived from what the confluence computation
+     concludes.
   4. NO inference from live numeric risk config. build_governed_risk_
      config() reads ONLY backtest.research_matrix.RISK_PRESETS (the
      SAME fixed, named presets Phases 1-8B already use) -- never
@@ -72,7 +94,10 @@ NON-NEGOTIABLE invariants (operator's own locked Phase 8C contract):
      governed_config()'s own docstring for exactly how and why).
   6. NO change to main.py, scheduler.py, or backtest.hypothesis_
      decision_gate.py. All three are reused exactly as they already
-     exist.
+     exist, and check_edge_gate()'s existing EdgeNotProvenError is never
+     caught or absorbed here (see evaluate_live_identity_request()'s own
+     docstring, and tests/test_hypothesis_live_request_edge_gate.py's
+     real, non-mocked proof).
   7. Policy Registry remains authorization-only. This module never asks
      it "what should I run" -- only, via the unchanged Phase 7 Gate,
      "is the identity I already decided to compute now authorized."
@@ -86,12 +111,13 @@ NON-NEGOTIABLE invariants (operator's own locked Phase 8C contract):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
 from backtest.hypothesis_decision_gate import evaluate_live_decision
 from backtest.hypothesis_execution import HypothesisExecutionError
-from backtest.hypothesis_factory import CONFLUENCE
+from backtest.hypothesis_factory import CONFLUENCE, SINGLE_ENGINE
 from backtest.research_matrix import RISK_PRESETS
 
 
@@ -100,44 +126,66 @@ def resolve_governed_identity(hypothesis_id: str) -> dict[str, Any]:
     identity: the hypothesis row itself, re-fetched fresh from storage
     (never trusted from a caller-supplied dict — this function's own
     signature accepts only the id string). Raises HypothesisExecutionError
-    for an unknown hypothesis_id, or for a hypothesis whose decision_type
-    is not CONFLUENCE — Phase 8C's live path supports CONFLUENCE
-    hypotheses only today (a SINGLE_ENGINE live path was never part of
-    any locked 8A/8B/8C contract; adding one now would be scope creep).
+    for an unknown hypothesis_id or an unrecognized decision_type.
+
+    Dispatches on the row's own `decision_type` — never inferred from
+    `engine`'s string value:
+
+      SINGLE_ENGINE — `engines_for_computation` is exactly the
+      hypothesis's own single `engine` (attribution is direct: this IS
+      the engine, not a guess from a bundle or a score). `bundle` stays
+      None — a single-engine hypothesis has no bundle to speak of.
+
+      CONFLUENCE — `engines_for_computation` is the bundle's own engine
+      list, parsed fresh from the hypothesis's persisted bundle_json.
+      `engine`/`engine_version` on a CONFLUENCE row are literally
+      CONFLUENCE/decision_version (Phase 8B) — the confluence decision
+      MECHANISM's own identity, never an engine's.
 
     Deliberately does NOT re-derive the hypothesis's own canonical
-    fingerprint the way backtest.hypothesis_execution._verify_
-    confluence_hypothesis_identity() does at BINDING time (Phase 3/8B) —
-    that check exists to protect against binding a tampered hypothesis
-    into a NEW Mission/cell. By the time a hypothesis has a real
-    Promotion and a real Policy Grant (Phase 5/6), its identity has
-    already been independently re-verified at each of those stages, and
-    no update path exists anywhere in this engine that could make it
-    drift afterward. Re-deriving it a third time here would be
-    re-litigating an already-structurally-guaranteed invariant, not
+    fingerprint the way backtest.hypothesis_execution's own _verify_
+    hypothesis_identity()/_verify_confluence_hypothesis_identity() do at
+    BINDING time (Phase 3/8B) — those checks exist to protect against
+    binding a tampered hypothesis into a NEW Mission/cell. By the time a
+    hypothesis has a real Promotion and a real Policy Grant (Phase 5/6),
+    its identity has already been independently re-verified at each of
+    those stages, and no update path exists anywhere in this engine that
+    could make it drift afterward. Re-deriving it a third time here would
+    be re-litigating an already-structurally-guaranteed invariant, not
     adding a new one."""
     from storage import hypothesis_factory as storage_hypothesis_factory
 
     h = storage_hypothesis_factory.get_hypothesis(hypothesis_id)
     if h is None:
         raise HypothesisExecutionError(f"resolve_governed_identity: unknown hypothesis_id {hypothesis_id!r}.")
-    if h["decision_type"] != CONFLUENCE:
+    decision_type = h.get("decision_type") or SINGLE_ENGINE
+    if decision_type not in (SINGLE_ENGINE, CONFLUENCE):
         raise HypothesisExecutionError(
-            f"resolve_governed_identity: hypothesis {hypothesis_id!r} has decision_type={h['decision_type']!r}, "
-            f"not {CONFLUENCE!r} — Phase 8C's live identity request path supports CONFLUENCE hypotheses only."
+            f"resolve_governed_identity: hypothesis {hypothesis_id!r} has an unrecognized decision_type "
+            f"{decision_type!r}."
         )
-    if not h.get("bundle_json"):
-        raise HypothesisExecutionError(
-            f"resolve_governed_identity: hypothesis {hypothesis_id!r} has decision_type={CONFLUENCE!r} but no "
-            f"bundle_json — cannot resolve a governed identity without its own persisted bundle."
-        )
-    bundle = json.loads(h["bundle_json"])
-    return {
+
+    identity: dict[str, Any] = {
         "hypothesis_id": hypothesis_id,
         "symbol": h["symbol"], "engine": h["engine"], "engine_version": h["engine_version"],
-        "timeframe": h["timeframe"], "risk_preset": h["risk_preset"], "decision_type": h["decision_type"],
-        "bundle_id": h["bundle_id"], "bundle_version": h["bundle_version"], "bundle": bundle,
+        "timeframe": h["timeframe"], "risk_preset": h["risk_preset"], "decision_type": decision_type,
+        "bundle_id": h.get("bundle_id"), "bundle_version": h.get("bundle_version"),
     }
+    if decision_type == CONFLUENCE:
+        if not h.get("bundle_json"):
+            raise HypothesisExecutionError(
+                f"resolve_governed_identity: hypothesis {hypothesis_id!r} has decision_type={CONFLUENCE!r} but "
+                f"no bundle_json — cannot resolve a governed identity without its own persisted bundle."
+            )
+        bundle = json.loads(h["bundle_json"])
+        identity["bundle"] = bundle
+        identity["engines_for_computation"] = list(bundle["engines"])
+        identity["timeframes_for_computation"] = list(bundle["timeframes"])
+    else:
+        identity["bundle"] = None
+        identity["engines_for_computation"] = [h["engine"]]
+        identity["timeframes_for_computation"] = [h["timeframe"]]
+    return identity
 
 
 def build_governed_risk_config(risk_preset: str) -> dict[str, float]:
@@ -182,6 +230,30 @@ def build_governed_risk_config(risk_preset: str) -> dict[str, float]:
     }
 
 
+def compute_preset_definition_hash(risk_preset: str) -> str:
+    """A canonical, deterministic hash of RISK_PRESETS[risk_preset]'s own
+    field/value representation (sorted keys, fixed separators — never
+    Python's default dict repr or an unsorted json.dumps, so the hash
+    can never differ merely due to formatting/key order). Detects ANY
+    future edit to what a preset name means numerically — even though
+    backtest.research_matrix.compute_cell_fingerprint() (Phase 1, locked,
+    unchanged) only fingerprints the preset NAME, not its definition (a
+    real, pre-existing gap on the research side; fixing THAT is out of
+    scope here, since it would mean touching the locked Matrix
+    fingerprint function — tracked as separate technical debt, not
+    conflated with this live-side provenance).
+
+    Raises HypothesisExecutionError for an unrecognized risk_preset —
+    same fail-closed rule as build_governed_risk_config()."""
+    preset = RISK_PRESETS.get(risk_preset)
+    if preset is None:
+        raise HypothesisExecutionError(
+            f"compute_preset_definition_hash: unknown risk_preset {risk_preset!r}."
+        )
+    canonical = json.dumps(preset, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def build_governed_config(identity: dict[str, Any], base_config: dict[str, Any]) -> dict[str, Any]:
     """Constructs a run_pipeline()-compatible config dict from a resolved
     governed identity, layered onto `base_config` (the caller's own
@@ -192,17 +264,22 @@ def build_governed_config(identity: dict[str, Any], base_config: dict[str, Any])
     per_trade_min all stay whatever the ambient config already has
     (Contract B: these are global safety controls, never preset inputs).
 
-    engines.enabled: set True for every engine named in the bundle, and
-    nothing else is set at all — confirmed by direct trace of main.py's
-    own build_active_engines() (`enabled.get(key, False)`) that an
-    OMITTED key is already treated identically to an explicit False, so
-    no other engine needs to be explicitly disabled here.
+    engines.enabled: set True for every engine in `identity[
+    "engines_for_computation"]` — for SINGLE_ENGINE this is exactly the
+    hypothesis's own one engine (direct attribution, never a bundle
+    guess); for CONFLUENCE it's the bundle's own engine list. Nothing
+    else is set at all — confirmed by direct trace of main.py's own
+    build_active_engines() (`enabled.get(key, False)`) that an OMITTED
+    key is already treated identically to an explicit False, so no other
+    engine needs to be explicitly disabled here.
 
-    data.timeframes: the bundle's own timeframe list (already validated
+    data.timeframes: `identity["timeframes_for_computation"]` — the
+    bundle's own timeframe list for CONFLUENCE (already validated
     single-timeframe by generate_confluence_hypotheses() at proposal
-    time). Confirmed by direct trace that run_pipeline() degrades
-    gracefully (an inert D1-confirmation gate, a logged warning) rather
-    than raising when "D1" is absent from this list — never a crash.
+    time), or the hypothesis's own single timeframe for SINGLE_ENGINE.
+    Confirmed by direct trace that run_pipeline() degrades gracefully
+    (an inert D1-confirmation gate, a logged warning) rather than raising
+    when "D1" is absent from this list — never a crash.
 
     The symbol-level `rr` neutralization (Contract B's most important
     finding): main.py::_symbol_config() resolves a per-symbol override
@@ -221,16 +298,15 @@ def build_governed_config(identity: dict[str, Any], base_config: dict[str, Any])
     carrying only `internal`/`rr` is added so the governed RR still
     applies."""
     risk_overrides = build_governed_risk_config(identity["risk_preset"])
-    bundle = identity["bundle"]
 
     governed = dict(base_config)
 
     governed["engines"] = dict(base_config.get("engines", {}))
-    governed["engines"]["enabled"] = {engine: True for engine in bundle["engines"]}
+    governed["engines"]["enabled"] = {engine: True for engine in identity["engines_for_computation"]}
 
     governed["data"] = dict(base_config.get("data", {}))
     governed["data"]["symbol"] = identity["symbol"]
-    governed["data"]["timeframes"] = list(bundle["timeframes"])
+    governed["data"]["timeframes"] = list(identity["timeframes_for_computation"])
 
     existing_entries = base_config.get("data", {}).get("twelve_data_symbols", [])
     governed_entries: list[dict[str, Any]] = []
@@ -262,12 +338,15 @@ def evaluate_live_identity_request(hypothesis_id: str, base_config: dict[str, An
     Note on an existing, UNCHANGED safety layer this call inherits: main.
     build_active_engines() (invoked inside run_pipeline()) already calls
     research.edge_gate.check_edge_gate(), which can raise
-    EdgeNotProvenError for a bundle engine with no research/results/
-    registry.json backing. This function does not catch that exception —
-    it is a genuine, structural configuration problem (a governed
-    identity naming an engine this system has no evidence for at all),
-    not an ordinary NO_TRADE outcome, and deliberately propagates loudly
-    rather than being silently absorbed.
+    EdgeNotProvenError for an engine this system has no proven-edge
+    backing for at all (read-only against research/results/registry.json
+    — never written by this module or anything it calls). This function
+    does not catch that exception — it is a genuine, structural
+    configuration problem, not an ordinary NO_TRADE outcome, and
+    deliberately propagates loudly rather than being silently absorbed
+    into a result that could be mistaken for an authorization decision.
+    Proven by a REAL (non-mocked) run_pipeline() call in tests/
+    test_hypothesis_live_request_edge_gate.py — not merely documented.
 
     Kill Switch -> Policy -> Live Decision (Phase 7, unchanged) is
     consulted ONLY when the live computation itself resolves to
@@ -277,33 +356,49 @@ def evaluate_live_identity_request(hypothesis_id: str, base_config: dict[str, An
     function's own overall `decision` is then NO_TRADE with a reason
     naming the live verdict, and gate_result stays None (the Gate was
     never asked, not asked-and-blocked — a distinct, honestly-recorded
-    reason, matching Phase 7's own 'missing vs unreadable' distinction)."""
+    reason, matching Phase 7's own 'missing vs unreadable' distinction).
+
+    Every call persists one immutable governed-risk-provenance record via
+    storage.hypothesis_live_request.record_live_identity_request() —
+    risk_preset, preset_definition_hash, and risk_parameters_used_json
+    (the EXACT numbers actually fed into this specific computation,
+    never re-derived later from RISK_PRESETS or config/risk.yaml) — the
+    same "every call is an independent, real observation, never
+    deduplicated" discipline Phase 7's own audit trail already uses."""
     identity = resolve_governed_identity(hypothesis_id)
     governed_config = build_governed_config(identity, base_config)
+    risk_overrides = build_governed_risk_config(identity["risk_preset"])
+    preset_definition_hash = compute_preset_definition_hash(identity["risk_preset"])
+    risk_parameters_used_json = json.dumps(risk_overrides, sort_keys=True, separators=(",", ":"))
 
     from main import run_pipeline
+    from storage import hypothesis_live_request as storage_hypothesis_live_request
 
     report = run_pipeline(governed_config)
     live_verdict = report.get("final_verdict")
 
     if live_verdict != "EXECUTE":
-        return {
-            "hypothesis_id": hypothesis_id,
-            "identity": identity,
-            "live_verdict": live_verdict,
-            "gate_result": None,
-            "decision": "NO_TRADE",
-            "decision_reason": f"live computation produced final_verdict={live_verdict!r}, not EXECUTE — nothing to gate.",
-        }
+        gate_result = None
+        overall_decision = "NO_TRADE"
+        overall_reason = f"live computation produced final_verdict={live_verdict!r}, not EXECUTE — nothing to gate."
+    else:
+        gate_result = evaluate_live_decision(
+            identity["symbol"], identity["engine"], identity["engine_version"],
+            identity["timeframe"], identity["risk_preset"],
+        )
+        overall_decision = gate_result["decision"]
+        overall_reason = gate_result["decision_reason"]
 
-    gate_result = evaluate_live_decision(
-        identity["symbol"], identity["engine"], identity["engine_version"], identity["timeframe"], identity["risk_preset"],
+    record = storage_hypothesis_live_request.record_live_identity_request(
+        hypothesis_id=hypothesis_id,
+        decision_type=identity["decision_type"],
+        symbol=identity["symbol"], engine=identity["engine"], engine_version=identity["engine_version"],
+        timeframe=identity["timeframe"], risk_preset=identity["risk_preset"],
+        preset_definition_hash=preset_definition_hash, risk_parameters_used_json=risk_parameters_used_json,
+        bundle_id=identity.get("bundle_id"),
+        live_verdict=live_verdict,
+        gate_decision=(gate_result["decision"] if gate_result else None),
+        gate_policy_event_id=(gate_result.get("policy_event_id") if gate_result else None),
+        decision=overall_decision, decision_reason=overall_reason,
     )
-    return {
-        "hypothesis_id": hypothesis_id,
-        "identity": identity,
-        "live_verdict": live_verdict,
-        "gate_result": gate_result,
-        "decision": gate_result["decision"],
-        "decision_reason": gate_result["decision_reason"],
-    }
+    return dict(record, identity=identity, gate_result=gate_result)

@@ -34,10 +34,12 @@ strings — never a symbol, engine, timeframe, or risk_preset. Every id is
 independently re-fetched from storage.hypothesis_factory (an unknown id
 is refused outright, loudly) and the resulting rows are re-verified as a
 whole by calling backtest.hypothesis_execution.build_execution_request()
-wholesale (never re-implemented) before anything is persisted. There is
-no code path here — or anywhere downstream of it — that turns a raw
-symbol/engine/timeframe/risk_preset combination directly into a Matrix
-cell without first passing through a real, stored Hypothesis identity:
+(SINGLE_ENGINE) or build_confluence_execution_request() (CONFLUENCE —
+Phase 8B) wholesale (never re-implemented) before anything is persisted.
+There is no code path here — or anywhere downstream of it — that turns a
+raw symbol/engine/timeframe/risk_preset combination directly into a
+Matrix cell without first passing through a real, stored Hypothesis
+identity:
 
     Hypothesis  ->  ExecutionRequest  ->  Mission
 
@@ -45,13 +47,25 @@ never:
 
     arbitrary Mission config  ->  Matrix Cell
 
+Phase 8B (2026-08-24): a real gap found and fixed while building Phase
+8C's own integration tests — this function was originally hard-wired to
+build_execution_request() only, meaning a CONFLUENCE hypothesis could
+never actually reach a Mission despite Phase 8B's own contract claiming
+the parallel path ran all the way through. Fixed by dispatching on the
+fetched hypothesis rows' own decision_type — never inferred, never
+defaulted, read directly off each row. A batch mixing SINGLE_ENGINE and
+CONFLUENCE hypotheses in one record_mission() call is refused outright
+(HypothesisExecutionError) — never silently split, never silently
+resolved by picking one builder for the whole batch.
+
 Reuses, never rebuilds: backtest.hypothesis_execution.build_execution_
-request() for all identity re-verification and cell construction, and
-storage.research_matrix.upsert_family()/upsert_cells() (both completely
-UNCHANGED by this module) for all Matrix persistence. This module adds
-zero new Cartesian-product, fingerprinting, Stage A/Stage B, promotion,
-ranking, or optimizer logic of its own — see this module's own docstring
-list of what it explicitly does NOT do, below.
+request()/build_confluence_execution_request() for all identity
+re-verification and cell construction, and storage.research_matrix.
+upsert_family()/upsert_cells() (both completely UNCHANGED by this
+module) for all Matrix persistence. This module adds zero new Cartesian-
+product, fingerprinting, Stage A/Stage B, promotion, ranking, or
+optimizer logic of its own — see this module's own docstring list of
+what it explicitly does NOT do, below.
 
 Explicitly out of scope for this module (operator's own Phase 4 list):
 no changes to generate_discovery_cells()/generate_hypotheses()/build_
@@ -66,7 +80,12 @@ import hashlib
 import json
 from typing import Any
 
-from backtest.hypothesis_execution import HypothesisExecutionError, build_execution_request
+from backtest.hypothesis_execution import (
+    HypothesisExecutionError,
+    build_confluence_execution_request,
+    build_execution_request,
+)
+from backtest.hypothesis_factory import CONFLUENCE, SINGLE_ENGINE
 
 
 def compute_mission_id(
@@ -187,7 +206,22 @@ def record_mission(
             )
         hypothesis_rows.append(row)
 
-    request = build_execution_request(
+    # Dispatch on the fetched rows' OWN decision_type -- never inferred,
+    # never defaulted, read directly off storage. A batch mixing
+    # SINGLE_ENGINE and CONFLUENCE hypotheses is refused outright: never
+    # silently split into two ExecutionRequests, never resolved by
+    # picking one builder for the whole batch (either choice would
+    # silently drop or misclassify some of the caller's own hypotheses).
+    decision_types = {row.get("decision_type") or SINGLE_ENGINE for row in hypothesis_rows}
+    if len(decision_types) > 1:
+        raise HypothesisExecutionError(
+            f"record_mission: hypothesis_ids mix decision_type values {sorted(decision_types)} in one call — "
+            f"a single Mission must bind hypotheses of exactly ONE decision_type; refusing to silently split "
+            f"or pick one for the whole batch."
+        )
+    decision_type = decision_types.pop()
+    builder = build_confluence_execution_request if decision_type == CONFLUENCE else build_execution_request
+    request = builder(
         hypothesis_rows, research_code_commit=research_code_commit, data_provider=data_provider,
     )
 

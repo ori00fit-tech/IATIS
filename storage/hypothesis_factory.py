@@ -13,6 +13,16 @@ families (a Hypothesis's evidence lives entirely in its own Matrix cell,
 joined by matrix_cell_fingerprint — this module never writes that table),
 and never touches research/results/registry.json, config.yaml, config/
 engines.yaml, or config/symbols.yaml. Discovery != Evidence != Promotion.
+
+Phase 8B (Confluence Governed Identity) — four additive columns:
+`decision_type` (NOT NULL, defaults to SINGLE_ENGINE for every
+pre-existing row via migration 24 — see storage/migrations.py), and
+`bundle_id`/`bundle_version`/`bundle_json` (all nullable, populated only
+for a CONFLUENCE hypothesis — see backtest.hypothesis_factory.Hypothesis's
+own docstring for the exact polymorphic contract). This module still
+computes nothing and validates nothing about what these values mean —
+it persists whatever backtest.hypothesis_factory.generate_hypotheses()/
+generate_confluence_hypotheses() already produced.
 """
 from __future__ import annotations
 
@@ -31,6 +41,10 @@ CREATE TABLE IF NOT EXISTS research_hypotheses (
     risk_preset               TEXT NOT NULL,
     claim                     TEXT NOT NULL,
     matrix_cell_fingerprint   TEXT NOT NULL,
+    decision_type             TEXT NOT NULL DEFAULT 'SINGLE_ENGINE',
+    bundle_id                 TEXT,
+    bundle_version            TEXT,
+    bundle_json               TEXT,
     proposed_at               TEXT NOT NULL
 )
 """
@@ -38,6 +52,10 @@ _DDL_HYPOTHESES_SYMBOL_IDX = "CREATE INDEX IF NOT EXISTS idx_rh_symbol ON resear
 _DDL_HYPOTHESES_ENGINE_IDX = "CREATE INDEX IF NOT EXISTS idx_rh_engine ON research_hypotheses(engine)"
 _DDL_HYPOTHESES_TIMEFRAME_IDX = "CREATE INDEX IF NOT EXISTS idx_rh_timeframe ON research_hypotheses(timeframe)"
 _DDL_HYPOTHESES_FINGERPRINT_IDX = "CREATE INDEX IF NOT EXISTS idx_rh_fingerprint ON research_hypotheses(matrix_cell_fingerprint)"
+# Phase 8B — the real discriminator (never inferred from `engine`'s string
+# value); indexed since "give me every CONFLUENCE hypothesis" is a real
+# forensic/dashboard query.
+_DDL_HYPOTHESES_DECISION_TYPE_IDX = "CREATE INDEX IF NOT EXISTS idx_rh_decision_type ON research_hypotheses(decision_type)"
 
 
 def _init(con) -> None:
@@ -46,6 +64,7 @@ def _init(con) -> None:
     con.execute(_DDL_HYPOTHESES_ENGINE_IDX)
     con.execute(_DDL_HYPOTHESES_TIMEFRAME_IDX)
     con.execute(_DDL_HYPOTHESES_FINGERPRINT_IDX)
+    con.execute(_DDL_HYPOTHESES_DECISION_TYPE_IDX)
 
 
 def _now_iso() -> str:
@@ -79,11 +98,13 @@ def record_hypotheses(hypotheses: list[Any]) -> dict[str, int]:
             con.execute(
                 """INSERT OR IGNORE INTO research_hypotheses
                    (hypothesis_id, symbol, engine, engine_version, timeframe, risk_preset,
-                    claim, matrix_cell_fingerprint, proposed_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    claim, matrix_cell_fingerprint, decision_type, bundle_id, bundle_version,
+                    bundle_json, proposed_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     h.hypothesis_id, h.symbol, h.engine, h.engine_version, h.timeframe,
-                    h.risk_preset, h.claim, h.matrix_cell_fingerprint, now,
+                    h.risk_preset, h.claim, h.matrix_cell_fingerprint, h.decision_type,
+                    h.bundle_id, h.bundle_version, h.bundle_json, now,
                 ),
             )
             inserted += 1
@@ -98,7 +119,8 @@ def get_hypothesis(hypothesis_id: str) -> dict[str, Any] | None:
 
 
 def list_hypotheses(
-    symbol: str | None = None, engine: str | None = None, timeframe: str | None = None, limit: int = 500,
+    symbol: str | None = None, engine: str | None = None, timeframe: str | None = None,
+    decision_type: str | None = None, limit: int = 500,
 ) -> list[dict[str, Any]]:
     query = "SELECT * FROM research_hypotheses WHERE 1=1"
     params: list[Any] = []
@@ -111,6 +133,9 @@ def list_hypotheses(
     if timeframe is not None:
         query += " AND timeframe=?"
         params.append(timeframe)
+    if decision_type is not None:
+        query += " AND decision_type=?"
+        params.append(decision_type)
     query += " ORDER BY proposed_at DESC LIMIT ?"
     params.append(limit)
     with d1_client.d1_connection() as con:

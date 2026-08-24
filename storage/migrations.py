@@ -409,6 +409,35 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             "CREATE INDEX IF NOT EXISTS idx_rmc_source_hypothesis ON research_matrix_cells(source_hypothesis_id)",
         ],
     ),
+    (
+        24,
+        "hypothesis_confluence_columns",
+        # Hypothesis Discovery Engine Phase 8B — Confluence Governed
+        # Identity (2026-08-24): decision_type becomes the real
+        # discriminator between a SINGLE_ENGINE hypothesis (the historical
+        # shape) and a CONFLUENCE one — never inferred from the `engine`
+        # column's string value. Every pre-existing row is a SINGLE_ENGINE
+        # hypothesis by construction (generate_confluence_hypotheses()
+        # did not exist before this migration), so DEFAULT 'SINGLE_ENGINE'
+        # correctly and losslessly backfills every historical row with no
+        # reinterpretation of its own meaning. bundle_id/bundle_version/
+        # bundle_json stay NULL for every SINGLE_ENGINE row (a single-
+        # engine bundle is always re-derivable from scalar identity
+        # fields — see backtest.hypothesis_execution's own module
+        # docstring — so nothing is lost by not persisting one). Reuses
+        # the same "ALTER TABLE research_hypotheses" guard added below in
+        # apply_migrations() (bare _DDL_HYPOTHESES only, never the full
+        # _init() — see migration 21's own incident postmortem for why
+        # that distinction matters). Diagnostic/query-support only — never
+        # a gate, never registry.json/config.yaml.
+        [
+            "ALTER TABLE research_hypotheses ADD COLUMN decision_type TEXT NOT NULL DEFAULT 'SINGLE_ENGINE'",
+            "ALTER TABLE research_hypotheses ADD COLUMN bundle_id TEXT",
+            "ALTER TABLE research_hypotheses ADD COLUMN bundle_version TEXT",
+            "ALTER TABLE research_hypotheses ADD COLUMN bundle_json TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_rh_decision_type ON research_hypotheses(decision_type)",
+        ],
+    ),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -491,6 +520,9 @@ def apply_migrations() -> list[str]:
             if any("ALTER TABLE research_matrix_families" in s for s in statements):
                 from storage import research_matrix
                 con.execute(research_matrix._DDL_FAMILIES)
+            if any("ALTER TABLE research_hypotheses" in s for s in statements):
+                from storage import hypothesis_factory
+                con.execute(hypothesis_factory._DDL_HYPOTHESES)
             # NOTE: these guards call the bare CREATE TABLE IF NOT EXISTS
             # DDL only -- matching every other guard's own convention in
             # this function (decision_db._CREATE_DECISIONS, reconciliation.

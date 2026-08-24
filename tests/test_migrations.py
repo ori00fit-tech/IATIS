@@ -346,3 +346,86 @@ def test_apply_migrations_safe_never_raises(monkeypatch):
 
 def test_version_zero_before_any_apply():
     assert _version() == 0
+
+
+# --- Phase 8B (Confluence Governed Identity, 2026-08-24) regression --------
+
+
+def _legacy_pre_phase8b_research_hypotheses_schema(con) -> None:
+    """The EXACT research_hypotheses shape from before Phase 8B (no
+    decision_type/bundle_id/bundle_version/bundle_json columns) —
+    hand-written, not imported from storage.hypothesis_factory's own
+    _DDL_HYPOTHESES (which already includes them for fresh installs), so
+    this test genuinely exercises migrating an OLD production table."""
+    con.execute("""
+        CREATE TABLE research_hypotheses (
+            hypothesis_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, engine TEXT NOT NULL,
+            engine_version TEXT NOT NULL, timeframe TEXT NOT NULL, risk_preset TEXT NOT NULL,
+            claim TEXT NOT NULL, matrix_cell_fingerprint TEXT NOT NULL, proposed_at TEXT NOT NULL
+        )
+    """)
+    con.execute(
+        "INSERT INTO research_hypotheses (hypothesis_id, symbol, engine, engine_version, timeframe, "
+        "risk_preset, claim, matrix_cell_fingerprint, proposed_at) VALUES "
+        "('DISCOVERY-HYPOTHESIS-preexisting', 'EURUSD', 'price_action', 'v2', 'H1', 'balanced', "
+        "'pre-existing hypothesis claim', 'preexisting', '2026-01-01T00:00:00+00:00')"
+    )
+    con.commit()
+
+
+def test_old_research_hypotheses_schema_migrates_to_current(fake_d1):
+    """Migration 24, reproduced and proven: an old production research_
+    hypotheses table (no decision_type/bundle_id/bundle_version/
+    bundle_json) migrates cleanly to LATEST_VERSION, ends up with all
+    four columns AND the new index, and its pre-existing (SINGLE_ENGINE,
+    by construction — generate_confluence_hypotheses() did not exist
+    before this migration) row survives untouched, correctly backfilled
+    to decision_type='SINGLE_ENGINE', with the three bundle columns
+    NULL — never fabricated."""
+    _legacy_pre_phase8b_research_hypotheses_schema(fake_d1)
+
+    applied = migrations.apply_migrations()
+    assert "hypothesis_confluence_columns" in applied
+    assert _version() == migrations.LATEST_VERSION
+
+    cols = {r[1] for r in fake_d1.execute("PRAGMA table_info(research_hypotheses)").fetchall()}
+    assert {"decision_type", "bundle_id", "bundle_version", "bundle_json"} <= cols
+
+    idx_names = {
+        r[0] for r in fake_d1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='research_hypotheses'"
+        ).fetchall()
+    }
+    assert "idx_rh_decision_type" in idx_names
+
+    row = dict(fake_d1.execute(
+        "SELECT * FROM research_hypotheses WHERE hypothesis_id='DISCOVERY-HYPOTHESIS-preexisting'"
+    ).fetchone())
+    assert row["symbol"] == "EURUSD"  # untouched
+    assert row["decision_type"] == "SINGLE_ENGINE"
+    assert row["bundle_id"] is None
+    assert row["bundle_version"] is None
+    assert row["bundle_json"] is None
+
+
+def test_old_research_hypotheses_schema_migration_is_idempotent_on_reapply(fake_d1):
+    _legacy_pre_phase8b_research_hypotheses_schema(fake_d1)
+    migrations.apply_migrations()
+    assert migrations.apply_migrations() == []
+    assert _version() == migrations.LATEST_VERSION
+
+
+def test_migration_touched_tables_includes_research_hypotheses():
+    tables = migrations._migration_touched_tables()
+    assert "research_hypotheses" in tables
+
+
+def test_migration_guard_for_research_hypotheses_never_calls_the_full_init():
+    """Same static proof as migration 22/23's own regression test,
+    extended to the new guard: bare _DDL_HYPOTHESES only, never the
+    module's full _init(con)."""
+    import inspect
+
+    source = inspect.getsource(migrations.apply_migrations)
+    guard_block = source[source.index('if any("ALTER TABLE research_hypotheses"'):]
+    assert "hypothesis_factory._init(con)" not in guard_block.split("for sql in statements")[0]

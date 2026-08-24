@@ -77,13 +77,30 @@ for ALL bundle construction/validation (both to re-derive a hypothesis's
 own canonical fingerprint for verification, and to build the real,
 commit-stamped MatrixCellSpec actually persisted) — this module adds zero
 new Cartesian-product or bundle-shaping logic of its own.
+
+Phase 8B (Confluence Governed Identity, 2026-08-24) — build_confluence_
+execution_request() below is the PARALLEL confluence counterpart to
+build_execution_request(): the SAME governance guarantees (immutability,
+no auto-selection, no config/registry access, no Stage A bypass, no
+promotion, structural collision-impossibility), but re-deriving via
+backtest.research_matrix.generate_matrix_cells() (already confluence-
+bundle-capable, unchanged since before Phase 1) instead of generate_
+discovery_cells() (which validates against ENGINE_KEYS and would reject
+a "CONFLUENCE" engine name outright). build_execution_request() itself
+is UNCHANGED except for one additive guard — see its own docstring
+below — that refuses a CONFLUENCE-typed hypothesis outright rather than
+letting it fail deeper inside generate_discovery_cells() with a less
+specific error. Both functions share the SAME ExecutionRequest shape;
+neither ever accepts a hypothesis of the other's decision_type.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
-from backtest.research_matrix import MatrixCellSpec, generate_discovery_cells
+from backtest.hypothesis_factory import CONFLUENCE, SINGLE_ENGINE
+from backtest.research_matrix import MatrixCellSpec, generate_discovery_cells, generate_matrix_cells
 
 
 class HypothesisExecutionError(ValueError):
@@ -179,7 +196,14 @@ def build_execution_request(
     research_matrix.upsert_cells() is safely deduplicated there exactly
     like any other repeated cell. A DIFFERENT research_code_commit
     produces a genuinely different, coexisting cell — never a collision,
-    never an overwrite of the earlier one (guardrail 8's corollary)."""
+    never an overwrite of the earlier one (guardrail 8's corollary).
+
+    Phase 8B: refuses (HypothesisExecutionError) any hypothesis whose own
+    stored `decision_type` is not SINGLE_ENGINE — the identity-boundary
+    guard that keeps this function's own contract from silently drifting
+    to accept a CONFLUENCE-typed row it was never built to handle. See
+    build_confluence_execution_request() below for that row's own,
+    parallel binding path."""
     if not hypotheses:
         raise HypothesisExecutionError(
             "hypotheses must be non-empty — an execution request always binds at least one explicitly-named "
@@ -192,10 +216,124 @@ def build_execution_request(
         hypothesis_id = h["hypothesis_id"]
         if hypothesis_id in cell_id_by_hypothesis:
             continue  # idempotent within one request
+        decision_type = h.get("decision_type") or SINGLE_ENGINE
+        if decision_type != SINGLE_ENGINE:
+            raise HypothesisExecutionError(
+                f"build_execution_request: hypothesis {hypothesis_id!r} has decision_type={decision_type!r}, "
+                f"not {SINGLE_ENGINE!r} — this function only binds SINGLE_ENGINE hypotheses; use "
+                f"build_confluence_execution_request() for a {CONFLUENCE!r} hypothesis (identity-boundary "
+                f"guard, never a silent substitution)."
+            )
         _verify_hypothesis_identity(h)
         real_cells = generate_discovery_cells(
             symbols=[h["symbol"]], engines=[h["engine"]], timeframes=[h["timeframe"]],
             engine_versions={h["engine"]: (h["engine_version"],)}, risk_presets=[h["risk_preset"]],
+            data_provider=data_provider, research_code_commit=research_code_commit,
+        )
+        spec = real_cells[0]
+        cells.append(spec)
+        cell_id_by_hypothesis[hypothesis_id] = spec.cell_id
+
+    return ExecutionRequest(
+        hypothesis_ids=tuple(cell_id_by_hypothesis.keys()),
+        cells=tuple(cells),
+        cell_id_by_hypothesis=cell_id_by_hypothesis,
+    )
+
+
+def _canonical_confluence_cell_for_hypothesis(h: dict[str, Any]) -> MatrixCellSpec:
+    """The CONFLUENCE counterpart to _canonical_cell_for_hypothesis()
+    above. Unlike a single-engine bundle — which generate_discovery_
+    cells() deterministically RECONSTRUCTS from just (engine, timeframe),
+    because a single-engine bundle's own shape is a pure function of
+    those scalars — a confluence bundle's full composition (engines/
+    indicators/context_filters) is genuinely independent information
+    that cannot be re-derived from scalar identity fields alone. So this
+    re-verifies from the hypothesis's own STORED `bundle_json` (persisted
+    verbatim at generation time by backtest.hypothesis_factory.
+    generate_confluence_hypotheses()) rather than reconstructing it from
+    nothing — re-computing the fingerprint from that stored bundle via
+    generate_matrix_cells() (unchanged) and confirming it still matches
+    what was actually proposed is what "re-verify" means for this shape:
+    it catches a tampered bundle_json the same way _verify_hypothesis_
+    identity() catches a tampered scalar field."""
+    if not h.get("bundle_json"):
+        raise HypothesisExecutionError(
+            f"hypothesis {h.get('hypothesis_id')!r}: decision_type={CONFLUENCE!r} but bundle_json is missing "
+            f"— a confluence hypothesis cannot be re-verified without its own persisted bundle."
+        )
+    bundle = json.loads(h["bundle_json"])
+    cells = generate_matrix_cells(
+        symbols=[h["symbol"]], bundles=[bundle], risk_presets=[h["risk_preset"]],
+        engine_variants_choices=({CONFLUENCE: h["engine_version"]},),
+    )
+    if len(cells) != 1:
+        raise HypothesisExecutionError(
+            f"hypothesis {h.get('hypothesis_id')!r}: expected exactly one canonical cell, got {len(cells)} — "
+            f"malformed hypothesis row."
+        )
+    return cells[0]
+
+
+def _verify_confluence_hypothesis_identity(h: dict[str, Any]) -> None:
+    """The CONFLUENCE counterpart to _verify_hypothesis_identity() above —
+    same structural immutability proof, re-derived from the hypothesis's
+    own stored bundle rather than reconstructed from scalars."""
+    canonical = _canonical_confluence_cell_for_hypothesis(h)
+    if canonical.fingerprint != h.get("matrix_cell_fingerprint"):
+        raise HypothesisExecutionError(
+            f"hypothesis {h.get('hypothesis_id')!r} fingerprint mismatch: stored "
+            f"{h.get('matrix_cell_fingerprint')!r}, re-derived {canonical.fingerprint!r} — refusing to bind a "
+            f"hypothesis whose own identity appears to have drifted since it was proposed."
+        )
+
+
+def build_confluence_execution_request(
+    hypotheses: list[dict[str, Any]], *,
+    research_code_commit: str | None = None,
+    data_provider: str | None = None,
+) -> ExecutionRequest:
+    """Phase 8B — the PARALLEL confluence counterpart to build_execution_
+    request() above. Same signature shape, same ExecutionRequest return
+    type, same guardrails (non-empty list required — guardrail 3, no
+    auto-selection; per-hypothesis re-verification — guardrail 1; never
+    touches config/registry — guardrail 4; produces ordinary QUEUED-bound
+    cells only — guardrail 5/6; structurally cannot collide across a
+    different research_code_commit — guardrail 8's corollary) — the only
+    difference is which cell-generation function re-derives and
+    constructs the cell: generate_matrix_cells() (confluence-bundle-
+    capable, unchanged since before Phase 1) instead of generate_
+    discovery_cells() (single-engine only, validates against ENGINE_KEYS).
+
+    Refuses (HypothesisExecutionError) any hypothesis whose own stored
+    `decision_type` is not CONFLUENCE — the symmetric identity-boundary
+    guard to build_execution_request()'s own SINGLE_ENGINE-only check;
+    neither function ever silently accepts the other's hypothesis shape."""
+    if not hypotheses:
+        raise HypothesisExecutionError(
+            "hypotheses must be non-empty — an execution request always binds at least one explicitly-named "
+            "hypothesis; this function never selects one on its own."
+        )
+
+    cells: list[MatrixCellSpec] = []
+    cell_id_by_hypothesis: dict[str, str] = {}
+    for h in hypotheses:
+        hypothesis_id = h["hypothesis_id"]
+        if hypothesis_id in cell_id_by_hypothesis:
+            continue  # idempotent within one request
+        decision_type = h.get("decision_type") or SINGLE_ENGINE
+        if decision_type != CONFLUENCE:
+            raise HypothesisExecutionError(
+                f"build_confluence_execution_request: hypothesis {hypothesis_id!r} has "
+                f"decision_type={decision_type!r}, not {CONFLUENCE!r} — this function only binds CONFLUENCE "
+                f"hypotheses; use build_execution_request() for a {SINGLE_ENGINE!r} hypothesis "
+                f"(identity-boundary guard, never a silent substitution)."
+            )
+        _verify_confluence_hypothesis_identity(h)
+        bundle = json.loads(h["bundle_json"])
+        real_cells = generate_matrix_cells(
+            symbols=[h["symbol"]], bundles=[bundle], risk_presets=[h["risk_preset"]],
+            engine_variants_choices=({CONFLUENCE: h["engine_version"]},),
             data_provider=data_provider, research_code_commit=research_code_commit,
         )
         spec = real_cells[0]

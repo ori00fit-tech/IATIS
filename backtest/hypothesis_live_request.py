@@ -364,7 +364,40 @@ def evaluate_live_identity_request(hypothesis_id: str, base_config: dict[str, An
     (the EXACT numbers actually fed into this specific computation,
     never re-derived later from RISK_PRESETS or config/risk.yaml) — the
     same "every call is an independent, real observation, never
-    deduplicated" discipline Phase 7's own audit trail already uses."""
+    deduplicated" discipline Phase 7's own audit trail already uses.
+
+    PHASE 15D CONTROLLED EXTENSION (operator's own locked Governance
+    Decision — a controlled extension of this already-accepted module,
+    not a formal reopening): the returned dict also carries
+    `decision_snapshot` — EITHER None (confluence did not pass; nothing
+    to evaluate downstream), OR a dict with EXACTLY `bar_time`, `side`,
+    `entry_price`, `stop_loss`, `take_profit`, derived directly from the
+    SAME `report` this function already computes, at the SAME point it
+    already has `report` in hand — never a second, separate computation,
+    never a re-run of run_pipeline(). This extension changes NOTHING
+    about `final_verdict`/`decision`/`decision_reason`/`gate_decision`/
+    `request_id`/`hypothesis_id` or any existing field's value or
+    meaning (proven by tests/test_hypothesis_live_request*.py passing
+    completely unmodified). `side` is derived from `report`'s own
+    `confluence.vote.winning_bias` via the SAME BULLISH/BEARISH mapping
+    execution/trade_executor.py already uses privately — duplicated
+    here deliberately (a 3-line pure mapping) rather than imported, so
+    this module's own non-negotiable #9 (never imports execution/*.py)
+    stays intact. `decision_snapshot` is all-or-nothing: whenever
+    `entry_price` is present, `bar_time`/`stop_loss`/`take_profit` and a
+    resolvable BULLISH/BEARISH `side` MUST all be present too, or this
+    function raises HypothesisExecutionError for a structurally
+    inconsistent report — it never returns a partially-populated
+    snapshot. `bar_time` is the market bar timestamp `report` itself was
+    computed from — never this call's own wall-clock time — because it
+    is the one and only `T_D` any future look-ahead check may ever
+    compare subsequent bars against (backtest.shadow_decision_snapshot,
+    Phase 15D, consumes this verbatim and never substitutes a capture
+    timestamp for it). This module itself never persists
+    `decision_snapshot` anywhere — Phase 15D's own storage layer, one
+    layer up, owns that entirely; this function only computes and
+    returns it in-memory, exactly once per call, matching every other
+    value this function already returns."""
     identity = resolve_governed_identity(hypothesis_id)
     governed_config = build_governed_config(identity, base_config)
     risk_overrides = build_governed_risk_config(identity["risk_preset"])
@@ -376,6 +409,32 @@ def evaluate_live_identity_request(hypothesis_id: str, base_config: dict[str, An
 
     report = run_pipeline(governed_config)
     live_verdict = report.get("final_verdict")
+
+    decision_snapshot: dict[str, Any] | None = None
+    if report.get("entry_price") is not None:
+        bias = (report.get("confluence") or {}).get("vote", {}).get("winning_bias")
+        if bias not in ("BULLISH", "BEARISH"):
+            raise HypothesisExecutionError(
+                f"evaluate_live_identity_request: entry_price exists but winning_bias={bias!r} "
+                f"is not BULLISH/BEARISH -- structurally inconsistent report."
+            )
+        bar_time = report.get("bar_time")
+        snapshot_stop_loss = report.get("stop_loss")
+        snapshot_take_profit = report.get("take_profit")
+        if bar_time is None or snapshot_stop_loss is None or snapshot_take_profit is None:
+            raise HypothesisExecutionError(
+                f"evaluate_live_identity_request: entry_price exists but bar_time={bar_time!r}/"
+                f"stop_loss={snapshot_stop_loss!r}/take_profit={snapshot_take_profit!r} is missing -- "
+                f"structurally inconsistent report (all four must co-exist whenever confluence "
+                f"passed); this is a broken snapshot, never a partial one."
+            )
+        decision_snapshot = {
+            "bar_time": bar_time,
+            "side": "BUY" if bias == "BULLISH" else "SELL",
+            "entry_price": report["entry_price"],
+            "stop_loss": snapshot_stop_loss,
+            "take_profit": snapshot_take_profit,
+        }
 
     if live_verdict != "EXECUTE":
         gate_result = None
@@ -401,4 +460,4 @@ def evaluate_live_identity_request(hypothesis_id: str, base_config: dict[str, An
         gate_policy_event_id=(gate_result.get("policy_event_id") if gate_result else None),
         decision=overall_decision, decision_reason=overall_reason,
     )
-    return dict(record, identity=identity, gate_result=gate_result)
+    return dict(record, identity=identity, gate_result=gate_result, decision_snapshot=decision_snapshot)

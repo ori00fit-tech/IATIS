@@ -97,6 +97,10 @@ def test_duplicate_timestamps_are_caught_by_the_real_validator_never_silently_ha
                                     provenance=dtm.LIVE_PROVIDER_DATA)
     assert result["validation_status"] == dtq.INVALID
     assert any("OHLC validation failed" in r for r in result["reasons"])
+    # the operator's own required closure: a dataset identity must never
+    # be computed from data whose row order isn't uniquely determined --
+    # dataset_hash must be None here, never an order-dependent value.
+    assert result["manifest"]["dataset_hash"] is None
 
 
 # --- critical_window boundary inclusivity -----------------------------------

@@ -51,19 +51,38 @@ def _now_iso() -> str:
 def compute_dataset_hash(df: pd.DataFrame, symbol: str, timeframe: str) -> str:
     """A canonical, deterministic sha256 over the dataset's own real
     content -- never the raw provider payload, never pandas' own
-    internal representation. Rows are sorted by timestamp (order-
-    independent); each OHLCV value is formatted to a fixed numeric
-    precision (so e.g. 1.1 and 1.10000000000000001 -- the same float
-    value through two different code paths -- always hash identically);
-    volume defaults to 0.0 when absent, matching core/data_providers.py's
-    own established convention for a provider that doesn't report it.
+    internal representation. Rows are sorted by timestamp; each OHLCV
+    value is formatted to a fixed numeric precision (so e.g. 1.1 and
+    1.10000000000000001 -- the same float value through two different
+    code paths -- always hash identically); volume defaults to 0.0 when
+    absent, matching core/data_providers.py's own established convention
+    for a provider that doesn't report it.
 
-    Raises DataTrustError if the required OHLC columns aren't present --
-    there is no canonical content to hash without them."""
+    Sorting by timestamp alone only produces a UNIQUE row order when
+    every timestamp is unique -- two rows sharing the same timestamp
+    have no defined relative order from sorting, so their post-sort
+    sequence (and therefore the hash) would depend on their ORIGINAL
+    input order, silently defeating the "same content -> same identity"
+    guarantee this function exists to provide. core.data_validator.
+    validate_ohlcv() already rejects duplicate timestamps outright
+    (df.index.duplicated().any()) -- rather than silently trusting that
+    some earlier caller ran it first, this function enforces that exact
+    same precondition itself (a narrow, one-line check of ITS OWN
+    requirement, never a reimplementation of validate_ohlcv() as a
+    whole) and refuses to hash data it cannot canonicalize uniquely.
+
+    Raises DataTrustError if the required OHLC columns aren't present, or
+    if any timestamp is duplicated -- there is no canonical content to
+    hash in either case."""
     missing = [c for c in _HASH_REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise DataTrustError(
             f"compute_dataset_hash: missing required column(s) {missing} -- cannot compute a canonical hash."
+        )
+    if df.index.duplicated().any():
+        raise DataTrustError(
+            "compute_dataset_hash: duplicate timestamps found -- sorting by timestamp alone cannot "
+            "produce a unique row order, so no canonical hash can be computed."
         )
     sorted_df = df.sort_index()
     rows = []

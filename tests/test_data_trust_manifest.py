@@ -78,6 +78,27 @@ def test_compute_dataset_hash_rejects_missing_ohlc_columns():
         dtm.compute_dataset_hash(df, "EURUSD", "H1")
 
 
+def test_compute_dataset_hash_rejects_duplicate_timestamps():
+    """Sorting by timestamp alone does not uniquely order two rows that
+    share the same timestamp -- compute_dataset_hash() must refuse
+    rather than silently produce an order-dependent hash."""
+    df = _df(n=5)
+    dup = pd.concat([df, df.iloc[[0]]])  # a genuine duplicate timestamp
+    with pytest.raises(dtm.DataTrustError, match="duplicate timestamps"):
+        dtm.compute_dataset_hash(dup, "EURUSD", "H1")
+
+
+def test_compute_dataset_hash_duplicate_rejection_is_order_independent():
+    """The refusal itself must not depend on which permutation of the
+    duplicate rows appears first -- both orderings are refused alike."""
+    df = _df(n=5)
+    dup_a = pd.concat([df, df.iloc[[0]]])
+    dup_b = pd.concat([df.iloc[[0]], df])
+    for dup in (dup_a, dup_b):
+        with pytest.raises(dtm.DataTrustError, match="duplicate timestamps"):
+            dtm.compute_dataset_hash(dup, "EURUSD", "H1")
+
+
 # --- build_manifest ------------------------------------------------------
 
 
@@ -125,6 +146,16 @@ def test_build_manifest_dataset_hash_is_none_when_columns_are_missing_never_a_cr
                                                                    reasons=["OHLC validation failed: ..."]))
     assert manifest["dataset_hash"] is None
     assert manifest["validation_status"] == "INVALID"
+
+
+def test_build_manifest_dataset_hash_is_none_for_duplicate_timestamps_never_order_dependent():
+    df = _df(n=5)
+    dup = pd.concat([df, df.iloc[[0]]])
+    manifest = dtm.build_manifest(dup, symbol="EURUSD", timeframe="H1", provider="twelve_data",
+                                   provenance=dtm.LIVE_PROVIDER_DATA,
+                                   quality_result=_quality_result(validation_status="INVALID",
+                                                                   reasons=["OHLC validation failed: ..."]))
+    assert manifest["dataset_hash"] is None
 
 
 def test_build_manifest_missing_bar_count_is_none_when_not_assessed():

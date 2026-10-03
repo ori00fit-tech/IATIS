@@ -307,6 +307,168 @@ def test_never_calls_run_pipeline():
     assert "run_pipeline(" not in body
 
 
+# ---------------------------------------------------------------------------
+# Historical Outcome Stability + Non-Causal Walk Value Stability (#1) --
+# provider_at_observation and walk_ohlc controlled additive extension
+# ---------------------------------------------------------------------------
+
+def _df_ohlc(rows: list[tuple[str, float, float, float, float]]) -> pd.DataFrame:
+    """rows: list of (iso_timestamp, open, high, low, close) -- distinct
+    values per field, unlike this file's own _df() helper (which sets
+    open=close=high), so OHLC capture can be verified field-by-field."""
+    index = pd.to_datetime([r[0] for r in rows], utc=True)
+    return pd.DataFrame(
+        {
+            "open": [r[1] for r in rows], "high": [r[2] for r in rows],
+            "low": [r[3] for r in rows], "close": [r[4] for r in rows],
+            "volume": [0.0] * len(rows),
+        },
+        index=index,
+    )
+
+
+def test_provider_at_observation_is_captured_from_fetch_with_failover(monkeypatch):
+    snapshot = _snapshot()
+    df = _df([("2026-01-01T04:00:00+00:00", 1.2320, 1.2310)])
+    _patch_fetch(monkeypatch, df)  # _patch_fetch's fake returns "fake_provider"
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["provider_at_observation"] == "fake_provider"
+
+
+def test_walk_ohlc_captures_every_walked_bar_on_sl_hit(monkeypatch):
+    snapshot = _snapshot()  # BUY, SL=1.2300, TP=1.2450
+    df = _df_ohlc([
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),  # walked, no hit
+        ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),  # SL hit (low <= 1.2300)
+    ])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T09:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.SL_HIT
+    walk = result["walk_ohlc"]
+    assert walk is not None
+    assert len(walk) == 2  # BOTH bars -- the non-causal one too, not just the causal hit
+    assert walk[0] == {
+        "bar_time": "2026-01-01T04:00:00+00:00",
+        "open": 1.2315, "high": 1.2320, "low": 1.2310, "close": 1.2318,
+    }
+    assert walk[1] == {
+        "bar_time": "2026-01-01T08:00:00+00:00",
+        "open": 1.2312, "high": 1.2320, "low": 1.2290, "close": 1.2295,
+    }
+
+
+def test_walk_ohlc_captures_single_bar_on_immediate_tp_hit(monkeypatch):
+    snapshot = _snapshot()
+    df = _df_ohlc([("2026-01-01T04:00:00+00:00", 1.2440, 1.2460, 1.2430, 1.2455)])  # TP hit immediately
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.TP_HIT
+    assert result["walk_ohlc"] == [{
+        "bar_time": "2026-01-01T04:00:00+00:00",
+        "open": 1.2440, "high": 1.2460, "low": 1.2430, "close": 1.2455,
+    }]
+
+
+def test_walk_ohlc_is_none_for_timeout(monkeypatch):
+    snapshot = _snapshot()
+    rows = _contiguous_no_hit_bars("2026-01-01T00:00:00+00:00", count=42)
+    df = _df(rows)
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-08T01:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.TIMEOUT
+    assert result["walk_ohlc"] is None
+
+
+def test_walk_ohlc_is_none_for_data_gap(monkeypatch):
+    snapshot = _snapshot()
+    df = _df([
+        ("2026-01-01T04:00:00+00:00", 1.2320, 1.2310),
+        ("2026-01-01T12:00:00+00:00", 1.2320, 1.2290),
+    ])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T13:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.DATA_GAP
+    assert result["walk_ohlc"] is None
+
+
+def test_walk_ohlc_is_none_for_not_yet_assessable(monkeypatch):
+    snapshot = _snapshot()
+    df = _df([("2026-01-01T04:00:00+00:00", 1.2320, 1.2310)])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.NOT_YET_ASSESSABLE
+    assert result["walk_ohlc"] is None
+
+
+def test_non_finite_orthogonal_field_on_an_otherwise_valid_sl_hit_raises(monkeypatch):
+    """SL fires on `low` -- `high` is never read by _resolve_sl_before_tp
+    for a BUY's SL check, so a NaN there would otherwise pass through
+    silently. Capture-time validation must still catch it."""
+    snapshot = _snapshot()  # BUY, SL=1.2300
+    df = _df_ohlc([("2026-01-01T04:00:00+00:00", 1.2310, float("nan"), 1.2290, 1.2295)])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    with pytest.raises(sor.ShadowOutcomeResolverError, match="non-finite"):
+        sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+
+
+def test_non_finite_field_on_a_non_causal_walked_bar_raises(monkeypatch):
+    snapshot = _snapshot()
+    df = _df_ohlc([
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, float("inf")),  # walked, no hit, bad close
+        ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),        # SL hit
+    ])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T09:00:00+00:00")
+
+    with pytest.raises(sor.ShadowOutcomeResolverError, match="non-finite"):
+        sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+
+
+def test_non_finite_bar_is_never_converted_into_data_gap_or_any_outcome(monkeypatch):
+    """A structural capture error must propagate as an exception, never
+    be silently swallowed into DATA_GAP (or any other outcome)."""
+    snapshot = _snapshot()
+    df = _df_ohlc([("2026-01-01T04:00:00+00:00", float("nan"), 1.2460, 1.2290, 1.2455)])  # TP hit, bad open
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    with pytest.raises(sor.ShadowOutcomeResolverError):
+        sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+
+
+def test_existing_outcome_and_resolved_bar_time_semantics_are_unaffected(monkeypatch):
+    """Backward compatibility: the pre-existing contract's own keys keep
+    their exact pre-extension values and meaning."""
+    snapshot = _snapshot()
+    df = _df([("2026-01-01T04:00:00+00:00", 1.2320, 1.2290)])
+    _patch_fetch(monkeypatch, df)
+    _patch_now(monkeypatch, "2026-01-01T05:00:00+00:00")
+
+    result = sor.resolve_decision_outcome(snapshot, base_config=_base_config())
+    assert result["outcome"] == sor.SL_HIT
+    assert result["resolved_bar_time"] == "2026-01-01T04:00:00+00:00"
+    assert result["request_id"] == snapshot["request_id"]
+    assert result["hypothesis_id"] == snapshot["hypothesis_id"]
+    assert set(result.keys()) == {
+        "request_id", "hypothesis_id", "outcome", "resolved_bar_time", "evaluated_at",
+        "provider_at_observation", "walk_ohlc",
+    }
+
+
 def test_no_storage_write_of_any_kind():
     body = _source_without_docstrings()
     forbidden = ("record_", "insert_", "try_insert_", "update_", "write_", "d1_connection(", "con.execute(")

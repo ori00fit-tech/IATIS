@@ -268,6 +268,186 @@ def test_extra_bars_beyond_baseline_walk_are_never_inspected(monkeypatch):
 # --- provider identity: orthogonal, never merged with OHLC -----------------
 
 
+# --- Walk Composition Stability (#2): newly-appearing bars only -------------
+
+
+def test_no_extra_bars_is_composition_stable(monkeypatch):
+    df = _verification_df([
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),
+        ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),
+    ])
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    assert result["composition_state"] == sov.COMPOSITION_STABLE
+    assert result["extra_bars"] is None
+
+
+def test_new_bar_strictly_inside_the_walked_span_is_composition_unstable(monkeypatch):
+    """A bar at 06:00 -- strictly between the two walked bars (04:00,
+    08:00) -- that was never part of walk_ohlc at all. #1's per-bar
+    lookup would never notice this (it only ever looks up 04:00/08:00);
+    this is exactly the phenomenon #2 exists to catch."""
+    df = _verification_df([
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),
+        ("2026-01-01T06:00:00+00:00", 1.2316, 1.2319, 1.2314, 1.2317),  # new, never walked
+        ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),
+    ])
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    assert result["composition_state"] == sov.COMPOSITION_UNSTABLE
+    assert result["extra_bars"] == ["2026-01-01T06:00:00+00:00"]
+    # OHLC state for the two original bars is untouched by this finding -- independent facts.
+    assert all(b["state"] == sov.OHLC_STABLE for b in result["bars"])
+
+
+def test_bars_outside_the_walked_span_are_never_treated_as_extra(monkeypatch):
+    """A bar before span_start or after span_end must never count as
+    'extra' -- that's exactly the boundary already locked for #1's own
+    per-bar lookup, and #2 must respect the identical boundary."""
+    df = _verification_df([
+        ("2026-01-01T00:30:00+00:00", 9.9, 9.9, 9.9, 9.9),  # before span_start -- irrelevant
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),
+        ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),
+        ("2026-01-02T00:00:00+00:00", 9.9, 9.9, 9.9, 9.9),  # after span_end -- irrelevant
+    ])
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    assert result["composition_state"] == sov.COMPOSITION_STABLE
+    assert result["extra_bars"] is None
+
+
+def test_missing_baseline_bar_is_not_reported_as_a_composition_fact(monkeypatch):
+    """A missing baseline bar belongs entirely to #1 (VERIFICATION_DATA_GAP
+    on that bar) -- #2 must never also flag it, duplicating the same
+    fact under a different name."""
+    df = _verification_df([
+        ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),
+        # 08:00 missing entirely
+    ])
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    bars = {b["bar_time"]: b for b in result["bars"]}
+    assert bars["2026-01-01T08:00:00+00:00"]["state"] == sov.VERIFICATION_DATA_GAP
+    # A missing bar is not an "extra" bar -- composition_state is driven
+    # only by appearances, never by absences.
+    assert result["composition_state"] == sov.COMPOSITION_STABLE
+    assert result["extra_bars"] is None
+
+
+def test_single_bar_walk_is_trivially_composition_stable(monkeypatch):
+    resolver_result = _resolver_result(
+        outcome="TP_HIT",
+        walk_ohlc=[{"bar_time": "2026-01-01T04:00:00+00:00", "open": 1.2440, "high": 1.2460,
+                    "low": 1.2430, "close": 1.2455}],
+    )
+    df = _verification_df([
+        ("2026-01-01T04:00:00+00:00", 1.2440, 1.2460, 1.2430, 1.2455),
+    ])
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), resolver_result, base_config=_base_config())
+    assert result["composition_state"] == sov.COMPOSITION_STABLE
+    assert result["extra_bars"] is None
+
+
+def test_duplicate_timestamp_in_verification_is_not_double_counted_as_extra(monkeypatch):
+    """A duplicate row for an EXISTING baseline timestamp must not be
+    counted as an 'extra' bar at all -- it's the same timestamp, already
+    a member of the baseline set, not a newly-appearing one. (Separately,
+    #1 already marks that bar VERIFICATION_DATA_GAP for ambiguity.)"""
+    idx = pd.to_datetime(["2026-01-01T04:00:00+00:00",
+                          "2026-01-01T08:00:00+00:00", "2026-01-01T08:00:00+00:00"], utc=True)
+    df = pd.DataFrame({
+        "open": [1.2315, 1.2312, 1.2313], "high": [1.2320, 1.2320, 1.2321],
+        "low": [1.2310, 1.2290, 1.2291], "close": [1.2318, 1.2295, 1.2296],
+        "volume": [0.0, 0.0, 0.0],
+    }, index=idx)
+    _patch_client(monkeypatch, df=df)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    assert result["composition_state"] == sov.COMPOSITION_STABLE
+    assert result["extra_bars"] is None
+
+
+@pytest.mark.parametrize("outcome", ["TIMEOUT", "DATA_GAP", "NOT_YET_ASSESSABLE"])
+def test_no_baseline_outcomes_are_composition_not_yet_verifiable_too(monkeypatch, outcome):
+    resolver_result = _resolver_result(outcome=outcome, walk_ohlc=None, resolved_bar_time=None)
+    monkeypatch.setattr(sov, "TwelveDataClient",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no client for no-baseline case")))
+
+    result = sov.verify_historical_stability(_snapshot(), resolver_result, base_config=_base_config())
+    assert result["composition_state"] == sov.NOT_YET_VERIFIABLE
+    assert result["extra_bars"] is None
+
+
+def test_wrong_provider_baseline_is_composition_not_yet_verifiable(monkeypatch):
+    resolver_result = _resolver_result(provider_at_observation="finnhub")
+    monkeypatch.setattr(sov, "TwelveDataClient",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no client for wrong-provider case")))
+
+    result = sov.verify_historical_stability(_snapshot(), resolver_result, base_config=_base_config())
+    assert result["composition_state"] == sov.NOT_YET_VERIFIABLE
+    assert result["extra_bars"] is None
+
+
+def test_legacy_observation_composition_is_not_yet_verifiable(monkeypatch):
+    resolver_result = _resolver_result()
+    del resolver_result["provider_at_observation"]
+    monkeypatch.setattr(sov, "TwelveDataClient",
+                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no client for legacy case")))
+
+    result = sov.verify_historical_stability(_snapshot(), resolver_result, base_config=_base_config())
+    assert result["composition_state"] == sov.NOT_YET_VERIFIABLE
+    assert result["extra_bars"] is None
+
+
+def test_composition_check_never_triggers_a_second_fetch(monkeypatch):
+    """Design Gate #2's own locked constraint: zero new network calls --
+    the composition check must reuse the one fetch already made for #1."""
+    call_count = {"n": 0}
+
+    class _CountingClient:
+        def __init__(self, api_key):
+            pass
+
+        def time_series(self, *a, **k):
+            call_count["n"] += 1
+            return _verification_df([
+                ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),
+                ("2026-01-01T06:00:00+00:00", 1.2316, 1.2319, 1.2314, 1.2317),
+                ("2026-01-01T08:00:00+00:00", 1.2312, 1.2320, 1.2290, 1.2295),
+            ])
+
+    monkeypatch.setattr(sov, "TwelveDataClient", _CountingClient)
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    result = sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config())
+    assert call_count["n"] == 1
+    assert result["composition_state"] == sov.COMPOSITION_UNSTABLE
+
+
+def test_genuine_fetch_exception_means_no_composition_state_either(monkeypatch):
+    from core.twelve_data_client import TwelveDataError
+    _patch_client(monkeypatch, raise_exc=TwelveDataError("wholesale empty historical response"))
+    _patch_now(monkeypatch, "2026-02-01T00:00:00+00:00")
+
+    with pytest.raises(TwelveDataError):
+        sov.verify_historical_stability(_snapshot(), _resolver_result(), base_config=_base_config(),
+                                         api_key="test_key")
+    # (nothing further to assert -- the exception itself propagating unchanged,
+    # with no composition_state/extra_bars ever computed, IS the locked behavior)
+
+
 def test_same_provider_is_reported_alongside_ohlc_never_merged(monkeypatch):
     df = _verification_df([
         ("2026-01-01T04:00:00+00:00", 1.2315, 1.2320, 1.2310, 1.2318),

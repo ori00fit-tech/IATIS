@@ -25,10 +25,29 @@ own controlled additive extension), this module asks only "is there a
 bar at exactly this timestamp in the verification retrieval", and if
 so, compares its O/H/L/C exactly. Bars the verification retrieval
 returns beyond what baseline ever walked are never inspected -- they
-carry no meaning here. Whether the full SET of available bars for a
-range stays stable over repeated retrievals is Design Gate #2 (walk
-COMPOSITION stability) -- explicitly NOT designed, and this module must
-never answer that question by accident.
+carry no meaning here.
+
+WALK COMPOSITION STABILITY (#2, operator's own locked Design Gate --
+second controlled additive extension to this same function): a MISSING
+baseline bar is never a new concept -- it is already exactly
+VERIFICATION_DATA_GAP on that bar's own per-bar state, from the value
+side. The one thing per-bar lookup structurally cannot see is a bar
+APPEARING inside the already-walked span that was never part of
+`walk_ohlc` at all -- that is this extension's entire, narrow scope.
+It reuses the SAME verification_df this function already fetched for
+the OHLC check (no second network call, no new independence/cache
+semantics needed) and scans it ONLY for timestamps strictly within
+[min(walk_ohlc bar_time), max(walk_ohlc bar_time)] that are absent from
+walk_ohlc's own timestamp set. Nothing outside that span is ever
+inspected -- the identical boundary discipline already locked for the
+per-bar OHLC lookup. This is deliberately NOT a calendar/expected-grid
+model (no find_gaps, no weekend/session awareness, no claim about
+whether a timeframe's full schedule was observed) -- it answers only
+"did anything new appear inside the exact span already observed," never
+"was the complete expected set present." `composition_state`,
+`ohlc_state`, and `provider_state` are three independent facts, never
+aggregated into one verdict, never a step toward CATASTROPHIC_DIVERGENCE
+or any terminality judgment -- both remain explicitly out of scope.
 
 Per-bar states are never rolled up into one decision-level verdict --
 that would be a new, unlocked aggregation judgment. `verify_historical_
@@ -98,6 +117,15 @@ SAME_PROVIDER = "SAME_PROVIDER"
 DIFFERENT_PROVIDER = "DIFFERENT_PROVIDER"
 PROVIDER_NOT_AVAILABLE = "PROVIDER_NOT_AVAILABLE"
 
+# Design Gate #2 (Walk Composition Stability) -- a THIRD, independent
+# fact, never merged with OHLC_STABLE/OHLC_UNSTABLE or the provider
+# states above. NOT_YET_VERIFIABLE is deliberately reused verbatim (not
+# a new parallel name): the triggering conditions (no walk_ohlc, wrong
+# provider, pre-capture legacy observation) are identical for the OHLC
+# check and this one, by construction -- they always fire together.
+COMPOSITION_STABLE = "COMPOSITION_STABLE"
+COMPOSITION_UNSTABLE = "COMPOSITION_UNSTABLE"
+
 # The only provider this phase can target (locked Historical Targeting
 # scope decision). Matches the "twelve_data" chain-entry string the
 # multi-provider failover abstraction uses elsewhere, verbatim -- never
@@ -107,6 +135,7 @@ _TWELVE_DATA = "twelve_data"
 __all__ = [
     "OHLC_STABLE", "OHLC_UNSTABLE", "NOT_YET_VERIFIABLE", "VERIFICATION_DATA_GAP",
     "SAME_PROVIDER", "DIFFERENT_PROVIDER", "PROVIDER_NOT_AVAILABLE",
+    "COMPOSITION_STABLE", "COMPOSITION_UNSTABLE",
     "ShadowOutcomeVerificationError", "verify_historical_stability",
 ]
 
@@ -162,6 +191,25 @@ def _lookup_bar(verification_df: pd.DataFrame, bar_time: pd.Timestamp) -> dict[s
     return values
 
 
+def _find_extra_bars(verification_df: pd.DataFrame, baseline_bar_times: list[pd.Timestamp]) -> list[str]:
+    """Design Gate #2's own, narrow addition: every DISTINCT timestamp in
+    `verification_df` that falls strictly within
+    [min(baseline_bar_times), max(baseline_bar_times)] and is NOT one of
+    `baseline_bar_times` itself. Never inspects anything outside that
+    span (the identical boundary already locked for per-bar OHLC
+    lookup). Never a calendar/expected-grid check -- purely "what's
+    here now that wasn't in the baseline walk," nothing about whether
+    the full schedule was observed. Returns ISO strings, sorted
+    ascending, empty if none found."""
+    baseline_set = set(baseline_bar_times)
+    span_start, span_end = min(baseline_bar_times), max(baseline_bar_times)
+    extras = sorted(
+        t for t in verification_df.index.unique()
+        if span_start <= t <= span_end and t not in baseline_set
+    )
+    return [t.isoformat() for t in extras]
+
+
 def _compare_ohlc(baseline: dict[str, float], verification: dict[str, float]) -> str:
     """Exact equality on all four fields, no tolerance (locked rule).
     This answers only "did the same historical bar report the same raw
@@ -187,12 +235,16 @@ def verify_historical_stability(
     `provider_at_observation`, `evaluated_at`, `request_id`,
     `hypothesis_id`) -- never a hand-assembled substitute for either.
 
-    Returns a per-bar OHLC verification breakdown plus a single,
-    orthogonal provider-identity fact -- NEVER merged into one verdict
-    (the locked Provider Identity Semantics rule). Never calls
-    resolve_decision_outcome() itself. Never fetches via
-    fetch_with_failover -- Twelve Data only, direct, per the locked
-    Historical Targeting scope. Performs no storage read or write.
+    Returns a per-bar OHLC verification breakdown, a single orthogonal
+    provider-identity fact, and a single orthogonal composition fact
+    (`composition_state`/`extra_bars`, Design Gate #2) -- NEVER merged
+    into one verdict (the locked Provider Identity Semantics and Walk
+    Composition Stability rules). Never calls resolve_decision_outcome()
+    itself. Never fetches via fetch_with_failover -- Twelve Data only,
+    direct, per the locked Historical Targeting scope. Performs no
+    storage read or write, and never a second network call for the
+    composition check -- it reuses the same verification_df already
+    fetched for the OHLC check.
     """
     request_id = resolver_result["request_id"]
     hypothesis_id = resolver_result["hypothesis_id"]
@@ -207,22 +259,28 @@ def verify_historical_stability(
         "verification_evaluated_at": None,
         "ohlc_state": None,
         "bars": None,
+        "composition_state": None,
+        "extra_bars": None,
     }
 
     if "provider_at_observation" not in resolver_result:
         # Baseline predates provider-identity capture -- permanent,
         # never backfilled (the locked PROVIDER_NOT_AVAILABLE scope).
+        # No baseline material exists for composition either.
         result["provider_state"] = PROVIDER_NOT_AVAILABLE
         result["ohlc_state"] = NOT_YET_VERIFIABLE
+        result["composition_state"] = NOT_YET_VERIFIABLE
         return result
 
     provider_at_observation = resolver_result["provider_at_observation"]
 
     if walk_ohlc is None:
         # TIMEOUT / DATA_GAP / NOT_YET_ASSESSABLE -- no causal walk, no
-        # baseline OHLC ever existed to verify. Permanent for this
+        # baseline OHLC ever existed to verify, and therefore no span to
+        # check for newly-appearing bars either. Permanent for this
         # observation (Design Gate #1's own locked scope).
         result["ohlc_state"] = NOT_YET_VERIFIABLE
+        result["composition_state"] = NOT_YET_VERIFIABLE
         return result
 
     if provider_at_observation != _TWELVE_DATA:
@@ -231,6 +289,7 @@ def verify_historical_stability(
         # never a silent re-target onto a different provider. Temporary:
         # deferred follow-on coverage, not permanently impossible.
         result["ohlc_state"] = NOT_YET_VERIFIABLE
+        result["composition_state"] = NOT_YET_VERIFIABLE
         return result
 
     t_now = _now_utc()
@@ -306,5 +365,9 @@ def verify_historical_stability(
             "verification": verification,
         })
     result["bars"] = bars_result
+
+    extra_bars = _find_extra_bars(verification_df, bar_times)
+    result["composition_state"] = COMPOSITION_UNSTABLE if extra_bars else COMPOSITION_STABLE
+    result["extra_bars"] = extra_bars if extra_bars else None
 
     return result

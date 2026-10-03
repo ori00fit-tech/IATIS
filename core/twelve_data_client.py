@@ -262,6 +262,8 @@ class TwelveDataClient:
         interval: str,
         outputsize: int = 500,
         use_cache: bool = True,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> pd.DataFrame:
         """Fetch OHLCV time series from Twelve Data.
 
@@ -271,6 +273,16 @@ class TwelveDataClient:
                       Twelve Data label ("1min","15min","1h","4h","1day")
             outputsize: number of bars to fetch (max 5000 on Free plan)
             use_cache: skip the API call if a fresh cached response exists.
+            start_date: optional explicit historical range start, sent
+                verbatim as Twelve Data's own "start_date" param (format
+                "%Y-%m-%d %H:%M:%S", matching scripts/build_database.py's
+                proven start_date+end_date+timezone=UTC combination --
+                this is a controlled additive extension, not a new
+                request pattern). Controlled additive extension (Historical
+                Targeting Design Gate) -- every existing caller is
+                unaffected, since this defaults to None.
+            end_date: optional explicit historical range end, same format
+                and provenance as start_date.
 
         Returns:
             Standard OHLCV DataFrame (same contract as load_synthetic()).
@@ -278,10 +290,19 @@ class TwelveDataClient:
         Raises:
             TwelveDataError: API returned an error.
             RateLimitExceeded: would exceed daily or per-minute cap.
+
+        NON-NEGOTIABLE (operator's own locked scope boundary): when
+        start_date or end_date is supplied, the response cache is never
+        read from or written to -- the cache key is (symbol, interval,
+        outputsize) only and has no date component, so caching a
+        date-ranged response under that key would be silently wrong.
+        This is a scoping guard on existing, unmodified cache functions,
+        not a change to cache architecture.
         """
         td_interval = INTERVAL_MAP.get(interval, interval)
+        date_ranged = start_date is not None or end_date is not None
 
-        if use_cache:
+        if use_cache and not date_ranged:
             cached = _load_from_cache(symbol, td_interval, outputsize)
             if cached:
                 return _parse_response(cached)
@@ -309,6 +330,10 @@ class TwelveDataClient:
             "timezone":   "UTC",
             "order":      "ASC",
         }
+        if start_date is not None:
+            params["start_date"] = start_date
+        if end_date is not None:
+            params["end_date"] = end_date
 
         try:
             resp = self._session.get(
@@ -328,7 +353,8 @@ class TwelveDataClient:
                 f"(code={data.get('code')})"
             )
 
-        _save_to_cache(symbol, td_interval, outputsize, data)
+        if not date_ranged:
+            _save_to_cache(symbol, td_interval, outputsize, data)
         return _parse_response(data)
 
     def validate_key(self) -> dict[str, Any]:

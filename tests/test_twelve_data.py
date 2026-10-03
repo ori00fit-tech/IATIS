@@ -240,6 +240,76 @@ def test_client_passes_correct_params(mock_client):
 
 
 # ---------------------------------------------------------------------------
+# Historical Targeting Implementation Gate — start_date/end_date
+# (controlled additive extension, Twelve Data first-scope)
+# ---------------------------------------------------------------------------
+
+def test_time_series_without_dates_sends_no_date_params_backward_compat(mock_client):
+    """Every existing caller omits start_date/end_date -- the request
+    params must be byte-identical to before this extension existed."""
+    with patch.object(mock_client._session, "get",
+                      return_value=_mock_response(SAMPLE_TD_RESPONSE)) as mock_get:
+        mock_client.time_series("EUR/USD", "H1", use_cache=False)
+
+    call_params = mock_get.call_args[1]["params"]
+    assert "start_date" not in call_params
+    assert "end_date" not in call_params
+
+
+def test_time_series_with_dates_sends_both_params(mock_client):
+    with patch.object(mock_client._session, "get",
+                      return_value=_mock_response(SAMPLE_TD_RESPONSE)) as mock_get:
+        mock_client.time_series(
+            "XAU/USD", "H4", outputsize=50, use_cache=False,
+            start_date="2026-01-01 00:00:00", end_date="2026-01-05 00:00:00",
+        )
+
+    call_params = mock_get.call_args[1]["params"]
+    assert call_params["start_date"] == "2026-01-01 00:00:00"
+    assert call_params["end_date"] == "2026-01-05 00:00:00"
+    assert call_params["timezone"] == "UTC"  # unchanged, already sent unconditionally
+
+
+def test_date_ranged_call_never_reads_cache_even_if_use_cache_true(mock_client, tmp_path):
+    """The cache key has no date component -- a date-ranged request must
+    never be served from (or write into) that mis-keyed cache, even if a
+    caller passes use_cache=True by mistake. This is a scoping guard on
+    existing cache functions, not a change to cache architecture."""
+    with patch.object(mock_client._session, "get",
+                      return_value=_mock_response(SAMPLE_TD_RESPONSE)) as mock_get:
+        mock_client.time_series(
+            "EUR/USD", "H1", outputsize=3, use_cache=True,
+            start_date="2026-06-01 00:00:00", end_date="2026-06-01 02:00:00",
+        )
+        mock_client.time_series(
+            "EUR/USD", "H1", outputsize=3, use_cache=True,
+            start_date="2026-06-01 00:00:00", end_date="2026-06-01 02:00:00",
+        )
+
+    # Both calls hit the network -- a date-ranged request is never a cache hit.
+    assert mock_get.call_count == 2
+
+
+def test_date_ranged_call_does_not_poison_the_plain_cache(mock_client):
+    """A date-ranged fetch must never populate the cache key that a later,
+    PLAIN (no dates) call for the same (symbol, interval, outputsize)
+    would read from -- otherwise a verification-only response could
+    silently leak into ordinary live/backtest traffic."""
+    with patch.object(mock_client._session, "get",
+                      return_value=_mock_response(SAMPLE_TD_RESPONSE)) as mock_get:
+        mock_client.time_series(
+            "EUR/USD", "H1", outputsize=3, use_cache=True,
+            start_date="2026-06-01 00:00:00", end_date="2026-06-01 02:00:00",
+        )
+        # A plain, dateless call for the identical (symbol, interval,
+        # outputsize) right after -- must NOT be served from a cache
+        # entry the date-ranged call might have written.
+        mock_client.time_series("EUR/USD", "H1", outputsize=3, use_cache=True)
+
+    assert mock_get.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # load_from_twelve_data integration (mocked)
 # ---------------------------------------------------------------------------
 

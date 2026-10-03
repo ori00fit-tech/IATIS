@@ -48,6 +48,31 @@ bar_time of the bar that resolved this decision. It is non-None if and
 only if the outcome is TP_HIT or SL_HIT; it is None for TIMEOUT,
 DATA_GAP, and NOT_YET_ASSESSABLE alike -- none of those three have a
 single causal bar, so none of them are given one.
+
+CONTROLLED ADDITIVE EXTENSION (operator's own locked Historical Outcome
+Stability + Non-Causal Walk Value Stability Design Gates): two new
+return keys, `provider_at_observation` and `walk_ohlc`, widen this
+module's return shape without changing any existing key's value or
+meaning, without touching hit detection, and without touching
+resolved_bar_time semantics.
+
+`provider_at_observation` is the provider name actually returned by
+`fetch_with_failover()` for this call -- always present, never
+fabricated (it is the loop variable bound at the exact successful
+iteration, per `core.data_providers.fetch_with_failover`'s own
+contract), captured so a later, independent verification can observe
+(never engineer) whether it lands on the same provider.
+
+`walk_ohlc` is the open/high/low/close of EVERY bar this call actually
+read during the walk (not just the causal one) -- captured iff the
+outcome is TP_HIT or SL_HIT (the only two outcomes with an actual
+causal walk to capture), else None. Every captured bar's four fields
+are validated finite at capture time; a non-finite value anywhere
+(possible even on an otherwise-valid hit, since only the specific field
+that triggered the hit is guaranteed non-NaN by
+`_resolve_sl_before_tp`'s own comparison semantics) raises
+ShadowOutcomeResolverError -- a structural capture error, never
+silently converted into DATA_GAP or any other outcome.
 """
 from __future__ import annotations
 
@@ -127,6 +152,22 @@ def _provider_symbol(internal_symbol: str, base_config: dict[str, Any]) -> str:
     )
 
 
+def _validate_finite_ohlc_bar(bar: dict[str, Any]) -> None:
+    """Capture-time structural validation (operator's own locked rule): a
+    TP_HIT/SL_HIT's own walk evidence must be finite, numeric O/H/L/C for
+    EVERY bar actually walked -- not just the causal one. A non-finite
+    value anywhere is a structural capture error, never silently
+    converted into an outcome or a verification state."""
+    for field in ("open", "high", "low", "close"):
+        value = bar[field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ShadowOutcomeResolverError(
+                f"resolve_decision_outcome: non-finite/unusable {field}={value!r} captured for "
+                f"bar at {bar['bar_time']!r} -- OHLC evidence capture failed structurally, never "
+                f"converted into DATA_GAP or any other outcome."
+            )
+
+
 def _resolve_sl_before_tp(snapshot: dict[str, Any], bar_high: float, bar_low: float) -> str | None:
     """The EXACT tie-break convention already shipped in storage.
     outcome_tracker.auto_close_outcomes()/storage.shadow_book.
@@ -158,7 +199,12 @@ def resolve_decision_outcome(snapshot: dict[str, Any], *, base_config: dict[str,
     Returns EXACTLY:
         {"request_id": ..., "hypothesis_id": ...,
          "outcome": TP_HIT | SL_HIT | TIMEOUT | DATA_GAP | NOT_YET_ASSESSABLE,
-         "resolved_bar_time": <ISO str> | None, "evaluated_at": <ISO str>}
+         "resolved_bar_time": <ISO str> | None, "evaluated_at": <ISO str>,
+         "provider_at_observation": <str>,
+         "walk_ohlc": [{"bar_time": <ISO str>, "open": <float>, "high": <float>,
+                        "low": <float>, "close": <float>}, ...] | None}
+    (the last two keys are this module's own locked controlled additive
+    extension -- see module docstring)
 
     Performs NO storage read or write -- a pure, stateless, deterministic
     function of its own two arguments plus whatever core.data_providers.
@@ -181,17 +227,22 @@ def resolve_decision_outcome(snapshot: dict[str, Any], *, base_config: dict[str,
     bars_needed = math.ceil(hours_needed / expected_freq_hours) if hours_needed > 0 else 0
     outputsize = bars_needed + _OUTPUTSIZE_BUFFER_BARS
 
-    df, _provider = fetch_with_failover(symbol=provider_symbol, interval=timeframe, outputsize=outputsize)
+    df, provider = fetch_with_failover(symbol=provider_symbol, interval=timeframe, outputsize=outputsize)
     eligible = df[df.index > pd.Timestamp(t_d)].sort_index()
 
     last_seen_time = t_d
     outcome: str | None = None
     resolved_bar_time: datetime | None = None
+    walk_bars: list[dict[str, Any]] = []
 
     for bar_time, row in eligible.iterrows():
         if (bar_time - last_seen_time) > expected_freq:
             outcome = DATA_GAP
             break
+        walk_bars.append({
+            "bar_time": bar_time,
+            "open": row["open"], "high": row["high"], "low": row["low"], "close": row["close"],
+        })
         hit = _resolve_sl_before_tp(snapshot, row["high"], row["low"])
         if hit is not None:
             outcome = hit
@@ -207,10 +258,24 @@ def resolve_decision_outcome(snapshot: dict[str, Any], *, base_config: dict[str,
         else:
             outcome = NOT_YET_ASSESSABLE
 
+    walk_ohlc: list[dict[str, Any]] | None = None
+    if outcome in (TP_HIT, SL_HIT):
+        for bar in walk_bars:
+            _validate_finite_ohlc_bar(bar)
+        walk_ohlc = [
+            {
+                "bar_time": bar["bar_time"].isoformat(),
+                "open": bar["open"], "high": bar["high"], "low": bar["low"], "close": bar["close"],
+            }
+            for bar in walk_bars
+        ]
+
     return {
         "request_id": snapshot["request_id"],
         "hypothesis_id": snapshot["hypothesis_id"],
         "outcome": outcome,
         "resolved_bar_time": resolved_bar_time.isoformat() if resolved_bar_time is not None else None,
         "evaluated_at": t_now.isoformat(),
+        "provider_at_observation": provider,
+        "walk_ohlc": walk_ohlc,
     }

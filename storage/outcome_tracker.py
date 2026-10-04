@@ -472,6 +472,38 @@ def recent_signals(limit: int = 10) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def ordered_closed_outcomes(symbols: set[str] | None = None) -> list[dict]:
+    """Every closed real-trade outcome (win/loss/breakeven), CHRONOLOGICALLY
+    ordered by entry_time ascending -- the one property scripts.
+    forward_review's own pre-existing _closed_outcomes() never had (no
+    ORDER BY, entry_time not even selected), and the property any
+    autocorrelation-based diagnostic (backtest.multiple_testing.
+    effective_sample_size()) requires to be meaningful at all, since lag-k
+    autocorrelation is defined over index adjacency.
+
+    `symbols`, when given, filters to that symbol set (Python-side, after
+    the fetch -- the same simplicity scripts.forward_review's own
+    _bucket_stats() already uses, matching this project's established
+    pattern for this exact kind of query rather than building dynamic SQL
+    placeholders). `symbols=None` (the default) returns every closed
+    outcome, unfiltered.
+
+    Returns each row's symbol/outcome/pnl_usd/entry_time only -- the same
+    four fields _closed_outcomes() already read, plus entry_time. This is
+    purely an ordered-read accessor; it computes nothing itself (no ESS,
+    no bucket aggregation) -- that is the caller's job."""
+    _init_db()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT symbol, outcome, pnl_usd, entry_time FROM outcomes "
+            "WHERE outcome IN ('win','loss','breakeven') ORDER BY entry_time ASC"
+        ).fetchall()
+    result = [{k: r[k] for k in ("symbol", "outcome", "pnl_usd", "entry_time")} for r in rows]
+    if symbols is not None:
+        result = [r for r in result if r["symbol"] in symbols]
+    return result
+
+
 # ─── Auto-Close ────────────────────────────────────────────────────────────
 
 def auto_close_outcomes(

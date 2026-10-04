@@ -34,23 +34,49 @@ CARRIERS = {"XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD"}
 
 
 def _closed_outcomes() -> list[dict]:
-    from storage import d1_client
-    with d1_client.d1_connection() as con:
-        rows = con.execute(
-            "SELECT symbol, outcome, pnl_usd FROM outcomes "
-            "WHERE outcome IN ('win','loss','breakeven')").fetchall()
-    return [{k: r[k] for k in ("symbol", "outcome", "pnl_usd")} for r in rows]
+    """Delegates to storage.outcome_tracker.ordered_closed_outcomes() --
+    the single, shared, chronologically-ordered accessor (no duplicate
+    direct `outcomes` query here or in execution/api_shared_helpers.py,
+    which imports this exact function). Unfiltered: _bucket_stats() does
+    its own per-bucket symbol filtering, same as before this change."""
+    from storage.outcome_tracker import ordered_closed_outcomes
+    return ordered_closed_outcomes()
 
 
 def _bucket_stats(rows: list[dict], symbols: set[str]) -> dict:
+    """n/wr/pf are unchanged from before this change -- evaluate_rules()
+    (and execution.api_shared_helpers._forward_rule_progress(), which
+    reads this same dict) only ever read `n` and the named `metric`
+    field, so D001/D002's own decision logic is untouched by anything
+    below.
+
+    `ess_pnl_usd`/`ess_basis` are a NEW, purely diagnostic addition
+    (operator's own locked ESS Design Gate): an autocorrelation-adjusted
+    sample size (backtest.multiple_testing.effective_sample_size()) over
+    this bucket's own chronologically-ordered pnl_usd sequence (`rows`
+    is already ordered by entry_time -- filtering preserves that order).
+    This is explicitly labeled as dollar-P&L-based, NEVER presented as
+    equivalent to backtest.mission_validator's own rr_actual-based (risk-
+    normalized) ESS diagnostic -- `outcomes` stores no per-trade risk
+    amount to convert one into the other, and none is invented here.
+    Nothing reads these two keys to gate any decision anywhere."""
+    from backtest.multiple_testing import effective_sample_size
+
     sel = [r for r in rows if r["symbol"] in symbols]
     wins = [r for r in sel if r["outcome"] == "win"]
     gross_w = sum(r["pnl_usd"] or 0 for r in sel if (r["pnl_usd"] or 0) > 0)
     gross_l = -sum(r["pnl_usd"] or 0 for r in sel if (r["pnl_usd"] or 0) < 0)
+    pnl_sequence = [r["pnl_usd"] or 0.0 for r in sel]
     return {
         "n": len(sel),
         "wr": round(100 * len(wins) / len(sel), 1) if sel else None,
         "pf": round(gross_w / gross_l, 3) if gross_l > 0 else (None if not sel else float("inf")),
+        "ess_pnl_usd": effective_sample_size(pnl_sequence),
+        "ess_basis": (
+            "diagnostic only, never gates D001/D002 -- autocorrelation-adjusted n over "
+            "pnl_usd (dollar P&L); NOT the risk-normalized rr_actual-based ESS computed "
+            "elsewhere for backtest trials"
+        ),
     }
 
 
@@ -107,6 +133,9 @@ def main() -> int:
           f"FX n={buckets['fx']['n']} PF={buckets['fx']['pf']} WR={buckets['fx']['wr']}% | "
           f"carriers n={buckets['carriers']['n']} PF={buckets['carriers']['pf']} "
           f"WR={buckets['carriers']['wr']}%\n")
+    print(f"  [diagnostic, never gates D001/D002] ESS(pnl_usd): "
+          f"FX={buckets['fx']['ess_pnl_usd']} carriers={buckets['carriers']['ess_pnl_usd']} "
+          f"-- dollar-P&L-based, not risk-normalized\n")
 
     any_reached = False
     for verdict in evaluate_rules(rules, buckets):

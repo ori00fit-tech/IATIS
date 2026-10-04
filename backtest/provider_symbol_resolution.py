@@ -35,8 +35,9 @@ WHAT THIS PHASE WIRES IN, and NOTHING MORE (operator's own locked
 scope): Stage 2 is implemented for "twelve_data" (a pass-through, since
 the shared slash-form symbol already IS Twelve Data's own wire format),
 "alpha_vantage" (operator's own locked AV Stage 2 Design Gate, 2026),
-AND "finnhub" (operator's own locked Finnhub Stage 2 Design Gate,
-2026) -- see below.
+"finnhub" (operator's own locked Finnhub Stage 2 Design Gate, 2026),
+AND "alpaca" (operator's own locked Alpaca Stage 2 Design Gate, 2026)
+-- see below.
 
 Calling resolve_provider_symbol() with any OTHER provider name raises
 ProviderSymbolResolutionError -- a DIFFERENT fact from PROVIDER_SYMBOL_
@@ -136,6 +137,65 @@ wiring):
   ordinary miss, resolved to PROVIDER_SYMBOL_UNSUPPORTED like any other
   unmapped symbol, not a special case requiring its own logic.
 
+ALPACA STAGE 2 (operator's own locked Design Gate, distinct from all
+three contracts above -- read carefully before touching this
+provider's wiring):
+
+  Stage 1 required NO changes for this gate: config/symbols.yaml's
+  twelve_data_symbols already has entries for every alpaca-relevant
+  internal symbol (BTCUSD/ETHUSD -> "BTC/USD"/"ETH/USD", AAPL/NVDA/
+  SPY/QQQ -> themselves, unchanged) -- confirmed by direct evidence
+  before this gate was locked, not assumed.
+
+  _resolve_alpaca() dispatches on the SAME two-path split
+  core.data_providers._fetch_alpaca() itself uses: equity ->
+  core.data_providers._is_equity_symbol() (already a module-level,
+  pure, reusable function -- no extraction needed); crypto ->
+  core.data_providers._alpaca_crypto_symbol() (NEWLY extracted BY THIS
+  GATE from what was previously an inline check-and-reconstruct inside
+  _fetch_alpaca's body, mirroring the Finnhub extraction precedent).
+  core.data_providers.py IS modified by this phase -- the second
+  exception (after Finnhub) to the otherwise-universal "zero diff on
+  core/data_providers.py" closing check; the replacement standard is
+  again BEHAVIOR-EQUIVALENCE, proven by tests: _fetch_alpaca's exact
+  raise type and message for an unsupported crypto symbol are
+  unchanged, and every previously-working symbol still produces the
+  exact same alpaca_symbol value.
+
+  For the equity path, provider_symbol is the shared_symbol UNCHANGED
+  (identity) -- _fetch_alpaca_equity() does no translation at all,
+  interpolating the raw symbol straight into its request URL. For the
+  crypto path, provider_symbol is also, after round-tripping through
+  _internal_symbol() and _alpaca_crypto_symbol(), the SAME string the
+  shared_symbol started as (e.g. "BTC/USD" -> "BTCUSD" -> "BTC/USD") --
+  so unlike Alpha Vantage, provider_symbol for "alpaca" is ALWAYS a
+  `str`, never a tuple; no new type heterogeneity is introduced by this
+  gate.
+
+  _CRYPTO (core.data_providers's own module-level set, {"BTCUSD",
+  "ETHUSD"}) remains the SOLE source of truth for crypto coverage --
+  _alpaca_crypto_symbol() reads it, never redefines or shadows it with
+  a second whitelist. Likewise _STOCKS/_ETF (via _is_equity_symbol())
+  are reused, never duplicated. This phase adds NO new entries to any
+  of these three sets -- expanding coverage is explicitly out of
+  scope, exactly as it was for Finnhub's map.
+
+  resolution_state is genuinely reachable as PROVIDER_SYMBOL_UNSUPPORTED
+  for "alpaca" -- the SECOND Stage 2 resolver (after Finnhub) to
+  actually exercise that branch, for ANY shared_symbol that is neither
+  a recognized equity/ETF nor a recognized crypto pair.
+
+  EXPLICIT EPISTEMIC BOUNDARY (operator's own locked instruction,
+  stated for the record): a successful resolution for "alpaca" --
+  including the identity case, e.g. "AAPL" -> "AAPL" -- proves ONLY
+  that the symbol passes Alpaca's own known coverage predicate
+  (_CRYPTO/_STOCKS/_ETF membership). It is NEVER a claim that Alpaca
+  will actually serve this instrument at fetch time -- that remains
+  the fetch layer's own responsibility (API keys, network, rate
+  limits, endpoint availability), exactly as "syntactically
+  transformable" was never conflated with "provider capability
+  confirmed" for Alpha Vantage.
+
 TWELVE DATA REGRESSION PROTECTION (locked): this module changes no
 value backtest.shadow_outcome_resolver._provider_symbol() or
 backtest.shadow_outcome_verification.verify_historical_stability()
@@ -146,14 +206,21 @@ point, reusing _provider_symbol() by direct call, not by copy.
 NON-NEGOTIABLE: no date-range behavior change, no Finnhub coverage
 expansion (no new XAG/energy/index mappings), no equity redesign, no
 HTTP-403 repair, no provider-chain changes, no fetch/failover redesign,
-no network or storage access anywhere in this module.
+no _CRYPTO/_STOCKS/_ETF expansion, no network or storage access
+anywhere in this module.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
 from backtest.shadow_outcome_resolver import _provider_symbol
-from core.data_providers import FINNHUB_SYMBOL_MAP, _to_av_symbol
+from core.data_providers import (
+    FINNHUB_SYMBOL_MAP,
+    _alpaca_crypto_symbol,
+    _internal_symbol,
+    _is_equity_symbol,
+    _to_av_symbol,
+)
 
 PROVIDER_SYMBOL_UNSUPPORTED = "PROVIDER_SYMBOL_UNSUPPORTED"
 
@@ -225,10 +292,46 @@ def _resolve_finnhub(shared_symbol: str) -> str | None:
     return FINNHUB_SYMBOL_MAP.get(shared_symbol)
 
 
+def _resolve_alpaca(shared_symbol: str) -> str | None:
+    """Stage 2 for alpaca: reuses the SAME two-path split
+    core.data_providers._fetch_alpaca() itself uses, never reimplementing
+    either decision.
+
+    Equity/ETF (core.data_providers._is_equity_symbol(), already
+    module-level and pure): provider_symbol is the shared_symbol
+    UNCHANGED -- _fetch_alpaca_equity() does no translation of its own,
+    passing the raw ticker straight through.
+
+    Crypto (core.data_providers._alpaca_crypto_symbol(), NEWLY extracted
+    by this Design Gate from what was an inline check inside
+    _fetch_alpaca's body): shared_symbol -> _internal_symbol() ->
+    _alpaca_crypto_symbol() -> the SAME string the shared_symbol started
+    as (e.g. "BTC/USD" round-trips to "BTC/USD"), or None if
+    _CRYPTO does not recognize it.
+
+    _CRYPTO/_STOCKS/_ETF (core.data_providers's own sets) remain the
+    SOLE source of truth for coverage -- this function adds no new
+    whitelist of its own. Any shared_symbol that is neither a
+    recognized equity/ETF nor a recognized crypto pair returns None,
+    which resolve_provider_symbol() reports as PROVIDER_SYMBOL_
+    UNSUPPORTED -- the second Stage 2 resolver (after Finnhub) to
+    actually exercise that branch.
+
+    EXPLICIT EPISTEMIC BOUNDARY: a non-None result here -- including
+    the equity identity case -- means ONLY "this symbol passes Alpaca's
+    own known coverage predicate." It is NEVER a claim that Alpaca will
+    actually serve this instrument at fetch time; that remains the
+    fetch layer's own responsibility."""
+    if _is_equity_symbol(shared_symbol):
+        return shared_symbol
+    internal = _internal_symbol(shared_symbol)
+    return _alpaca_crypto_symbol(internal)
+
+
 # Wired-in Stage 2 translators. Return types are deliberately
 # heterogeneous across providers (str for twelve_data, tuple[str, str]
-# for alpha_vantage, str | None for finnhub) -- provider_symbol is
-# provider-shaped, not provider-uniform, per the operator's own locked
+# for alpha_vantage, str | None for finnhub and alpaca) -- provider_symbol
+# is provider-shaped, not provider-uniform, per the operator's own locked
 # AV Stage 2 Design Gate: forcing Alpha Vantage's genuine (from_symbol,
 # to_symbol) wire format into a single string would be an unauthorized
 # normalization layer this gate does not grant.
@@ -236,6 +339,7 @@ _STAGE_2_RESOLVERS: dict[str, Callable[[str], Any]] = {
     "twelve_data": _resolve_twelve_data,
     "alpha_vantage": _resolve_alpha_vantage,
     "finnhub": _resolve_finnhub,
+    "alpaca": _resolve_alpaca,
 }
 
 
@@ -253,7 +357,8 @@ def resolve_provider_symbol(
     Stage 2 dispatches on `provider`. If no Stage 2 translator is wired
     in for that provider name, raises ProviderSymbolResolutionError (a
     "not implemented here" structural fact, never a coverage claim).
-    This phase wires in "twelve_data", "alpha_vantage", and "finnhub".
+    This phase wires in "twelve_data", "alpha_vantage", "finnhub", and
+    "alpaca".
 
     Returns exactly: {internal_symbol, provider, shared_symbol,
     provider_symbol, resolution_state}. `provider_symbol` is
@@ -261,17 +366,18 @@ def resolve_provider_symbol(
     `tuple[str, str]` for "alpha_vantage" (Alpha Vantage's own wire
     format genuinely is a (from_symbol, to_symbol) pair -- passed
     through unchanged, never reconstructed into a string), a `str` for
-    "finnhub" when mapped. `resolution_state` is None when fully
-    resolved, or PROVIDER_SYMBOL_UNSUPPORTED when Stage 2 recognized the
-    provider but could not represent this specific shared_symbol --
-    unreachable for "twelve_data" and "alpha_vantage" (neither
-    translator can ever fail: twelve_data's pass-through trivially,
-    alpha_vantage's _to_av_symbol() because it has no coverage
-    predicate at all, see _resolve_alpha_vantage()'s own docstring), but
-    genuinely reachable for "finnhub" -- its closed symbol map CAN and
-    does fail closed for any shared_symbol outside its 12 entries (see
-    _resolve_finnhub()'s own docstring). This is the first provider in
-    this dispatcher to actually exercise this branch.
+    "finnhub"/"alpaca" when mapped. `resolution_state` is None when
+    fully resolved, or PROVIDER_SYMBOL_UNSUPPORTED when Stage 2
+    recognized the provider but could not represent this specific
+    shared_symbol -- unreachable for "twelve_data" and "alpha_vantage"
+    (neither translator can ever fail: twelve_data's pass-through
+    trivially, alpha_vantage's _to_av_symbol() because it has no
+    coverage predicate at all, see _resolve_alpha_vantage()'s own
+    docstring), but genuinely reachable for "finnhub" (its closed
+    symbol map CAN and does fail closed for any shared_symbol outside
+    its 12 entries) and for "alpaca" (any shared_symbol that is neither
+    a recognized equity/ETF nor a recognized crypto pair) -- see each
+    resolver's own docstring.
 
     Pure -- no network call, no storage read or write, no randomness.
     """

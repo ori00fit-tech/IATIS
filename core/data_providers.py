@@ -721,6 +721,20 @@ def _internal_symbol(symbol: str) -> str:
     return _FETCH_TO_INTERNAL.get(symbol, symbol.replace("/", ""))
 
 
+# Alpaca's crypto coverage predicate + wire-format translation (module
+# scope, locked Alpaca Stage 2 Design Gate): the SAME check and
+# reconstruction that previously lived inline inside _fetch_alpaca,
+# extracted unchanged so backtest/provider_symbol_resolution.py can reuse
+# this exact predicate by direct reference, never by a second copy.
+# _fetch_alpaca below reads this same function -- its own raise/message
+# behavior is unchanged. _CRYPTO remains the single source of truth;
+# this function never becomes a second whitelist.
+def _alpaca_crypto_symbol(internal_symbol: str) -> str | None:
+    if internal_symbol not in _CRYPTO:
+        return None
+    return f"{internal_symbol[:-3]}/{internal_symbol[-3:]}"  # BTCUSD -> BTC/USD
+
+
 def symbol_class(symbol: str) -> str:
     internal = _internal_symbol(symbol)
     if internal in _CRYPTO:
@@ -882,7 +896,8 @@ def _fetch_alpaca(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
         raise DataFetchError("ALPACA_API_KEY/ALPACA_API_SECRET not set — skipping Alpaca")
 
     internal = _internal_symbol(symbol)
-    if internal not in _CRYPTO:
+    alpaca_symbol = _alpaca_crypto_symbol(internal)
+    if alpaca_symbol is None:
         raise DataFetchError(f"Alpaca serves crypto only in this codebase (got {internal})")
 
     tf = _ALPACA_TF_MAP.get(interval)
@@ -895,7 +910,6 @@ def _fetch_alpaca(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
         raise DataFetchError("requests not installed")
 
     base = os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets").rstrip("/")
-    alpaca_symbol = f"{internal[:-3]}/{internal[-3:]}"  # BTCUSD → BTC/USD
     params = {
         "symbols": alpaca_symbol,
         "timeframe": tf,

@@ -209,9 +209,11 @@ def test_resolve_finnhub_has_no_equity_detection_call_in_its_own_source():
 
 
 def test_finnhub_is_the_first_resolver_to_return_none():
-    """Documents and locks in the Gate 0/Design Gate finding: twelve_data
+    """Documents and locks in the Finnhub Design Gate finding: twelve_data
     and alpha_vantage can never produce None from their own Stage 2
-    function; finnhub is the first (and, this phase, only) one that can."""
+    function; finnhub was the first resolver wired in this chain that
+    can. (alpaca, wired in a later phase, is the second -- see
+    tests/test_alpaca_provider.py::test_resolve_alpaca_is_second_resolver_to_return_none.)"""
     assert psr._resolve_twelve_data("XAU/USD") is not None
     assert psr._resolve_alpha_vantage("XAU/USD") is not None
     assert psr._resolve_finnhub("XAG/USD") is None
@@ -274,14 +276,14 @@ def test_unwired_provider_check_happens_before_stage_1_lookup():
 # --- _STAGE_2_RESOLVERS registry content (this phase only) -----------------
 
 
-def test_stage_2_resolvers_registry_contains_exactly_three_wired_providers():
-    assert set(psr._STAGE_2_RESOLVERS) == {"twelve_data", "alpha_vantage", "finnhub"}
+def test_stage_2_resolvers_registry_contains_exactly_four_wired_providers():
+    assert set(psr._STAGE_2_RESOLVERS) == {"twelve_data", "alpha_vantage", "finnhub", "alpaca"}
 
 
 # --- result shape ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", ["twelve_data", "alpha_vantage", "finnhub"])
+@pytest.mark.parametrize("provider", ["twelve_data", "alpha_vantage", "finnhub", "alpaca"])
 def test_result_shape_has_exactly_five_keys(provider):
     result = psr.resolve_provider_symbol("EURUSD", provider, _base_config())
     assert set(result.keys()) == {
@@ -297,19 +299,30 @@ def _source_without_docstrings() -> str:
     return re.sub(r'""".*?"""', "", source, flags=re.DOTALL)
 
 
-def test_core_data_providers_coupling_is_exactly_the_two_locked_imports():
+def test_core_data_providers_coupling_is_exactly_the_locked_imports():
     """This module's core.data_providers coupling is narrowed, not
-    absent: the AV and Finnhub Stage 2 Design Gates authorize importing
-    ONLY _to_av_symbol and FINNHUB_SYMBOL_MAP, by direct reference,
-    never copied/reimplemented. Every other core.data_providers name
-    (fetch_with_failover, _fetch_alpha_vantage, _fetch_finnhub,
-    DataFetchError, etc.) stays unimported, and Stage 1 is still reused
-    via backtest.shadow_outcome_resolver only."""
+    absent: the AV, Finnhub, and Alpaca Stage 2 Design Gates authorize
+    importing ONLY FINNHUB_SYMBOL_MAP, _to_av_symbol, _alpaca_crypto_
+    symbol, _internal_symbol, and _is_equity_symbol, by direct
+    reference, never copied/reimplemented. Every other
+    core.data_providers name (fetch_with_failover, _fetch_alpha_vantage,
+    _fetch_finnhub, _fetch_alpaca, DataFetchError, etc.) stays
+    unimported, and Stage 1 is still reused via
+    backtest.shadow_outcome_resolver only."""
     body = _source_without_docstrings()
-    assert body.count("from core.data_providers import FINNHUB_SYMBOL_MAP, _to_av_symbol") == 1
+    expected_import = (
+        "from core.data_providers import (\n"
+        "    FINNHUB_SYMBOL_MAP,\n"
+        "    _alpaca_crypto_symbol,\n"
+        "    _internal_symbol,\n"
+        "    _is_equity_symbol,\n"
+        "    _to_av_symbol,\n"
+        ")"
+    )
+    assert body.count(expected_import) == 1
     forbidden = (
         "import core.data_providers\n", "fetch_with_failover",
-        "_fetch_alpha_vantage", "_fetch_finnhub", "DataFetchError",
+        "_fetch_alpha_vantage", "_fetch_finnhub", "_fetch_alpaca", "DataFetchError",
     )
     for pattern in forbidden:
         assert pattern not in body, f"provider_symbol_resolution unexpectedly references {pattern!r}"

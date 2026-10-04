@@ -4,7 +4,7 @@ import pytest
 from storage.outcome_tracker import (
     log_signal, close_signal, get_open_signals,
     performance_summary, recent_signals, _pip_size,
-    reconcile_close_signal,
+    reconcile_close_signal, ordered_closed_outcomes, _conn,
 )
 
 
@@ -226,3 +226,61 @@ def test_performance_summary_all_breakeven_profit_factor_is_not_infinite():
     close_signal(sid, 1.0850, "breakeven", risk_usd=100.0)
     summary = performance_summary()
     assert summary["profit_factor"] is None
+
+
+# ---------- ordered_closed_outcomes() (ESS diagnostic Design Gate) ---------
+
+
+def test_ordered_closed_outcomes_returns_chronological_order():
+    sid_a = log_signal(_make_report(symbol="EURUSD"))
+    close_signal(sid_a, 1.0640, "win", risk_usd=100.0)
+    sid_b = log_signal(_make_report(symbol="GBPUSD"))
+    close_signal(sid_b, 1.0920, "loss", risk_usd=100.0)
+
+    # Force a specific, testable chronological order regardless of real
+    # wall-clock timing between the two log_signal() calls above.
+    with _conn() as con:
+        con.execute("UPDATE outcomes SET entry_time = ? WHERE signal_id = ?",
+                    ("2026-01-01T00:00:00+00:00", sid_b))
+        con.execute("UPDATE outcomes SET entry_time = ? WHERE signal_id = ?",
+                    ("2026-01-02T00:00:00+00:00", sid_a))
+
+    rows = ordered_closed_outcomes()
+    symbols_in_order = [r["symbol"] for r in rows]
+    assert symbols_in_order.index("GBPUSD") < symbols_in_order.index("EURUSD")
+
+
+def test_ordered_closed_outcomes_excludes_open_signals():
+    log_signal(_make_report(symbol="STILLOPEN"))  # never closed
+    sid = log_signal(_make_report(symbol="CLOSED1"))
+    close_signal(sid, 1.0640, "win", risk_usd=100.0)
+
+    rows = ordered_closed_outcomes()
+    assert {r["symbol"] for r in rows} == {"CLOSED1"}
+
+
+def test_ordered_closed_outcomes_symbol_filter():
+    sid_a = log_signal(_make_report(symbol="EURUSD"))
+    close_signal(sid_a, 1.0640, "win", risk_usd=100.0)
+    sid_b = log_signal(_make_report(symbol="XAUUSD"))
+    close_signal(sid_b, 1.0640, "win", risk_usd=100.0)
+
+    rows = ordered_closed_outcomes(symbols={"XAUUSD"})
+    assert {r["symbol"] for r in rows} == {"XAUUSD"}
+
+
+def test_ordered_closed_outcomes_unfiltered_returns_everything():
+    for sym in ("EURUSD", "XAUUSD", "BTCUSD"):
+        sid = log_signal(_make_report(symbol=sym))
+        close_signal(sid, 1.0640, "win", risk_usd=100.0)
+
+    rows = ordered_closed_outcomes()
+    assert {r["symbol"] for r in rows} == {"EURUSD", "XAUUSD", "BTCUSD"}
+
+
+def test_ordered_closed_outcomes_row_shape():
+    sid = log_signal(_make_report(symbol="EURUSD"))
+    close_signal(sid, 1.0640, "win", risk_usd=100.0)
+
+    rows = ordered_closed_outcomes()
+    assert set(rows[0].keys()) == {"symbol", "outcome", "pnl_usd", "entry_time"}

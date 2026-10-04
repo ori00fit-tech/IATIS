@@ -11,6 +11,7 @@ from core.data_providers import (
     _fetch_yahoo_finance,
     _fetch_fcs_api,
     _to_yfinance_symbol,
+    _to_av_symbol,
     _is_equity_symbol,
     _fetch_finnhub,
     _fetch_finnhub_equity,
@@ -38,6 +39,48 @@ def test_to_yfinance_symbol_fx():
 def test_to_yfinance_symbol_special():
     assert _to_yfinance_symbol("XAU/USD") == "GC=F"
     assert _to_yfinance_symbol("BTC/USD") == "BTC-USD"
+
+
+def test_to_av_symbol_slash_form_fx():
+    assert _to_av_symbol("EUR/USD") == ("EUR", "USD")
+
+
+def test_to_av_symbol_slash_form_metals():
+    assert _to_av_symbol("XAU/USD") == ("XAU", "USD")
+
+
+def test_to_av_symbol_no_slash_falls_back_to_fixed_width_slice():
+    """Locked-frozen existing behavior (AV Stage 2 Design Gate, 2026):
+    a no-slash input is split by a blind symbol[:3]/symbol[3:] slice --
+    never validated, never a lookup. This is captured here as a
+    regression guard for the CURRENT behavior, not an endorsement of it;
+    changing it is explicitly out of scope for that gate."""
+    assert _to_av_symbol("EURUSD") == ("EUR", "USD")
+
+
+def test_to_av_symbol_slash_with_extra_segment_silently_drops_it():
+    """Locked-frozen existing behavior: only parts[0]/parts[1] are ever
+    used -- a third slash-separated segment is silently discarded, never
+    raised on."""
+    assert _to_av_symbol("XAU/USD/EXTRA") == ("XAU", "USD")
+
+
+def test_to_av_symbol_short_no_slash_input_produces_empty_to_symbol():
+    """Locked-frozen existing behavior: a no-slash input under 3
+    characters slices to an empty to_symbol rather than failing."""
+    assert _to_av_symbol("EU") == ("EU", "")
+
+
+def test_to_av_symbol_never_raises_and_never_returns_none():
+    """_to_av_symbol() has no coverage predicate -- it always produces
+    SOME 2-tuple of strings, never a failure signal. This is the exact
+    fact the AV Stage 2 Design Gate relies on to justify never inventing
+    PROVIDER_SYMBOL_UNSUPPORTED for Alpha Vantage."""
+    for value in ("EUR/USD", "XAU/USD", "EURUSD", "", "X"):
+        result = _to_av_symbol(value)
+        assert result is not None
+        assert isinstance(result, tuple)
+        assert len(result) == 2
     assert _to_yfinance_symbol("DJI") == "^DJI"
 
 

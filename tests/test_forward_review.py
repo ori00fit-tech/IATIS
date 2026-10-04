@@ -81,3 +81,76 @@ def test_result_shape_carries_every_documented_field():
     for key in ("rule_id", "statement", "bucket", "n", "min_n", "metric", "value",
                 "op", "threshold", "triggered", "action", "insufficient_n"):
         assert key in result
+
+
+# ---------- _bucket_stats() diagnostic ESS addition (ESS Design Gate) -----
+
+
+def test_bucket_stats_adds_diagnostic_ess_fields_without_changing_n_wr_pf():
+    from scripts.forward_review import _bucket_stats
+
+    rows = [
+        {"symbol": "EURUSD", "outcome": "win", "pnl_usd": 100.0, "entry_time": "2026-01-01T00:00:00+00:00"},
+        {"symbol": "EURUSD", "outcome": "loss", "pnl_usd": -50.0, "entry_time": "2026-01-02T00:00:00+00:00"},
+        {"symbol": "EURUSD", "outcome": "win", "pnl_usd": 80.0, "entry_time": "2026-01-03T00:00:00+00:00"},
+    ]
+    result = _bucket_stats(rows, {"EURUSD"})
+
+    # n/wr/pf: identical computation to before this change.
+    assert result["n"] == 3
+    assert result["wr"] == round(100 * 2 / 3, 1)
+    assert result["pf"] == round(180.0 / 50.0, 3)
+
+    # New diagnostic fields present, clearly labeled.
+    assert "ess_pnl_usd" in result
+    assert "ess_basis" in result
+    assert "never gates D001/D002" in result["ess_basis"]
+    assert "dollar P&L" in result["ess_basis"]
+    assert "NOT the risk-normalized" in result["ess_basis"]
+
+
+def test_bucket_stats_ess_is_none_below_the_underlying_floor():
+    """effective_sample_size() itself returns None for n&lt;5 -- this
+    function must not fabricate a value in that case."""
+    from scripts.forward_review import _bucket_stats
+
+    rows = [
+        {"symbol": "EURUSD", "outcome": "win", "pnl_usd": 100.0, "entry_time": "2026-01-01T00:00:00+00:00"},
+    ]
+    result = _bucket_stats(rows, {"EURUSD"})
+    assert result["ess_pnl_usd"] is None
+
+
+def test_bucket_stats_ess_never_exceeds_raw_n():
+    """ESS is mathematically always &lt;= N for any series -- a direct,
+    executable check that this diagnostic can never make the bucket
+    LOOK more sufficient than the raw count already locked for
+    evaluate_rules()."""
+    from scripts.forward_review import _bucket_stats
+
+    rows = [
+        {"symbol": "EURUSD", "outcome": "win" if i % 2 == 0 else "loss",
+         "pnl_usd": 10.0 if i % 2 == 0 else -10.0,
+         "entry_time": f"2026-01-{i + 1:02d}T00:00:00+00:00"}
+        for i in range(20)
+    ]
+    result = _bucket_stats(rows, {"EURUSD"})
+    assert result["ess_pnl_usd"] is not None
+    assert result["ess_pnl_usd"] <= result["n"]
+
+
+def test_evaluate_rules_unaffected_by_the_new_ess_fields():
+    """evaluate_rules() must remain byte-for-byte unchanged -- feeding it
+    a bucket dict that now ALSO carries ess_pnl_usd/ess_basis must
+    produce identical verdicts to a bucket dict without them."""
+    from scripts.forward_review import evaluate_rules
+
+    rule = {
+        "R1": {"statement": "s", "bucket": "fx", "metric": "pf", "op": "<",
+               "threshold": 1.0, "min_n": 40, "action": "a"},
+    }
+    plain_buckets = {"fx": {"n": 45, "pf": 0.8, "wr": 40.0}}
+    enriched_buckets = {"fx": {"n": 45, "pf": 0.8, "wr": 40.0,
+                                "ess_pnl_usd": 12.3, "ess_basis": "diagnostic only"}}
+
+    assert evaluate_rules(rule, plain_buckets) == evaluate_rules(rule, enriched_buckets)

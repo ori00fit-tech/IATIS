@@ -26,25 +26,23 @@ TWO-STAGE CONTRACT, locked:
     UNSUPPORTED state -- never a provider-specific variant (no
     FINNHUB_SYMBOL_UNSUPPORTED, no AV_SYMBOL_UNSUPPORTED, locked
     explicitly as a single, non-multiplying name in the resolver's
-    public contract). Finnhub's own closed symbol map remains an
-    internal implementation detail of *how* that state might eventually
-    be reached for Finnhub specifically -- never part of this module's
-    own public shape.
+    public contract). Finnhub's own closed symbol map (see below) is
+    the FIRST real exercise of this state -- it was reachable in theory
+    since this module's creation, never exercised by twelve_data or
+    alpha_vantage, both of which can never fail.
 
 WHAT THIS PHASE WIRES IN, and NOTHING MORE (operator's own locked
 scope): Stage 2 is implemented for "twelve_data" (a pass-through, since
-the shared slash-form symbol already IS Twelve Data's own wire format)
-AND "alpha_vantage" (operator's own locked AV Stage 2 Design Gate,
+the shared slash-form symbol already IS Twelve Data's own wire format),
+"alpha_vantage" (operator's own locked AV Stage 2 Design Gate, 2026),
+AND "finnhub" (operator's own locked Finnhub Stage 2 Design Gate,
 2026) -- see below.
 
 Calling resolve_provider_symbol() with any OTHER provider name raises
 ProviderSymbolResolutionError -- a DIFFERENT fact from PROVIDER_SYMBOL_
 UNSUPPORTED: it means "no Stage 2 translator is wired into this
 dispatcher for that provider yet," never a claim about whether that
-provider could, in principle, serve the symbol. Finnhub's own symbol
-map is explicitly NOT wired in here -- per the operator's own locked
-instruction, it remains a future consumer of this same contract, not
-something this phase builds.
+provider could, in principle, serve the symbol.
 
 ALPHA VANTAGE STAGE 2 (operator's own locked Design Gate, distinct from
 the generic contract above -- read carefully before touching this
@@ -86,12 +84,57 @@ provider's wiring):
 
   This module's "no core.data_providers coupling" invariant is narrowed,
   not dropped, by this gate: _to_av_symbol -- and ONLY _to_av_symbol --
-  is now imported directly from core.data_providers, by direct call,
-  never copied or reimplemented. _fetch_alpha_vantage,
-  fetch_with_failover, FINNHUB_SYMBOL_MAP, and every other
-  core.data_providers name remain unimported here -- confirmed by this
-  module's own structural tests, which now assert the forbidden-name
-  list excluding only this one locked exception.
+  is imported directly from core.data_providers for Alpha Vantage, by
+  direct call, never copied or reimplemented. _fetch_alpha_vantage,
+  fetch_with_failover, and every other core.data_providers name remain
+  unimported here -- confirmed by this module's own structural tests.
+
+FINNHUB STAGE 2 (operator's own locked Design Gate, distinct from both
+contracts above -- read carefully before touching this provider's
+wiring):
+
+  _resolve_finnhub() reads core.data_providers.FINNHUB_SYMBOL_MAP
+  DIRECTLY -- the SAME 12-entry constant core.data_providers._fetch_
+  finnhub() itself reads, extracted from that function's own body to
+  module scope BY THIS GATE (it was previously a local dict re-created
+  on every _fetch_finnhub() call) so this module can reuse it by direct
+  reference, never a second copy. core.data_providers.py IS modified by
+  this phase -- the one and only exception, across every phase in this
+  Design Gate chain, to the otherwise-universal "zero diff on
+  core/data_providers.py" closing check. The replacement closing
+  standard for this phase is BEHAVIOR-EQUIVALENCE of _fetch_finnhub():
+  all 12 previously-covered symbols must produce the exact same
+  fh_symbol value, and an unmapped symbol must raise the exact same
+  DataFetchError type and message, both before and after the
+  extraction -- proven by tests, not by an empty diff.
+
+  Unlike Alpha Vantage's _to_av_symbol() (no coverage predicate at
+  all), Finnhub's map IS a genuine, pre-existing, closed coverage
+  predicate -- a dict with exactly 12 keys, all FX pairs plus XAU/USD,
+  BTC/USD, ETH/USD. _resolve_finnhub() is nothing but a lookup against
+  it: shared_symbol in the map -> that entry's value; shared_symbol NOT
+  in the map -> None, which resolve_provider_symbol() then correctly
+  reports as PROVIDER_SYMBOL_UNSUPPORTED. This is the FIRST Stage 2
+  resolver to ever return None, and therefore the first to actually
+  exercise that branch.
+
+  PROVIDER_SYMBOL_UNSUPPORTED for "finnhub" reflects ACTUAL map
+  coverage, never provider-chain membership (operator's own locked
+  distinction): config.yaml lists "finnhub" in the metals, energy, and
+  indices chains, but FINNHUB_SYMBOL_MAP has no XAG/USD entry and no
+  energy or index entries at all -- so XAG/USD, USOIL, US30/NAS100/
+  SPX500 (and any other non-FX/metals/crypto shared symbol) all
+  correctly resolve to PROVIDER_SYMBOL_UNSUPPORTED here, honestly
+  exposing a real gap the provider chain's own membership list does
+  not reveal. This phase does NOT add a single new mapping to close
+  that gap -- expanding coverage is explicitly out of scope.
+
+  No equity special-casing exists in _resolve_finnhub() (operator's own
+  locked instruction): it is a plain dict lookup with no
+  _is_equity_symbol() branch of any kind. An equity-shaped shared
+  symbol reaching this function is simply absent from the map -- an
+  ordinary miss, resolved to PROVIDER_SYMBOL_UNSUPPORTED like any other
+  unmapped symbol, not a special case requiring its own logic.
 
 TWELVE DATA REGRESSION PROTECTION (locked): this module changes no
 value backtest.shadow_outcome_resolver._provider_symbol() or
@@ -101,15 +144,16 @@ modified by this phase -- this is a purely additive, parallel entry
 point, reusing _provider_symbol() by direct call, not by copy.
 
 NON-NEGOTIABLE: no date-range behavior change, no Finnhub coverage
-expansion, no fetch/governance logic, no change to any provider's own
-fetch function, no network or storage access anywhere in this module.
+expansion (no new XAG/energy/index mappings), no equity redesign, no
+HTTP-403 repair, no provider-chain changes, no fetch/failover redesign,
+no network or storage access anywhere in this module.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
 from backtest.shadow_outcome_resolver import _provider_symbol
-from core.data_providers import _to_av_symbol
+from core.data_providers import FINNHUB_SYMBOL_MAP, _to_av_symbol
 
 PROVIDER_SYMBOL_UNSUPPORTED = "PROVIDER_SYMBOL_UNSUPPORTED"
 
@@ -159,18 +203,39 @@ def _resolve_alpha_vantage(shared_symbol: str) -> tuple[str, str]:
     return _to_av_symbol(shared_symbol)
 
 
-# Wired-in Stage 2 translators, this phase only. Adding "finnhub" here
-# is explicitly future work (per the locked Design Gate) -- not
-# something this phase authorizes. Return types are deliberately
+def _resolve_finnhub(shared_symbol: str) -> str | None:
+    """Stage 2 for finnhub: a plain dict lookup against
+    core.data_providers.FINNHUB_SYMBOL_MAP -- the SAME 12-entry constant
+    core.data_providers._fetch_finnhub() itself reads, read directly,
+    never copied.
+
+    Unlike _to_av_symbol(), this map IS a genuine, pre-existing, closed
+    coverage predicate: shared_symbol in the map -> that entry's own
+    Finnhub wire-format value; shared_symbol NOT in the map -> None,
+    which resolve_provider_symbol() reports as PROVIDER_SYMBOL_
+    UNSUPPORTED. This correctly reflects ACTUAL Finnhub coverage (only
+    FX pairs + XAU/USD + BTC/USD + ETH/USD), never provider-chain
+    membership -- config.yaml lists "finnhub" in metals/energy/indices
+    chains the map does not actually cover (no XAG/USD, no energy, no
+    index entries), and this function does not paper over that gap.
+
+    No equity special-casing: an equity-shaped shared_symbol is simply
+    absent from the map, an ordinary miss like any other unmapped
+    symbol -- there is no _is_equity_symbol() branch here."""
+    return FINNHUB_SYMBOL_MAP.get(shared_symbol)
+
+
+# Wired-in Stage 2 translators. Return types are deliberately
 # heterogeneous across providers (str for twelve_data, tuple[str, str]
-# for alpha_vantage) -- provider_symbol is provider-shaped, not
-# provider-uniform, per the operator's own locked AV Stage 2 Design
-# Gate: forcing Alpha Vantage's genuine (from_symbol, to_symbol) wire
-# format into a single string would be an unauthorized normalization
-# layer this gate does not grant.
+# for alpha_vantage, str | None for finnhub) -- provider_symbol is
+# provider-shaped, not provider-uniform, per the operator's own locked
+# AV Stage 2 Design Gate: forcing Alpha Vantage's genuine (from_symbol,
+# to_symbol) wire format into a single string would be an unauthorized
+# normalization layer this gate does not grant.
 _STAGE_2_RESOLVERS: dict[str, Callable[[str], Any]] = {
     "twelve_data": _resolve_twelve_data,
     "alpha_vantage": _resolve_alpha_vantage,
+    "finnhub": _resolve_finnhub,
 }
 
 
@@ -188,23 +253,25 @@ def resolve_provider_symbol(
     Stage 2 dispatches on `provider`. If no Stage 2 translator is wired
     in for that provider name, raises ProviderSymbolResolutionError (a
     "not implemented here" structural fact, never a coverage claim).
-    This phase wires in "twelve_data" and "alpha_vantage" only.
+    This phase wires in "twelve_data", "alpha_vantage", and "finnhub".
 
     Returns exactly: {internal_symbol, provider, shared_symbol,
     provider_symbol, resolution_state}. `provider_symbol` is
     provider-shaped, not provider-uniform: a `str` for "twelve_data", a
     `tuple[str, str]` for "alpha_vantage" (Alpha Vantage's own wire
     format genuinely is a (from_symbol, to_symbol) pair -- passed
-    through unchanged, never reconstructed into a string).
-    `resolution_state` is None when fully resolved, or
-    PROVIDER_SYMBOL_UNSUPPORTED when Stage 2 recognized the provider but
-    could not represent this specific shared_symbol -- unreachable for
-    both providers wired in this phase (neither translator can fail:
-    twelve_data's pass-through trivially, alpha_vantage's
-    _to_av_symbol() because it has no coverage predicate at all, see
-    _resolve_alpha_vantage()'s own docstring), reserved as honest,
-    non-dead vocabulary for providers wired in later (e.g. Finnhub's own
-    closed symbol map, which CAN fail closed).
+    through unchanged, never reconstructed into a string), a `str` for
+    "finnhub" when mapped. `resolution_state` is None when fully
+    resolved, or PROVIDER_SYMBOL_UNSUPPORTED when Stage 2 recognized the
+    provider but could not represent this specific shared_symbol --
+    unreachable for "twelve_data" and "alpha_vantage" (neither
+    translator can ever fail: twelve_data's pass-through trivially,
+    alpha_vantage's _to_av_symbol() because it has no coverage
+    predicate at all, see _resolve_alpha_vantage()'s own docstring), but
+    genuinely reachable for "finnhub" -- its closed symbol map CAN and
+    does fail closed for any shared_symbol outside its 12 entries (see
+    _resolve_finnhub()'s own docstring). This is the first provider in
+    this dispatcher to actually exercise this branch.
 
     Pure -- no network call, no storage read or write, no randomness.
     """

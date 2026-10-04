@@ -13,6 +13,7 @@ from core.data_providers import (
     _to_yfinance_symbol,
     _to_av_symbol,
     _is_equity_symbol,
+    FINNHUB_SYMBOL_MAP,
     _fetch_finnhub,
     _fetch_finnhub_equity,
     _fetch_alpha_vantage,
@@ -269,6 +270,70 @@ def test_fetch_finnhub_dispatches_equity_symbols_to_the_equity_endpoint(monkeypa
     with patch("core.data_providers._fetch_finnhub_equity", return_value=_make_df()) as mock_eq:
         _fetch_finnhub("AAPL", "D1", 10)
     mock_eq.assert_called_once_with("AAPL", "D1", 10)
+
+
+# --- FINNHUB_SYMBOL_MAP (Finnhub Stage 2 Design Gate: extracted to module
+# scope unchanged, so backtest/provider_symbol_resolution.py can reuse it
+# by direct reference) -- behavior-equivalence regression guards. ---------
+
+
+def test_finnhub_symbol_map_exact_contents():
+    """Regression guard for the module-scope extraction: these must be
+    the EXACT same 12 entries that previously lived as a local dict
+    inside _fetch_finnhub, unchanged."""
+    assert FINNHUB_SYMBOL_MAP == {
+        "EUR/USD": "OANDA:EUR_USD",
+        "GBP/USD": "OANDA:GBP_USD",
+        "USD/JPY": "OANDA:USD_JPY",
+        "USD/CHF": "OANDA:USD_CHF",
+        "AUD/USD": "OANDA:AUD_USD",
+        "USD/CAD": "OANDA:USD_CAD",
+        "NZD/USD": "OANDA:NZD_USD",
+        "EUR/JPY": "OANDA:EUR_JPY",
+        "GBP/JPY": "OANDA:GBP_JPY",
+        "XAU/USD": "OANDA:XAU_USD",
+        "BTC/USD": "BINANCE:BTCUSDT",
+        "ETH/USD": "BINANCE:ETHUSDT",
+    }
+
+
+def _finnhub_forex_response(n=3):
+    base = 1735689600  # 2025-01-01 UTC
+    return {
+        "s": "ok",
+        "t": [base + i * 3600 for i in range(n)],
+        "o": [1.1 + i * 0.01 for i in range(n)],
+        "h": [1.2 + i * 0.01 for i in range(n)],
+        "l": [1.0 + i * 0.01 for i in range(n)],
+        "c": [1.15 + i * 0.01 for i in range(n)],
+    }
+
+
+@pytest.mark.parametrize("shared_symbol,expected_fh_symbol", list(FINNHUB_SYMBOL_MAP.items()))
+def test_fetch_finnhub_forex_uses_the_exact_mapped_symbol(monkeypatch, shared_symbol, expected_fh_symbol):
+    """Behavior-equivalence (Finnhub Stage 2 Design Gate closing check,
+    replacing a zero-diff check on core/data_providers.py): every one
+    of the 12 previously-covered symbols must still produce the exact
+    same fh_symbol value in the actual Finnhub request, before and
+    after extracting FINNHUB_SYMBOL_MAP to module scope."""
+    monkeypatch.setenv("FINNHUB_API_KEY", "test_key")
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _finnhub_forex_response(3)
+    mock_resp.raise_for_status.return_value = None
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        df = _fetch_finnhub(shared_symbol, "H1", 10)
+    assert len(df) == 3
+    called_url, called_params = mock_get.call_args[0][0], mock_get.call_args[1]["params"]
+    assert called_url == "https://finnhub.io/api/v1/forex/candle"
+    assert called_params["symbol"] == expected_fh_symbol
+
+
+def test_fetch_finnhub_raises_same_error_type_and_message_for_unmapped_symbol(monkeypatch):
+    """Behavior-equivalence: an unmapped symbol must raise the exact
+    same DataFetchError type and message, unchanged by the extraction."""
+    monkeypatch.setenv("FINNHUB_API_KEY", "test_key")
+    with pytest.raises(DataFetchError, match=r"Finnhub: no mapping for XAG/USD"):
+        _fetch_finnhub("XAG/USD", "H1", 10)
 
 
 def test_fetch_alpha_vantage_dispatches_equity_symbols_to_the_equity_endpoint(monkeypatch):

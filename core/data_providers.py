@@ -421,6 +421,28 @@ def _fetch_finnhub_equity(symbol: str, interval: str, outputsize: int) -> pd.Dat
     return df
 
 
+# Finnhub's own closed FX/metals/crypto symbol map (module scope, locked
+# Finnhub Stage 2 Design Gate): the SAME 12 entries that previously lived
+# as a local dict inside _fetch_finnhub, extracted unchanged so
+# backtest/provider_symbol_resolution.py can reuse this exact predicate
+# by direct reference, never by a second copy. _fetch_finnhub below reads
+# this same constant -- its own lookup/raise behavior is unchanged.
+FINNHUB_SYMBOL_MAP = {
+    "EUR/USD": "OANDA:EUR_USD",
+    "GBP/USD": "OANDA:GBP_USD",
+    "USD/JPY": "OANDA:USD_JPY",
+    "USD/CHF": "OANDA:USD_CHF",
+    "AUD/USD": "OANDA:AUD_USD",
+    "USD/CAD": "OANDA:USD_CAD",
+    "NZD/USD": "OANDA:NZD_USD",
+    "EUR/JPY": "OANDA:EUR_JPY",
+    "GBP/JPY": "OANDA:GBP_JPY",
+    "XAU/USD": "OANDA:XAU_USD",
+    "BTC/USD": "BINANCE:BTCUSDT",
+    "ETH/USD": "BINANCE:ETHUSDT",
+}
+
+
 def _fetch_finnhub(
     symbol: str,
     interval: str,
@@ -448,20 +470,6 @@ def _fetch_finnhub(
         raise DataFetchError("requests not installed")
 
     # Convert to Finnhub format
-    FINNHUB_SYMBOL_MAP = {
-        "EUR/USD": "OANDA:EUR_USD",
-        "GBP/USD": "OANDA:GBP_USD",
-        "USD/JPY": "OANDA:USD_JPY",
-        "USD/CHF": "OANDA:USD_CHF",
-        "AUD/USD": "OANDA:AUD_USD",
-        "USD/CAD": "OANDA:USD_CAD",
-        "NZD/USD": "OANDA:NZD_USD",
-        "EUR/JPY": "OANDA:EUR_JPY",
-        "GBP/JPY": "OANDA:GBP_JPY",
-        "XAU/USD": "OANDA:XAU_USD",
-        "BTC/USD": "BINANCE:BTCUSDT",
-        "ETH/USD": "BINANCE:ETHUSDT",
-    }
     fh_symbol = FINNHUB_SYMBOL_MAP.get(symbol)
     if not fh_symbol:
         raise DataFetchError(f"Finnhub: no mapping for {symbol}")

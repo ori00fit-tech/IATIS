@@ -2,11 +2,15 @@
 provider_symbol_resolution.py (Alpha Vantage / Finnhub Targeting Design
 Gate, generic-symbol-resolution phase): the locked two-stage contract
 (Stage 1 = backtest.shadow_outcome_resolver._provider_symbol(), reused
-verbatim; Stage 2 = per-provider dispatch, "twelve_data" wired in this
-phase only), Stage 1 failure propagation unchanged, Stage 2 pass-through
-behavior for twelve_data, ProviderSymbolResolutionError for any provider
-not yet wired in, the exact result shape, and structural independence
-from core.data_providers / network / storage / execution / scheduler."""
+verbatim; Stage 2 = per-provider dispatch, "twelve_data" and
+"alpha_vantage" wired in this phase), Stage 1 failure propagation
+unchanged, Stage 2 pass-through behavior for twelve_data, Stage 2
+direct-call-through-to-_to_av_symbol() for alpha_vantage (including its
+provider-shaped, non-str provider_symbol and its always-None
+resolution_state), ProviderSymbolResolutionError for any provider not
+yet wired in (finnhub), the exact result shape, and structural
+independence from core.data_providers (beyond the one locked
+_to_av_symbol import) / network / storage / execution / scheduler."""
 from __future__ import annotations
 
 import inspect
@@ -16,6 +20,7 @@ import pytest
 
 from backtest import provider_symbol_resolution as psr
 from backtest.shadow_outcome_resolver import ShadowOutcomeResolverError, _provider_symbol
+from core.data_providers import _to_av_symbol
 
 
 def _base_config() -> dict:
@@ -53,6 +58,62 @@ def test_twelve_data_never_produces_unsupported_state():
     assert result["provider_symbol"] is not None
 
 
+# --- Stage 1 + Stage 2 happy path (alpha_vantage) ---------------------------
+
+
+def test_alpha_vantage_resolves_to_from_to_tuple():
+    result = psr.resolve_provider_symbol("EURUSD", "alpha_vantage", _base_config())
+    assert result == {
+        "internal_symbol": "EURUSD",
+        "provider": "alpha_vantage",
+        "shared_symbol": "EUR/USD",
+        "provider_symbol": ("EUR", "USD"),
+        "resolution_state": None,
+    }
+
+
+def test_alpha_vantage_provider_symbol_equals_direct_to_av_symbol_call_regression():
+    """Regression-equivalence: the tuple returned here must be
+    byte-identical to calling _to_av_symbol() directly on the same
+    shared_symbol -- this module must never transform Alpha Vantage's
+    own translated value."""
+    config = _base_config()
+    shared_symbol = _provider_symbol("EURUSD", config)
+    direct = _to_av_symbol(shared_symbol)
+    result = psr.resolve_provider_symbol("EURUSD", "alpha_vantage", config)
+    assert result["provider_symbol"] == direct
+
+
+def test_alpha_vantage_provider_symbol_is_a_tuple_not_a_string():
+    """provider_symbol is provider-shaped, not provider-uniform (locked
+    AV Stage 2 Design Gate): Alpha Vantage's genuine wire format is a
+    (from_symbol, to_symbol) pair, never reconstructed into a slash-string
+    or any other single-string normalization."""
+    result = psr.resolve_provider_symbol("EURUSD", "alpha_vantage", _base_config())
+    assert isinstance(result["provider_symbol"], tuple)
+    assert result["provider_symbol"] == ("EUR", "USD")
+
+
+def test_alpha_vantage_never_produces_unsupported_state():
+    """_to_av_symbol() has no coverage predicate -- AV's
+    resolution_state must always be None, never PROVIDER_SYMBOL_
+    UNSUPPORTED, since inventing that path would require inventing a
+    coverage predicate that does not exist in the real translator."""
+    result = psr.resolve_provider_symbol("EURUSD", "alpha_vantage", _base_config())
+    assert result["resolution_state"] is None
+
+
+def test_alpha_vantage_malformed_input_passes_through_frozen_behavior_unchanged():
+    """_to_av_symbol()'s existing malformed-input behavior (e.g. a
+    no-slash internal-style symbol slicing blindly) is frozen, not
+    validated or redesigned by this dispatcher -- the same tuple
+    _to_av_symbol() itself would produce is returned, whatever it is."""
+    config = {"data": {"twelve_data_symbols": [{"internal": "WEIRD", "symbol": "EURUSD"}]}}
+    result = psr.resolve_provider_symbol("WEIRD", "alpha_vantage", config)
+    assert result["provider_symbol"] == _to_av_symbol("EURUSD") == ("EUR", "USD")
+    assert result["resolution_state"] is None
+
+
 # --- Stage 1 failure propagation (unchanged) --------------------------------
 
 
@@ -74,15 +135,11 @@ def test_stage_1_failure_raised_before_stage_2_dispatch_check_is_irrelevant():
 
 
 # --- unwired provider: ProviderSymbolResolutionError ------------------------
+# (finnhub remains the only unwired provider this phase; alpha_vantage was
+# wired in by the AV Stage 2 Design Gate above.)
 
 
 def test_unwired_provider_raises_provider_symbol_resolution_error():
-    config = _base_config()
-    with pytest.raises(psr.ProviderSymbolResolutionError, match="alpha_vantage"):
-        psr.resolve_provider_symbol("EURUSD", "alpha_vantage", config)
-
-
-def test_finnhub_also_unwired_in_this_phase():
     config = _base_config()
     with pytest.raises(psr.ProviderSymbolResolutionError, match="finnhub"):
         psr.resolve_provider_symbol("EURUSD", "finnhub", config)
@@ -95,7 +152,7 @@ def test_unwired_provider_error_is_distinct_from_unsupported_state():
     claim."""
     config = _base_config()
     with pytest.raises(psr.ProviderSymbolResolutionError) as exc_info:
-        psr.resolve_provider_symbol("EURUSD", "alpha_vantage", config)
+        psr.resolve_provider_symbol("EURUSD", "finnhub", config)
     message = str(exc_info.value)
     assert "could not, in principle, serve this symbol" in message
 
@@ -106,21 +163,22 @@ def test_unwired_provider_check_happens_before_stage_1_lookup():
     structural precondition evaluated first."""
     config = {"data": {"twelve_data_symbols": []}}
     with pytest.raises(psr.ProviderSymbolResolutionError):
-        psr.resolve_provider_symbol("UNKNOWNSYMBOL", "alpha_vantage", config)
+        psr.resolve_provider_symbol("UNKNOWNSYMBOL", "finnhub", config)
 
 
 # --- _STAGE_2_RESOLVERS registry content (this phase only) -----------------
 
 
-def test_stage_2_resolvers_registry_contains_only_twelve_data():
-    assert set(psr._STAGE_2_RESOLVERS) == {"twelve_data"}
+def test_stage_2_resolvers_registry_contains_twelve_data_and_alpha_vantage_only():
+    assert set(psr._STAGE_2_RESOLVERS) == {"twelve_data", "alpha_vantage"}
 
 
 # --- result shape ------------------------------------------------------------
 
 
-def test_result_shape_has_exactly_five_keys():
-    result = psr.resolve_provider_symbol("EURUSD", "twelve_data", _base_config())
+@pytest.mark.parametrize("provider", ["twelve_data", "alpha_vantage"])
+def test_result_shape_has_exactly_five_keys(provider):
+    result = psr.resolve_provider_symbol("EURUSD", provider, _base_config())
     assert set(result.keys()) == {
         "internal_symbol", "provider", "shared_symbol", "provider_symbol", "resolution_state",
     }
@@ -134,14 +192,18 @@ def _source_without_docstrings() -> str:
     return re.sub(r'""".*?"""', "", source, flags=re.DOTALL)
 
 
-def test_no_core_data_providers_import():
-    """This module must never import core.data_providers -- no
-    _to_av_symbol, no FINNHUB_SYMBOL_MAP, no fetch_with_failover. Stage 1
-    is reused via backtest.shadow_outcome_resolver only."""
+def test_core_data_providers_coupling_is_exactly_the_one_locked_av_import():
+    """This module's core.data_providers coupling is narrowed, not
+    absent: the AV Stage 2 Design Gate authorizes importing ONLY
+    _to_av_symbol, by direct call, never copied. Every other
+    core.data_providers name (fetch_with_failover, FINNHUB_SYMBOL_MAP,
+    _fetch_alpha_vantage, DataFetchError, etc.) stays unimported, and
+    Stage 1 is still reused via backtest.shadow_outcome_resolver only."""
     body = _source_without_docstrings()
+    assert body.count("from core.data_providers import _to_av_symbol") == 1
     forbidden = (
-        "import core.data_providers", "from core.data_providers",
-        "fetch_with_failover", "_to_av_symbol", "FINNHUB_SYMBOL_MAP",
+        "import core.data_providers\n", "fetch_with_failover", "FINNHUB_SYMBOL_MAP",
+        "_fetch_alpha_vantage", "_fetch_finnhub", "DataFetchError",
     )
     for pattern in forbidden:
         assert pattern not in body, f"provider_symbol_resolution unexpectedly references {pattern!r}"

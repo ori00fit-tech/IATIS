@@ -32,23 +32,66 @@ TWO-STAGE CONTRACT, locked:
     own public shape.
 
 WHAT THIS PHASE WIRES IN, and NOTHING MORE (operator's own locked
-scope): Stage 2 is implemented for "twelve_data" ONLY -- a pass-through,
-since the shared slash-form symbol already IS Twelve Data's own wire
-format (confirmed by _provider_symbol()'s own existing, unmodified
-behavior and every caller that already uses its return value directly
-as the Twelve Data request symbol).
+scope): Stage 2 is implemented for "twelve_data" (a pass-through, since
+the shared slash-form symbol already IS Twelve Data's own wire format)
+AND "alpha_vantage" (operator's own locked AV Stage 2 Design Gate,
+2026) -- see below.
 
 Calling resolve_provider_symbol() with any OTHER provider name raises
 ProviderSymbolResolutionError -- a DIFFERENT fact from PROVIDER_SYMBOL_
 UNSUPPORTED: it means "no Stage 2 translator is wired into this
 dispatcher for that provider yet," never a claim about whether that
-provider could, in principle, serve the symbol. Alpha Vantage's own
-_to_av_symbol() and Finnhub's own symbol map are explicitly NOT wired in
-here -- per the operator's own locked instruction, they remain future
-consumers of this same contract, not something this phase builds. This
-module never imports core.data_providers at all (no _to_av_symbol, no
-Finnhub map, no fetch_with_failover) -- confirmed by this module's own
-structural tests.
+provider could, in principle, serve the symbol. Finnhub's own symbol
+map is explicitly NOT wired in here -- per the operator's own locked
+instruction, it remains a future consumer of this same contract, not
+something this phase builds.
+
+ALPHA VANTAGE STAGE 2 (operator's own locked Design Gate, distinct from
+the generic contract above -- read carefully before touching this
+provider's wiring):
+
+  _resolve_alpha_vantage() calls core.data_providers's own
+  _to_av_symbol() DIRECTLY -- never a copy or reimplementation of its
+  splitting logic. Gate 0 established (forensically, by direct code
+  reading) that _to_av_symbol() has NO coverage predicate: it is a pure
+  syntactic transformer (slash-split, or a blind symbol[:3]/symbol[3:]
+  slice otherwise) that ALWAYS returns a 2-tuple of strings and NEVER
+  raises or returns None -- structurally unlike Finnhub's own closed
+  symbol map, which can and does fail closed.
+
+  Because of this, AV's resolution_state is LOCKED to always be None in
+  this phase -- there is no invented PROVIDER_SYMBOL_UNSUPPORTED path
+  for Alpha Vantage, since inventing one would require inventing a
+  coverage predicate that does not exist in the real translator. A
+  non-None provider_symbol for "alpha_vantage" means ONLY "syntactically
+  transformable by _to_av_symbol()" -- it is NEVER a claim that Alpha
+  Vantage actually supports serving this instrument/endpoint. Successful
+  syntactic translation and confirmed provider capability are two
+  different facts, and this module asserts only the former.
+
+  provider_symbol is PROVIDER-SHAPED, not provider-uniform, by the
+  operator's own locked instruction: it is a `str` for "twelve_data" and
+  a `tuple[str, str]` for "alpha_vantage" (Alpha Vantage's own wire
+  format genuinely is a (from_symbol, to_symbol) pair, not a single
+  string -- forcing it into a string would be an unauthorized
+  normalization layer). The tuple _to_av_symbol() returns is passed
+  through completely unchanged -- no reconstruction, no re-joining into
+  a slash-string, no serialization of any kind.
+
+  _to_av_symbol()'s existing edge/malformed-input behavior (silently
+  dropping a third slash-separated segment, producing an empty
+  to_symbol for short no-slash inputs, etc.) is FROZEN for this gate --
+  explicitly not "fixed," not validated, not redesigned. Any future
+  tightening of that behavior is its own separate, future Design Gate.
+
+  This module's "no core.data_providers coupling" invariant is narrowed,
+  not dropped, by this gate: _to_av_symbol -- and ONLY _to_av_symbol --
+  is now imported directly from core.data_providers, by direct call,
+  never copied or reimplemented. _fetch_alpha_vantage,
+  fetch_with_failover, FINNHUB_SYMBOL_MAP, and every other
+  core.data_providers name remain unimported here -- confirmed by this
+  module's own structural tests, which now assert the forbidden-name
+  list excluding only this one locked exception.
 
 TWELVE DATA REGRESSION PROTECTION (locked): this module changes no
 value backtest.shadow_outcome_resolver._provider_symbol() or
@@ -63,9 +106,10 @@ fetch function, no network or storage access anywhere in this module.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from backtest.shadow_outcome_resolver import _provider_symbol
+from core.data_providers import _to_av_symbol
 
 PROVIDER_SYMBOL_UNSUPPORTED = "PROVIDER_SYMBOL_UNSUPPORTED"
 
@@ -94,11 +138,39 @@ def _resolve_twelve_data(shared_symbol: str) -> str:
     return shared_symbol
 
 
-# Wired-in Stage 2 translators, this phase only. Adding "alpha_vantage"
-# or "finnhub" here is explicitly future work (per the locked Design
-# Gate) -- not something this phase authorizes.
-_STAGE_2_RESOLVERS = {
+def _resolve_alpha_vantage(shared_symbol: str) -> tuple[str, str]:
+    """Stage 2 for alpha_vantage: calls core.data_providers._to_av_symbol()
+    DIRECTLY (never a copy of its splitting logic) and returns its
+    (from_symbol, to_symbol) tuple completely unchanged -- no
+    reconstruction, no re-joining into a slash-string, no serialization.
+
+    _to_av_symbol() has NO coverage predicate (Gate 0 finding, confirmed
+    by direct code reading): it always returns a 2-tuple of strings and
+    never raises or returns None, even for malformed input. Because of
+    this, this function never returns None and this provider's
+    resolution_state is therefore always None in resolve_provider_symbol()
+    -- there is no invented PROVIDER_SYMBOL_UNSUPPORTED path for Alpha
+    Vantage. A non-None result here means ONLY "syntactically
+    transformable by _to_av_symbol()" -- it is NEVER a claim that Alpha
+    Vantage actually supports serving this instrument/endpoint.
+    _to_av_symbol()'s existing edge/malformed-input behavior is frozen
+    and unvalidated here, exactly as it is in core.data_providers itself
+    -- changing it is out of scope for this Design Gate."""
+    return _to_av_symbol(shared_symbol)
+
+
+# Wired-in Stage 2 translators, this phase only. Adding "finnhub" here
+# is explicitly future work (per the locked Design Gate) -- not
+# something this phase authorizes. Return types are deliberately
+# heterogeneous across providers (str for twelve_data, tuple[str, str]
+# for alpha_vantage) -- provider_symbol is provider-shaped, not
+# provider-uniform, per the operator's own locked AV Stage 2 Design
+# Gate: forcing Alpha Vantage's genuine (from_symbol, to_symbol) wire
+# format into a single string would be an unauthorized normalization
+# layer this gate does not grant.
+_STAGE_2_RESOLVERS: dict[str, Callable[[str], Any]] = {
     "twelve_data": _resolve_twelve_data,
+    "alpha_vantage": _resolve_alpha_vantage,
 }
 
 
@@ -116,15 +188,23 @@ def resolve_provider_symbol(
     Stage 2 dispatches on `provider`. If no Stage 2 translator is wired
     in for that provider name, raises ProviderSymbolResolutionError (a
     "not implemented here" structural fact, never a coverage claim).
-    This phase wires in ONLY "twelve_data".
+    This phase wires in "twelve_data" and "alpha_vantage" only.
 
     Returns exactly: {internal_symbol, provider, shared_symbol,
-    provider_symbol, resolution_state}. `resolution_state` is None when
-    fully resolved, or PROVIDER_SYMBOL_UNSUPPORTED when Stage 2
-    recognized the provider but could not represent this specific
-    shared_symbol -- unreachable in this phase (twelve_data's
-    pass-through can never fail), reserved as honest, non-dead
-    vocabulary for providers wired in later.
+    provider_symbol, resolution_state}. `provider_symbol` is
+    provider-shaped, not provider-uniform: a `str` for "twelve_data", a
+    `tuple[str, str]` for "alpha_vantage" (Alpha Vantage's own wire
+    format genuinely is a (from_symbol, to_symbol) pair -- passed
+    through unchanged, never reconstructed into a string).
+    `resolution_state` is None when fully resolved, or
+    PROVIDER_SYMBOL_UNSUPPORTED when Stage 2 recognized the provider but
+    could not represent this specific shared_symbol -- unreachable for
+    both providers wired in this phase (neither translator can fail:
+    twelve_data's pass-through trivially, alpha_vantage's
+    _to_av_symbol() because it has no coverage predicate at all, see
+    _resolve_alpha_vantage()'s own docstring), reserved as honest,
+    non-dead vocabulary for providers wired in later (e.g. Finnhub's own
+    closed symbol map, which CAN fail closed).
 
     Pure -- no network call, no storage read or write, no randomness.
     """

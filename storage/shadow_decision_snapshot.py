@@ -117,3 +117,22 @@ def get_snapshot_by_request_id(request_id: str) -> dict[str, Any] | None:
             "SELECT * FROM research_shadow_decision_snapshots WHERE request_id=?", (request_id,)
         ).fetchone()
     return _row_to_dict(row) if row else None
+
+
+def list_request_ids_for_hypothesis(hypothesis_id: str) -> list[str]:
+    """Every request_id that ever had a decision snapshot captured for
+    this hypothesis_id -- complete, duplicate-free (request_id is UNIQUE
+    on this table), deliberately NO LIMIT. This is the canonical
+    enumeration source for n_T(H) (docs/SHADOW_EVIDENCE_UNIT_CLOSURE.md):
+    unlike list_observations_for_hypothesis() (storage.shadow_outcome_
+    observation, a row-count LIMIT window that can also hold several
+    rows per request_id), a row here exists iff that request's entry/
+    stop/target were captured at all -- the one precondition resolve_
+    decision_outcome() needs to ever run for it."""
+    with d1_client.d1_connection() as con:
+        _init(con)
+        rows = con.execute(
+            "SELECT request_id FROM research_shadow_decision_snapshots WHERE hypothesis_id=?",
+            (hypothesis_id,),
+        ).fetchall()
+    return [row["request_id"] for row in rows]

@@ -179,6 +179,20 @@ class BacktestMetrics:
     # backtest/meta_analysis.py's pooling helpers).
     by_direction_regime_session: dict = field(default_factory=dict)
 
+    # SHADOW Comparable Statistic Design (Design Gate, locked 2026-10):
+    # per-exit_reason {trades, wins} counts, keyed by the exit_reason
+    # literal exactly as backtesting/backtest_engine.py produces it (TP,
+    # TP_GAP, SL, SL_GAP, FORCED_CLOSE). Deliberately NOT given a
+    # win_rate/profit_factor derivation like the by_* dicts below -- this
+    # field's sole purpose is letting a future consumer compute a
+    # TP/TP_GAP-vs-SL/SL_GAP win rate restricted to that population,
+    # comparable against SHADOW's TERMINAL_CONFIRMED evidence unit. Does
+    # not change win_rate/winning_trades/losing_trades' own existing
+    # meaning in any way. A key absent from this dict (old metrics_json
+    # predating this field, or an exit_reason that never occurred in this
+    # run) must never be read as a zero count by any consumer.
+    by_exit_reason: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
 
@@ -471,6 +485,17 @@ def calculate_metrics(
             m.by_engine[engine_name]["pnl"]    += t.pnl_usd
             if t.is_win:
                 m.by_engine[engine_name]["wins"] += 1
+
+    # By exit_reason (SHADOW Comparable Statistic Design, locked) — raw
+    # {trades, wins} counts only, keyed by the literal exit_reason value.
+    # No win_rate/profit_factor derivation here by design (see the
+    # dataclass field's own comment); a future consumer computes the
+    # TP/TP_GAP-vs-SL/SL_GAP ratio itself from these raw counts.
+    for t in closed:
+        bucket = m.by_exit_reason.setdefault(t.exit_reason, {"trades": 0, "wins": 0})
+        bucket["trades"] += 1
+        if t.is_win:
+            bucket["wins"] += 1
 
     # Win rates per category. by_engine deliberately gets no profit_factor
     # (an engine's votes span overlapping trades — different semantics

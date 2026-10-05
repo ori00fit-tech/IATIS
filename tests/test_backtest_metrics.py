@@ -154,7 +154,7 @@ def test_mar_ratio_equals_calmar_ratio():
 # ── Edge Discovery (2026-07-31) — by_direction_regime_session + PF on
 # by_regime/by_direction/by_session/by_direction_regime_session ──────────
 
-def _full_trade(pnl, direction="BUY", regime="", session="", is_win=None) -> TradeRecord:
+def _full_trade(pnl, direction="BUY", regime="", session="", is_win=None, exit_reason="") -> TradeRecord:
     if is_win is None:
         is_win = pnl > 0
     return TradeRecord(
@@ -162,6 +162,7 @@ def _full_trade(pnl, direction="BUY", regime="", session="", is_win=None) -> Tra
         entry_time=pd_ts(0), exit_time=pd_ts(1),
         entry_price=1.1, exit_price=1.1, stop_loss=1.09, take_profit=1.12,
         position_size=1.0, pnl_usd=pnl, is_win=is_win, regime=regime, session=session,
+        exit_reason=exit_reason,
     )
 
 
@@ -218,3 +219,77 @@ def test_bucket_profit_factor_real_ratio():
     m = calculate_metrics(trades)
     bucket = m.by_direction_regime_session["BUY|TRENDING|London"]
     assert bucket["profit_factor"] == pytest.approx(4.0)
+
+
+# ── SHADOW Comparable Statistic Design (Design Gate, locked 2026-10) —
+# by_exit_reason: raw {trades, wins} counts keyed by the literal
+# exit_reason value, no win_rate/profit_factor derivation, no semantics
+# change to win_rate/winning_trades/losing_trades. ────────────────────────
+
+
+def test_by_exit_reason_empty_on_no_trades():
+    m = calculate_metrics([])
+    assert m.by_exit_reason == {}
+
+
+def test_by_exit_reason_populated_per_literal_value():
+    trades = [
+        _full_trade(100, is_win=True, exit_reason="TP"),
+        _full_trade(80, is_win=True, exit_reason="TP_GAP"),
+        _full_trade(-50, is_win=False, exit_reason="SL"),
+        _full_trade(-20, is_win=False, exit_reason="SL_GAP"),
+        _full_trade(5, is_win=True, exit_reason="FORCED_CLOSE"),
+        _full_trade(-5, is_win=False, exit_reason="FORCED_CLOSE"),
+    ]
+    m = calculate_metrics(trades)
+    assert m.by_exit_reason["TP"] == {"trades": 1, "wins": 1}
+    assert m.by_exit_reason["TP_GAP"] == {"trades": 1, "wins": 1}
+    assert m.by_exit_reason["SL"] == {"trades": 1, "wins": 0}
+    assert m.by_exit_reason["SL_GAP"] == {"trades": 1, "wins": 0}
+    # FORCED_CLOSE recorded as its own key, mixed wins/losses counted
+    # exactly like any other exit_reason -- no causal/non-causal judgment
+    # made here (that is a future consumer's decision, not this field's).
+    assert m.by_exit_reason["FORCED_CLOSE"] == {"trades": 2, "wins": 1}
+
+
+def test_by_exit_reason_absent_key_means_never_occurred_not_zero():
+    """An exit_reason that never occurred in this run must be ABSENT from
+    the dict entirely -- a consumer checking for a zero count via a
+    present key with trades=0 would be reading a fabricated fact. Locked
+    distinction: absent means 'no evidence', never 'confirmed zero'."""
+    trades = [_full_trade(100, is_win=True, exit_reason="TP")]
+    m = calculate_metrics(trades)
+    assert "TP" in m.by_exit_reason
+    for never_occurred in ("SL", "TP_GAP", "SL_GAP", "FORCED_CLOSE"):
+        assert never_occurred not in m.by_exit_reason
+
+
+def test_by_exit_reason_has_no_win_rate_or_profit_factor_key():
+    """Locked shape is {trades, wins} only -- unlike by_direction/
+    by_session/by_regime/by_direction_regime_session, this bucket gets no
+    derived win_rate/profit_factor. A future consumer computes its own
+    TP/TP_GAP-vs-SL/SL_GAP ratio from the raw counts instead."""
+    trades = [
+        _full_trade(100, is_win=True, exit_reason="TP"),
+        _full_trade(-50, is_win=False, exit_reason="SL"),
+    ]
+    m = calculate_metrics(trades)
+    assert "win_rate" not in m.by_exit_reason["TP"]
+    assert "profit_factor" not in m.by_exit_reason["TP"]
+    assert set(m.by_exit_reason["TP"].keys()) == {"trades", "wins"}
+
+
+def test_by_exit_reason_does_not_change_existing_win_rate_semantics():
+    """Regression guard: adding by_exit_reason must not alter
+    win_rate/winning_trades/losing_trades' own existing, pre-existing
+    meaning (profitability-based, pooled across every exit_reason)."""
+    trades = [
+        _full_trade(100, is_win=True, exit_reason="TP"),
+        _full_trade(-50, is_win=False, exit_reason="SL"),
+        _full_trade(5, is_win=True, exit_reason="FORCED_CLOSE"),
+    ]
+    m = calculate_metrics(trades)
+    assert m.total_trades == 3
+    assert m.winning_trades == 2
+    assert m.losing_trades == 1
+    assert m.win_rate == pytest.approx(200 / 3)

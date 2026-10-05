@@ -109,6 +109,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backtest.multiple_testing import binomial_lower_tail_p_value
 from backtest.shadow_outcome_resolver import SL_HIT, TP_HIT, resolve_decision_outcome
 from backtest.shadow_outcome_terminality import TERMINAL_CONFIRMED, assess_terminality
 from backtest.shadow_outcome_verification import verify_historical_stability
@@ -124,6 +125,7 @@ __all__ = [
     "count_terminal_confirmed",
     "compute_observed_win_rate",
     "count_terminal_confirmed_by_outcome",
+    "compute_catastrophic_divergence_p_value",
 ]
 
 
@@ -267,3 +269,38 @@ def count_terminal_confirmed_by_outcome(results: list[dict[str, Any]]) -> dict[s
                 f"assess_terminality() and this aggregator, not an ordinary data gap."
             )
     return {"tp_count": tp_count, "sl_count": sl_count}
+
+
+def compute_catastrophic_divergence_p_value(
+    results: list[dict[str, Any]], p: float | None,
+) -> float | None:
+    """PURE -- no I/O, no randomness, no significance classification
+    (p-value Composition Design Gate, locked 2026-10). Composes
+    count_terminal_confirmed_by_outcome() (k=tp_count,
+    n=tp_count+sl_count) with backtest.multiple_testing.
+    binomial_lower_tail_p_value().
+
+    `p` is the caller-supplied baseline statistic (exactly
+    baseline["tp_sl_win_rate"] from backtest.hypothesis_baseline_
+    statistic.evaluate_canonical_baseline_statistic()) -- taken
+    verbatim, never recomputed, never substituted with a fallback.
+
+    Returns None if `p` is None (no valid baseline -- the caller's own
+    divergence_statistic_valid was False) -- checked explicitly here,
+    before any call to binomial_lower_tail_p_value(), since that
+    function's own `0 <= p <= 1` guard cannot be evaluated against
+    None. Also returns None when n < 1 (no TERMINAL_CONFIRMED evidence
+    yet) -- no second check needed for that case: it already flows
+    through binomial_lower_tail_p_value()'s own existing `n < 1` guard,
+    the single source of truth for that behavior.
+
+    NOT in scope here: Bonferroni/family-size correction,
+    classify_significance(), diverged_catastrophically,
+    DIVERGENCE_VERDICT_COMPUTED, build_shadow_record(), any writer, any
+    execution/broker path."""
+    if p is None:
+        return None
+    counts = count_terminal_confirmed_by_outcome(results)
+    k = counts["tp_count"]
+    n = counts["tp_count"] + counts["sl_count"]
+    return binomial_lower_tail_p_value(k, n, p)

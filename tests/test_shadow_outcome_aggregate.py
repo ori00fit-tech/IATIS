@@ -221,6 +221,76 @@ def test_count_terminal_confirmed_by_outcome_independent_of_compute_observed_win
     assert "compute_observed_win_rate(" not in body
 
 
+# ---------- compute_catastrophic_divergence_p_value() (PURE) -- p-value
+# Composition Design Gate (locked 2026-10) -----------------------------------
+
+
+def test_compute_catastrophic_divergence_p_value_none_when_p_is_none():
+    """Locked: p=None (no valid baseline) short-circuits before any call
+    to binomial_lower_tail_p_value() -- no fallback, no recomputation."""
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(50)]
+    assert soa.compute_catastrophic_divergence_p_value(results, None) is None
+
+
+def test_compute_catastrophic_divergence_p_value_none_when_no_terminal_confirmed():
+    """n=0 flows through binomial_lower_tail_p_value()'s own existing
+    n<1 guard -- no second check added here."""
+    results = [{"terminality_state": PROVISIONAL, "outcome": TP_HIT}]
+    assert soa.compute_catastrophic_divergence_p_value(results, 0.65) is None
+
+
+def test_compute_catastrophic_divergence_p_value_matches_direct_composition():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(7)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(13)]
+    )
+    p = 0.65
+    k, n = 7, 20
+    expected = soa.binomial_lower_tail_p_value(k, n, p)
+    assert soa.compute_catastrophic_divergence_p_value(results, p) == pytest.approx(expected)
+
+
+def test_compute_catastrophic_divergence_p_value_small_when_observed_far_below_baseline():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(7)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(43)]
+    )
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert result is not None
+    assert result < 0.001
+
+
+def test_compute_catastrophic_divergence_p_value_large_when_observed_meets_baseline():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(35)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(15)]
+    )
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert result is not None
+    assert result > 0.5
+
+
+def test_compute_catastrophic_divergence_p_value_never_classifies_significance():
+    """Scope lock: this function returns only the raw p-value -- never
+    a significance label, never a boolean verdict."""
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(50)]
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert isinstance(result, float)
+
+
+def test_compute_catastrophic_divergence_p_value_has_no_scope_creep_in_source():
+    import inspect
+    import re
+    body = re.sub(
+        r'""".*?"""', "",
+        inspect.getsource(soa.compute_catastrophic_divergence_p_value), flags=re.DOTALL,
+    )
+    forbidden = ("classify_significance", "bonferroni_alpha", "diverged_catastrophically",
+                 "DIVERGENCE_VERDICT_COMPUTED", "build_shadow_record")
+    for pattern in forbidden:
+        assert pattern not in body, f"compute_catastrophic_divergence_p_value unexpectedly references {pattern!r}"
+
+
 # ---------- evaluate_all_requests_for_hypothesis() (ORCHESTRATION) ---------
 
 

@@ -138,6 +138,35 @@ def binomial_sign_test_p_value(k: int, n: int, p: float = 0.5) -> float | None:
     return min(1.0, total)
 
 
+def binomial_lower_tail_p_value(k: int, n: int, p: float) -> float | None:
+    """One-tailed (lower-tail) binomial p-value: P(X <= k) under
+    Binomial(n, p) -- the probability of observing this few
+    'successes' or fewer, if the true success probability were p.
+    Small => observed proportion is significantly BELOW p.
+
+    This is a LOWER-TAIL test ONLY, by construction (Observed Win/Loss
+    Statistic Design, One-Tailed Catastrophic Divergence Test Design
+    Gate, both locked 2026-10) -- it can never flag a result where
+    observed is above p (P(X<=k) approaches 1.0 as k grows, never
+    small). No separate 'is observed below expected' check is ever
+    needed before interpreting a small result: the test topology
+    itself already encodes that direction.
+
+    Distinct from binomial_sign_test_p_value() above (two-tailed,
+    equal-tail/minimum-likelihood method) -- this is a plain CDF sum,
+    not derivable from that one by halving it.
+
+    Returns None (never a fabricated value) when undefined: n<1, k
+    outside [0, n], or p outside [0, 1]."""
+    if n < 1 or not (0 <= k <= n) or not (0 <= p <= 1):
+        return None
+
+    def _pmf(i: int) -> float:
+        return math.comb(n, i) * (p ** i) * ((1 - p) ** (n - i))
+
+    return min(1.0, sum(_pmf(i) for i in range(k + 1)))
+
+
 def classify_significance(
     p_value: float | None, n_trials: int, family_alpha: float = 0.05
 ) -> str:

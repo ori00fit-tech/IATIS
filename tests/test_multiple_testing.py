@@ -16,6 +16,7 @@ import pytest
 import random
 
 from backtest.multiple_testing import (
+    binomial_lower_tail_p_value,
     binomial_sign_test_p_value,
     bonferroni_alpha,
     classify_significance,
@@ -136,6 +137,83 @@ def test_binomial_sign_test_p_value_none_when_undefined():
     assert binomial_sign_test_p_value(0, 0) is None
     assert binomial_sign_test_p_value(-1, 10) is None
     assert binomial_sign_test_p_value(11, 10) is None
+
+
+# ── One-Tailed Catastrophic Divergence Test Design (locked 2026-10) —
+# binomial_lower_tail_p_value() ──────────────────────────────────────────
+
+
+def test_binomial_lower_tail_p_value_matches_hand_computed():
+    n, k, p = 50, 7, 0.65
+
+    def pmf(i):
+        return math.comb(n, i) * (p ** i) * ((1 - p) ** (n - i))
+
+    expected = sum(pmf(i) for i in range(k + 1))
+    assert binomial_lower_tail_p_value(k, n, p) == pytest.approx(expected, rel=1e-9)
+
+
+def test_binomial_lower_tail_p_value_small_when_observed_far_below_expected():
+    # 7 wins out of 50, when the true rate is supposed to be 0.65, is a
+    # catastrophic shortfall -- comfortably significant.
+    result = binomial_lower_tail_p_value(7, 50, 0.65)
+    assert result is not None
+    assert result < 0.001
+
+
+def test_binomial_lower_tail_p_value_large_when_observed_meets_or_exceeds_expected():
+    """The core locked guarantee: this is a LOWER-TAIL test only -- it
+    must never produce a small p-value when observed is AT or ABOVE the
+    expected rate. 35 of 50 (0.70) comfortably exceeds p=0.65."""
+    result = binomial_lower_tail_p_value(35, 50, 0.65)
+    assert result is not None
+    assert result > 0.5
+
+
+def test_binomial_lower_tail_p_value_monotonically_increases_with_k():
+    """P(X<=k) is a CDF -- strictly non-decreasing in k, by construction.
+    This is what makes a separate direction check unnecessary: a small
+    result can only ever come from a low k."""
+    n, p = 50, 0.65
+    values = [binomial_lower_tail_p_value(k, n, p) for k in range(n + 1)]
+    assert all(v is not None for v in values)
+    assert values == sorted(values)
+    assert values[0] < values[-1]
+    assert values[-1] == pytest.approx(1.0)
+
+
+def test_binomial_lower_tail_p_value_not_derivable_by_halving_two_tailed():
+    """Locked finding (Gate 0): the two-tailed binomial_sign_test_p_value()
+    uses an equal-tail/minimum-likelihood method, not a simple
+    doubled-tail -- so this one-tailed function is NOT just that one
+    divided by two."""
+    n, k, p = 20, 7, 0.65
+    lower_tail = binomial_lower_tail_p_value(k, n, p)
+    two_tailed_sign_test = binomial_sign_test_p_value(k, n, p)
+    # At this asymmetric p, the two methods diverge by a wide margin
+    # (well beyond floating-point noise) -- not merely a rounding gap.
+    assert lower_tail == pytest.approx(0.006015269958176856, rel=1e-9)
+    assert two_tailed_sign_test == pytest.approx(0.00814838958353013, rel=1e-9)
+    assert lower_tail != pytest.approx(two_tailed_sign_test / 2, rel=1e-6)
+
+
+def test_binomial_lower_tail_p_value_none_when_undefined():
+    assert binomial_lower_tail_p_value(0, 0, 0.5) is None
+    assert binomial_lower_tail_p_value(-1, 10, 0.5) is None
+    assert binomial_lower_tail_p_value(11, 10, 0.5) is None
+    assert binomial_lower_tail_p_value(5, 10, -0.1) is None
+    assert binomial_lower_tail_p_value(5, 10, 1.1) is None
+
+
+def test_binomial_lower_tail_p_value_boundary_p_values():
+    # p=0: only k=0 has any probability mass (1.0); any k>=0 observed
+    # with 0 expected successes is never below expectation.
+    assert binomial_lower_tail_p_value(0, 10, 0.0) == pytest.approx(1.0)
+    assert binomial_lower_tail_p_value(5, 10, 0.0) == pytest.approx(1.0)
+    # p=1: only k=n has probability mass; anything less is maximally
+    # below expectation (p-value -> 0 for k<n).
+    assert binomial_lower_tail_p_value(5, 10, 1.0) == pytest.approx(0.0)
+    assert binomial_lower_tail_p_value(10, 10, 1.0) == pytest.approx(1.0)
 
 
 # ── Mission Center Research Rigor Phase 2 (2026-08-XX) — effective_sample_size ──

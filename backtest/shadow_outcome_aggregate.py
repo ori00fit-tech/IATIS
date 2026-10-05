@@ -123,6 +123,7 @@ __all__ = [
     "evaluate_all_requests_for_hypothesis",
     "count_terminal_confirmed",
     "compute_observed_win_rate",
+    "count_terminal_confirmed_by_outcome",
 ]
 
 
@@ -223,3 +224,46 @@ def compute_observed_win_rate(results: list[dict[str, Any]]) -> float | None:
     if denominator == 0:
         return None
     return tp / denominator
+
+
+def count_terminal_confirmed_by_outcome(results: list[dict[str, Any]]) -> dict[str, int]:
+    """PURE -- no I/O, no randomness. Raw {tp_count, sl_count} over
+    TERMINAL_CONFIRMED results only (k/n Raw-Count Extraction Design
+    Gate, locked 2026-10) -- the k/n inputs backtest.multiple_testing.
+    binomial_lower_tail_p_value() needs, exposed separately from any
+    computed ratio (mirrors backtest.metrics.py's by_exit_reason style:
+    raw counts, no derived statistic baked in).
+
+    tp_count + sl_count == count_terminal_confirmed(results) exactly,
+    by the same population guarantee compute_observed_win_rate() above
+    already locks. Same fail-closed contract-drift guard: raises
+    ShadowOutcomeAggregateError if any TERMINAL_CONFIRMED result's
+    `outcome` is neither TP_HIT nor SL_HIT.
+
+    Unlike compute_observed_win_rate(), an empty/zero population
+    returns {"tp_count": 0, "sl_count": 0} -- never `None`. A raw count
+    of zero is an honest fact; it is only a RATIO (0/0) that is
+    undefined, and this function computes no ratio.
+
+    Deliberately independent of compute_observed_win_rate() -- neither
+    calls the other, by this Design Gate's own explicit scope lock,
+    to avoid any behavioral/implementation churn on that already-
+    accepted function."""
+    tp_count = 0
+    sl_count = 0
+    for result in results:
+        if result["terminality_state"] != TERMINAL_CONFIRMED:
+            continue
+        outcome = result["outcome"]
+        if outcome == TP_HIT:
+            tp_count += 1
+        elif outcome == SL_HIT:
+            sl_count += 1
+        else:
+            raise ShadowOutcomeAggregateError(
+                f"count_terminal_confirmed_by_outcome: TERMINAL_CONFIRMED result for request_id "
+                f"{result.get('request_id')!r} has outcome {outcome!r} -- only TP_HIT/SL_HIT "
+                f"are structurally possible here; this indicates a contract drift between "
+                f"assess_terminality() and this aggregator, not an ordinary data gap."
+            )
+    return {"tp_count": tp_count, "sl_count": sl_count}

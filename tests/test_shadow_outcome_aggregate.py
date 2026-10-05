@@ -153,6 +153,74 @@ def test_compute_observed_win_rate_never_compares_to_a_threshold():
     assert isinstance(result, float)
 
 
+# ---------- count_terminal_confirmed_by_outcome() (PURE) -- k/n Raw-Count
+# Extraction Design Gate (locked 2026-10) ------------------------------------
+
+
+def test_count_terminal_confirmed_by_outcome_empty_list_is_zero_counts_not_none():
+    assert soa.count_terminal_confirmed_by_outcome([]) == {"tp_count": 0, "sl_count": 0}
+
+
+def test_count_terminal_confirmed_by_outcome_none_terminal_confirmed_is_zero_counts():
+    results = [
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+    ]
+    assert soa.count_terminal_confirmed_by_outcome(results) == {"tp_count": 0, "sl_count": 0}
+
+
+def test_count_terminal_confirmed_by_outcome_mixed_tp_sl():
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},  # excluded -- not TERMINAL_CONFIRMED
+    ]
+    assert soa.count_terminal_confirmed_by_outcome(results) == {"tp_count": 2, "sl_count": 1}
+
+
+def test_count_terminal_confirmed_by_outcome_sum_equals_count_terminal_confirmed():
+    """The central locked invariant: tp_count + sl_count ==
+    count_terminal_confirmed(results) exactly, for any mix of states."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": CONTRADICTED, "outcome": SL_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},
+    ]
+    counts = soa.count_terminal_confirmed_by_outcome(results)
+    assert counts["tp_count"] + counts["sl_count"] == soa.count_terminal_confirmed(results) == 3
+
+
+def test_count_terminal_confirmed_by_outcome_contract_drift_raises_fail_closed():
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": "TIMEOUT", "request_id": "R-drift"},
+    ]
+    with pytest.raises(soa.ShadowOutcomeAggregateError, match="R-drift"):
+        soa.count_terminal_confirmed_by_outcome(results)
+
+
+def test_count_terminal_confirmed_by_outcome_independent_of_compute_observed_win_rate():
+    """Locked scope: neither function calls the other -- same inputs
+    must be independently consistent, not wired together."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+    ]
+    counts = soa.count_terminal_confirmed_by_outcome(results)
+    win_rate = soa.compute_observed_win_rate(results)
+    assert win_rate == pytest.approx(counts["tp_count"] / (counts["tp_count"] + counts["sl_count"]))
+
+    import inspect
+    import re
+    body = re.sub(r'""".*?"""', "", inspect.getsource(soa.count_terminal_confirmed_by_outcome), flags=re.DOTALL)
+    assert "compute_observed_win_rate(" not in body
+
+
 # ---------- evaluate_all_requests_for_hypothesis() (ORCHESTRATION) ---------
 
 

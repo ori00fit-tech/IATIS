@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from backtest import shadow_outcome_aggregate as soa
+from backtest.shadow_outcome_resolver import SL_HIT, TP_HIT
 from backtest.shadow_outcome_terminality import (
     CONTRADICTED,
     NOT_YET_ASSESSABLE,
@@ -21,8 +22,8 @@ from backtest.shadow_outcome_terminality import (
 HID = "CONFLUENCE-HYPOTHESIS-x"
 
 
-def _obs(request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", **overrides) -> dict:
-    base = {"request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at}
+def _obs(request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", outcome=TP_HIT, **overrides) -> dict:
+    base = {"request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at, "outcome": outcome}
     base.update(overrides)
     return base
 
@@ -78,6 +79,80 @@ def test_count_terminal_confirmed_counts_only_that_state():
     assert soa.count_terminal_confirmed(results) == 3
 
 
+# ---------- compute_observed_win_rate() (PURE) -- Observed Win/Loss
+# Statistic Design (locked 2026-10) ------------------------------------------
+
+
+def test_compute_observed_win_rate_none_when_no_terminal_confirmed():
+    results = [
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+    ]
+    assert soa.compute_observed_win_rate(results) is None
+
+
+def test_compute_observed_win_rate_none_on_empty_list():
+    assert soa.compute_observed_win_rate([]) is None
+
+
+def test_compute_observed_win_rate_basic_ratio():
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},  # excluded -- not TERMINAL_CONFIRMED
+    ]
+    assert soa.compute_observed_win_rate(results) == pytest.approx(2 / 3)
+
+
+def test_compute_observed_win_rate_denominator_equals_count_terminal_confirmed():
+    """Structural invariant, locked: TP_HIT_count + SL_HIT_count ==
+    count_terminal_confirmed(results) exactly."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": CONTRADICTED, "outcome": SL_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+    ]
+    win_rate = soa.compute_observed_win_rate(results)
+    assert win_rate == pytest.approx(1 / 3)
+    assert soa.count_terminal_confirmed(results) == 3  # == TP_HIT_count(1) + SL_HIT_count(2)
+
+
+def test_compute_observed_win_rate_all_wins_is_one():
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(5)]
+    assert soa.compute_observed_win_rate(results) == pytest.approx(1.0)
+
+
+def test_compute_observed_win_rate_all_losses_is_zero():
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(5)]
+    assert soa.compute_observed_win_rate(results) == pytest.approx(0.0)
+
+
+def test_compute_observed_win_rate_contract_drift_raises_fail_closed():
+    """Locked fail-closed guard: a TERMINAL_CONFIRMED result with an
+    outcome other than TP_HIT/SL_HIT must never be silently excluded --
+    this is structurally impossible per assess_terminality()'s own
+    rules, so if it happens, raise rather than produce a statistic over
+    a drifted population."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": "TIMEOUT", "request_id": "R-drift"},
+    ]
+    with pytest.raises(soa.ShadowOutcomeAggregateError, match="R-drift"):
+        soa.compute_observed_win_rate(results)
+
+
+def test_compute_observed_win_rate_never_compares_to_a_threshold():
+    """Statistic definition vs. verdict threshold stays separate -- this
+    function returns only the ratio, never True/False against 0.65 or
+    anything else."""
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(100)]
+    result = soa.compute_observed_win_rate(results)
+    assert isinstance(result, float)
+
+
 # ---------- evaluate_all_requests_for_hypothesis() (ORCHESTRATION) ---------
 
 
@@ -123,7 +198,7 @@ def test_single_request_wires_latest_previous_verification_into_assess_terminali
     mock_list_obs.assert_called_once_with("R1")
     mock_verify.assert_called_once_with(snapshot, latest, base_config={"x": 1}, api_key="k")
     mock_assess.assert_called_once_with(latest, None, verification)
-    assert result == [{"terminality_state": TERMINAL_CONFIRMED}]
+    assert result == [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT}]
 
 
 @patch("backtest.shadow_outcome_aggregate.assess_terminality")

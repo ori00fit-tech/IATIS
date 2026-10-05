@@ -27,6 +27,49 @@ locked separation):
       compute_shadow_observed_profile(), reused as a precedent, not
       imported (that function counts a structurally different thing).
 
+  compute_observed_win_rate() -- PURE. No I/O, no randomness. Observed
+      Win/Loss Statistic Design (operator's own locked Design Gate,
+      built on this module's own population guarantee below).
+
+OUTCOME IS NOW CARRIED THROUGH (operator's own locked extension, this
+Design Gate): each dict evaluate_all_requests_for_hypothesis() returns is
+no longer bare assess_terminality() output -- it is that SAME dict,
+unchanged, plus one additional key, `outcome`, copied verbatim from
+`latest_observation["outcome"]`. assess_terminality()'s own contract is
+NOT touched or re-implemented; this is purely an additive widening of
+THIS module's own orchestration output, done here because this is the
+one place that still has `latest_observation` in hand before it would
+otherwise be discarded.
+
+POPULATION GUARANTEE (operator's own locked Gate 0 finding, reused
+verbatim, not re-derived): TERMINAL_CONFIRMED is only reachable when
+`latest_observation["outcome"]` is TP_HIT or SL_HIT -- verification_
+attempted requires `walk_ohlc is not None`, and walk_ohlc is captured
+for TP_HIT/SL_HIT only (backtest.shadow_outcome_revision's own locked
+scope). So among TERMINAL_CONFIRMED results, TP_HIT_count + SL_HIT_count
+== count_terminal_confirmed(...) == n_T(H) exactly -- the SAME
+population backtest.hypothesis_baseline_statistic's own tp_sl_win_rate
+is computed over (TP+TP_GAP vs SL+SL_GAP, FORCED_CLOSE excluded). No
+population-mismatch repair is needed here, unlike the original,
+rejected §9 win_rate proposal.
+
+FAIL-CLOSED CONTRACT-DRIFT GUARD (operator's own locked decision):
+compute_observed_win_rate() never silently ignores a TERMINAL_CONFIRMED
+result whose `outcome` is neither TP_HIT nor SL_HIT -- structurally this
+should never happen (see the population guarantee above), so if it ever
+does, that is evidence of a drift between this module's own assumptions
+and assess_terminality()'s/resolve_decision_outcome()'s actual behavior.
+It raises ShadowOutcomeAggregateError rather than producing a statistic
+over a population that silently stopped matching the locked assumption.
+
+STATISTIC DEFINITION vs. VERDICT THRESHOLD (operator's own locked
+separation, NOT reopened here): compute_observed_win_rate() returns only
+the ratio itself (or None if the TERMINAL_CONFIRMED population is
+empty). It never compares against 0.65 or any other threshold, never
+sets DIVERGENCE_VERDICT_COMPUTED, and is never wired into backtest.
+shadow_record or backtest.promotion_gate in this phase -- each is an
+explicitly separate, future, independently-authorized Design Gate.
+
 FAIL-FAST, NO ISOLATION (operator's own locked decision, adopting
 backtest.shadow_observation.run_shadow_cycle()'s own existing,
 independently-reached precedent verbatim): an exception raised while
@@ -66,7 +109,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backtest.shadow_outcome_resolver import resolve_decision_outcome
+from backtest.shadow_outcome_resolver import SL_HIT, TP_HIT, resolve_decision_outcome
 from backtest.shadow_outcome_terminality import TERMINAL_CONFIRMED, assess_terminality
 from backtest.shadow_outcome_verification import verify_historical_stability
 from storage.shadow_decision_snapshot import (
@@ -75,7 +118,22 @@ from storage.shadow_decision_snapshot import (
 )
 from storage.shadow_outcome_observation import list_observations_for_request
 
-__all__ = ["evaluate_all_requests_for_hypothesis", "count_terminal_confirmed"]
+__all__ = [
+    "ShadowOutcomeAggregateError",
+    "evaluate_all_requests_for_hypothesis",
+    "count_terminal_confirmed",
+    "compute_observed_win_rate",
+]
+
+
+class ShadowOutcomeAggregateError(Exception):
+    """Structural misuse / contract-drift guard only -- raised by
+    compute_observed_win_rate() when a TERMINAL_CONFIRMED result's own
+    `outcome` is neither TP_HIT nor SL_HIT. Structurally impossible per
+    assess_terminality()'s own locked rules (TERMINAL_CONFIRMED requires
+    walk_ohlc, captured for TP_HIT/SL_HIT only) -- if it ever happens,
+    this is evidence of contract drift, never an ordinary data gap, and
+    must fail closed rather than be silently ignored."""
 
 
 def _select_previous(stored: list[dict[str, Any]], latest_observation: dict[str, Any]) -> dict[str, Any] | None:
@@ -91,10 +149,14 @@ def evaluate_all_requests_for_hypothesis(
     hypothesis_id: str, *, base_config: dict[str, Any], api_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """ORCHESTRATION -- impure, performs storage reads and a live network
-    call per request_id. Returns one assess_terminality() result dict
-    per request_id enumerated by storage.shadow_decision_snapshot.
-    list_request_ids_for_hypothesis() (complete, no LIMIT), in that
-    enumeration's own order.
+    call per request_id. Returns one dict per request_id enumerated by
+    storage.shadow_decision_snapshot.list_request_ids_for_hypothesis()
+    (complete, no LIMIT), in that enumeration's own order: exactly
+    assess_terminality()'s own return shape ({request_id, hypothesis_id,
+    terminality_state, relationship}), PLUS one additional key,
+    `outcome`, copied verbatim from `latest_observation["outcome"]`
+    (this module's own additive widening -- assess_terminality()'s
+    contract is untouched).
 
     FAIL-FAST: any exception raised while evaluating one request_id
     propagates immediately and unchanged -- no partial list is ever
@@ -109,15 +171,55 @@ def evaluate_all_requests_for_hypothesis(
         latest_verification = verify_historical_stability(
             snapshot, latest_observation, base_config=base_config, api_key=api_key,
         )
-        results.append(assess_terminality(latest_observation, previous_observation, latest_verification))
+        terminality_result = assess_terminality(latest_observation, previous_observation, latest_verification)
+        results.append({**terminality_result, "outcome": latest_observation["outcome"]})
     return results
 
 
 def count_terminal_confirmed(terminality_results: list[dict[str, Any]]) -> int:
     """PURE -- no I/O, no randomness. Counts how many of the
-    caller-supplied assess_terminality() result dicts have
-    terminality_state == TERMINAL_CONFIRMED. This IS n_T(H) (docs/
+    caller-supplied result dicts have terminality_state ==
+    TERMINAL_CONFIRMED. This IS n_T(H) (docs/
     SHADOW_EVIDENCE_UNIT_CLOSURE.md) when `terminality_results` is the
     WHOLE list evaluate_all_requests_for_hypothesis() returned for one
     hypothesis_id -- never a hand-filtered subset."""
     return sum(1 for result in terminality_results if result["terminality_state"] == TERMINAL_CONFIRMED)
+
+
+def compute_observed_win_rate(results: list[dict[str, Any]]) -> float | None:
+    """PURE -- no I/O, no randomness, no threshold comparison.
+    `results` is evaluate_all_requests_for_hypothesis()'s own return
+    list (each dict carrying `outcome` alongside assess_terminality()'s
+    own fields) -- never a hand-filtered subset.
+
+    Returns TP_HIT_count / (TP_HIT_count + SL_HIT_count) over
+    TERMINAL_CONFIRMED results only -- `None` if that population is
+    empty (never a fabricated 0.0). TP_HIT_count + SL_HIT_count equals
+    count_terminal_confirmed(results) exactly, by the population
+    guarantee this module's own docstring locks: TERMINAL_CONFIRMED is
+    only ever reachable for a TP_HIT/SL_HIT outcome.
+
+    Fail-closed contract-drift guard: raises ShadowOutcomeAggregateError
+    if any TERMINAL_CONFIRMED result's `outcome` is neither TP_HIT nor
+    SL_HIT, rather than silently excluding it from the ratio."""
+    tp = 0
+    sl = 0
+    for result in results:
+        if result["terminality_state"] != TERMINAL_CONFIRMED:
+            continue
+        outcome = result["outcome"]
+        if outcome == TP_HIT:
+            tp += 1
+        elif outcome == SL_HIT:
+            sl += 1
+        else:
+            raise ShadowOutcomeAggregateError(
+                f"compute_observed_win_rate: TERMINAL_CONFIRMED result for request_id "
+                f"{result.get('request_id')!r} has outcome {outcome!r} -- only TP_HIT/SL_HIT "
+                f"are structurally possible here; this indicates a contract drift between "
+                f"assess_terminality() and this aggregator, not an ordinary data gap."
+            )
+    denominator = tp + sl
+    if denominator == 0:
+        return None
+    return tp / denominator

@@ -41,6 +41,22 @@ THIS module's own orchestration output, done here because this is the
 one place that still has `latest_observation` in hand before it would
 otherwise be discarded.
 
+BAR_TIME/RESOLVED_BAR_TIME ARE NOW ALSO CARRIED THROUGH (operator's own
+locked extension, Design Gate "Export Exposure Window Evidence",
+2026-10): the SAME additive-widening precedent as `outcome` above, for
+the SAME reason -- this is the one place that still has both `snapshot`
+(carrying `bar_time`) and `latest_observation` (carrying
+`resolved_bar_time`) in hand before either would otherwise be discarded.
+Both are copied verbatim, unconditionally, for EVERY result regardless
+of terminality_state -- no filtering happens at this layer.
+`resolved_bar_time` is `None` whenever `latest_observation["outcome"]` is
+not TP_HIT/SL_HIT (resolve_decision_outcome()'s own locked contract,
+reused verbatim here, never re-derived). Consumers that need the
+TERMINAL_CONFIRMED-only population guarantee that `resolved_bar_time` is
+never None (backtest.shadow_outcome_evidence.evaluate_shadow_evidence(),
+specifically) impose that filtering themselves, one layer up -- this
+module makes no population claim about either new key.
+
 POPULATION GUARANTEE (operator's own locked Gate 0 finding, reused
 verbatim, not re-derived): TERMINAL_CONFIRMED is only reachable when
 `latest_observation["outcome"]` is TP_HIT or SL_HIT -- verification_
@@ -109,6 +125,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backtest.multiple_testing import binomial_lower_tail_p_value
 from backtest.shadow_outcome_resolver import SL_HIT, TP_HIT, resolve_decision_outcome
 from backtest.shadow_outcome_terminality import TERMINAL_CONFIRMED, assess_terminality
 from backtest.shadow_outcome_verification import verify_historical_stability
@@ -123,6 +140,8 @@ __all__ = [
     "evaluate_all_requests_for_hypothesis",
     "count_terminal_confirmed",
     "compute_observed_win_rate",
+    "count_terminal_confirmed_by_outcome",
+    "compute_catastrophic_divergence_p_value",
 ]
 
 
@@ -153,10 +172,15 @@ def evaluate_all_requests_for_hypothesis(
     storage.shadow_decision_snapshot.list_request_ids_for_hypothesis()
     (complete, no LIMIT), in that enumeration's own order: exactly
     assess_terminality()'s own return shape ({request_id, hypothesis_id,
-    terminality_state, relationship}), PLUS one additional key,
-    `outcome`, copied verbatim from `latest_observation["outcome"]`
-    (this module's own additive widening -- assess_terminality()'s
-    contract is untouched).
+    terminality_state, relationship}), PLUS three additional keys --
+    `outcome` (copied verbatim from `latest_observation["outcome"]`),
+    `bar_time` (copied verbatim from `snapshot["bar_time"]`), and
+    `resolved_bar_time` (copied verbatim from
+    `latest_observation["resolved_bar_time"]`) -- this module's own
+    additive widening (see module docstring); assess_terminality()'s own
+    contract is untouched. All three are carried through unconditionally
+    for every result, with no filtering by terminality_state at this
+    layer.
 
     FAIL-FAST: any exception raised while evaluating one request_id
     propagates immediately and unchanged -- no partial list is ever
@@ -172,7 +196,12 @@ def evaluate_all_requests_for_hypothesis(
             snapshot, latest_observation, base_config=base_config, api_key=api_key,
         )
         terminality_result = assess_terminality(latest_observation, previous_observation, latest_verification)
-        results.append({**terminality_result, "outcome": latest_observation["outcome"]})
+        results.append({
+            **terminality_result,
+            "outcome": latest_observation["outcome"],
+            "bar_time": snapshot["bar_time"],
+            "resolved_bar_time": latest_observation["resolved_bar_time"],
+        })
     return results
 
 
@@ -223,3 +252,81 @@ def compute_observed_win_rate(results: list[dict[str, Any]]) -> float | None:
     if denominator == 0:
         return None
     return tp / denominator
+
+
+def count_terminal_confirmed_by_outcome(results: list[dict[str, Any]]) -> dict[str, int]:
+    """PURE -- no I/O, no randomness. Raw {tp_count, sl_count} over
+    TERMINAL_CONFIRMED results only (k/n Raw-Count Extraction Design
+    Gate, locked 2026-10) -- the k/n inputs backtest.multiple_testing.
+    binomial_lower_tail_p_value() needs, exposed separately from any
+    computed ratio (mirrors backtest.metrics.py's by_exit_reason style:
+    raw counts, no derived statistic baked in).
+
+    tp_count + sl_count == count_terminal_confirmed(results) exactly,
+    by the same population guarantee compute_observed_win_rate() above
+    already locks. Same fail-closed contract-drift guard: raises
+    ShadowOutcomeAggregateError if any TERMINAL_CONFIRMED result's
+    `outcome` is neither TP_HIT nor SL_HIT.
+
+    Unlike compute_observed_win_rate(), an empty/zero population
+    returns {"tp_count": 0, "sl_count": 0} -- never `None`. A raw count
+    of zero is an honest fact; it is only a RATIO (0/0) that is
+    undefined, and this function computes no ratio.
+
+    Deliberately independent of compute_observed_win_rate() -- neither
+    calls the other, by this Design Gate's own explicit scope lock,
+    to avoid any behavioral/implementation churn on that already-
+    accepted function."""
+    tp_count = 0
+    sl_count = 0
+    for result in results:
+        if result["terminality_state"] != TERMINAL_CONFIRMED:
+            continue
+        outcome = result["outcome"]
+        if outcome == TP_HIT:
+            tp_count += 1
+        elif outcome == SL_HIT:
+            sl_count += 1
+        else:
+            raise ShadowOutcomeAggregateError(
+                f"count_terminal_confirmed_by_outcome: TERMINAL_CONFIRMED result for request_id "
+                f"{result.get('request_id')!r} has outcome {outcome!r} -- only TP_HIT/SL_HIT "
+                f"are structurally possible here; this indicates a contract drift between "
+                f"assess_terminality() and this aggregator, not an ordinary data gap."
+            )
+    return {"tp_count": tp_count, "sl_count": sl_count}
+
+
+def compute_catastrophic_divergence_p_value(
+    results: list[dict[str, Any]], p: float | None,
+) -> float | None:
+    """PURE -- no I/O, no randomness, no significance classification
+    (p-value Composition Design Gate, locked 2026-10). Composes
+    count_terminal_confirmed_by_outcome() (k=tp_count,
+    n=tp_count+sl_count) with backtest.multiple_testing.
+    binomial_lower_tail_p_value().
+
+    `p` is the caller-supplied baseline statistic (exactly
+    baseline["tp_sl_win_rate"] from backtest.hypothesis_baseline_
+    statistic.evaluate_canonical_baseline_statistic()) -- taken
+    verbatim, never recomputed, never substituted with a fallback.
+
+    Returns None if `p` is None (no valid baseline -- the caller's own
+    divergence_statistic_valid was False) -- checked explicitly here,
+    before any call to binomial_lower_tail_p_value(), since that
+    function's own `0 <= p <= 1` guard cannot be evaluated against
+    None. Also returns None when n < 1 (no TERMINAL_CONFIRMED evidence
+    yet) -- no second check needed for that case: it already flows
+    through binomial_lower_tail_p_value()'s own existing `n < 1` guard,
+    the single source of truth for that behavior.
+
+    NOT in scope here: Bonferroni/family-size correction,
+    classify_significance(), diverged_catastrophically,
+    DIVERGENCE_VERDICT_COMPUTED, build_shadow_record(), any writer, any
+    execution/broker path."""
+    if p is None:
+        return None
+    counts = count_terminal_confirmed_by_outcome(results)
+    k = counts["tp_count"]
+    n = counts["tp_count"] + counts["sl_count"]
+    return binomial_lower_tail_p_value(k, n, p)

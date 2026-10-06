@@ -22,8 +22,14 @@ from backtest.shadow_outcome_terminality import (
 HID = "CONFLUENCE-HYPOTHESIS-x"
 
 
-def _obs(request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", outcome=TP_HIT, **overrides) -> dict:
-    base = {"request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at, "outcome": outcome}
+def _obs(
+    request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", outcome=TP_HIT,
+    resolved_bar_time="2026-09-01T04:00:00+00:00", **overrides,
+) -> dict:
+    base = {
+        "request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at,
+        "outcome": outcome, "resolved_bar_time": resolved_bar_time,
+    }
     base.update(overrides)
     return base
 
@@ -153,6 +159,144 @@ def test_compute_observed_win_rate_never_compares_to_a_threshold():
     assert isinstance(result, float)
 
 
+# ---------- count_terminal_confirmed_by_outcome() (PURE) -- k/n Raw-Count
+# Extraction Design Gate (locked 2026-10) ------------------------------------
+
+
+def test_count_terminal_confirmed_by_outcome_empty_list_is_zero_counts_not_none():
+    assert soa.count_terminal_confirmed_by_outcome([]) == {"tp_count": 0, "sl_count": 0}
+
+
+def test_count_terminal_confirmed_by_outcome_none_terminal_confirmed_is_zero_counts():
+    results = [
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+    ]
+    assert soa.count_terminal_confirmed_by_outcome(results) == {"tp_count": 0, "sl_count": 0}
+
+
+def test_count_terminal_confirmed_by_outcome_mixed_tp_sl():
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},  # excluded -- not TERMINAL_CONFIRMED
+    ]
+    assert soa.count_terminal_confirmed_by_outcome(results) == {"tp_count": 2, "sl_count": 1}
+
+
+def test_count_terminal_confirmed_by_outcome_sum_equals_count_terminal_confirmed():
+    """The central locked invariant: tp_count + sl_count ==
+    count_terminal_confirmed(results) exactly, for any mix of states."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+        {"terminality_state": CONTRADICTED, "outcome": SL_HIT},
+        {"terminality_state": NOT_YET_ASSESSABLE, "outcome": "TIMEOUT"},
+        {"terminality_state": PROVISIONAL, "outcome": TP_HIT},
+    ]
+    counts = soa.count_terminal_confirmed_by_outcome(results)
+    assert counts["tp_count"] + counts["sl_count"] == soa.count_terminal_confirmed(results) == 3
+
+
+def test_count_terminal_confirmed_by_outcome_contract_drift_raises_fail_closed():
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": "TIMEOUT", "request_id": "R-drift"},
+    ]
+    with pytest.raises(soa.ShadowOutcomeAggregateError, match="R-drift"):
+        soa.count_terminal_confirmed_by_outcome(results)
+
+
+def test_count_terminal_confirmed_by_outcome_independent_of_compute_observed_win_rate():
+    """Locked scope: neither function calls the other -- same inputs
+    must be independently consistent, not wired together."""
+    results = [
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT},
+        {"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT},
+    ]
+    counts = soa.count_terminal_confirmed_by_outcome(results)
+    win_rate = soa.compute_observed_win_rate(results)
+    assert win_rate == pytest.approx(counts["tp_count"] / (counts["tp_count"] + counts["sl_count"]))
+
+    import inspect
+    import re
+    body = re.sub(r'""".*?"""', "", inspect.getsource(soa.count_terminal_confirmed_by_outcome), flags=re.DOTALL)
+    assert "compute_observed_win_rate(" not in body
+
+
+# ---------- compute_catastrophic_divergence_p_value() (PURE) -- p-value
+# Composition Design Gate (locked 2026-10) -----------------------------------
+
+
+def test_compute_catastrophic_divergence_p_value_none_when_p_is_none():
+    """Locked: p=None (no valid baseline) short-circuits before any call
+    to binomial_lower_tail_p_value() -- no fallback, no recomputation."""
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(50)]
+    assert soa.compute_catastrophic_divergence_p_value(results, None) is None
+
+
+def test_compute_catastrophic_divergence_p_value_none_when_no_terminal_confirmed():
+    """n=0 flows through binomial_lower_tail_p_value()'s own existing
+    n<1 guard -- no second check added here."""
+    results = [{"terminality_state": PROVISIONAL, "outcome": TP_HIT}]
+    assert soa.compute_catastrophic_divergence_p_value(results, 0.65) is None
+
+
+def test_compute_catastrophic_divergence_p_value_matches_direct_composition():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(7)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(13)]
+    )
+    p = 0.65
+    k, n = 7, 20
+    expected = soa.binomial_lower_tail_p_value(k, n, p)
+    assert soa.compute_catastrophic_divergence_p_value(results, p) == pytest.approx(expected)
+
+
+def test_compute_catastrophic_divergence_p_value_small_when_observed_far_below_baseline():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(7)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(43)]
+    )
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert result is not None
+    assert result < 0.001
+
+
+def test_compute_catastrophic_divergence_p_value_large_when_observed_meets_baseline():
+    results = (
+        [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT} for _ in range(35)]
+        + [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(15)]
+    )
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert result is not None
+    assert result > 0.5
+
+
+def test_compute_catastrophic_divergence_p_value_never_classifies_significance():
+    """Scope lock: this function returns only the raw p-value -- never
+    a significance label, never a boolean verdict."""
+    results = [{"terminality_state": TERMINAL_CONFIRMED, "outcome": SL_HIT} for _ in range(50)]
+    result = soa.compute_catastrophic_divergence_p_value(results, 0.65)
+    assert isinstance(result, float)
+
+
+def test_compute_catastrophic_divergence_p_value_has_no_scope_creep_in_source():
+    import inspect
+    import re
+    body = re.sub(
+        r'""".*?"""', "",
+        inspect.getsource(soa.compute_catastrophic_divergence_p_value), flags=re.DOTALL,
+    )
+    forbidden = ("classify_significance", "bonferroni_alpha", "diverged_catastrophically",
+                 "DIVERGENCE_VERDICT_COMPUTED", "build_shadow_record")
+    for pattern in forbidden:
+        assert pattern not in body, f"compute_catastrophic_divergence_p_value unexpectedly references {pattern!r}"
+
+
 # ---------- evaluate_all_requests_for_hypothesis() (ORCHESTRATION) ---------
 
 
@@ -182,7 +326,7 @@ def test_single_request_wires_latest_previous_verification_into_assess_terminali
     mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
 ):
     mock_list_ids.return_value = ["R1"]
-    snapshot = {"request_id": "R1", "hypothesis_id": HID, "symbol": "XAUUSD"}
+    snapshot = {"request_id": "R1", "hypothesis_id": HID, "symbol": "XAUUSD", "bar_time": "2026-09-01T00:00:00+00:00"}
     latest = _obs(request_id="R1", evaluated_at="2026-09-05T00:00:00+00:00")
     mock_get_snapshot.return_value = snapshot
     mock_resolve.return_value = latest
@@ -198,7 +342,10 @@ def test_single_request_wires_latest_previous_verification_into_assess_terminali
     mock_list_obs.assert_called_once_with("R1")
     mock_verify.assert_called_once_with(snapshot, latest, base_config={"x": 1}, api_key="k")
     mock_assess.assert_called_once_with(latest, None, verification)
-    assert result == [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT}]
+    assert result == [{
+        "terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT,
+        "bar_time": "2026-09-01T00:00:00+00:00", "resolved_bar_time": "2026-09-01T04:00:00+00:00",
+    }]
 
 
 @patch("backtest.shadow_outcome_aggregate.assess_terminality")
@@ -211,7 +358,9 @@ def test_multiple_requests_each_produce_one_result_in_order(
     mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
 ):
     mock_list_ids.return_value = ["R1", "R2", "R3"]
-    mock_get_snapshot.side_effect = lambda rid: {"request_id": rid, "hypothesis_id": HID}
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": f"2026-09-0{rid[-1]}T00:00:00+00:00",
+    }
     mock_resolve.side_effect = lambda snap, base_config: _obs(request_id=snap["request_id"])
     mock_list_obs.return_value = []
     mock_verify.return_value = {}
@@ -226,6 +375,67 @@ def test_multiple_requests_each_produce_one_result_in_order(
         TERMINAL_CONFIRMED, PROVISIONAL, TERMINAL_CONFIRMED,
     ]
     assert mock_get_snapshot.call_count == 3
+
+
+# ---------- bar_time/resolved_bar_time carry-through (locked, Export --------
+# ---------- Exposure Window Evidence Design Gate) ---------------------------
+
+
+@patch("backtest.shadow_outcome_aggregate.assess_terminality")
+@patch("backtest.shadow_outcome_aggregate.verify_historical_stability")
+@patch("backtest.shadow_outcome_aggregate.list_observations_for_request")
+@patch("backtest.shadow_outcome_aggregate.resolve_decision_outcome")
+@patch("backtest.shadow_outcome_aggregate.get_snapshot_by_request_id")
+@patch("backtest.shadow_outcome_aggregate.list_request_ids_for_hypothesis")
+def test_bar_time_and_resolved_bar_time_carried_through_for_every_result(
+    mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
+):
+    """Carried through unconditionally for EVERY result, regardless of
+    terminality_state -- the same additive-widening policy already
+    locked for `outcome`, no filtering at this layer."""
+    mock_list_ids.return_value = ["R1", "R2"]
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": f"2026-09-0{rid[-1]}T00:00:00+00:00",
+    }
+    mock_resolve.side_effect = lambda snap, base_config: _obs(
+        request_id=snap["request_id"], outcome=SL_HIT, resolved_bar_time=None,
+    )
+    mock_list_obs.return_value = []
+    mock_verify.return_value = {}
+    mock_assess.return_value = {"terminality_state": PROVISIONAL}
+
+    result = soa.evaluate_all_requests_for_hypothesis(HID, base_config={})
+    assert result[0]["bar_time"] == "2026-09-01T00:00:00+00:00"
+    assert result[1]["bar_time"] == "2026-09-02T00:00:00+00:00"
+    # resolved_bar_time is carried through verbatim even though it is None here
+    # (a non-TP_HIT/SL_HIT-resolved observation) -- no filtering at this layer.
+    assert result[0]["resolved_bar_time"] is None
+    assert result[1]["resolved_bar_time"] is None
+
+
+@patch("backtest.shadow_outcome_aggregate.assess_terminality")
+@patch("backtest.shadow_outcome_aggregate.verify_historical_stability")
+@patch("backtest.shadow_outcome_aggregate.list_observations_for_request")
+@patch("backtest.shadow_outcome_aggregate.resolve_decision_outcome")
+@patch("backtest.shadow_outcome_aggregate.get_snapshot_by_request_id")
+@patch("backtest.shadow_outcome_aggregate.list_request_ids_for_hypothesis")
+def test_resolved_bar_time_is_none_for_non_tp_sl_outcomes(
+    mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
+):
+    """resolve_decision_outcome()'s own locked contract (resolved_bar_time
+    is None iff outcome is not TP_HIT/SL_HIT) is reused verbatim here,
+    never re-derived -- this module makes no population claim of its own."""
+    mock_list_ids.return_value = ["R1"]
+    mock_get_snapshot.return_value = {
+        "request_id": "R1", "hypothesis_id": HID, "bar_time": "2026-09-01T00:00:00+00:00",
+    }
+    mock_resolve.return_value = _obs(request_id="R1", outcome="TIMEOUT", resolved_bar_time=None)
+    mock_list_obs.return_value = []
+    mock_verify.return_value = {}
+    mock_assess.return_value = {"terminality_state": NOT_YET_ASSESSABLE}
+
+    result = soa.evaluate_all_requests_for_hypothesis(HID, base_config={})
+    assert result[0]["resolved_bar_time"] is None
 
 
 # ---------- fail-fast / no isolation (locked) -------------------------------
@@ -244,7 +454,9 @@ def test_one_request_failure_propagates_and_aborts_remaining_requests(
     no isolation. A provider/structural failure on request 2 of 3 must
     propagate unchanged, and request 3 must never be reached."""
     mock_list_ids.return_value = ["R1", "R2", "R3"]
-    mock_get_snapshot.side_effect = lambda rid: {"request_id": rid, "hypothesis_id": HID}
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": "2026-09-01T00:00:00+00:00",
+    }
 
     class _FakeProviderFailure(Exception):
         pass

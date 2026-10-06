@@ -44,12 +44,36 @@ intermediate evidence, not part of the contract -- adding diagnostic
 fields is deferred to a future, separately-authorized Design Gate if
 ever needed.
 
-OBSERVED SIDE vs. BASELINE SIDE -- asymmetric I/O boundary, intentional:
-this module performs I/O itself for the observed side (by calling
-backtest.shadow_outcome_aggregate.evaluate_all_requests_for_hypothesis(),
-which owns storage reads and a live network call). The baseline side is
+MEMBERSHIP INTEGRATION REFACTOR (operator's own locked Design Gate,
+2026-10, decision C): this module's PUBLIC signature and output are
+UNCHANGED by this refactor -- build_shadow_record() still takes exactly
+the same arguments and still returns exactly the same two-key shape, for
+exactly the same inputs. What changed is internal only: the
+observed-side evaluation, the baseline-side composition, and the
+canonical-identity resolution were extracted into backtest.
+shadow_outcome_evidence.evaluate_shadow_evidence() (a single, shared
+evaluation primitive, computed ONCE), so that a future Membership
+Integration orchestrator (backtest.shadow_integration) can consume the
+SAME evidence dict this function consumes, without re-running the
+observed side's live network call a second time. The three-conjunct
+`completed` formula itself now lives in compose_shadow_record() below --
+still the ONE place that formula is defined, reused here, never copied.
+
+NAMING NOTE: the shared primitive module is named
+`backtest.shadow_outcome_evidence`, NOT `backtest.shadow_evidence` --
+the latter name is already taken by an unrelated, pre-existing Phase 15B
+module (`backtest/shadow_evidence.py`, commit 677ce63, an ancestor of
+this branch's own HEAD: SHADOW's own decision/verdict-frequency record,
+structurally unable to assess divergence). The two modules are, and
+remain, entirely separate.
+
+OBSERVED SIDE vs. BASELINE SIDE -- asymmetric I/O boundary, intentional,
+unchanged by the refactor: backtest.shadow_outcome_evidence.
+evaluate_shadow_evidence() performs I/O itself for the observed side (a
+live network call via backtest.shadow_outcome_aggregate.
+evaluate_all_requests_for_hypothesis()). The baseline side is
 caller-supplied (`promotions`, `cell`, `validation_results`) and never
-fetched here -- preserving backtest.hypothesis_baseline_statistic.
+fetched -- preserving backtest.hypothesis_baseline_statistic.
 evaluate_canonical_baseline_statistic()'s own locked purity boundary
 unchanged.
 
@@ -70,11 +94,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backtest.hypothesis_baseline_statistic import evaluate_canonical_baseline_statistic
-from backtest.shadow_outcome_aggregate import (
-    count_terminal_confirmed,
-    evaluate_all_requests_for_hypothesis,
-)
+from backtest.shadow_outcome_evidence import evaluate_shadow_evidence
 
 N_MIN_TERMINAL_CONFIRMED = 40
 
@@ -86,7 +106,31 @@ N_MIN_TERMINAL_CONFIRMED = 40
 # observed-side statistic AND locks a real threshold.
 DIVERGENCE_VERDICT_COMPUTED = False
 
-__all__ = ["N_MIN_TERMINAL_CONFIRMED", "DIVERGENCE_VERDICT_COMPUTED", "build_shadow_record"]
+__all__ = [
+    "N_MIN_TERMINAL_CONFIRMED", "DIVERGENCE_VERDICT_COMPUTED",
+    "compose_shadow_record", "build_shadow_record",
+]
+
+
+def compose_shadow_record(evidence: dict[str, Any]) -> dict[str, Any]:
+    """PURE -- no I/O, no randomness. The three-conjunct `completed`
+    formula's SOLE definition (Membership Integration Design Gate,
+    locked 2026-10) -- reused by build_shadow_record() below AND by the
+    future Membership Integration orchestrator (backtest.
+    shadow_integration), so the formula is never copied to a second
+    location.
+
+    `evidence` is backtest.shadow_outcome_evidence.evaluate_shadow_evidence()'s
+    own return dict. Only `n_t` and `divergence_statistic_valid` are
+    read here -- canonical-identity/membership fields are deliberately
+    ignored: completion never depends on canonical identity (operator's
+    own locked rule)."""
+    completed = (
+        evidence["n_t"] >= N_MIN_TERMINAL_CONFIRMED
+        and evidence["divergence_statistic_valid"]
+        and DIVERGENCE_VERDICT_COMPUTED
+    )
+    return {"completed": completed, "diverged_catastrophically": False}
 
 
 def build_shadow_record(
@@ -103,7 +147,8 @@ def build_shadow_record(
     "diverged_catastrophically": bool}.
 
     Observed side is evaluated fresh here (I/O: storage reads + a live
-    network call, via backtest.shadow_outcome_aggregate.
+    network call, via backtest.shadow_outcome_evidence.evaluate_shadow_evidence()
+    -> backtest.shadow_outcome_aggregate.
     evaluate_all_requests_for_hypothesis()). Baseline side
     (`promotions`, `cell`, `validation_results`) is caller-supplied,
     exactly as backtest.hypothesis_baseline_statistic.
@@ -113,15 +158,8 @@ def build_shadow_record(
     FAIL-FAST: any exception from the observed-side evaluation
     propagates completely unchanged. No partial or fabricated record is
     ever returned."""
-    terminality_results = evaluate_all_requests_for_hypothesis(
-        hypothesis_id, base_config=base_config, api_key=api_key,
+    evidence = evaluate_shadow_evidence(
+        hypothesis_id, base_config=base_config, promotions=promotions,
+        cell=cell, validation_results=validation_results, api_key=api_key,
     )
-    n_t = count_terminal_confirmed(terminality_results)
-    baseline = evaluate_canonical_baseline_statistic(hypothesis_id, promotions, cell, validation_results)
-
-    completed = (
-        n_t >= N_MIN_TERMINAL_CONFIRMED
-        and baseline["divergence_statistic_valid"]
-        and DIVERGENCE_VERDICT_COMPUTED
-    )
-    return {"completed": completed, "diverged_catastrophically": False}
+    return compose_shadow_record(evidence)

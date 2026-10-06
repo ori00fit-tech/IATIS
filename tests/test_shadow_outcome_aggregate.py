@@ -22,8 +22,14 @@ from backtest.shadow_outcome_terminality import (
 HID = "CONFLUENCE-HYPOTHESIS-x"
 
 
-def _obs(request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", outcome=TP_HIT, **overrides) -> dict:
-    base = {"request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at, "outcome": outcome}
+def _obs(
+    request_id="R1", evaluated_at="2026-09-01T00:00:00+00:00", outcome=TP_HIT,
+    resolved_bar_time="2026-09-01T04:00:00+00:00", **overrides,
+) -> dict:
+    base = {
+        "request_id": request_id, "hypothesis_id": HID, "evaluated_at": evaluated_at,
+        "outcome": outcome, "resolved_bar_time": resolved_bar_time,
+    }
     base.update(overrides)
     return base
 
@@ -320,7 +326,7 @@ def test_single_request_wires_latest_previous_verification_into_assess_terminali
     mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
 ):
     mock_list_ids.return_value = ["R1"]
-    snapshot = {"request_id": "R1", "hypothesis_id": HID, "symbol": "XAUUSD"}
+    snapshot = {"request_id": "R1", "hypothesis_id": HID, "symbol": "XAUUSD", "bar_time": "2026-09-01T00:00:00+00:00"}
     latest = _obs(request_id="R1", evaluated_at="2026-09-05T00:00:00+00:00")
     mock_get_snapshot.return_value = snapshot
     mock_resolve.return_value = latest
@@ -336,7 +342,10 @@ def test_single_request_wires_latest_previous_verification_into_assess_terminali
     mock_list_obs.assert_called_once_with("R1")
     mock_verify.assert_called_once_with(snapshot, latest, base_config={"x": 1}, api_key="k")
     mock_assess.assert_called_once_with(latest, None, verification)
-    assert result == [{"terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT}]
+    assert result == [{
+        "terminality_state": TERMINAL_CONFIRMED, "outcome": TP_HIT,
+        "bar_time": "2026-09-01T00:00:00+00:00", "resolved_bar_time": "2026-09-01T04:00:00+00:00",
+    }]
 
 
 @patch("backtest.shadow_outcome_aggregate.assess_terminality")
@@ -349,7 +358,9 @@ def test_multiple_requests_each_produce_one_result_in_order(
     mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
 ):
     mock_list_ids.return_value = ["R1", "R2", "R3"]
-    mock_get_snapshot.side_effect = lambda rid: {"request_id": rid, "hypothesis_id": HID}
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": f"2026-09-0{rid[-1]}T00:00:00+00:00",
+    }
     mock_resolve.side_effect = lambda snap, base_config: _obs(request_id=snap["request_id"])
     mock_list_obs.return_value = []
     mock_verify.return_value = {}
@@ -364,6 +375,67 @@ def test_multiple_requests_each_produce_one_result_in_order(
         TERMINAL_CONFIRMED, PROVISIONAL, TERMINAL_CONFIRMED,
     ]
     assert mock_get_snapshot.call_count == 3
+
+
+# ---------- bar_time/resolved_bar_time carry-through (locked, Export --------
+# ---------- Exposure Window Evidence Design Gate) ---------------------------
+
+
+@patch("backtest.shadow_outcome_aggregate.assess_terminality")
+@patch("backtest.shadow_outcome_aggregate.verify_historical_stability")
+@patch("backtest.shadow_outcome_aggregate.list_observations_for_request")
+@patch("backtest.shadow_outcome_aggregate.resolve_decision_outcome")
+@patch("backtest.shadow_outcome_aggregate.get_snapshot_by_request_id")
+@patch("backtest.shadow_outcome_aggregate.list_request_ids_for_hypothesis")
+def test_bar_time_and_resolved_bar_time_carried_through_for_every_result(
+    mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
+):
+    """Carried through unconditionally for EVERY result, regardless of
+    terminality_state -- the same additive-widening policy already
+    locked for `outcome`, no filtering at this layer."""
+    mock_list_ids.return_value = ["R1", "R2"]
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": f"2026-09-0{rid[-1]}T00:00:00+00:00",
+    }
+    mock_resolve.side_effect = lambda snap, base_config: _obs(
+        request_id=snap["request_id"], outcome=SL_HIT, resolved_bar_time=None,
+    )
+    mock_list_obs.return_value = []
+    mock_verify.return_value = {}
+    mock_assess.return_value = {"terminality_state": PROVISIONAL}
+
+    result = soa.evaluate_all_requests_for_hypothesis(HID, base_config={})
+    assert result[0]["bar_time"] == "2026-09-01T00:00:00+00:00"
+    assert result[1]["bar_time"] == "2026-09-02T00:00:00+00:00"
+    # resolved_bar_time is carried through verbatim even though it is None here
+    # (a non-TP_HIT/SL_HIT-resolved observation) -- no filtering at this layer.
+    assert result[0]["resolved_bar_time"] is None
+    assert result[1]["resolved_bar_time"] is None
+
+
+@patch("backtest.shadow_outcome_aggregate.assess_terminality")
+@patch("backtest.shadow_outcome_aggregate.verify_historical_stability")
+@patch("backtest.shadow_outcome_aggregate.list_observations_for_request")
+@patch("backtest.shadow_outcome_aggregate.resolve_decision_outcome")
+@patch("backtest.shadow_outcome_aggregate.get_snapshot_by_request_id")
+@patch("backtest.shadow_outcome_aggregate.list_request_ids_for_hypothesis")
+def test_resolved_bar_time_is_none_for_non_tp_sl_outcomes(
+    mock_list_ids, mock_get_snapshot, mock_resolve, mock_list_obs, mock_verify, mock_assess,
+):
+    """resolve_decision_outcome()'s own locked contract (resolved_bar_time
+    is None iff outcome is not TP_HIT/SL_HIT) is reused verbatim here,
+    never re-derived -- this module makes no population claim of its own."""
+    mock_list_ids.return_value = ["R1"]
+    mock_get_snapshot.return_value = {
+        "request_id": "R1", "hypothesis_id": HID, "bar_time": "2026-09-01T00:00:00+00:00",
+    }
+    mock_resolve.return_value = _obs(request_id="R1", outcome="TIMEOUT", resolved_bar_time=None)
+    mock_list_obs.return_value = []
+    mock_verify.return_value = {}
+    mock_assess.return_value = {"terminality_state": NOT_YET_ASSESSABLE}
+
+    result = soa.evaluate_all_requests_for_hypothesis(HID, base_config={})
+    assert result[0]["resolved_bar_time"] is None
 
 
 # ---------- fail-fast / no isolation (locked) -------------------------------
@@ -382,7 +454,9 @@ def test_one_request_failure_propagates_and_aborts_remaining_requests(
     no isolation. A provider/structural failure on request 2 of 3 must
     propagate unchanged, and request 3 must never be reached."""
     mock_list_ids.return_value = ["R1", "R2", "R3"]
-    mock_get_snapshot.side_effect = lambda rid: {"request_id": rid, "hypothesis_id": HID}
+    mock_get_snapshot.side_effect = lambda rid: {
+        "request_id": rid, "hypothesis_id": HID, "bar_time": "2026-09-01T00:00:00+00:00",
+    }
 
     class _FakeProviderFailure(Exception):
         pass

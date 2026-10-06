@@ -92,6 +92,33 @@ guarantee). Never the full, unfiltered enumeration -- a membership row's
 request_ids_json must trace exactly the evidence that produced its own
 p_value_at_entry, nothing broader.
 
+EXPOSURE_WINDOWS (operator's own locked Design Gate, "Export Exposure
+Window Evidence", 2026-10): a SEPARATE, additive field, never a
+modification of `request_ids` above. Each element is exactly
+{"request_id", "bar_time", "resolved_bar_time"} -- the SAME values
+backtest.shadow_outcome_aggregate.evaluate_all_requests_for_hypothesis()
+now carries through verbatim (its own locked additive widening, see
+that module's docstring), never re-fetched or recomputed here (in
+particular, resolve_decision_outcome() is NEVER called a second time
+from this module -- that would duplicate a live network call). Scoped
+to TERMINAL_CONFIRMED only, same filter pass as `request_ids`, so the
+two lists share the same order by construction -- a documented
+consistency, never a positional contract: every element carries its own
+`request_id`, and no consumer may rely on position.
+
+FAIL-CLOSED IDENTITY GUARD (operator's own locked decision, same Design
+Gate): backtest.shadow_outcome_aggregate's own population guarantee
+(TERMINAL_CONFIRMED implies outcome in {TP_HIT, SL_HIT}, hence
+resolved_bar_time is never None) is asserted here, not merely trusted --
+a TERMINAL_CONFIRMED result whose `resolved_bar_time` is None raises
+backtest.shadow_outcome_aggregate.ShadowOutcomeAggregateError (the
+SAME, already-existing contract-drift guard that module's own
+compute_observed_win_rate()/count_terminal_confirmed_by_outcome() use
+for the identical population-guarantee violation -- no new exception
+type is introduced here). This module performs no clustering, no
+n_eff/k_eff, no overlap-graph construction -- those remain a separate,
+future, independently-authorized Design Gate.
+
 NON-NEGOTIABLE (operator's own locked scope boundary): this module never
 writes to storage, never imports backtest.promotion_gate, backtest.
 policy_health, backtest.execution_attribution, execution.authorization,
@@ -110,6 +137,7 @@ from backtest.hypothesis_baseline import CANONICAL_CELL_RESOLVED, resolve_canoni
 from backtest.hypothesis_baseline_statistic import evaluate_canonical_baseline_statistic
 from backtest.hypothesis_promotion import PROMOTED
 from backtest.shadow_outcome_aggregate import (
+    ShadowOutcomeAggregateError,
     compute_catastrophic_divergence_p_value,
     count_terminal_confirmed,
     count_terminal_confirmed_by_outcome,
@@ -152,6 +180,33 @@ def _resolve_canonical_identity(
     return CANONICAL_IDENTITY_RESOLVED, next(iter(fingerprints)), next(iter(commits))
 
 
+def _build_exposure_windows(terminality_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """PURE -- no I/O. One {"request_id", "bar_time", "resolved_bar_time"}
+    element per TERMINAL_CONFIRMED result, in the same order as this
+    filter pass encounters them (the same order request_ids above is
+    built in). Fail-closed: raises ShadowOutcomeAggregateError if a
+    TERMINAL_CONFIRMED result's own resolved_bar_time is None -- a
+    violation of the already-locked population guarantee, never
+    silently passed through as an incomplete window."""
+    windows = []
+    for result in terminality_results:
+        if result["terminality_state"] != TERMINAL_CONFIRMED:
+            continue
+        if result["resolved_bar_time"] is None:
+            raise ShadowOutcomeAggregateError(
+                f"_build_exposure_windows: TERMINAL_CONFIRMED result for request_id "
+                f"{result.get('request_id')!r} has resolved_bar_time=None -- this violates the "
+                f"already-locked population guarantee (TERMINAL_CONFIRMED implies outcome in "
+                f"{{TP_HIT, SL_HIT}}), indicating contract drift, not an ordinary data gap."
+            )
+        windows.append({
+            "request_id": result["request_id"],
+            "bar_time": result["bar_time"],
+            "resolved_bar_time": result["resolved_bar_time"],
+        })
+    return windows
+
+
 def evaluate_shadow_evidence(
     hypothesis_id: str,
     *,
@@ -173,13 +228,14 @@ def evaluate_shadow_evidence(
     Returns exactly:
         {hypothesis_id, n_t, tp_count, sl_count, p_value,
          divergence_statistic_valid, baseline_p, baseline_failure_reason,
-         request_ids, canonical_identity_state, hypothesis_fingerprint,
-         research_code_commit}
+         request_ids, exposure_windows, canonical_identity_state,
+         hypothesis_fingerprint, research_code_commit}
 
-    FAIL-FAST: any exception from the observed-side evaluation, or from
-    resolve_canonical_baseline()'s own HypothesisBaselineError, propagates
-    completely unchanged. No partial or fabricated evidence is ever
-    returned."""
+    FAIL-FAST: any exception from the observed-side evaluation, from
+    resolve_canonical_baseline()'s own HypothesisBaselineError, or from
+    the exposure-window population-guarantee guard
+    (ShadowOutcomeAggregateError), propagates completely unchanged. No
+    partial or fabricated evidence is ever returned."""
     terminality_results = evaluate_all_requests_for_hypothesis(
         hypothesis_id, base_config=base_config, api_key=api_key,
     )
@@ -189,6 +245,7 @@ def evaluate_shadow_evidence(
         result["request_id"] for result in terminality_results
         if result["terminality_state"] == TERMINAL_CONFIRMED
     ]
+    exposure_windows = _build_exposure_windows(terminality_results)
 
     baseline = evaluate_canonical_baseline_statistic(hypothesis_id, promotions, cell, validation_results)
     p_value = compute_catastrophic_divergence_p_value(terminality_results, baseline["tp_sl_win_rate"])
@@ -207,6 +264,7 @@ def evaluate_shadow_evidence(
         "baseline_p": baseline["tp_sl_win_rate"],
         "baseline_failure_reason": baseline["failure_reason"],
         "request_ids": request_ids,
+        "exposure_windows": exposure_windows,
         "canonical_identity_state": identity_state,
         "hypothesis_fingerprint": hypothesis_fingerprint,
         "research_code_commit": research_code_commit,

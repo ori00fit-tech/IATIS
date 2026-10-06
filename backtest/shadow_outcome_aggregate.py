@@ -41,6 +41,22 @@ THIS module's own orchestration output, done here because this is the
 one place that still has `latest_observation` in hand before it would
 otherwise be discarded.
 
+BAR_TIME/RESOLVED_BAR_TIME ARE NOW ALSO CARRIED THROUGH (operator's own
+locked extension, Design Gate "Export Exposure Window Evidence",
+2026-10): the SAME additive-widening precedent as `outcome` above, for
+the SAME reason -- this is the one place that still has both `snapshot`
+(carrying `bar_time`) and `latest_observation` (carrying
+`resolved_bar_time`) in hand before either would otherwise be discarded.
+Both are copied verbatim, unconditionally, for EVERY result regardless
+of terminality_state -- no filtering happens at this layer.
+`resolved_bar_time` is `None` whenever `latest_observation["outcome"]` is
+not TP_HIT/SL_HIT (resolve_decision_outcome()'s own locked contract,
+reused verbatim here, never re-derived). Consumers that need the
+TERMINAL_CONFIRMED-only population guarantee that `resolved_bar_time` is
+never None (backtest.shadow_outcome_evidence.evaluate_shadow_evidence(),
+specifically) impose that filtering themselves, one layer up -- this
+module makes no population claim about either new key.
+
 POPULATION GUARANTEE (operator's own locked Gate 0 finding, reused
 verbatim, not re-derived): TERMINAL_CONFIRMED is only reachable when
 `latest_observation["outcome"]` is TP_HIT or SL_HIT -- verification_
@@ -156,10 +172,15 @@ def evaluate_all_requests_for_hypothesis(
     storage.shadow_decision_snapshot.list_request_ids_for_hypothesis()
     (complete, no LIMIT), in that enumeration's own order: exactly
     assess_terminality()'s own return shape ({request_id, hypothesis_id,
-    terminality_state, relationship}), PLUS one additional key,
-    `outcome`, copied verbatim from `latest_observation["outcome"]`
-    (this module's own additive widening -- assess_terminality()'s
-    contract is untouched).
+    terminality_state, relationship}), PLUS three additional keys --
+    `outcome` (copied verbatim from `latest_observation["outcome"]`),
+    `bar_time` (copied verbatim from `snapshot["bar_time"]`), and
+    `resolved_bar_time` (copied verbatim from
+    `latest_observation["resolved_bar_time"]`) -- this module's own
+    additive widening (see module docstring); assess_terminality()'s own
+    contract is untouched. All three are carried through unconditionally
+    for every result, with no filtering by terminality_state at this
+    layer.
 
     FAIL-FAST: any exception raised while evaluating one request_id
     propagates immediately and unchanged -- no partial list is ever
@@ -175,7 +196,12 @@ def evaluate_all_requests_for_hypothesis(
             snapshot, latest_observation, base_config=base_config, api_key=api_key,
         )
         terminality_result = assess_terminality(latest_observation, previous_observation, latest_verification)
-        results.append({**terminality_result, "outcome": latest_observation["outcome"]})
+        results.append({
+            **terminality_result,
+            "outcome": latest_observation["outcome"],
+            "bar_time": snapshot["bar_time"],
+            "resolved_bar_time": latest_observation["resolved_bar_time"],
+        })
     return results
 
 

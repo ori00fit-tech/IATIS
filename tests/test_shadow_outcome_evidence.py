@@ -21,11 +21,14 @@ from backtest import shadow_outcome_evidence as se
 HID = "CONFLUENCE-HYPOTHESIS-x"
 
 
-def _terminality_result(request_id: str, terminality_state: str, outcome: str | None = None) -> dict:
+def _terminality_result(
+    request_id: str, terminality_state: str, outcome: str | None = None,
+    bar_time: str | None = None, resolved_bar_time: str | None = None,
+) -> dict:
     return {
         "request_id": request_id, "hypothesis_id": HID,
         "terminality_state": terminality_state, "relationship": "UNCHANGED",
-        "outcome": outcome,
+        "outcome": outcome, "bar_time": bar_time, "resolved_bar_time": resolved_bar_time,
     }
 
 
@@ -44,10 +47,19 @@ def _baseline(valid: bool, tp_sl_win_rate: float | None, failure_reason: str | N
 
 
 TERMINALITY_RESULTS = [
-    _terminality_result("R1", "TERMINAL_CONFIRMED", "TP_HIT"),
-    _terminality_result("R2", "TERMINAL_CONFIRMED", "TP_HIT"),
-    _terminality_result("R3", "TERMINAL_CONFIRMED", "SL_HIT"),
-    _terminality_result("R4", "AWAITING_OUTCOME", None),
+    _terminality_result(
+        "R1", "TERMINAL_CONFIRMED", "TP_HIT",
+        bar_time="2026-09-01T00:00:00+00:00", resolved_bar_time="2026-09-01T04:00:00+00:00",
+    ),
+    _terminality_result(
+        "R2", "TERMINAL_CONFIRMED", "TP_HIT",
+        bar_time="2026-09-02T00:00:00+00:00", resolved_bar_time="2026-09-02T04:00:00+00:00",
+    ),
+    _terminality_result(
+        "R3", "TERMINAL_CONFIRMED", "SL_HIT",
+        bar_time="2026-09-03T00:00:00+00:00", resolved_bar_time="2026-09-03T04:00:00+00:00",
+    ),
+    _terminality_result("R4", "AWAITING_OUTCOME", None, bar_time="2026-09-04T00:00:00+00:00", resolved_bar_time=None),
 ]
 
 
@@ -91,6 +103,109 @@ def test_request_ids_scoped_to_terminal_confirmed_only(mock_evaluate_requests, m
         HID, base_config={}, promotions=[], cell=None, validation_results=[],
     )
     assert sorted(evidence["request_ids"]) == ["R1", "R2", "R3"]  # R4 (AWAITING_OUTCOME) excluded
+
+
+# ---------- exposure_windows (Export Exposure Window Evidence Design Gate) -
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_exposure_windows_scoped_to_terminal_confirmed_only(mock_evaluate_requests, mock_baseline):
+    mock_evaluate_requests.return_value = TERMINALITY_RESULTS
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    evidence = se.evaluate_shadow_evidence(
+        HID, base_config={}, promotions=[], cell=None, validation_results=[],
+    )
+    assert {w["request_id"] for w in evidence["exposure_windows"]} == {"R1", "R2", "R3"}  # R4 excluded
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_exposure_windows_preserve_bar_time_and_resolved_bar_time(mock_evaluate_requests, mock_baseline):
+    mock_evaluate_requests.return_value = TERMINALITY_RESULTS
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    evidence = se.evaluate_shadow_evidence(
+        HID, base_config={}, promotions=[], cell=None, validation_results=[],
+    )
+    by_id = {w["request_id"]: w for w in evidence["exposure_windows"]}
+    assert by_id["R1"] == {
+        "request_id": "R1", "bar_time": "2026-09-01T00:00:00+00:00",
+        "resolved_bar_time": "2026-09-01T04:00:00+00:00",
+    }
+    assert by_id["R3"] == {
+        "request_id": "R3", "bar_time": "2026-09-03T00:00:00+00:00",
+        "resolved_bar_time": "2026-09-03T04:00:00+00:00",
+    }
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_exposure_windows_request_id_matches_request_ids_list(mock_evaluate_requests, mock_baseline):
+    """Regression guard, not mere convenience: the set of request_ids
+    inside exposure_windows must exactly match evidence['request_ids'] --
+    both are the SAME TERMINAL_CONFIRMED filter pass, so they must never
+    silently drift apart."""
+    mock_evaluate_requests.return_value = TERMINALITY_RESULTS
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    evidence = se.evaluate_shadow_evidence(
+        HID, base_config={}, promotions=[], cell=None, validation_results=[],
+    )
+    assert {w["request_id"] for w in evidence["exposure_windows"]} == set(evidence["request_ids"])
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_exposure_windows_order_matches_request_ids_order(mock_evaluate_requests, mock_baseline):
+    mock_evaluate_requests.return_value = TERMINALITY_RESULTS
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    evidence = se.evaluate_shadow_evidence(
+        HID, base_config={}, promotions=[], cell=None, validation_results=[],
+    )
+    assert [w["request_id"] for w in evidence["exposure_windows"]] == evidence["request_ids"]
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_contract_drift_raises_if_terminal_confirmed_has_none_resolved_bar_time(mock_evaluate_requests, mock_baseline):
+    """Fail-closed, not a silent incomplete window: a TERMINAL_CONFIRMED
+    result with resolved_bar_time=None violates the already-locked
+    population guarantee (TERMINAL_CONFIRMED implies outcome in
+    {TP_HIT, SL_HIT}) and must raise, never produce partial evidence."""
+    import pytest
+    from backtest.shadow_outcome_aggregate import ShadowOutcomeAggregateError
+
+    drifted = [_terminality_result(
+        "R-drift", "TERMINAL_CONFIRMED", "TP_HIT",
+        bar_time="2026-09-01T00:00:00+00:00", resolved_bar_time=None,
+    )]
+    mock_evaluate_requests.return_value = drifted
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    with pytest.raises(ShadowOutcomeAggregateError, match="R-drift"):
+        se.evaluate_shadow_evidence(HID, base_config={}, promotions=[], cell=None, validation_results=[])
+
+
+@patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
+@patch("backtest.shadow_outcome_evidence.evaluate_all_requests_for_hypothesis")
+def test_other_evidence_fields_unchanged_by_this_extension(mock_evaluate_requests, mock_baseline):
+    """Regression guard: adding exposure_windows must not alter any
+    other already-locked evidence field's value."""
+    mock_evaluate_requests.return_value = TERMINALITY_RESULTS
+    mock_baseline.return_value = _baseline(True, 0.65, None)
+
+    evidence = se.evaluate_shadow_evidence(
+        HID, base_config={}, promotions=[], cell=None, validation_results=[],
+    )
+    assert evidence["n_t"] == 3
+    assert evidence["tp_count"] == 2
+    assert evidence["sl_count"] == 1
+    assert evidence["divergence_statistic_valid"] is True
+    assert evidence["baseline_p"] == 0.65
+    assert sorted(evidence["request_ids"]) == ["R1", "R2", "R3"]
 
 
 @patch("backtest.shadow_outcome_evidence.evaluate_canonical_baseline_statistic")
@@ -250,7 +365,8 @@ def test_evidence_dict_has_exactly_the_locked_fields():
     assert set(evidence.keys()) == {
         "hypothesis_id", "n_t", "tp_count", "sl_count", "p_value",
         "divergence_statistic_valid", "baseline_p", "baseline_failure_reason",
-        "request_ids", "canonical_identity_state", "hypothesis_fingerprint", "research_code_commit",
+        "request_ids", "exposure_windows", "canonical_identity_state",
+        "hypothesis_fingerprint", "research_code_commit",
     }
 
 

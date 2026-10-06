@@ -1,8 +1,12 @@
 """tests/test_shadow_record.py -- tests for backtest/shadow_record.py
-(the Full Observed Evidence Producer, Implementation Design): the
+(the Full Observed Evidence Producer, refactored under the Membership
+Integration Design Gate, 2026-10, decision C): compose_shadow_record()'s
 three-conjunct `completed` formula (with DIVERGENCE_VERDICT_COMPUTED
-hardcoded False), the minimal two-key record shape, the
-observed/baseline I/O-boundary asymmetry, and fail-fast propagation."""
+hardcoded False) as the SOLE definition of that formula, the minimal
+two-key record shape, build_shadow_record()'s delegation to
+evaluate_shadow_evidence() + compose_shadow_record(), and fail-fast
+propagation. build_shadow_record()'s own PUBLIC signature and output are
+asserted unchanged by the refactor."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -10,6 +14,17 @@ from unittest.mock import patch
 import pytest
 
 from backtest import shadow_record as sr
+
+
+def _evidence(**overrides) -> dict:
+    base = dict(
+        hypothesis_id="H", n_t=0, tp_count=0, sl_count=0, p_value=None,
+        divergence_statistic_valid=False, baseline_p=None, baseline_failure_reason="NO_CANONICAL_CELL",
+        request_ids=[], canonical_identity_state="NO_CANONICAL_CELL",
+        hypothesis_fingerprint=None, research_code_commit=None,
+    )
+    base.update(overrides)
+    return base
 
 
 def test_divergence_verdict_computed_is_hardcoded_false():
@@ -22,120 +37,91 @@ def test_n_min_terminal_confirmed_is_forty():
     assert sr.N_MIN_TERMINAL_CONFIRMED == 40
 
 
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_completed_is_always_false_even_with_abundant_n_t_and_valid_baseline(
-    mock_evaluate_requests, mock_count, mock_baseline,
-):
+# ---------- compose_shadow_record() -- the formula's SOLE definition ------
+
+
+def test_compose_completed_is_always_false_even_with_abundant_n_t_and_valid_baseline():
     """The central guard this Design Gate exists for: n_T(H)>=40 AND a
     valid baseline statistic are NECESSARY but NOT SUFFICIENT. completed
     must stay False because DIVERGENCE_VERDICT_COMPUTED is False,
     regardless of how strong the other two conjuncts look."""
-    mock_evaluate_requests.return_value = [{"terminality_state": "TERMINAL_CONFIRMED"}] * 100
-    mock_count.return_value = 100  # far above the n>=40 threshold
-    mock_baseline.return_value = {
-        "hypothesis_id": "H", "divergence_statistic_valid": True,
-        "tp_sl_win_rate": 0.7, "failure_reason": None,
-    }
+    evidence = _evidence(n_t=100, divergence_statistic_valid=True, baseline_p=0.7)
+    assert sr.compose_shadow_record(evidence) == {"completed": False, "diverged_catastrophically": False}
+
+
+def test_compose_completed_false_when_n_t_below_forty_even_if_baseline_valid():
+    evidence = _evidence(n_t=39, divergence_statistic_valid=True)
+    assert sr.compose_shadow_record(evidence)["completed"] is False
+
+
+def test_compose_completed_false_when_baseline_invalid_even_if_n_t_abundant():
+    evidence = _evidence(n_t=1000, divergence_statistic_valid=False)
+    assert sr.compose_shadow_record(evidence)["completed"] is False
+
+
+def test_compose_diverged_catastrophically_is_always_false():
+    evidence = _evidence(n_t=0, divergence_statistic_valid=False)
+    assert sr.compose_shadow_record(evidence)["diverged_catastrophically"] is False
+
+
+def test_compose_record_shape_has_exactly_two_keys():
+    """Locked minimal shape -- no diagnostic fields (n_t, baseline,
+    identity, etc.) leak into the returned record."""
+    evidence = _evidence()
+    assert set(sr.compose_shadow_record(evidence).keys()) == {"completed", "diverged_catastrophically"}
+
+
+def test_compose_ignores_canonical_identity_fields():
+    """Operator's own locked rule: completion never depends on canonical
+    identity. An IDENTITY_MISMATCH evidence dict with otherwise-passing
+    n_t/divergence_statistic_valid must compose identically to one with
+    CANONICAL_IDENTITY_RESOLVED."""
+    mismatched = _evidence(n_t=100, divergence_statistic_valid=True, canonical_identity_state="IDENTITY_MISMATCH")
+    resolved = _evidence(
+        n_t=100, divergence_statistic_valid=True, canonical_identity_state="CANONICAL_IDENTITY_RESOLVED",
+        hypothesis_fingerprint="FP", research_code_commit="abc",
+    )
+    assert sr.compose_shadow_record(mismatched) == sr.compose_shadow_record(resolved)
+
+
+# ---------- build_shadow_record() -- delegates, unchanged public contract -
+
+
+@patch("backtest.shadow_record.evaluate_shadow_evidence")
+def test_build_shadow_record_delegates_to_evaluate_shadow_evidence_and_compose(mock_evaluate):
+    mock_evaluate.return_value = _evidence(n_t=100, divergence_statistic_valid=True, baseline_p=0.7)
+    promotions = [{"promotion_id": "P1"}]
+    cell = {"cell_id": "C1"}
+    validation_results = [{"symbol": "XAUUSD"}]
 
     result = sr.build_shadow_record(
-        "H", base_config={}, promotions=[], cell={"cell_id": "C1"}, validation_results=[],
+        "H", base_config={"k": "v"}, promotions=promotions, cell=cell,
+        validation_results=validation_results, api_key="secret",
+    )
+
+    mock_evaluate.assert_called_once_with(
+        "H", base_config={"k": "v"}, promotions=promotions, cell=cell,
+        validation_results=validation_results, api_key="secret",
     )
     assert result == {"completed": False, "diverged_catastrophically": False}
 
 
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_completed_false_when_n_t_below_forty_even_if_baseline_valid(
-    mock_evaluate_requests, mock_count, mock_baseline,
-):
-    mock_evaluate_requests.return_value = []
-    mock_count.return_value = 39
-    mock_baseline.return_value = {"divergence_statistic_valid": True}
-    result = sr.build_shadow_record(
-        "H", base_config={}, promotions=[], cell=None, validation_results=[],
-    )
-    assert result["completed"] is False
-
-
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_completed_false_when_baseline_invalid_even_if_n_t_abundant(
-    mock_evaluate_requests, mock_count, mock_baseline,
-):
-    mock_evaluate_requests.return_value = []
-    mock_count.return_value = 1000
-    mock_baseline.return_value = {"divergence_statistic_valid": False}
-    result = sr.build_shadow_record(
-        "H", base_config={}, promotions=[], cell=None, validation_results=[],
-    )
-    assert result["completed"] is False
-
-
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_diverged_catastrophically_is_always_false(mock_evaluate_requests, mock_count, mock_baseline):
-    mock_evaluate_requests.return_value = []
-    mock_count.return_value = 0
-    mock_baseline.return_value = {"divergence_statistic_valid": False}
-    result = sr.build_shadow_record(
-        "H", base_config={}, promotions=[], cell=None, validation_results=[],
-    )
-    assert result["diverged_catastrophically"] is False
-
-
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_record_shape_has_exactly_two_keys(mock_evaluate_requests, mock_count, mock_baseline):
-    """Locked minimal shape -- no diagnostic fields (n_t, baseline,
-    etc.) in the returned record."""
-    mock_evaluate_requests.return_value = []
-    mock_count.return_value = 0
-    mock_baseline.return_value = {"divergence_statistic_valid": False}
+@patch("backtest.shadow_record.evaluate_shadow_evidence")
+def test_build_shadow_record_record_shape_has_exactly_two_keys(mock_evaluate):
+    mock_evaluate.return_value = _evidence()
     result = sr.build_shadow_record(
         "H", base_config={}, promotions=[], cell=None, validation_results=[],
     )
     assert set(result.keys()) == {"completed", "diverged_catastrophically"}
 
 
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.count_terminal_confirmed")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_baseline_inputs_are_passed_through_unfetched(mock_evaluate_requests, mock_count, mock_baseline):
-    """The baseline side is caller-supplied, never fetched by this
-    module -- evaluate_canonical_baseline_statistic() must receive
-    exactly what the caller passed, unchanged."""
-    mock_evaluate_requests.return_value = []
-    mock_count.return_value = 0
-    mock_baseline.return_value = {"divergence_statistic_valid": False}
-    promotions = [{"promotion_id": "P1"}]
-    cell = {"cell_id": "C1"}
-    validation_results = [{"symbol": "XAUUSD"}]
-
-    sr.build_shadow_record(
-        "H", base_config={"k": "v"}, promotions=promotions, cell=cell,
-        validation_results=validation_results, api_key="secret",
-    )
-    mock_baseline.assert_called_once_with("H", promotions, cell, validation_results)
-    mock_evaluate_requests.assert_called_once_with("H", base_config={"k": "v"}, api_key="secret")
-
-
-@patch("backtest.shadow_record.evaluate_canonical_baseline_statistic")
-@patch("backtest.shadow_record.evaluate_all_requests_for_hypothesis")
-def test_observed_side_failure_propagates_uncaught(mock_evaluate_requests, mock_baseline):
-    """Fail-fast: an exception from the observed-side evaluation must
-    propagate unchanged -- no partial/fabricated record, and the
-    baseline side must never even be evaluated once the observed side
-    has already failed."""
-    mock_evaluate_requests.side_effect = RuntimeError("provider down")
+@patch("backtest.shadow_record.evaluate_shadow_evidence")
+def test_observed_side_failure_propagates_uncaught(mock_evaluate):
+    """Fail-fast: an exception raised while evaluating shared evidence
+    must propagate unchanged -- no partial/fabricated record."""
+    mock_evaluate.side_effect = RuntimeError("provider down")
     with pytest.raises(RuntimeError, match="provider down"):
         sr.build_shadow_record("H", base_config={}, promotions=[], cell=None, validation_results=[])
-    mock_baseline.assert_not_called()
 
 
 def _source_without_docstrings() -> str:

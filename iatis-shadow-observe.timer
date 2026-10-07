@@ -1,0 +1,16 @@
+# Fires iatis-shadow-observe.service on the same cadence convention
+# already used by iatis-marketaux-collect.timer (OnCalendar, not
+# OnUnitActiveSec -- fixed wall-clock slots at 00:00, 04:15, 08:30,
+# 12:45, 17:00, 21:15 UTC, NOT an exact 4h15m elapsed interval from the
+# previous run; use OnUnitActiveSec=4h15min instead if elapsed-interval
+# semantics are ever wanted).
+#   systemctl enable --now iatis-shadow-observe.timer
+[Unit]
+Description=Periodic IATIS SHADOW observe cycle (evidence accumulation only)
+
+[Timer]
+OnCalendar=*-*-* 0/4:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

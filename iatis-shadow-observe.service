@@ -1,0 +1,32 @@
+# IATIS SHADOW observe cycle (fired by iatis-shadow-observe.timer; enable
+# the .timer, not this unit). Runs one SHADOW observe cycle: SHADOW roster
+# -> fresh promotion_gate(SHADOW) eligibility -> run_shadow_cycle() ->
+# decision-snapshot capture into research_shadow_decision_snapshots (D1,
+# over HTTPS -- no local storage write at all, hence no ReadWritePaths).
+# Research/evidence-accumulation only: never promotes, never authorizes,
+# never places an order -- see scripts/run_shadow_observe_cycle.py's own
+# module docstring. Requires D1_WORKER_URL/D1_PROXY_TOKEN in .env.
+[Unit]
+Description=IATIS SHADOW observe cycle (oneshot; scheduled by iatis-shadow-observe.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=iatis
+WorkingDirectory=/opt/iatis
+EnvironmentFile=-/opt/iatis/.env
+Environment=PATH=/opt/iatis/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/iatis/venv/bin/python3 -m scripts.run_shadow_observe_cycle
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+MemoryMax=256M
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

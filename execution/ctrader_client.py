@@ -2135,6 +2135,7 @@ class CTraderClient:
             quantity_step=(details.step_volume / lot_size * 100.0) if details.step_volume > 0 else None,
             min_quantity=(details.min_volume / lot_size * 100.0) if details.min_volume > 0 else None,
             max_quantity=(details.max_volume / lot_size * 100.0) if details.max_volume > 0 else None,
+            contract_units=lot_size / 100.0,   # lotSize is in cents of base units
         )
 
     def test_connection(self) -> bool:

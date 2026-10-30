@@ -524,3 +524,39 @@ def test_manual_override_requires_a_reason():
 def test_manual_override_allows_the_call_through():
     with manual_override_context("dec_z", "manual smoke test of broker connectivity"):
         require_pretrade_approval("dec_z")  # must not raise
+
+
+# ─── 2026-10-30 regression: the layer rejected every real order ─────────────
+
+def test_first_order_into_flat_book_is_approved():
+    # Flat account: the raw concentration ratio is 100% for ANY order.
+    ctx = _context(portfolio_notional=0.0, open_positions_notional={})
+    decision = evaluate_pretrade(_order(), ctx, _limits())
+    assert decision.approved is True, decision.violations
+
+
+def test_carrier_orders_use_broker_contract_size():
+    ctx_kwargs = dict(portfolio_notional=0.0, open_positions_notional={})
+    gold = _order(symbol="XAUUSD", quantity=2.0, reference_price=4000.0, stop_loss=3940.0, take_profit=4120.0)
+    d = evaluate_pretrade(gold, _context(symbol_spec=_spec(price_digits=2, contract_units=100.0), executable_price=4000.0, **ctx_kwargs), _limits())
+    assert d.approved is True, d.violations
+    assert d.estimated_notional_usd == pytest.approx(8_000.0)   # 0.02 lot * 100 oz * $4000
+
+    btc = _order(decision_id="dec_btc", symbol="BTCUSD", quantity=3.0, reference_price=100_000.0, stop_loss=97_000.0, take_profit=106_000.0)
+    d = evaluate_pretrade(btc, _context(symbol_spec=_spec(price_digits=2, contract_units=1.0), executable_price=100_000.0, **ctx_kwargs), _limits())
+    assert d.approved is True, d.violations
+    assert d.estimated_notional_usd == pytest.approx(3_000.0)
+
+
+def test_non_fx_without_contract_size_fails_closed():
+    gold = _order(symbol="XAUUSD", quantity=1.0, reference_price=4000.0, stop_loss=3940.0, take_profit=4120.0)
+    d = evaluate_pretrade(gold, _context(symbol_spec=_spec(price_digits=2), executable_price=4000.0), _limits())
+    assert d.approved is False
+    assert any(v.check == "max_notional" for v in d.violations)
+
+
+def test_usd_based_pair_notional_is_not_multiplied_by_quote():
+    order = _order(symbol="USDJPY", quantity=10.0, reference_price=150.0, stop_loss=149.0, take_profit=152.0)
+    d = evaluate_pretrade(order, _context(executable_price=150.0), _limits())
+    assert d.estimated_notional_usd == pytest.approx(10_000.0)   # 0.1 lot = $10,000, not $1.5M
+    assert d.approved is True, d.violations

@@ -41,13 +41,13 @@ smoke-test script) must use manual_override_context() explicitly, which
 logs the bypass at WARNING level with the caller's own stated reason —
 never silent, never the automated live path.
 
-Known, stated limitation (Phase 11 residual risk — not overclaimed):
-notional-value estimates assume the FX-standard 100,000-unit lot
-(`standard_contract_units`) applied uniformly to every asset class. This
-is exact for forex, an approximation for metals/crypto/indices (whose
-real contract sizes differ). Getting a broker-specific contract-size
-table wrong would be worse than an honestly-labeled approximation, so
-this is documented rather than silently assumed precise.
+Notional estimates use the broker's own contract size (SymbolSpec.
+contract_units, from cTrader's lotSize) and convert to USD per quote
+currency (estimate_notional_usd). The FX-standard 100,000-unit lot
+(`standard_contract_units`) is only a fallback for FX pairs; a non-FX
+symbol with no broker contract size fails closed. Until 2026-10-30 the
+100,000 lot was applied to every asset class, which priced a 0.01-lot
+XAUUSD order at $4M and rejected every carrier trade.
 """
 from __future__ import annotations
 
@@ -135,6 +135,10 @@ class SymbolSpec:
     quantity_step: float | None = None
     min_quantity: float | None = None
     max_quantity: float | None = None
+    # Base-asset units per 1.0 lot, from the broker (cTrader lotSize / 100:
+    # 100,000 for EURUSD, 100 oz for XAUUSD, 1 BTC for BTCUSD). None =
+    # unknown; only an FX pair may then fall back to standard_contract_units.
+    contract_units: float | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +223,28 @@ def compute_decision_id(symbol: str, direction: str, bar_time: str | None,
     id, which is exactly what duplicate-order protection needs."""
     raw = f"{symbol}|{direction}|{bar_time}|{entry}|{sl}|{tp}"
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+_FIAT = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD"}
+
+
+def _is_fx_pair(symbol: str) -> bool:
+    return len(symbol) == 6 and symbol[:3] in _FIAT and symbol[3:] in _FIAT
+
+
+def estimate_notional_usd(symbol: str, units: float, price: float) -> float:
+    """USD notional of `units` of `symbol`'s base asset at `price`.
+
+    USD-quoted (EURUSD, XAUUSD, BTCUSD, NAS100, USOIL): units * price.
+    USD-based FX (USDJPY, USDCHF, USDCAD): units — they ARE dollars;
+    multiplying by the JPY quote overstated USDJPY ~150x.
+    FX crosses (EURJPY, EURGBP, ...): units, i.e. base ~= $1 — EUR/GBP/
+    CHF/AUD/NZD all sit within ~0.6-1.35 USD, accurate enough for a
+    runaway-order cap and far better than a yen- or pound-quoted product.
+    """
+    if _is_fx_pair(symbol) and not symbol.endswith("USD"):
+        return abs(units)
+    return abs(units) * price
 
 
 def load_pretrade_limits(config: dict) -> PretradeLimits:
@@ -408,15 +434,22 @@ def evaluate_pretrade(order: PendingOrder, context: PretradeContext, limits: Pre
     # --- Notional estimate, used by several checks below -----------------------
     # centi-lots -> real lots -> standard contract units -> notional. FX-
     # calibrated approximation — see module docstring's residual-risk note.
+    # Contract size comes from the broker's own spec. The FX-standard
+    # 100,000 is only a fallback for FX pairs: applied to XAUUSD (100 oz)
+    # or BTCUSD (1 BTC) it inflated a 0.01-lot order to $4M / $300M and
+    # rejected every carrier trade.
+    contract_units = spec.contract_units if spec is not None and spec.contract_units else None
+    if contract_units is None and _is_fx_pair(order.symbol):
+        contract_units = limits.standard_contract_units
     estimated_notional = None
-    if ref_price is not None and quantity is not None:
+    if ref_price is not None and quantity is not None and contract_units is not None:
         lots = quantity / 100.0
-        estimated_notional = abs(lots) * limits.standard_contract_units * ref_price
+        estimated_notional = estimate_notional_usd(order.symbol, lots * contract_units, ref_price)
 
     # --- 1. MAX NOTIONAL -----------------------------------------------------
     if limits.max_notional_usd is not None:
         if estimated_notional is None:
-            fail("max_notional", "cannot estimate order notional (missing quantity/reference_price)")
+            fail("max_notional", "cannot estimate order notional (missing quantity/reference_price/contract size)")
         elif estimated_notional > limits.max_notional_usd * (1.0 + 1e-9):
             fail("max_notional", f"estimated notional ${estimated_notional:,.2f} exceeds max ${limits.max_notional_usd:,.2f}")
         else:
@@ -465,7 +498,14 @@ def evaluate_pretrade(order: PendingOrder, context: PretradeContext, limits: Pre
             existing = context.open_positions_notional.get(order.symbol, 0.0) if context.open_positions_notional is not None else 0.0
             projected_portfolio = context.portfolio_notional + estimated_notional
             projected_symbol = existing + estimated_notional
-            pct = (projected_symbol / projected_portfolio) if projected_portfolio > 0 else 1.0
+            # Measured against the portfolio's capacity, not only its
+            # current size: against an empty or near-empty book ANY first
+            # order is ~100% of portfolio notional, so the raw ratio
+            # rejected every order placed while flat.
+            denominator = projected_portfolio
+            if limits.max_portfolio_notional_usd is not None:
+                denominator = max(projected_portfolio, limits.max_portfolio_notional_usd)
+            pct = (projected_symbol / denominator) if denominator > 0 else 1.0
             if pct > limits.max_symbol_concentration_pct:
                 fail(
                     "max_symbol_concentration",

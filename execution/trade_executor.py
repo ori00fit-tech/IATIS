@@ -408,8 +408,11 @@ class TradeExecutor:
                 # from state gathered THIS call (account, open positions,
                 # independently-re-verified symbol precision), immediately
                 # before the broker call that follows.
+                # OpenPosition.volume is the raw cTrader volume (cents of
+                # base units), NOT centi-lots — /100 gives base units.
+                from risk.pretrade_limits import estimate_notional_usd
                 open_positions_notional = {
-                    p.symbol: (p.volume / 100.0) * self.pretrade_limits.standard_contract_units * p.current_price
+                    p.symbol: estimate_notional_usd(p.symbol, p.volume / 100.0, p.current_price)
                     for p in client.get_open_positions()
                 }
                 portfolio_notional = sum(open_positions_notional.values())

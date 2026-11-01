@@ -76,6 +76,25 @@ const MODULES: Record<TabId, LazyExoticComponent<() => ReactNode>> = {
     import('./modules/roadmap/RoadmapGrid').then((m) => ({ default: m.RoadmapGrid }))),
 }
 
+// TV Wall (2026-11) — a full-screen, read-only 10-foot display rendered
+// OUTSIDE the console shell (no sidebar/header/palette). Reached via
+// /app/#/tv; not a TABS entry because it replaces the whole chrome.
+const TvWall = lazy(() => import('./modules/tv-wall/TvWall').then((m) => ({ default: m.TvWall })))
+
+function isTvHash(): boolean {
+  return /^#\/?tv\b/.test(window.location.hash)
+}
+
+function useIsTvRoute(): boolean {
+  const [tv, setTv] = useState(isTvHash)
+  useEffect(() => {
+    const onChange = () => setTv(isTvHash())
+    window.addEventListener('hashchange', onChange)
+    return () => window.removeEventListener('hashchange', onChange)
+  }, [])
+  return tv
+}
+
 function TabLoading({ label }: { label: string }) {
   return (
     <div className="min-h-[240px] flex items-center justify-center text-muted text-[0.85em]">
@@ -185,6 +204,13 @@ function Shell() {
             <kbd className="text-[0.9em] opacity-70">⌘K</kbd>
           </button>
           <Clock />
+          <a
+            href="#/tv"
+            className="hidden sm:inline text-muted text-[0.75em] border border-border rounded px-2 py-1 no-underline hover:text-accent hover:border-accent/50"
+            title="Full-screen read-only TV display (remote: ◀ ▶ switch, OK pause)"
+          >
+            📺 TV
+          </a>
           <button onClick={() => logout()} className="text-muted text-[0.75em] bg-transparent border-none cursor-pointer hover:text-accent">
             Logout
           </button>
@@ -216,8 +242,18 @@ function Shell() {
 
 function Root() {
   const { status } = useAuth()
+  const tv = useIsTvRoute()
   if (status === 'checking') return <div className="min-h-screen flex items-center justify-center text-muted">Connecting to IATIS...</div>
   if (status === 'unauthenticated') return <Login />
+  if (tv) {
+    return (
+      <ErrorBoundary moduleName="TV Wall">
+        <Suspense fallback={<TabLoading label="TV Wall" />}>
+          <TvWall />
+        </Suspense>
+      </ErrorBoundary>
+    )
+  }
   return <Shell />
 }
 

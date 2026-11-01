@@ -1,0 +1,254 @@
+/*
+ * TV Wall — 10-foot styles. Everything is sized in vh/vw so the same
+ * layout reads from the sofa on a 1366×768 HD panel and on 1080p.
+ * Scoped under .tv-root; reuses the console palette from theme/tokens.css.
+ */
+.tv-root {
+  --tv-gap: 1.6vh;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(120% 90% at 85% -10%, #12224a 0%, var(--bg) 55%) var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 2.1vh;
+  cursor: none;
+  user-select: none;
+  /* TV overscan: keep content inside the title-safe area. */
+  padding: 3vh 3.5vw 2vh;
+  box-sizing: border-box;
+}
+.tv-root *,
+.tv-root *::before,
+.tv-root *::after {
+  box-sizing: border-box;
+}
+.tv-glow {
+  position: absolute;
+  width: 60vw;
+  height: 60vw;
+  left: -25vw;
+  bottom: -40vw;
+  background: radial-gradient(circle, rgba(124, 92, 252, 0.18), transparent 65%);
+  pointer-events: none;
+}
+
+/* tones */
+.tv-fg-ok { color: var(--green); }
+.tv-fg-warn { color: var(--amber); }
+.tv-fg-bad { color: var(--red); }
+.tv-fg-muted { color: var(--muted); }
+.tv-fg-text { color: var(--text); }
+.tv-bg-ok { background: var(--green); }
+.tv-bg-warn { background: var(--amber); }
+.tv-bg-bad { background: var(--red); }
+.tv-bg-idle { background: var(--muted); }
+
+/* ── top bar ─────────────────────────────────────────────── */
+.tv-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2vw;
+}
+.tv-brand { display: flex; align-items: center; gap: 1.2vw; }
+.tv-logo {
+  width: 6.5vh;
+  height: 6.5vh;
+  border-radius: 1.6vh;
+  display: grid;
+  place-items: center;
+  font-size: 3.6vh;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  box-shadow: 0 0 3vh rgba(0, 212, 255, 0.35);
+}
+.tv-brand-name { font-size: 4vh; font-weight: 800; letter-spacing: 0.5vh; color: var(--accent); line-height: 1; }
+.tv-brand-sub { font-size: 1.5vh; letter-spacing: 0.35vh; color: var(--muted); margin-top: 0.6vh; }
+.tv-pills { display: flex; gap: 1vw; flex-wrap: wrap; justify-content: center; }
+.tv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8vh;
+  padding: 0.8vh 1.8vh;
+  border-radius: 99px;
+  font-size: 1.9vh;
+  font-weight: 600;
+  border: 1px solid currentColor;
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+.tv-pill.tv-ok { color: var(--green); }
+.tv-pill.tv-warn { color: var(--amber); }
+.tv-pill.tv-bad { color: var(--red); background: rgba(255, 82, 82, 0.12); animation: tv-pulse 1.4s ease-in-out infinite; }
+.tv-pill.tv-idle { color: var(--muted); }
+.tv-dot { width: 1.2vh; height: 1.2vh; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+.tv-clock { text-align: right; }
+.tv-clock-main { font-size: 5.4vh; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.tv-clock-main small { font-size: 1.8vh; color: var(--muted); margin-left: 0.8vh; font-weight: 600; }
+.tv-clock-sub { font-size: 1.6vh; color: var(--muted); margin-top: 0.6vh; }
+.tv-blink { animation: tv-blink 1s steps(2, start) infinite; }
+
+/* rotation progress */
+.tv-progress {
+  height: 0.4vh;
+  margin-top: 2vh;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transform-origin: left center;
+  animation-name: tv-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+/* ── stage ───────────────────────────────────────────────── */
+.tv-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding-top: 2.4vh;
+  animation: tv-enter 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.tv-scene { height: 100%; display: flex; flex-direction: column; gap: var(--tv-gap); }
+.tv-scene-head h1 { margin: 0; font-size: 4.6vh; font-weight: 800; letter-spacing: -0.05vh; }
+.tv-scene-head p { margin: 0.6vh 0 0; color: var(--muted); font-size: 2vh; }
+
+.tv-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(22, 32, 52, 0.9), rgba(14, 20, 32, 0.9));
+  border: 1px solid var(--panel-border);
+  border-radius: 2vh;
+  padding: 2.4vh 1.8vw;
+  min-width: 0;
+  box-shadow: 0 1vh 4vh rgba(0, 0, 0, 0.35);
+}
+.tv-eyebrow { font-size: 1.6vh; letter-spacing: 0.3vh; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 1vh; }
+.tv-empty { color: var(--muted); font-size: 2vh; padding: 2vh 0; }
+.tv-small { color: var(--muted); font-size: 1.7vh; margin-top: 1.4vh; }
+
+.tv-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6vw; flex: 1; min-height: 0; }
+.tv-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2vw; flex: 1; min-height: 0; }
+.tv-grid-sys { display: grid; grid-template-columns: 1fr 1.1fr 1fr; gap: 1.4vw; flex: 1; min-height: 0; }
+
+/* evidence */
+.tv-rule h2 { margin: 0 0 1.4vh; font-size: 3vh; font-weight: 700; }
+.tv-edge-ok { border-color: rgba(0, 230, 118, 0.55); box-shadow: 0 0 4vh rgba(0, 230, 118, 0.12); }
+.tv-edge-bad { border-color: rgba(255, 82, 82, 0.6); box-shadow: 0 0 4vh rgba(255, 82, 82, 0.15); }
+.tv-edge-warn { border-color: rgba(255, 171, 64, 0.5); }
+.tv-rule-body { display: flex; align-items: center; gap: 2.4vw; }
+.tv-ring { position: relative; width: 20vh; height: 20vh; flex: none; }
+.tv-ring svg { width: 100%; height: 100%; }
+.tv-ring-track { fill: none; stroke: rgba(255, 255, 255, 0.07); stroke-width: 9; }
+.tv-ring-bar { fill: none; stroke-width: 9; stroke-linecap: round; transition: stroke-dashoffset 1.2s ease; }
+.tv-stroke-ok { stroke: var(--green); }
+.tv-stroke-warn { stroke: var(--amber); }
+.tv-stroke-bad { stroke: var(--red); }
+.tv-stroke-idle { stroke: var(--accent); }
+.tv-ring-label { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.tv-ring-num { font-size: 5vh; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.tv-ring-sub { font-size: 1.6vh; color: var(--muted); margin-top: 0.5vh; }
+.tv-metric-label { font-size: 1.7vh; color: var(--muted); letter-spacing: 0.2vh; }
+.tv-metric-big { font-size: 9vh; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.tv-state { margin-top: 1.6vh; font-size: 2.3vh; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2vh; }
+.tv-statement { margin-top: 0.8vh; color: var(--muted); font-size: 1.7vh; line-height: 1.35; }
+
+.tv-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.2vw; }
+.tv-kpi { background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: 1.6vh; padding: 1.4vh 1.2vw; }
+.tv-kpi-label { font-size: 1.6vh; color: var(--muted); text-transform: uppercase; letter-spacing: 0.2vh; }
+.tv-kpi-value { font-size: 4vh; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 0.4vh; }
+
+/* carriers */
+.tv-tile { display: flex; flex-direction: column; gap: 1.4vh; }
+.tv-tile-exec { border-color: rgba(0, 230, 118, 0.6); box-shadow: 0 0 5vh rgba(0, 230, 118, 0.15); }
+.tv-tile-top { display: flex; justify-content: space-between; align-items: center; gap: 0.6vw; }
+.tv-tile-sym { font-size: 3.6vh; font-weight: 800; letter-spacing: 0.1vh; }
+.tv-verdict { font-size: 1.5vh; font-weight: 700; padding: 0.5vh 1.1vh; border-radius: 0.8vh; background: rgba(100, 116, 139, 0.2); color: var(--muted); white-space: nowrap; }
+.tv-verdict-exec { background: rgba(0, 230, 118, 0.15); color: var(--green); animation: tv-pulse 2s ease-in-out infinite; }
+.tv-bias { font-size: 3vh; font-weight: 700; }
+.tv-score { display: flex; align-items: center; gap: 1vw; font-size: 2.6vh; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tv-score-track { flex: 1; height: 1.2vh; border-radius: 99px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.tv-score-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width 1s ease; }
+.tv-tile-facts { margin: 0; display: grid; gap: 1vh; }
+.tv-tile-facts div { display: flex; justify-content: space-between; gap: 0.6vw; font-size: 2vh; }
+.tv-tile-facts dt { color: var(--muted); }
+.tv-tile-facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.tv-tile-foot { margin-top: auto; color: var(--muted); font-size: 1.7vh; }
+
+/* board */
+.tv-board { display: grid; grid-template-columns: 1fr 1fr; gap: 1vh 1.6vw; align-content: start; }
+.tv-board-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1.2fr 0.5fr 1fr 0.8fr;
+  align-items: center;
+  gap: 0.8vw;
+  padding: 1.2vh 1.2vw;
+  border-radius: 1.2vh;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--panel-border);
+  font-size: 2.1vh;
+}
+.tv-board-exec { border-color: rgba(0, 230, 118, 0.5); background: rgba(0, 230, 118, 0.06); }
+.tv-board-sym { font-weight: 800; }
+.tv-star { color: var(--amber); margin-right: 0.5vw; }
+.tv-board-bias { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-board-score { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.tv-board-verdict { font-weight: 700; font-size: 1.8vh; }
+.tv-board-age { color: var(--muted); font-size: 1.7vh; text-align: right; }
+
+/* system */
+.tv-bar { margin-bottom: 1.8vh; }
+.tv-bar-head { display: flex; justify-content: space-between; font-size: 2vh; margin-bottom: 0.7vh; }
+.tv-bar-head b { font-variant-numeric: tabular-nums; }
+.tv-bar-track { height: 1.4vh; border-radius: 99px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.tv-bar-fill { height: 100%; border-radius: inherit; transition: width 1s ease; }
+.tv-facts { display: grid; gap: 1.3vh; }
+.tv-fact { display: flex; justify-content: space-between; gap: 1vw; font-size: 2.1vh; border-bottom: 1px dashed rgba(255, 255, 255, 0.06); padding-bottom: 1vh; }
+.tv-fact span { color: var(--muted); }
+.tv-services { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.1vh; }
+.tv-services li { display: flex; align-items: center; gap: 0.8vw; font-size: 2vh; }
+.tv-svc-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-svc-state { color: var(--muted); font-size: 1.7vh; }
+
+/* ── bottom ──────────────────────────────────────────────── */
+.tv-bottom { position: relative; margin-top: 1.6vh; display: grid; gap: 1.2vh; }
+.tv-dots { display: flex; align-items: center; gap: 1vw; }
+.tv-dot-nav {
+  font-size: 1.7vh;
+  color: var(--muted);
+  padding: 0.6vh 1.4vh;
+  border-radius: 99px;
+  border: 1px solid transparent;
+  transition: all 0.3s ease;
+}
+.tv-dot-active { color: var(--bg); background: var(--accent); font-weight: 700; }
+.tv-hint { margin-left: auto; font-size: 1.6vh; color: var(--muted); }
+.tv-ticker {
+  height: 4.4vh;
+  overflow: hidden;
+  border-top: 1px solid var(--panel-border);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
+}
+.tv-ticker-run { display: inline-flex; white-space: nowrap; padding-top: 1.1vh; animation: tv-marquee 60s linear infinite; }
+.tv-ticker-item { display: inline-flex; gap: 0.8vw; margin-right: 3vw; font-size: 1.9vh; }
+
+/* ── motion ──────────────────────────────────────────────── */
+@keyframes tv-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes tv-enter { from { opacity: 0; transform: translateY(1.5vh); } to { opacity: 1; transform: none; } }
+@keyframes tv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes tv-blink { to { visibility: hidden; } }
+@keyframes tv-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-root * { animation: none !important; transition: none !important; }
+}
+
+/* Narrow/portrait fallback (e.g. previewing on a phone). */
+@media (max-aspect-ratio: 4/3) {
+  .tv-root { overflow-y: auto; position: absolute; min-height: 100%; }
+  .tv-grid-2, .tv-grid-sys, .tv-board { grid-template-columns: 1fr; }
+  .tv-grid-4 { grid-template-columns: 1fr 1fr; }
+  .tv-kpis { grid-template-columns: repeat(3, 1fr); }
+}

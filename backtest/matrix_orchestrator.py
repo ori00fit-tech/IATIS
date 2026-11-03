@@ -199,6 +199,18 @@ def _build_mission_config(cell: dict, *, data_dir: Path, start: str | None, end:
     )
 
 
+def _load_for_volume_check(symbol: str, timeframe: str, data_dir: Path, start: str | None, end: str | None):
+    """Same loader check_data_quality() already used for this cell; None
+    on any failure so the volume guard never blocks a cell it can't
+    actually prove untradeable."""
+    from backtest.runner import load_symbol_data
+
+    try:
+        return load_symbol_data(symbol, data_dir, start=start, end=end, timeframe=timeframe)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _run_stage_a_cell(cell: dict, *, data_dir: Path, start: str | None, end: str | None, output_dir: Path) -> None:
     """Runs the data-quality gate, then (if it passes) Stage A for one
     claimed (RUNNING) cell, persisting the outcome. Never raises — every
@@ -223,6 +235,16 @@ def _run_stage_a_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     if not dq.ok:
         storage.update_cell(cell_id, status=rm.INSUFFICIENT_DATA, rejection_reason=dq.reason)
         return
+
+    bundle = _json.loads(cell["bundle_json"])
+    engine_variants = _json.loads(cell["engine_variants_json"]) if cell.get("engine_variants_json") else None
+    if bundle.get("engines") == ["wyckoff"]:
+        no_volume = rm.wyckoff_no_volume_reason(
+            bundle, engine_variants, _load_for_volume_check(cell["symbol"], timeframe, data_dir, start, end),
+        )
+        if no_volume:
+            storage.update_cell(cell_id, status=rm.INSUFFICIENT_DATA, rejection_reason=no_volume)
+            return
 
     mission_id = _mission_id_for_cell(cell)
     try:

@@ -593,7 +593,7 @@ def _proposed_cells_to_matrix_specs(proposed_next_cells: Any, *, research_code_c
             detail=f"proposed_next_cells has {len(proposed_next_cells)} entries, over the {_MAX_CELLS_PER_CONVERSION} cap per conversion.",
         )
 
-    from backtest.research_matrix import production_min_engines_agreeing
+    from backtest.research_matrix import production_min_engines_agreeing, structural_untradeability_reason
 
     production_quorum = production_min_engines_agreeing()
     specs = []
@@ -636,6 +636,10 @@ def _proposed_cells_to_matrix_specs(proposed_next_cells: Any, *, research_code_c
         confluence_overrides = (
             {"min_engines_agreeing": float(n_engines)} if n_engines < production_quorum else None
         )
+
+        untradeable = structural_untradeability_reason(bundle_spec.model_dump(), confluence_overrides, production_quorum)
+        if untradeable:
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}] could never trade: {untradeable}")
 
         specs.append(MatrixCellSpec(
             symbol=symbol, bundle=bundle_spec.model_dump(), risk_preset=risk_preset,

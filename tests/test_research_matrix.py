@@ -411,3 +411,42 @@ def test_override_above_engine_count_is_untradeable_even_if_production_allows_it
 def test_multi_engine_bundle_meeting_production_quorum_is_tradeable():
     bundle = {"name": "prod4", "engines": ["smc", "price_action", "nnfx", "wyckoff"], "timeframes": ["H4"]}
     assert rm.structural_untradeability_reason(bundle, None, 2) is None
+
+
+def _one(engine, tf):
+    return {"name": f"{engine} alone", "engines": [engine], "timeframes": [tf]}
+
+
+@pytest.mark.parametrize("tf", ["H1", "H4", "D1"])
+def test_sentiment_alone_is_structurally_untradeable_on_every_timeframe(tf):
+    reason = rm.structural_untradeability_reason(_one("sentiment", tf), {"min_engines_agreeing": 1.0}, 2)
+    assert reason is not None and rm.REASON_SENTIMENT_LIVE_ONLY_FEEDS in reason
+
+
+def test_ict_alone_is_untradeable_on_d1_only():
+    q1 = {"min_engines_agreeing": 1.0}
+    assert rm.REASON_ICT_D1_NO_SESSION in rm.structural_untradeability_reason(_one("ict", "D1"), q1, 2)
+    assert rm.structural_untradeability_reason(_one("ict", "H1"), q1, 2) is None
+    assert rm.structural_untradeability_reason(_one("ict", "H4"), q1, 2) is None
+
+
+def test_spec_ceilings_never_touch_multi_engine_bundles():
+    bundle = {"name": "pair", "engines": ["sentiment", "nnfx"], "timeframes": ["D1"]}
+    assert rm.structural_untradeability_reason(bundle, None, 2) is None
+
+
+def test_wyckoff_v1_alone_without_volume_is_untradeable_but_with_volume_is_not():
+    bundle = _one("wyckoff", "H4")
+    no_vol = pd.DataFrame({"close": [1.0, 2.0], "volume": [0.0, 0.0]})
+    missing = pd.DataFrame({"close": [1.0, 2.0]})
+    with_vol = pd.DataFrame({"close": [1.0, 2.0], "volume": [10.0, 0.0]})
+    assert rm.REASON_WYCKOFF_NO_VOLUME_CAP in rm.wyckoff_no_volume_reason(bundle, None, no_vol)
+    assert rm.REASON_WYCKOFF_NO_VOLUME_CAP in rm.wyckoff_no_volume_reason(bundle, None, missing)
+    assert rm.wyckoff_no_volume_reason(bundle, None, with_vol) is None
+
+
+def test_wyckoff_guard_is_inert_for_v2_and_for_unloadable_data():
+    bundle = _one("wyckoff", "H4")
+    no_vol = pd.DataFrame({"close": [1.0], "volume": [0.0]})
+    assert rm.wyckoff_no_volume_reason(bundle, {"wyckoff": "v2"}, no_vol) is None
+    assert rm.wyckoff_no_volume_reason(bundle, None, None) is None

@@ -43,6 +43,17 @@ _FULL_VALID_PLAN_JSON = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _single_engine_bundles_tradeable(monkeypatch):
+    """_BUNDLE is single-engine with no override; under config.yaml's real
+    quorum=2 the 2026-11-03 structural-tradeability guard (correctly)
+    refuses it. These contract tests target other behavior, so the
+    production quorum is pinned to 1 here; the guard itself is tested
+    explicitly with quorum=2 below."""
+    from backtest import research_matrix as _rm
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 1)
+
+
 @pytest.fixture
 def client(monkeypatch):
     import execution.api_server as m
@@ -857,3 +868,23 @@ def test_config_and_registry_files_are_byte_identical_after_a_full_conversion_cy
             content, mtime = before[p]
             assert p.read_bytes() == content, f"{p} content changed after a Matrix AI propose/review/convert cycle"
             assert p.stat().st_mtime == mtime, f"{p} mtime changed after a Matrix AI propose/review/convert cycle"
+
+
+def test_proposed_single_engine_cell_gets_explicit_quorum_matching_its_engine_count(monkeypatch):
+    """2026-11-03 live bug: AI-proposed single-engine cells were converted
+    with confluence_overrides=None, inherited production quorum=2, and
+    could never trade."""
+    from backtest import research_matrix as _rm
+    from execution.routes.matrix_ai import _proposed_cells_to_matrix_specs
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 2)
+    specs = _proposed_cells_to_matrix_specs(
+        [
+            {"symbol": "XAUUSD", "bundle_name": "NNFX alone", "timeframes": ["H4"], "engines": ["nnfx"], "risk_preset": "balanced"},
+            {"symbol": "XAUUSD", "bundle_name": "pair", "timeframes": ["H4"], "engines": ["nnfx", "smc"], "risk_preset": "balanced"},
+        ],
+        research_code_commit=None,
+    )
+    assert specs[0].confluence_overrides == {"min_engines_agreeing": 1.0}
+    assert specs[1].confluence_overrides is None
+    for spec in specs:
+        assert _rm.structural_untradeability_reason(spec.bundle, spec.confluence_overrides, 2) is None

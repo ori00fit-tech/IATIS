@@ -73,6 +73,17 @@ _HALLUCINATED_PLAN_JSON = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _single_engine_bundles_tradeable(monkeypatch):
+    """_BUNDLE is single-engine with no override; under config.yaml's real
+    quorum=2 the 2026-11-03 structural-tradeability guard (correctly)
+    refuses it. This suite targets other behavior, so the production
+    quorum is pinned to 1 (the guard is tested in test_research_matrix.py,
+    test_matrix_orchestrator.py and test_research_matrix_routes.py)."""
+    from backtest import research_matrix as _rm
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 1)
+
+
 @pytest.fixture
 def client(monkeypatch):
     import execution.api_server as m

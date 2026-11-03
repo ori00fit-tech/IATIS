@@ -55,6 +55,17 @@ class _FakeProc:
 
 
 @pytest.fixture(autouse=True)
+def _single_engine_bundles_tradeable(monkeypatch):
+    """_BUNDLE is single-engine with no override; under config.yaml's real
+    quorum=2 the 2026-11-03 structural-tradeability guard (correctly)
+    refuses it. These contract tests target other behavior, so the
+    production quorum is pinned to 1 here; the guard itself is tested
+    explicitly with quorum=2 below."""
+    from backtest import research_matrix as _rm
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 1)
+
+
+@pytest.fixture(autouse=True)
 def _fake_subprocess(monkeypatch):
     monkeypatch.setattr("subprocess.Popen", _FakeProc)
 
@@ -658,3 +669,21 @@ def test_list_runs_rejects_out_of_range_limit(client):
 def test_run_batch_appears_in_the_shared_job_catalog_whitelist():
     from execution.routes.experiments import _JOB_COMMANDS
     assert "matrix_batch" in _JOB_COMMANDS
+
+
+def test_generate_refuses_single_engine_bundle_that_inherits_quorum_two(client, monkeypatch):
+    from backtest import research_matrix as _rm
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 2)
+    resp = client.post("/research/matrix/generate", headers=HDR, json={"symbols": ["EURUSD"], "bundles": [_BUNDLE]})
+    assert resp.status_code == 400
+    assert _rm.REASON_STRUCTURALLY_UNTRADEABLE_PREFIX in resp.json()["detail"]
+
+
+def test_generate_accepts_single_engine_bundle_with_explicit_quorum_one(client, monkeypatch):
+    from backtest import research_matrix as _rm
+    monkeypatch.setattr(_rm, "production_min_engines_agreeing", lambda: 2)
+    resp = client.post(
+        "/research/matrix/generate", headers=HDR,
+        json={"symbols": ["EURUSD"], "bundles": [_BUNDLE], "confluence_overrides": {"min_engines_agreeing": 1}},
+    )
+    assert resp.status_code == 200, resp.text

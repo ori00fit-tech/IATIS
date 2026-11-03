@@ -208,6 +208,17 @@ def _run_stage_a_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     cell_id = cell["cell_id"]
     timeframe = "H1"  # physical load timeframe; run_mission's own dataset loading resolves the real per-bundle timeframe internally
 
+    import json as _json
+
+    untradeable = rm.structural_untradeability_reason(
+        _json.loads(cell["bundle_json"]),
+        _json.loads(cell["confluence_overrides_json"]) if cell.get("confluence_overrides_json") else None,
+        rm.production_min_engines_agreeing(),
+    )
+    if untradeable:
+        storage.update_cell(cell_id, status=rm.INSUFFICIENT_DATA, rejection_reason=untradeable)
+        return
+
     dq = rm.check_data_quality(cell["symbol"], timeframe, data_dir, start, end)
     if not dq.ok:
         storage.update_cell(cell_id, status=rm.INSUFFICIENT_DATA, rejection_reason=dq.reason)

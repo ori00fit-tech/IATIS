@@ -559,6 +559,71 @@ def production_min_engines_agreeing() -> int:
     return int(load_config().get("confluence", {}).get("min_engines_agreeing", 0) or 0)
 
 
+REASON_SENTIMENT_LIVE_ONLY_FEEDS = "SENTIMENT_LIVE_ONLY_FEEDS"
+REASON_ICT_D1_NO_SESSION = "ICT_D1_NO_SESSION"
+REASON_WYCKOFF_NO_VOLUME_CAP = "WYCKOFF_NO_VOLUME_CAP"
+
+# Every engine-alone ceiling below is read from the engine's own code, not
+# inferred from results. With one engine enabled, confluence's final score
+# IS that engine's score (confluence.score_calculator.calculate_score: a
+# weighted average over a single agreeing engine), so an engine whose
+# reachable maximum is below confluence.min_score_to_trade can never
+# EXECUTE. Measured live 2026-11-03: these combinations produced 0 trades
+# in 70 of 75 single-engine cells that DID carry quorum=1.
+_SPEC_LEVEL_SINGLE_ENGINE_CEILINGS: tuple[tuple[str, str | None, str, str], ...] = (
+    # (engine, timeframe or None = any, reason code, explanation)
+    ("sentiment", None, REASON_SENTIMENT_LIVE_ONLY_FEEDS,
+     "engines/sentiment_engine.py: COT/MarketAux load only when _bar_time_is_live() (bar within 72h of now), "
+     "so every historical bar falls back to the retail proxy, whose strength is capped at 40 by construction "
+     "(below min_score_to_trade); only the final <=72h of a sample can score higher, which can never supply "
+     "a Stage-A-sized sample"),
+    ("ict", "D1", REASON_ICT_D1_NO_SESSION,
+     "engines/ict_engine.py: the Judas swing (its only bias-setting signal) requires session.is_session_open, "
+     "which regimes/session_context.py sets only at hours 21/22/7/8/12/13 UTC; a D1-only cell's bars are "
+     "stamped 00:00, so the engine is NEUTRAL/0 on every bar"),
+)
+
+
+def _single_engine_spec_ceiling_reason(bundle: dict[str, Any]) -> str | None:
+    engines = bundle.get("engines") or []
+    timeframes = bundle.get("timeframes") or []
+    if len(engines) != 1:
+        return None
+    engine = engines[0]
+    for rule_engine, rule_tf, code, why in _SPEC_LEVEL_SINGLE_ENGINE_CEILINGS:
+        if engine == rule_engine and (rule_tf is None or list(timeframes) == [rule_tf]):
+            return (
+                f"{REASON_STRUCTURALLY_UNTRADEABLE_PREFIX}/{code}: {engine} alone"
+                f"{' on ' + rule_tf if rule_tf else ''} cannot reach min_score_to_trade in a backtest — {why}. "
+                f"No backtest was run and this is NOT evidence about the idea."
+            )
+    return None
+
+
+def wyckoff_no_volume_reason(
+    bundle: dict[str, Any], engine_variants: dict[str, str] | None, df: Any,
+) -> str | None:
+    """Data-dependent counterpart to the spec-level ceilings: Wyckoff v1
+    alone scores at most 45 (spring/upthrust) without volume confirmation
+    (engines/wyckoff_engine.py decide(); volume counts as available only
+    when the window's volume sum is non-zero, _volume_analysis()), which is
+    below min_score_to_trade. So on a dataset whose volume is absent or
+    all-zero the cell can never trade. Wyckoff v2 scores differently
+    (cap 85) and is deliberately NOT covered without its own proof."""
+    engines = bundle.get("engines") or []
+    if engines != ["wyckoff"] or (engine_variants or {}).get("wyckoff", "v1") != "v1":
+        return None
+    if df is None:
+        return None
+    if "volume" in getattr(df, "columns", []) and float(df["volume"].fillna(0).abs().sum()) > 0:
+        return None
+    return (
+        f"{REASON_STRUCTURALLY_UNTRADEABLE_PREFIX}/{REASON_WYCKOFF_NO_VOLUME_CAP}: wyckoff v1 alone on a dataset "
+        f"with no volume scores at most 45 (spring/upthrust without volume confirmation, engines/wyckoff_engine.py), "
+        f"below min_score_to_trade. No backtest was run and this is NOT evidence about the idea."
+    )
+
+
 def structural_untradeability_reason(
     bundle: dict[str, Any], confluence_overrides: dict[str, float] | None, production_quorum: int,
 ) -> str | None:
@@ -587,7 +652,7 @@ def structural_untradeability_reason(
             f"min_engines_agreeing={effective} from {source} — EXECUTE is unreachable by construction, "
             f"so no backtest was run and this is NOT evidence about the idea."
         )
-    return None
+    return _single_engine_spec_ceiling_reason(bundle)
 
 
 REASON_STRUCTURALLY_UNTRADEABLE_PREFIX = "STRUCTURALLY_UNTRADEABLE"

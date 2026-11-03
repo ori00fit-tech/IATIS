@@ -888,3 +888,14 @@ def test_proposed_single_engine_cell_gets_explicit_quorum_matching_its_engine_co
     assert specs[1].confluence_overrides is None
     for spec in specs:
         assert _rm.structural_untradeability_reason(spec.bundle, spec.confluence_overrides, 2) is None
+
+
+def test_proposed_sentiment_alone_is_refused_not_converted_into_a_dead_cell(monkeypatch):
+    from fastapi import HTTPException
+    from execution.routes.matrix_ai import _proposed_cells_to_matrix_specs
+    with pytest.raises(HTTPException) as exc:
+        _proposed_cells_to_matrix_specs(
+            [{"symbol": "XAUUSD", "bundle_name": "S", "timeframes": ["H4"], "engines": ["sentiment"], "risk_preset": "balanced"}],
+            research_code_commit=None,
+        )
+    assert exc.value.status_code == 400 and "SENTIMENT_LIVE_ONLY_FEEDS" in exc.value.detail

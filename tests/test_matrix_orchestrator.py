@@ -515,3 +515,31 @@ def test_config_and_registry_files_are_byte_identical_after_a_real_run_batch_cal
             content, mtime = before[p]
             assert p.read_bytes() == content, f"{p} content changed after a Matrix Engine run"
             assert p.stat().st_mtime == mtime, f"{p} mtime changed after a Matrix Engine run"
+
+
+def test_stage_a_never_backtests_wyckoff_alone_on_volumeless_data(monkeypatch):
+    import pandas as pd
+    calls = []
+    monkeypatch.setattr(orch, "_load_for_volume_check", lambda *a, **k: pd.DataFrame({"close": [1.0, 2.0], "volume": [0.0, 0.0]}))
+    monkeypatch.setattr(orch, "run_mission", lambda mc: calls.append(mc))
+    fam = _family()
+    bundle = {"name": "Wyckoff only", "timeframes": ["H4"], "engines": ["wyckoff"], "indicators": [], "context_filters": []}
+    storage.upsert_cells([rm.MatrixCellSpec(symbol="EURUSD", bundle=bundle, risk_preset="balanced")], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert calls == []
+    row = storage.get_cell(cell["cell_id"])
+    assert row["status"] == rm.INSUFFICIENT_DATA
+    assert rm.REASON_WYCKOFF_NO_VOLUME_CAP in row["rejection_reason"]
+
+
+def test_stage_a_still_backtests_wyckoff_alone_when_volume_exists(monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr(orch, "_load_for_volume_check", lambda *a, **k: pd.DataFrame({"close": [1.0, 2.0], "volume": [5.0, 7.0]}))
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.8, "avg_rr": 0.3, "std_rr": 1.1}))
+    fam = _family()
+    bundle = {"name": "Wyckoff only", "timeframes": ["H4"], "engines": ["wyckoff"], "indicators": [], "context_filters": []}
+    storage.upsert_cells([rm.MatrixCellSpec(symbol="BTCUSD", bundle=bundle, risk_preset="balanced")], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert storage.get_cell(cell["cell_id"])["status"] == rm.SCREENED

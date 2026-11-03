@@ -39,6 +39,13 @@
 #     MARKETAUX_API_KEY in .env. Enable deliberately when ready:
 #       systemctl enable --now iatis-marketaux-collect.timer
 #       systemctl enable --now iatis-orderflow-collector.service
+#   - enabling iatis-shadow-observe.timer (External Shadow Observe Runner,
+#     9288ba6): installed by this script (same OPS-6 gap class -- it was
+#     missing from UNITS when added), NOT enabled. It is research-only
+#     (never authorizes/places orders, never touches main.py/scheduler.py)
+#     but an empty SHADOW roster makes it a no-op; admit a hypothesis
+#     first (scripts/add_hypothesis_to_shadow_roster.py), then:
+#       systemctl enable --now iatis-shadow-observe.timer
 
 set -euo pipefail
 
@@ -50,7 +57,8 @@ UNITS=(iatis-api.service iatis-scheduler.service
        iatis-backup.service iatis-backup.timer
        iatis-d1-backup.service iatis-d1-backup.timer
        iatis-marketaux-collect.service iatis-marketaux-collect.timer
-       iatis-orderflow-collector.service)
+       iatis-orderflow-collector.service
+       iatis-shadow-observe.service iatis-shadow-observe.timer)
 
 say()  { echo -e "\033[1;36m==> $*\033[0m"; }
 fail() { echo -e "\033[1;31m✗ $*\033[0m" >&2; exit 1; }

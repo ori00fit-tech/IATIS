@@ -383,3 +383,31 @@ def test_screen_stage_a_handles_infinity_sentinel():
 def test_screen_stage_a_rejects_nan_sentinel():
     r = rm.screen_stage_a({"profit_factor": "NaN"}, trades=50)
     assert r.passed is False
+
+
+# ---------------------------------------------------------------------------
+# Structural tradeability (2026-11-03 live bug: quorum > enabled engines)
+# ---------------------------------------------------------------------------
+
+
+def test_single_engine_bundle_without_override_is_untradeable_under_quorum_two():
+    bundle = {"name": "wyckoff alone", "engines": ["wyckoff"], "timeframes": ["H1"]}
+    reason = rm.structural_untradeability_reason(bundle, None, 2)
+    assert reason is not None and reason.startswith(rm.REASON_STRUCTURALLY_UNTRADEABLE_PREFIX)
+    assert "config.yaml" in reason
+
+
+def test_explicit_quorum_one_makes_a_single_engine_bundle_tradeable():
+    bundle = {"name": "wyckoff alone", "engines": ["wyckoff"], "timeframes": ["H1"]}
+    assert rm.structural_untradeability_reason(bundle, {"min_engines_agreeing": 1.0}, 2) is None
+
+
+def test_override_above_engine_count_is_untradeable_even_if_production_allows_it():
+    bundle = {"name": "pair", "engines": ["nnfx", "smc"], "timeframes": ["H4"]}
+    reason = rm.structural_untradeability_reason(bundle, {"min_engines_agreeing": 3.0}, 1)
+    assert reason is not None and "confluence_overrides" in reason
+
+
+def test_multi_engine_bundle_meeting_production_quorum_is_tradeable():
+    bundle = {"name": "prod4", "engines": ["smc", "price_action", "nnfx", "wyckoff"], "timeframes": ["H4"]}
+    assert rm.structural_untradeability_reason(bundle, None, 2) is None

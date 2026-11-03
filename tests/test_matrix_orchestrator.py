@@ -74,11 +74,45 @@ def _no_real_data_quality_gate(monkeypatch):
     Defaults to OK; individual tests override via monkeypatch when they
     want to exercise the INSUFFICIENT_DATA path specifically."""
     monkeypatch.setattr(rm, "check_data_quality", lambda *a, **k: rm.DataQualityResult(True, None, {"completeness_pct": 100.0}, "deadbeef"))
+    # Same reasoning for the structural-tradeability guard: _BUNDLE is a
+    # single-engine bundle without an override, which under config.yaml's
+    # real quorum=2 is (correctly) untradeable. Tests exercising that guard
+    # set the quorum explicitly below.
+    monkeypatch.setattr(rm, "production_min_engines_agreeing", lambda: 1)
 
 
 # ---------------------------------------------------------------------------
 # Stage A
 # ---------------------------------------------------------------------------
+
+
+def test_stage_a_never_runs_a_structurally_untradeable_cell(monkeypatch):
+    """2026-11-03 live bug: single-engine cells inheriting production
+    quorum=2 ran a full backtest, produced 0 trades, and were REJECTED as
+    if tested. They must instead be classified INSUFFICIENT_DATA with an
+    explicit reason, without ever calling run_mission()."""
+    calls = []
+    monkeypatch.setattr(rm, "production_min_engines_agreeing", lambda: 2)
+    monkeypatch.setattr(orch, "run_mission", lambda mc: calls.append(mc))
+    fam = _family()
+    storage.upsert_cells([_cell()], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert calls == []
+    row = storage.get_cell(cell["cell_id"])
+    assert row["status"] == rm.INSUFFICIENT_DATA
+    assert row["rejection_reason"].startswith(rm.REASON_STRUCTURALLY_UNTRADEABLE_PREFIX)
+
+
+def test_stage_a_runs_a_single_engine_cell_with_an_explicit_quorum_of_one(monkeypatch):
+    monkeypatch.setattr(rm, "production_min_engines_agreeing", lambda: 2)
+    monkeypatch.setattr(orch, "run_mission", _stub_run_mission(state="COMPLETE", trades=50, metrics={"profit_factor": 1.8, "avg_rr": 0.3, "std_rr": 1.1}))
+    fam = _family()
+    spec = rm.MatrixCellSpec(symbol="EURUSD", bundle=_BUNDLE, risk_preset="balanced", confluence_overrides={"min_engines_agreeing": 1.0})
+    storage.upsert_cells([spec], fam)
+    cell = storage.claim_queued_cells(fam, 1)[0]
+    orch._run_stage_a_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert storage.get_cell(cell["cell_id"])["status"] == rm.SCREENED
 
 
 def test_stage_a_promotes_a_healthy_trial_to_screened(monkeypatch):

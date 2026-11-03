@@ -549,6 +549,50 @@ REASON_ZERO_R_MULTIPLE_VARIANCE = (
 )
 
 
+def production_min_engines_agreeing() -> int:
+    """config.yaml's live confluence.min_engines_agreeing — the quorum a
+    cell inherits when it carries no confluence_overrides of its own
+    (backtesting.backtest_engine.build_engine_config_override merges
+    overrides over exactly this block)."""
+    from utils.helpers import load_config
+
+    return int(load_config().get("confluence", {}).get("min_engines_agreeing", 0) or 0)
+
+
+def structural_untradeability_reason(
+    bundle: dict[str, Any], confluence_overrides: dict[str, float] | None, production_quorum: int,
+) -> str | None:
+    """Returns a reason string when a cell can NEVER produce a trade by
+    construction, else None. A cell runs with ONLY its bundle's engines
+    enabled (backtest.optimizer.evaluate_point: engines_enabled={e: e in
+    point["engines"]}), so a quorum larger than that engine count makes
+    agree_count >= quorum mathematically unreachable — the exact failure
+    backtest.optimizer.MissionSearchSpace's own confluence_overrides
+    comment already documents ("quorum=2 with a single-engine choice can
+    never pass").
+
+    Bug found live (2026-11-03): 66 single-engine cells without an
+    override inherited production quorum=2, each spent a full Stage A
+    backtest producing 0 trades, and were REJECTED as if the idea had been
+    tested and failed — while still counting in planned_n and tightening
+    every other cell's Bonferroni threshold. This check makes that state
+    impossible to mistake for evidence."""
+    n_engines = len(bundle.get("engines") or [])
+    quorum = (confluence_overrides or {}).get("min_engines_agreeing")
+    effective = int(quorum) if quorum is not None else int(production_quorum)
+    if n_engines < effective:
+        source = "confluence_overrides" if quorum is not None else "config.yaml (no override)"
+        return (
+            f"{REASON_STRUCTURALLY_UNTRADEABLE_PREFIX}: bundle enables {n_engines} engine(s) but "
+            f"min_engines_agreeing={effective} from {source} — EXECUTE is unreachable by construction, "
+            f"so no backtest was run and this is NOT evidence about the idea."
+        )
+    return None
+
+
+REASON_STRUCTURALLY_UNTRADEABLE_PREFIX = "STRUCTURALLY_UNTRADEABLE"
+
+
 @dataclass(frozen=True)
 class StageAScreenResult:
     passed: bool

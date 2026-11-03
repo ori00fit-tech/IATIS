@@ -593,6 +593,9 @@ def _proposed_cells_to_matrix_specs(proposed_next_cells: Any, *, research_code_c
             detail=f"proposed_next_cells has {len(proposed_next_cells)} entries, over the {_MAX_CELLS_PER_CONVERSION} cap per conversion.",
         )
 
+    from backtest.research_matrix import production_min_engines_agreeing
+
+    production_quorum = production_min_engines_agreeing()
     specs = []
     for i, raw in enumerate(proposed_next_cells):
         if not isinstance(raw, dict):
@@ -621,9 +624,22 @@ def _proposed_cells_to_matrix_specs(proposed_next_cells: Any, *, research_code_c
                 detail=f"proposed_next_cells[{i}] references unknown engine(s) {unknown_engines} — choose from {list(ENGINE_KEYS)}",
             )
 
+        # 2026-11-03 fix: a proposal with fewer engines than production
+        # min_engines_agreeing used to inherit that quorum and could never
+        # trade (see backtest.research_matrix.structural_untradeability_
+        # reason). A proposal naming N engines is a question about THOSE N
+        # engines, so its quorum is set explicitly to N; a proposal with no
+        # engines at all is refused rather than converted into a dead cell.
+        n_engines = len(bundle_spec.engines)
+        if n_engines == 0:
+            raise HTTPException(status_code=400, detail=f"proposed_next_cells[{i}] names no engines — it could never trade.")
+        confluence_overrides = (
+            {"min_engines_agreeing": float(n_engines)} if n_engines < production_quorum else None
+        )
+
         specs.append(MatrixCellSpec(
             symbol=symbol, bundle=bundle_spec.model_dump(), risk_preset=risk_preset,
-            confluence_overrides=None, engine_variants=None,
+            confluence_overrides=confluence_overrides, engine_variants=None,
             data_provider=None, research_code_commit=research_code_commit,
         ))
     return specs

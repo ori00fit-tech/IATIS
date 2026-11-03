@@ -130,6 +130,22 @@ async def matrix_generate(
 
     bundles = [b.model_dump() for b in body.bundles]
 
+    production_quorum = rm.production_min_engines_agreeing()
+    untradeable = [
+        f"{b['name']!r}: {reason}" for b in bundles
+        if (reason := rm.structural_untradeability_reason(b, body.confluence_overrides, production_quorum))
+    ]
+    if untradeable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Refusing to generate cells that can never trade (they would still count in planned_n and "
+                "tighten every other cell's Bonferroni threshold). Set confluence_overrides."
+                "min_engines_agreeing <= the smallest bundle's engine count, or split single-engine bundles "
+                "into their own family. " + " | ".join(untradeable)
+            ),
+        )
+
     # Finding 2 fix: the research-code commit is part of every cell's
     # fingerprint, so a code change (even with the hypothesis spec held
     # identical) always produces a fresh, distinguishable cell.

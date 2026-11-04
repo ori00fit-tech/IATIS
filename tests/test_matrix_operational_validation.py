@@ -18,6 +18,8 @@ suite doesn't have).
 """
 from __future__ import annotations
 
+import inspect
+
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,7 +195,7 @@ def test_crash_after_screened_before_correction_is_recovered_by_a_later_run(monk
     # apply correction to this earlier-orphaned SCREENED cell.
     _run_batch("run-correct-later", fam)
     row = storage.get_cell(cell["cell_id"])
-    assert row["status"] in (rm.CANDIDATE, rm.VALIDATING, rm.VALIDATED, rm.REJECTED)
+    assert row["status"] in (rm.CANDIDATE, rm.VALIDATING, rm.VALIDATED, rm.REJECTED, rm.FAILED)
     assert row["status"] != rm.SCREENED
 
 
@@ -214,9 +216,10 @@ def test_crash_after_candidate_before_stage_b_is_recovered_by_a_later_run(monkey
     assert row["status"] == rm.VALIDATED
 
 
-def test_crash_during_stage_b_rejects_the_cell_without_aborting_the_batch(monkeypatch):
+def test_crash_during_stage_b_fails_the_cell_without_aborting_the_batch(monkeypatch):
     """run_validation() itself raises mid-Stage-B for one cell — the cell
-    must reach a documented REJECTED (never stuck VALIDATING forever), and
+    must reach a documented FAILED -- never stuck VALIDATING forever, and
+    never REJECTED, since a crash is not a verdict (2026-11-04 fix) -- and
     the rest of the batch (a second, healthy cell) must still complete."""
     monkeypatch.setattr(orch, "run_mission", _stub_run_mission_healthy())
 
@@ -232,9 +235,10 @@ def test_crash_during_stage_b_rejects_the_cell_without_aborting_the_batch(monkey
     _run_batch("run-mixed", fam)
 
     by_symbol = {c["symbol"]: c["status"] for c in storage.list_cells(family_id=fam)}
-    assert by_symbol["EURUSD"] == rm.REJECTED
+    assert by_symbol["EURUSD"] == rm.FAILED
     assert by_symbol["GBPUSD"] == rm.VALIDATED
-    assert "crashed" in storage.list_cells(status=rm.REJECTED, family_id=fam, symbol="EURUSD")[0]["rejection_reason"]
+    reason = storage.list_cells(status=rm.FAILED, family_id=fam, symbol="EURUSD")[0]["rejection_reason"]
+    assert reason.startswith(orch.STAGE_B_CRASH_PREFIX) and "NOT a validation verdict" in reason
 
 
 def test_crash_after_validated_never_touches_that_cells_evidence_again(monkeypatch):
@@ -404,3 +408,27 @@ def test_run_batch_never_processes_more_cells_than_the_familys_planned_n(monkeyp
     storage.upsert_cells([_cell(symbol=s) for s in ("EURUSD", "GBPUSD", "XAUUSD")], fam)
     _run_batch("run-full", fam)
     assert len(storage.list_cells(family_id=fam)) == storage.get_family(fam)["planned_n"] == 3
+
+
+def test_requeued_stage_b_attempt_gets_its_own_validation_id(monkeypatch):
+    """2026-11-04 live bug: a requeued VALIDATING cell re-ran Stage B under
+    the SAME validation_id, hit the INSERT-only (validation_id, symbol)
+    primary key, and crashed. Each attempt must carry its own id."""
+    seen = []
+
+    def _record(vc):
+        seen.append(vc.validation_id)
+        return _stub_run_validation_confirmed()(vc)
+
+    monkeypatch.setattr(orch, "run_validation", _record)
+    cell = {"cell_id": "c1", "fingerprint": "abc", "symbol": "EURUSD", "stage_a_mission_id": "m", "stage_a_trial_number": 0}
+    monkeypatch.setattr(storage, "update_cell", lambda *a, **k: None)
+    monkeypatch.setattr(orch.research_mission_validations, "get_validation", lambda vid: {"overall_verdict": "SAME_SYMBOL_CONFIRMED"})
+    orch._run_stage_b_cell({**cell, "requeue_count": 0}, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    orch._run_stage_b_cell({**cell, "requeue_count": 2}, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
+    assert seen == ["mtxval-abc", "mtxval-abc-r2"]
+
+
+def test_stage_b_requeue_threshold_is_separate_and_longer_than_stage_a():
+    assert orch.DEFAULT_STALE_VALIDATING_SECONDS > orch.DEFAULT_STALE_RUNNING_SECONDS
+    assert "stale_validating_seconds" in inspect.signature(orch.run_batch).parameters

@@ -399,7 +399,7 @@ def test_stage_b_rejects_a_not_confirmed_verdict(monkeypatch):
     assert row["stage_b_verdict"] == "SAME_SYMBOL_NOT_CONFIRMED"
 
 
-def test_stage_b_crash_is_rejected_not_a_batch_abort(monkeypatch):
+def test_stage_b_crash_is_failed_not_rejected_and_not_a_batch_abort(monkeypatch):
     def _boom(vc):
         raise RuntimeError("stage b crash")
 
@@ -411,7 +411,8 @@ def test_stage_b_crash_is_rejected_not_a_batch_abort(monkeypatch):
     cell = storage.get_cell(cell_id)
     orch._run_stage_b_cell(cell, data_dir=Path("data"), start=None, end=None, output_dir=Path("reports"))
     row = storage.get_cell(cell_id)
-    assert row["status"] == rm.REJECTED
+    assert row["status"] == rm.FAILED  # a crash is not a verdict (2026-11-04 fix)
+    assert row["rejection_reason"].startswith(orch.STAGE_B_CRASH_PREFIX)
     assert "crashed" in row["rejection_reason"]
 
 

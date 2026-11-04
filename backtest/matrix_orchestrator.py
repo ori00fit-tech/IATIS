@@ -160,6 +160,18 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_STALE_RUNNING_SECONDS = 1800.0  # 30 minutes — generous relative to a single-trial Stage A run
+# Stage B (walk-forward + Monte Carlo + robustness) on a long H1 sample runs
+# far longer than Stage A, and a VALIDATING cell's updated_at is not
+# refreshed while it runs. Bug found live (2026-11-04): with the shared
+# 30-minute threshold, ANY batch started meanwhile (requeue is global, not
+# family-scoped) put a still-running Stage B cell back to CANDIDATE, a
+# second Stage B started on it, and the loser crashed on the
+# research_mission_validation_results (validation_id, symbol) primary key
+# -- which was then recorded as a terminal REJECTED for a real candidate
+# (BTCUSD nnfx H1, family 487a40ba6faa).
+DEFAULT_STALE_VALIDATING_SECONDS = 12 * 3600.0
+
+STAGE_B_CRASH_PREFIX = "STAGE_B_INFRASTRUCTURE_FAILURE"
 
 
 def _mission_id_for_cell(cell: dict) -> str:
@@ -378,8 +390,10 @@ def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     (the safe default the existing validation_mode infrastructure already
     ships; cross-symbol validation is a legitimate but separate
     escalation, not required to prove the Matrix Engine's own evidence
-    pipeline). Never raises — a Stage B crash is REJECTED with a real
-    reason, not a batch abort.
+    pipeline). Never raises — a Stage B crash is FAILED (terminal, no
+    evidence, reason prefixed STAGE_B_INFRASTRUCTURE_FAILURE), not a batch
+    abort and never a REJECTED verdict (2026-11-04 fix; before it, an
+    infrastructure crash was indistinguishable from a real rejection).
 
     Finding 3 note: run_validation()'s own family_survives gate
     (mission_validator._compute_mission_family_significance) is NOT an
@@ -389,7 +403,13 @@ def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
     mentioned here only so a future reader does not add logic that treats
     it as a second layer of evidence."""
     cell_id = cell["cell_id"]
-    validation_id = f"mtxval-{cell['fingerprint']}"
+    # One validation_id per ATTEMPT: a requeued cell (requeue_count > 0)
+    # never reuses the id of an earlier attempt whose per-symbol result rows
+    # may already exist (they are INSERT-only, keyed (validation_id,
+    # symbol)). The first attempt keeps the original id, so every
+    # never-requeued cell is byte-identical to before.
+    attempt = int(cell.get("requeue_count") or 0)
+    validation_id = f"mtxval-{cell['fingerprint']}" + (f"-r{attempt}" if attempt else "")
     try:
         vc = ValidationConfig(
             validation_id=validation_id, mission_id=cell["stage_a_mission_id"], trial_number=cell["stage_a_trial_number"] or 0,
@@ -400,7 +420,12 @@ def _run_stage_b_cell(cell: dict, *, data_dir: Path, start: str | None, end: str
         run_validation(vc)
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"Matrix cell {cell_id}: Stage B run_validation() raised: {exc}")
-        storage.update_cell(cell_id, status=rm.REJECTED, rejection_reason=f"Stage B crashed: {exc}", stage_b_validation_id=validation_id)
+        # A crash is an infrastructure outcome, not a verdict about the
+        # idea: FAILED (terminal, no evidence), never REJECTED.
+        storage.update_cell(
+            cell_id, status=rm.FAILED, stage_b_validation_id=validation_id,
+            rejection_reason=f"{STAGE_B_CRASH_PREFIX}: Stage B crashed: {exc} -- NOT a validation verdict",
+        )
         return
 
     validation = research_mission_validations.get_validation(validation_id)
@@ -418,6 +443,7 @@ def run_batch(
     run_id: str, *, family_id: str, batch_size: int, stage_b_batch_size: int, data_dir: Path,
     start: str | None, end: str | None, output_dir: Path,
     stale_running_seconds: float = DEFAULT_STALE_RUNNING_SECONDS, max_wall_clock_seconds: float | None = None,
+    stale_validating_seconds: float = DEFAULT_STALE_VALIDATING_SECONDS,
 ) -> None:
     """One bounded batch of work against ONE Matrix Family. family_id must
     already exist (created by POST /research/matrix/generate) — this
@@ -434,7 +460,7 @@ def run_batch(
     requeued = storage.requeue_stale_running_cells(stale_running_seconds)
     if requeued:
         logger.info(f"Matrix run {run_id}: requeued {requeued} stale RUNNING cell(s) from a previous crashed run.")
-    requeued_validating = storage.requeue_stale_validating_cells(stale_running_seconds)
+    requeued_validating = storage.requeue_stale_validating_cells(stale_validating_seconds)
     if requeued_validating:
         logger.info(f"Matrix run {run_id}: requeued {requeued_validating} stale VALIDATING cell(s) (back to CANDIDATE) from a previous crashed run.")
 
@@ -467,7 +493,10 @@ def run_batch(
             _run_stage_b_cell(cell, data_dir=data_dir, start=start, end=end, output_dir=output_dir)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Matrix cell {cell['cell_id']}: unexpected Stage B failure: {exc}")
-            storage.update_cell(cell["cell_id"], status=rm.REJECTED, rejection_reason=f"unexpected Stage B failure: {exc}")
+            storage.update_cell(
+                cell["cell_id"], status=rm.FAILED,
+                rejection_reason=f"{STAGE_B_CRASH_PREFIX}: unexpected Stage B failure: {exc} -- NOT a validation verdict",
+            )
             continue
         after = storage.get_cell(cell["cell_id"])
         if after and after["status"] == rm.VALIDATED:
@@ -492,6 +521,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--end", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default="reports")
     parser.add_argument("--max-wall-clock-seconds", type=float, default=None)
+    parser.add_argument("--stale-validating-seconds", type=float, default=DEFAULT_STALE_VALIDATING_SECONDS)
     args = parser.parse_args(argv)
 
     run_id = args.run_id or uuid.uuid4().hex[:12]
@@ -499,6 +529,7 @@ def main(argv: list[str] | None = None) -> None:
         run_id, family_id=args.family_id, batch_size=args.batch_size, stage_b_batch_size=args.stage_b_batch_size,
         data_dir=Path(args.data_dir), start=args.start, end=args.end,
         output_dir=Path(args.output_dir), max_wall_clock_seconds=args.max_wall_clock_seconds,
+        stale_validating_seconds=args.stale_validating_seconds,
     )
     print(f"Matrix run {run_id} (family {args.family_id}) finished.")
 

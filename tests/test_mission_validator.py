@@ -190,8 +190,10 @@ def test_run_validation_records_every_symbol_and_writes_report(tmp_path):
     for r in results:
         breakdown = json.loads(r["criteria_breakdown_json"])
         # Every criterion is always present, pass or fail — nothing suppressed.
+        # (H038: the default criteria_version is v2, whose drawdown criterion
+        # is judged against the Monte Carlo p95 instead of a fixed 10%.)
         assert set(breakdown) == {
-            "profit_factor", "trades", "max_drawdown_pct", "expectancy", "sharpe_ratio",
+            "profit_factor", "trades", "max_drawdown_vs_mc_p95", "expectancy", "sharpe_ratio",
             "walk_forward", "monte_carlo_risk_of_ruin", "monte_carlo_probability_profit",
             "robustness_all_stable", "dataset_completeness",
         }
@@ -1570,3 +1572,61 @@ def test_run_validation_reaches_strong_lead_when_family_survives_correction(monk
     assert validation["overall_verdict"] == STRONG_LEAD
     family_sig = json.loads(validation["mission_family_significance_json"])
     assert family_sig["classification"] == "SURVIVES_CORRECTION"
+
+
+# ── H038: Stage B criteria versioning (pre-registered 2026-11-04) ────────────
+
+def test_criteria_for_v1_is_the_original_dict_plus_its_version_label():
+    c = mission_validator.criteria_for("v1")
+    assert c["criteria_version"] == "v1"
+    assert {k: v for k, v in c.items() if k != "criteria_version"} == mission_validator.VALIDATION_CRITERIA
+    assert c["max_drawdown_pct"] == 10.0
+
+
+def test_criteria_for_v2_drops_the_fixed_drawdown_bar_and_lowers_only_the_window_bar():
+    c = mission_validator.criteria_for("v2")
+    assert c["criteria_version"] == "v2"
+    assert "max_drawdown_pct" not in c
+    assert c["wf_min_window_profit_factor"] == 1.0
+    # everything else is byte-identical to v1
+    for key in ("min_profit_factor", "min_trades", "min_expectancy", "min_sharpe", "max_risk_of_ruin_pct",
+                "min_probability_profit_pct", "min_dataset_completeness_pct"):
+        assert c[key] == mission_validator.VALIDATION_CRITERIA[key]
+
+
+def test_unknown_criteria_version_fails_loud():
+    with pytest.raises(ValueError):
+        mission_validator.criteria_for("v3")
+
+
+def test_h038_adoption_made_v2_the_default_for_new_validations():
+    assert mission_validator.DEFAULT_CRITERIA_VERSION == "v2"
+    vc = ValidationConfig(validation_id="x", mission_id="m", trial_number=0, trial_symbol="EURUSD",
+                          validation_symbols=("EURUSD",), data_dir=Path("data"), start=None, end=None)
+    assert vc.criteria_version == "v2"
+
+
+@pytest.mark.parametrize("version,window_pf,dd_key", [("v1", 1.25, "max_drawdown_pct"), ("v2", 1.0, "max_drawdown_vs_mc_p95")])
+def test_run_validation_grades_and_records_under_the_requested_criteria_version(tmp_path, monkeypatch, version, window_pf, dd_key):
+    _write_dataset(tmp_path, "EURUSD")
+    _write_dataset(tmp_path, "GBPUSD")
+    _seed_mission_and_trial(f"val-h038-{version}")
+    seen_min_pf = []
+    real_wf = mission_validator.run_walk_forward
+
+    def _spy(symbol, df, cfg, *a, **k):
+        seen_min_pf.append(cfg.min_pf)
+        return real_wf(symbol, df, cfg, *a, **k)
+
+    monkeypatch.setattr(mission_validator, "run_walk_forward", _spy)
+    from dataclasses import replace
+    vc = replace(_small_vc(tmp_path, f"v-h038-{version}", f"val-h038-{version}"), criteria_version=version)
+    run_validation(vc)
+
+    assert seen_min_pf and all(p == window_pf for p in seen_min_pf)
+    validation = research_mission_validations.get_validation(f"v-h038-{version}")
+    assert json.loads(validation["criteria_json"])["criteria_version"] == version
+    for r in research_mission_validations.validation_results(f"v-h038-{version}"):
+        breakdown = json.loads(r["criteria_breakdown_json"])
+        assert dd_key in breakdown
+        assert ({"max_drawdown_pct", "max_drawdown_vs_mc_p95"} - {dd_key}).isdisjoint(breakdown)

@@ -1,0 +1,289 @@
+{
+ "hypothesis": "H038",
+ "generated_at": "2026-11-04T13:32:05.059272+00:00",
+ "git_commit": "220b9c04c90466d174d37b657d0a534243f62946",
+ "git_dirty": false,
+ "seed": 38,
+ "n_streams_per_cell": 2000,
+ "n_shuffles": 200,
+ "n_windows": 3,
+ "cells": [
+  {
+   "preset": "conservative",
+   "true_pf": 1.0,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 400,
+   "v1_pass_rate": 0.001,
+   "v2_pass_rate": 0.0155
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.1,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 400,
+   "v1_pass_rate": 0.0105,
+   "v2_pass_rate": 0.0705
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.2,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 400,
+   "v1_pass_rate": 0.062,
+   "v2_pass_rate": 0.271
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.3,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 400,
+   "v1_pass_rate": 0.171,
+   "v2_pass_rate": 0.547
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.5,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 400,
+   "v1_pass_rate": 0.539,
+   "v2_pass_rate": 0.8965
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.0,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0005
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.1,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0185
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.2,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 1000,
+   "v1_pass_rate": 0.0155,
+   "v2_pass_rate": 0.212
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.3,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 1000,
+   "v1_pass_rate": 0.138,
+   "v2_pass_rate": 0.674
+  },
+  {
+   "preset": "conservative",
+   "true_pf": 1.5,
+   "rr": 2.5,
+   "risk": 0.005,
+   "n": 1000,
+   "v1_pass_rate": 0.598,
+   "v2_pass_rate": 0.9935
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.0,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 400,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.009
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.1,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 400,
+   "v1_pass_rate": 0.002,
+   "v2_pass_rate": 0.0675
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.2,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 400,
+   "v1_pass_rate": 0.007,
+   "v2_pass_rate": 0.2375
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.3,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 400,
+   "v1_pass_rate": 0.0465,
+   "v2_pass_rate": 0.555
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.5,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 400,
+   "v1_pass_rate": 0.2055,
+   "v2_pass_rate": 0.9105
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.0,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0005
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.1,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.018
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.2,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.178
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.3,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 1000,
+   "v1_pass_rate": 0.0005,
+   "v2_pass_rate": 0.608
+  },
+  {
+   "preset": "balanced",
+   "true_pf": 1.5,
+   "rr": 2.0,
+   "risk": 0.01,
+   "n": 1000,
+   "v1_pass_rate": 0.024,
+   "v2_pass_rate": 0.9875
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.0,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 400,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0055
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.1,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 400,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0615
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.2,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 400,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.2325
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.3,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 400,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.4935
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.5,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 400,
+   "v1_pass_rate": 0.0005,
+   "v2_pass_rate": 0.9025
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.0,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0015
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.1,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.0185
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.2,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.179
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.3,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.5375
+  },
+  {
+   "preset": "aggressive",
+   "true_pf": 1.5,
+   "rr": 1.5,
+   "risk": 0.02,
+   "n": 1000,
+   "v1_pass_rate": 0.0,
+   "v2_pass_rate": 0.964
+  }
+ ],
+ "verdict": {
+  "condition_1_null_false_pass_le_0.05": true,
+  "condition_2_power_at_1.3_ge_0.40": true,
+  "condition_3_power_at_1.3_ge_2x_v1": true,
+  "condition_4_marginal_1.1_pass_le_0.20": true,
+  "decision": "ADOPT"
+ }
+}

@@ -500,7 +500,7 @@
   },
   "H038": {
    "title": "Stage B power repair: walk-forward 'every window PF >= 1.25' and the fixed 'max drawdown <= 10%' criteria reject real PF~1.3 edges most of the time; v2 criteria (every window PF >= 1.0, pooled PF >= 1.25 via the existing profit_factor criterion, observed max drawdown <= the Monte Carlo p95 of the same trades) restore power without admitting null edges.",
-   "status": "PLANNED",
+   "status": "RESOLVED",
    "registered": "2026-11-04",
    "origin": "Operator question 2026-11-04 ('Stage B is too harsh'). Motivated by two live Stage B outcomes (ETHUSD price_action H1: walk-forward windows 1.22/1.48/0.99; BTCUSD nnfx H1: windows 1.28/1.08/1.46 and max DD 14.4% at 995 trades) and by quick simulations in the same session: under v1, a true PF 1.3 edge passes walk-forward ~24% of the time; at 1% risk and 1000 trades it passes the 10% drawdown bar ~0% of the time. Because the motivation came AFTER seeing those candidates fail, this hypothesis is judged ONLY on synthetic trades with known true edge, never on any real candidate.",
    "method": "research/experiments/H038_stage_b_power.py. Synthetic i.i.d. fixed-RR trade streams with known true PF in {1.0, 1.1, 1.2, 1.3, 1.5}; configurations (rr, risk_per_trade) in {(2.5, 0.005), (2.0, 0.01), (1.5, 0.02)} matching backtest/research_matrix.py RISK_PRESETS conservative/balanced/aggressive; total trades n in {400, 1000} split into 3 equal chronological windows (ValidationConfig.wf_windows=3). Dollar P&L compounds on a 10,000 balance exactly like the backtest (risk_amount = balance * risk_per_trade). Each scored stream applies ONLY the criteria under test plus the pooled profit-factor bar they interact with: v1 = pooled PF >= 1.25 AND every window PF >= 1.25 AND max DD <= 10%; v2 = pooled PF >= 1.25 AND every window PF >= 1.0 AND max DD <= Monte Carlo p95 max DD of the same stream's shuffled trade order (backtest.monte_carlo convention). 2000 streams per cell, 200 shuffles per Monte Carlo, fixed seed. All other Stage B criteria (trades >= 300, expectancy, Sharpe, risk of ruin, probability of profit, robustness, completeness) are unchanged by v2 and excluded from both arms.",
@@ -509,7 +509,24 @@
    "live_safety": "Research tooling only. Never touches main.py, scheduler.py, config.yaml or engines, so it cannot reset the forward-demo counter. Past validation verdicts are NOT re-labeled: every stored validation keeps its v1 verdict; re-grading a previously seen candidate under v2 is a diagnostic only and can never count as VALIDATED evidence. A candidate that would pass under v2 still needs NEW data (after its dataset's last bar) to confirm.",
    "not_in_scope": "Changing the pooled PF bar (1.25), the trade minimum (300), the number of windows, Monte Carlo ruin/profit thresholds, robustness or completeness; autocorrelated (non-i.i.d.) trade streams; any re-scoring of existing candidates as evidence.",
    "linked_experiment": "research/experiments/H038_stage_b_power.py",
-   "linked_result": "research/results/H038_stage_b_power.json"
+   "linked_result": "research/results/H038_stage_b_power.json",
+   "result": {
+    "manifest": "research/results/H038_stage_b_power.json",
+    "git_commit": "220b9c04c90466d174d37b657d0a534243f62946",
+    "git_dirty": false,
+    "v2_pass_at_true_pf_1.0_max": 0.0155,
+    "v2_pass_at_true_pf_1.1_max": 0.0705,
+    "v2_pass_at_true_pf_1.3_range": [
+     0.4935,
+     0.674
+    ],
+    "v1_pass_at_true_pf_1.3_range": [
+     0.0,
+     0.171
+    ],
+    "decision": "ADOPT"
+   },
+   "conclusion": "ADOPT by the pre-registered rule: all four conditions held on synthetic streams (clean tree, pre-registration commit). Under v1, a true PF 1.3 edge passed Stage B's walk-forward+drawdown criteria 0-17% of the time (0% at the balanced/aggressive presets over 1000 trades); under v2 it passes 49-67%, while a null edge (PF 1.0) passes at most 1.5% and a marginal PF 1.1 edge at most 7%. v2 is the default criteria_version for NEW validations (backtest/mission_validator.py). Stored validations keep their v1 verdicts; re-grading an already-seen candidate under v2 is diagnostic only and never VALIDATED evidence. Status RESOLVED (methodology), not PASSED: this is not a trading edge."
   }
  },
  "walk_forward_validation": {

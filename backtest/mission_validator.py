@@ -172,6 +172,51 @@ VALIDATION_CRITERIA: dict[str, float | bool] = {
     "min_dataset_completeness_pct": MIN_COVERAGE_PCT_FOR_READY,
 }
 
+# H038 (research/results/registry.json, pre-registered 2026-11-04) — Stage B
+# power repair. Two v1 criteria reject real edges most of the time,
+# measured on synthetic trades with a known true edge:
+#   * walk-forward "every window PF >= 1.25" (the SAME bar as the pooled
+#     sample): a true PF 1.3 edge passes ~24% of the time with 3 windows
+#     of ~130 trades, because ordinary sampling noise pushes one window
+#     under the pooled bar;
+#   * "max drawdown <= 10%": drawdown scales with position size and with
+#     sample length, so at 1% risk a true PF 1.3 edge over 1000 trades
+#     essentially never passes — a LONGER, stronger sample is punished more.
+# v2 keeps the pooled bar (min_profit_factor 1.25 over the whole sample
+# already IS the pooled walk-forward bar, since the windows partition that
+# sample), requires every window to be merely profitable (PF >= 1.0), and
+# judges drawdown against the Monte Carlo p95 of the SAME trades in
+# shuffled order: it fails only when losses cluster worse than the trades
+# themselves imply, independent of sizing and sample length.
+# Versioned, never silently swapped: every stored validation records the
+# criteria_version it was graded under; past verdicts are never re-labeled.
+CRITERIA_V1 = "v1"
+CRITERIA_V2 = "v2"
+CRITERIA_VERSIONS: tuple[str, ...] = (CRITERIA_V1, CRITERIA_V2)
+# H038 decision (2026-11-04, research/results/H038_stage_b_power.json,
+# clean tree at the pre-registration commit): ADOPT — all four
+# pre-registered conditions held (null false-pass <= 0.015, power at true
+# PF 1.3 = 0.49-0.67 vs v1 0.00-0.17, marginal PF 1.1 pass <= 0.07). v2 is
+# therefore the default for NEW validations only; v1 stays selectable and
+# every stored validation keeps the version it was graded under.
+DEFAULT_CRITERIA_VERSION = CRITERIA_V2
+
+VALIDATION_CRITERIA_V2: dict[str, float | bool | str] = {
+    **{k: v for k, v in VALIDATION_CRITERIA.items() if k != "max_drawdown_pct"},
+    "wf_min_window_profit_factor": 1.0,
+    "max_drawdown_rule": "observed max_drawdown <= Monte Carlo p95_max_dd of the same trades",
+}
+
+
+def criteria_for(version: str) -> dict:
+    """The criteria dict a validation is graded (and recorded) under."""
+    if version == CRITERIA_V1:
+        return {**VALIDATION_CRITERIA, "criteria_version": CRITERIA_V1}
+    if version == CRITERIA_V2:
+        return {**VALIDATION_CRITERIA_V2, "criteria_version": CRITERIA_V2}
+    raise ValueError(f"unknown criteria_version {version!r} — choose from {CRITERIA_VERSIONS}")
+
+
 # A STRONG_LEAD requires passing on at least this many validation
 # symbols, REGARDLESS of how many were validated — a 1- or 2-symbol
 # validation run can therefore never reach STRONG_LEAD even if every
@@ -201,6 +246,7 @@ class ValidationConfig:
     mc_n_simulations: int = 1000
     mc_seed: int = 42
     output_dir: Path = Path("reports")
+    criteria_version: str = DEFAULT_CRITERIA_VERSION
 
 
 def _criterion(actual: Any, threshold: Any, passed: bool) -> dict:
@@ -700,9 +746,14 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
     regime_robustness_result = _compute_regime_robustness_diagnostic(metrics.by_regime)
     cost_stress_result = _compute_cost_stress_diagnostic(symbol, df, point)
 
+    criteria = criteria_for(vc.criteria_version)
+    wf_window_pf = (
+        criteria["wf_min_window_profit_factor"] if vc.criteria_version == CRITERIA_V2
+        else criteria["min_profit_factor"]
+    )
     wf_result = run_walk_forward(symbol, df, WalkForwardConfig(
         n_windows=vc.wf_windows,
-        min_pf=VALIDATION_CRITERIA["min_profit_factor"],
+        min_pf=wf_window_pf,
         min_trades_per_window=vc.wf_min_trades_per_window,
         warmup_bars=vc.wf_warmup_bars,
         engine_overrides=point["risk_overrides"],
@@ -735,31 +786,39 @@ def _evaluate_symbol(symbol: str, point: dict, vc: ValidationConfig) -> dict:
         significance_result, regime_robustness_result, stability_score_result, cost_stress_result,
     )
 
+    if vc.criteria_version == CRITERIA_V2:
+        drawdown_key, drawdown_criterion = "max_drawdown_vs_mc_p95", _criterion(
+            metrics.max_drawdown, mc_result.p95_max_dd,
+            mc_result.simulations > 0 and metrics.max_drawdown <= mc_result.p95_max_dd)
+    else:
+        drawdown_key, drawdown_criterion = "max_drawdown_pct", _criterion(
+            metrics.max_drawdown, criteria["max_drawdown_pct"],
+            metrics.max_drawdown <= criteria["max_drawdown_pct"])
+
     breakdown = {
-        "profit_factor": _criterion(metrics.profit_factor, VALIDATION_CRITERIA["min_profit_factor"],
-                                     metrics.profit_factor >= VALIDATION_CRITERIA["min_profit_factor"]),
-        "trades": _criterion(metrics.total_trades, VALIDATION_CRITERIA["min_trades"],
-                              metrics.total_trades >= VALIDATION_CRITERIA["min_trades"]),
-        "max_drawdown_pct": _criterion(metrics.max_drawdown, VALIDATION_CRITERIA["max_drawdown_pct"],
-                                        metrics.max_drawdown <= VALIDATION_CRITERIA["max_drawdown_pct"]),
-        "expectancy": _criterion(metrics.expectancy, VALIDATION_CRITERIA["min_expectancy"],
-                                  metrics.expectancy > VALIDATION_CRITERIA["min_expectancy"]),
-        "sharpe_ratio": _criterion(metrics.sharpe_ratio, VALIDATION_CRITERIA["min_sharpe"],
-                                    metrics.sharpe_ratio >= VALIDATION_CRITERIA["min_sharpe"]),
+        "profit_factor": _criterion(metrics.profit_factor, criteria["min_profit_factor"],
+                                     metrics.profit_factor >= criteria["min_profit_factor"]),
+        "trades": _criterion(metrics.total_trades, criteria["min_trades"],
+                              metrics.total_trades >= criteria["min_trades"]),
+        drawdown_key: drawdown_criterion,
+        "expectancy": _criterion(metrics.expectancy, criteria["min_expectancy"],
+                                  metrics.expectancy > criteria["min_expectancy"]),
+        "sharpe_ratio": _criterion(metrics.sharpe_ratio, criteria["min_sharpe"],
+                                    metrics.sharpe_ratio >= criteria["min_sharpe"]),
         "walk_forward": _criterion(wf_result.verdict.value, SymbolVerdict.CONSISTENT.value,
                                     wf_result.verdict == SymbolVerdict.CONSISTENT),
         "monte_carlo_risk_of_ruin": _criterion(
-            mc_result.risk_of_ruin, VALIDATION_CRITERIA["max_risk_of_ruin_pct"],
-            mc_result.risk_of_ruin <= VALIDATION_CRITERIA["max_risk_of_ruin_pct"]),
+            mc_result.risk_of_ruin, criteria["max_risk_of_ruin_pct"],
+            mc_result.risk_of_ruin <= criteria["max_risk_of_ruin_pct"]),
         "monte_carlo_probability_profit": _criterion(
-            mc_result.probability_profit, VALIDATION_CRITERIA["min_probability_profit_pct"],
-            mc_result.probability_profit >= VALIDATION_CRITERIA["min_probability_profit_pct"]),
+            mc_result.probability_profit, criteria["min_probability_profit_pct"],
+            mc_result.probability_profit >= criteria["min_probability_profit_pct"]),
         "robustness_all_stable": _criterion(
             [s.verdict for s in rb_result.sweeps], "STABLE",
             all(s.verdict == "STABLE" for s in rb_result.sweeps)),
         "dataset_completeness": _criterion(
-            completeness_pct, VALIDATION_CRITERIA["min_dataset_completeness_pct"],
-            completeness_pct >= VALIDATION_CRITERIA["min_dataset_completeness_pct"]),
+            completeness_pct, criteria["min_dataset_completeness_pct"],
+            completeness_pct >= criteria["min_dataset_completeness_pct"]),
     }
     passed = all(c["passed"] for c in breakdown.values())
 
@@ -816,7 +875,7 @@ def run_validation(vc: ValidationConfig) -> None:
         validation_id=vc.validation_id, mission_id=vc.mission_id, trial_number=vc.trial_number,
         trial_symbol=vc.trial_symbol, validation_symbols=list(vc.validation_symbols),
         objective_metric=mission["objective_metric"] if mission else "unknown",
-        criteria=VALIDATION_CRITERIA, status="running", validation_mode=vc.validation_mode,
+        criteria=criteria_for(vc.criteria_version), status="running", validation_mode=vc.validation_mode,
     )
     research_mission_validations.set_validation_status(vc.validation_id, "running", started=True)
 
@@ -941,7 +1000,7 @@ def _write_report(
         "trial_number": vc.trial_number, "trial_symbol": vc.trial_symbol,
         "validation_symbols": list(vc.validation_symbols),
         "overall_verdict": overall, "passing_symbols": passing, "total_symbols": total,
-        "criteria": VALIDATION_CRITERIA,
+        "criteria": criteria_for(vc.criteria_version),
         "candidate_lock": candidate_lock,
         "date_overlap": date_overlap,
         "mission_family_significance": mission_family_significance,
@@ -992,6 +1051,7 @@ def main() -> None:
     parser.add_argument("--mc-simulations", type=int, default=1000)
     parser.add_argument("--mc-seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=Path("reports"))
+    parser.add_argument("--criteria-version", default=DEFAULT_CRITERIA_VERSION, choices=CRITERIA_VERSIONS)
     args = parser.parse_args()
 
     vc = ValidationConfig(
@@ -1006,6 +1066,7 @@ def main() -> None:
         rb_min_trades=args.rb_min_trades,
         mc_n_simulations=args.mc_simulations, mc_seed=args.mc_seed,
         output_dir=args.output_dir,
+        criteria_version=args.criteria_version,
     )
     run_validation(vc)
 

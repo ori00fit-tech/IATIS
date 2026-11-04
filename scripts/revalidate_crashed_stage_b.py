@@ -22,7 +22,7 @@ whose recorded reason is not a Stage B crash -- a real verdict is never
 re-litigated here.
 
 Usage (VPS):
-    python3 -m scripts.revalidate_crashed_stage_b MATRIX-CELL-xxxx [--dry-run]
+    python3 -m scripts.revalidate_crashed_stage_b MATRIX-CELL-xxxx [--dry-run] [--criteria-version v1|v2]
 """
 from __future__ import annotations
 
@@ -33,7 +33,9 @@ _CRASH_MARKERS = ("Stage B crashed", "unexpected Stage B failure")
 
 
 def main() -> int:
-    from backtest.mission_validator import SAME_SYMBOL, ValidationConfig, run_validation
+    from backtest.mission_validator import (
+        CRITERIA_VERSIONS, DEFAULT_CRITERIA_VERSION, SAME_SYMBOL, ValidationConfig, run_validation,
+    )
     from storage import research_matrix as storage
     from storage import research_mission_validations
 
@@ -42,6 +44,7 @@ def main() -> int:
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--dry-run", action="store_true", help="show what would run, run nothing")
+    parser.add_argument("--criteria-version", default=DEFAULT_CRITERIA_VERSION, choices=CRITERIA_VERSIONS)
     args = parser.parse_args()
 
     cell = storage.get_cell(args.cell_id)
@@ -56,10 +59,11 @@ def main() -> int:
         print("Refusing: cell has no stage_a_mission_id -- it never completed Stage A.")
         return 1
 
+    suffix = f"-{args.criteria_version}" if args.criteria_version != "v1" else ""
     n = 1
-    while research_mission_validations.get_validation(f"mtxval-{cell['fingerprint']}-manual{n}") is not None:
+    while research_mission_validations.get_validation(f"mtxval-{cell['fingerprint']}-manual{n}{suffix}") is not None:
         n += 1
-    validation_id = f"mtxval-{cell['fingerprint']}-manual{n}"
+    validation_id = f"mtxval-{cell['fingerprint']}-manual{n}{suffix}"
     print(
         f"cell={cell['cell_id']} symbol={cell['symbol']} family={cell['family_id']} "
         f"stage_a_mission={cell['stage_a_mission_id']} trial={cell.get('stage_a_trial_number') or 0} "
@@ -73,10 +77,14 @@ def main() -> int:
         validation_id=validation_id, mission_id=cell["stage_a_mission_id"],
         trial_number=cell.get("stage_a_trial_number") or 0, trial_symbol=cell["symbol"],
         validation_symbols=(cell["symbol"],), data_dir=Path(args.data_dir), start=None, end=None,
-        validation_mode=SAME_SYMBOL, output_dir=Path(args.output_dir),
+        validation_mode=SAME_SYMBOL, output_dir=Path(args.output_dir), criteria_version=args.criteria_version,
     ))
     validation = research_mission_validations.get_validation(validation_id) or {}
-    print(f"overall_verdict={validation.get('overall_verdict')!r} (cell itself left unchanged)")
+    print(f"overall_verdict={validation.get('overall_verdict')!r} criteria_version={args.criteria_version} "
+          f"(cell itself left unchanged)")
+    if args.criteria_version != "v1":
+        print("NOTE (H038): this candidate was already seen before the criteria changed -- a v2 verdict here is a "
+              "DIAGNOSTIC only, never VALIDATED evidence. Confirmation needs data after its dataset's last bar.")
     return 0
 
 
